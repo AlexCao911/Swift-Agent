@@ -1,4 +1,4 @@
-use crate::context::PromptFrame;
+use crate::context::{PromptFrame, PromptMessage};
 use crate::core::AgentError;
 use crate::tool::ToolCall;
 
@@ -29,12 +29,29 @@ impl ModelProvider for MockStreamingProvider {
     }
 
     fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        if let Some(tool_result) = frame
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                PromptMessage::ToolResult(content) => Some(content.as_str()),
+                _ => None,
+            })
+        {
+            let response = format!("Mock response after tool: {tool_result}");
+            return Ok(vec![
+                ModelProviderOutput::TextDelta("Mock response ".to_string()),
+                ModelProviderOutput::TextDelta(format!("after tool: {tool_result}")),
+                ModelProviderOutput::Completed(response),
+            ]);
+        }
+
         let last_user = frame
             .messages
             .iter()
             .rev()
             .find_map(|message| match message {
-                crate::context::PromptMessage::User(content) => Some(content.as_str()),
+                PromptMessage::User(content) => Some(content.as_str()),
                 _ => None,
             })
             .unwrap_or("");
