@@ -1,9 +1,11 @@
 use crate::context::PromptFrame;
 use crate::core::AgentError;
+use crate::tool::ToolCall;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelProviderOutput {
     TextDelta(String),
+    ToolCall(ToolCall),
     Completed(String),
 }
 
@@ -36,6 +38,14 @@ impl ModelProvider for MockStreamingProvider {
                 _ => None,
             })
             .unwrap_or("");
+
+        if last_user == "use tool debug.echo" {
+            return Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+                id: "call_mock_1".to_string(),
+                name: "debug.echo".to_string(),
+                arguments_json: r#"{"text":"hello"}"#.to_string(),
+            })]);
+        }
 
         let response = format!("Mock response to: {last_user}");
         Ok(vec![

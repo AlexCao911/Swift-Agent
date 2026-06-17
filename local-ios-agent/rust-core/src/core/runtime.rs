@@ -110,6 +110,7 @@ impl AgentRuntime {
                         )?);
                     }
                 }
+                ModelProviderOutput::ToolCall(_) => {}
                 ModelProviderOutput::Completed(completed) => {
                     if let Some(chunk) = batcher.flush() {
                         let delta_id = tree.append(
