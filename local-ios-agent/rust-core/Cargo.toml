@@ -1,0 +1,11 @@
+[package]
+name = "local_ios_agent_runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "local_ios_agent_runtime"
+path = "src/lib.rs"
+
+[dependencies]
