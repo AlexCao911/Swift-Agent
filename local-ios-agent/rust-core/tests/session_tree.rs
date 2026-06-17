@@ -1,4 +1,4 @@
-use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
+use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId, SessionTree};
 use local_ios_agent_runtime::memory::InMemoryEventStore;
 
 fn event(id: &str, parent: Option<&str>, sequence: u64, depth: u32, payload: &str) -> RuntimeEvent {
@@ -33,4 +33,20 @@ fn active_branch_returns_ancestors_in_order() {
 
     let payloads: Vec<_> = branch.iter().map(|event| event.payload.as_str()).collect();
     assert_eq!(payloads, vec!["root", "a", "b"]);
+}
+
+#[test]
+fn session_tree_tracks_active_leaf() {
+    let mut tree = SessionTree::new(SessionId("session_2".to_string()));
+    let root = tree
+        .append(None, EventKind::SessionCreated, "created")
+        .unwrap();
+    let user = tree
+        .append(Some(root.clone()), EventKind::UserMessage, "hello")
+        .unwrap();
+
+    assert_eq!(tree.active_leaf(), Some(&user));
+    let branch = tree.active_branch(&user).unwrap();
+    let payloads: Vec<_> = branch.iter().map(|event| event.payload.as_str()).collect();
+    assert_eq!(payloads, vec!["created", "hello"]);
 }
