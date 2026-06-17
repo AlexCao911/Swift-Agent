@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::context::{ContextController, TokenizerAdapter};
 use crate::core::{
-    AgentError, EntryId, EventKind, ModelProvider, ModelProviderOutput, RunId, RunRecord,
-    RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
+    AgentError, AgentTurnResult, EntryId, EventKind, ModelProvider, ModelProviderOutput, RunId,
+    RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore};
 use crate::utils::id::IdGenerator;
@@ -80,7 +80,15 @@ impl<S: EventStore> AgentRuntime<S> {
         &mut self,
         input: SendMessageInput,
     ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        self.send_message_turn(input).map(|turn| turn.events)
+    }
+
+    pub fn send_message_turn(
+        &mut self,
+        input: SendMessageInput,
+    ) -> Result<AgentTurnResult, AgentError> {
         let run_id = RunId(self.ids.next_id("run"));
+        let run_id_string = run_id.0.clone();
         self.runs.insert(
             run_id.clone(),
             RunRecord::new(run_id.clone(), input.session_id.clone()),
@@ -96,7 +104,7 @@ impl<S: EventStore> AgentRuntime<S> {
         let user_id = self.append_event(
             &input.session_id,
             parent_id,
-            None,
+            Some(run_id.clone()),
             EventKind::UserMessage,
             input.text,
         )?;
@@ -116,14 +124,30 @@ impl<S: EventStore> AgentRuntime<S> {
         let assistant_start = self.append_event(
             &input.session_id,
             Some(user_id.clone()),
-            None,
+            Some(run_id.clone()),
             EventKind::AssistantMessageStarted,
-            format!("run {}", run_id.0),
+            format!("run {}", run_id_string),
         )?;
         emitted.push(self.store.get(&input.session_id, &assistant_start)?);
 
         let mut batcher = StreamBatcher::new(24);
-        let provider_events = self.config.provider.stream_chat(&frame)?;
+        let provider_events = match self.config.provider.stream_chat(&frame) {
+            Ok(events) => events,
+            Err(error) => {
+                let failed_id = self.append_event(
+                    &input.session_id,
+                    Some(assistant_start.clone()),
+                    Some(run_id.clone()),
+                    EventKind::RunFailed,
+                    error.to_string(),
+                )?;
+                if let Some(run) = self.runs.get_mut(&run_id) {
+                    run.mark_failed()?;
+                }
+                emitted.push(self.store.get(&input.session_id, &failed_id)?);
+                return Err(error);
+            }
+        };
         let mut parent = assistant_start;
 
         for provider_event in provider_events {
@@ -133,7 +157,7 @@ impl<S: EventStore> AgentRuntime<S> {
                         let delta_id = self.append_event(
                             &input.session_id,
                             Some(parent.clone()),
-                            None,
+                            Some(run_id.clone()),
                             EventKind::AssistantTextDelta,
                             chunk,
                         )?;
@@ -141,13 +165,43 @@ impl<S: EventStore> AgentRuntime<S> {
                         emitted.push(self.store.get(&input.session_id, &delta_id)?);
                     }
                 }
-                ModelProviderOutput::ToolCall(_) => {}
+                ModelProviderOutput::ToolCall(tool_call) => {
+                    if let Some(chunk) = batcher.flush() {
+                        let delta_id = self.append_event(
+                            &input.session_id,
+                            Some(parent.clone()),
+                            Some(run_id.clone()),
+                            EventKind::AssistantTextDelta,
+                            chunk,
+                        )?;
+                        parent = delta_id.clone();
+                        emitted.push(self.store.get(&input.session_id, &delta_id)?);
+                    }
+                    let pending_tool_call_id = tool_call.id.clone();
+                    let tool_call_id = self.append_event(
+                        &input.session_id,
+                        Some(parent.clone()),
+                        Some(run_id.clone()),
+                        EventKind::ToolCallRequested,
+                        format!("{} {}", tool_call.name, tool_call.arguments_json),
+                    )?;
+                    if let Some(run) = self.runs.get_mut(&run_id) {
+                        run.mark_waiting_tool()?;
+                    }
+                    emitted.push(self.store.get(&input.session_id, &tool_call_id)?);
+                    return Ok(AgentTurnResult {
+                        run_id: run_id_string,
+                        state: RunState::WaitingTool,
+                        events: emitted,
+                        pending_tool_call_id: Some(pending_tool_call_id),
+                    });
+                }
                 ModelProviderOutput::Completed(completed) => {
                     if let Some(chunk) = batcher.flush() {
                         let delta_id = self.append_event(
                             &input.session_id,
                             Some(parent.clone()),
-                            None,
+                            Some(run_id.clone()),
                             EventKind::AssistantTextDelta,
                             chunk,
                         )?;
@@ -157,7 +211,7 @@ impl<S: EventStore> AgentRuntime<S> {
                     let completed_id = self.append_event(
                         &input.session_id,
                         Some(parent.clone()),
-                        None,
+                        Some(run_id.clone()),
                         EventKind::AssistantMessageCompleted,
                         completed,
                     )?;
@@ -165,11 +219,22 @@ impl<S: EventStore> AgentRuntime<S> {
                         run.mark_completed()?;
                     }
                     emitted.push(self.store.get(&input.session_id, &completed_id)?);
+                    return Ok(AgentTurnResult {
+                        run_id: run_id_string,
+                        state: RunState::Completed,
+                        events: emitted,
+                        pending_tool_call_id: None,
+                    });
                 }
             }
         }
 
-        Ok(emitted)
+        Ok(AgentTurnResult {
+            run_id: run_id_string,
+            state: RunState::Running,
+            events: emitted,
+            pending_tool_call_id: None,
+        })
     }
 
     fn append_event(
