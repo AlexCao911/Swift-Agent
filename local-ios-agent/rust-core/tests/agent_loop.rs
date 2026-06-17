@@ -86,3 +86,26 @@ fn runtime_resumes_from_tool_result_and_completes() {
         .iter()
         .any(|event| event.kind == EventKind::AssistantMessageCompleted));
 }
+
+#[test]
+fn runtime_cancel_appends_run_cancelled() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: vec!["debug.echo".into()],
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+    });
+    let session_id = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+
+    let event = runtime.cancel(turn.run_id).unwrap();
+
+    assert_eq!(event.kind, EventKind::RunCancelled);
+}

@@ -393,6 +393,34 @@ impl<S: EventStore> AgentRuntime<S> {
         })
     }
 
+    pub fn cancel(&mut self, run_id: String) -> Result<RuntimeEvent, AgentError> {
+        let run_key = RunId(run_id.clone());
+        let session_id = {
+            let run = self
+                .runs
+                .get_mut(&run_key)
+                .ok_or_else(|| AgentError::Storage(format!("missing run: {run_id}")))?;
+            run.cancel()?;
+            run.session_id.clone()
+        };
+        let parent_id = self
+            .sessions
+            .get(&session_id)
+            .and_then(|cursor| cursor.active_leaf.clone())
+            .ok_or_else(|| {
+                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
+            })?;
+
+        let event_id = self.append_event(
+            &session_id,
+            Some(parent_id),
+            Some(run_key),
+            EventKind::RunCancelled,
+            format!("run {run_id} cancelled"),
+        )?;
+        self.store.get(&session_id, &event_id)
+    }
+
     fn append_event(
         &mut self,
         session_id: &SessionId,
