@@ -9,3 +9,7 @@ name = "local_ios_agent_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3.10"
