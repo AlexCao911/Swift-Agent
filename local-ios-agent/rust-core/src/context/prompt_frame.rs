@@ -1,5 +1,5 @@
-use crate::context::TokenizerAdapter;
-use crate::core::{AgentError, EventKind, RuntimeEvent};
+use crate::context::{BranchProjector, TokenizerAdapter};
+use crate::core::{AgentError, RuntimeEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PromptMessage {
@@ -47,19 +47,7 @@ impl ContextController {
     }
 
     pub fn build_prompt_frame(&self, branch: Vec<RuntimeEvent>) -> Result<PromptFrame, AgentError> {
-        let mut messages = Vec::new();
-        for event in branch {
-            match event.kind {
-                EventKind::UserMessage => messages.push(PromptMessage::User(event.payload)),
-                EventKind::AssistantMessageCompleted => {
-                    messages.push(PromptMessage::Assistant(event.payload));
-                }
-                EventKind::ToolResultMessage => {
-                    messages.push(PromptMessage::ToolResult(event.payload));
-                }
-                _ => {}
-            }
-        }
+        let messages = BranchProjector::new().project(branch);
 
         let frame = PromptFrame {
             system_prompt: self.system_prompt.clone(),
