@@ -1,5 +1,5 @@
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId, SessionTree};
-use local_ios_agent_runtime::memory::InMemoryEventStore;
+use local_ios_agent_runtime::memory::{InMemoryEventStore, SqliteEventStore};
 
 fn event(id: &str, parent: Option<&str>, sequence: u64, depth: u32, payload: &str) -> RuntimeEvent {
     RuntimeEvent::new(
@@ -62,4 +62,24 @@ fn session_tree_can_be_constructed_with_explicit_store() {
         .unwrap();
 
     assert_eq!(tree.active_leaf(), Some(&root));
+}
+
+#[test]
+fn session_tree_can_use_sqlite_event_store() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let mut tree = SessionTree::with_store(SessionId("session_sqlite_tree".to_string()), store);
+
+    let root = tree
+        .append(None, EventKind::SessionCreated, "created")
+        .unwrap();
+    let user = tree
+        .append(Some(root), EventKind::UserMessage, "hello")
+        .unwrap();
+
+    assert_eq!(tree.active_leaf(), Some(&user));
+    let branch = tree.active_branch(&user).unwrap();
+    let payloads: Vec<_> = branch.iter().map(|event| event.payload.as_str()).collect();
+    assert_eq!(payloads, vec!["created", "hello"]);
 }
