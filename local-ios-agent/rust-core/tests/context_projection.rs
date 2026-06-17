@@ -1,6 +1,8 @@
+use local_ios_agent_runtime::context::ContextInjectionPolicy;
 use local_ios_agent_runtime::context::PromptLayers;
 use local_ios_agent_runtime::context::{BranchProjector, PromptMessage};
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
+use local_ios_agent_runtime::tool::{RetentionPolicy, Sensitivity, ToolResult};
 
 fn event(id: &str, kind: EventKind, payload: &str) -> RuntimeEvent {
     RuntimeEvent::new(
@@ -59,4 +61,20 @@ fn context_sorts_tool_schemas_for_stable_prompt_frames() {
     let frame = controller.build_prompt_frame(Vec::new()).unwrap();
 
     assert_eq!(frame.tool_schemas, vec!["a.tool", "z.tool"]);
+}
+
+#[test]
+fn injection_policy_excludes_audit_only_and_secret_tool_results() {
+    let policy = ContextInjectionPolicy::default();
+    let result = ToolResult {
+        display_text: "display".into(),
+        model_text: "secret".into(),
+        structured_json: "{}".into(),
+        audit_text: "audit".into(),
+        sensitivity: Sensitivity::Secret,
+        retention: RetentionPolicy::AuditOnly,
+        is_error: false,
+    };
+
+    assert!(!policy.should_inject_tool_result(&result));
 }
