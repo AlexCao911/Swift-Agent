@@ -5,12 +5,10 @@ Project path: `/Users/alexandercou/Projects/Alex-agent/local-ios-agent`
 
 ## Purpose
 
-This roadmap splits the remaining MVP into small execution plans that can be
-implemented, tested, and committed one at a time. It is based on the current
-repository state after Plan 1 and Plan 2.
-
-Current audit companion:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-current-code-audit-and-gap-review.md`
+This roadmap replaces the earlier mixed plans with a cleaner sequence. Plan 1
+and Plan 2 are already complete. Plans 3-7 build the Rust runtime foundation in
+the right order before UniFFI, SwiftUI, Swift native tools, and Desktop MiniCPM
+are planned in detail.
 
 The architectural boundary remains:
 
@@ -25,53 +23,34 @@ SwiftUI Frontend       = presentation and interaction
 
 Implemented:
 
-- Rust crate skeleton under `local-ios-agent/rust-core`.
-- Runtime IDs, errors, runtime events, and event kinds.
-- Event-sourced `SessionTree`.
-- In-memory closure-table event store.
-- SQLite `EventStore` with `sessions`, `events`, `event_paths`, and
-  `audit_log` tables.
-- Active-branch reconstruction through closure-table path rows.
-- `ContextController` and `PromptFrame` basics.
-- `TokenizerAdapter` and deterministic `MockTokenizer`.
+- Rust crate skeleton.
+- Runtime IDs, error categories, runtime events.
+- `SessionTree`.
+- In-memory event store.
+- SQLite event store with closure-table active branch reconstruction.
+- Basic `ContextController` and `PromptFrame`.
+- `TokenizerAdapter` and `MockTokenizer`.
 - `MockStreamingProvider`.
 - `StreamBatcher`.
-- Approval DTOs and `PolicyEngine` stubs.
-- Tool DTOs: `ToolSchema`, `ToolCall`, and `ToolResult`.
-- Rust tests for runtime, session tree, SQLite store, approvals, context, mock
-  provider, and stream batching.
+- Approval DTOs and simple `PolicyEngine`.
+- Tool DTOs: `ToolSchema`, `ToolCall`, `ToolResult`.
 
 Not implemented:
 
-- Run state machine, cancellation, and replay from persisted events.
-- Tool registry, tool router, JSON validation, and executor bridge.
-- Full tool-call lifecycle inside `AgentRuntime`.
-- Tool-result injection and model continuation after tool execution.
-- Runtime use of SQLite as the app persistence backend.
-- Provider settings persistence.
-- Prompt debug export API.
-- Context truncation beyond fail-fast budget checks.
-- UniFFI bridge.
-- Swift package or iOS app shell.
-- Swift Native Toolkit and iOS permission/tool execution.
-- Shortcuts / `INVoiceShortcutCenter` bridge.
-- Desktop MiniCPM-V-4.6 provider.
-- C++ on-device inference boundary.
-- End-to-end MVP smoke tests.
+- Complete multi-step agent loop.
+- Run state machine, cancellation, replay, persistent runtime cursors.
+- Tool registry/router/parser/execution request/result continuation.
+- Full context controller with prompt layering, budget, retention, compaction.
+- Long-term memory, memory candidates, branch summaries, blob metadata,
+  provider settings, audit storage.
+- Security manager with permission scopes, approval queue, approval protocol.
+- UniFFI, SwiftUI, Swift native toolkit, Desktop MiniCPM provider.
 
-## Plan Authoring Gate
+## Plan Authoring Rule
 
-Before writing each detailed implementation plan, perform a current-code audit:
-
-1. Read the relevant source files and tests.
-2. Run targeted `rg` checks for the capability being planned.
-3. Compare requested gaps or external review notes against actual code behavior.
-4. Add a "Current Code Audit" section to the detailed plan.
-5. Assign each valid gap to the current plan, a later MVP plan, or a post-MVP
-   backlog item.
-
-This gate prevents stale plans from assuming code that does not exist, or
-dragging post-MVP concerns into the next small execution step.
+Every future detailed plan must start by checking the current code. The plan
+must include a `Current Code Audit` section that states what exists, what is
+missing, and which gaps are assigned to that plan.
 
 ## Execution Phases
 
@@ -89,160 +68,96 @@ Status: complete.
 Plan file:
 `local-ios-agent/docs/superpowers/plans/2026-06-17-sqlite-memory-store.md`
 
-### Plan 3: Rust Tool Runtime Lifecycle
+### Plan 3: Core Agent Loop + Run State Machine
 
 Status: next.
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-rust-tool-runtime-lifecycle.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-core-agent-loop-run-state.md`
 
-Builds:
+Owns:
 
-- `ToolRegistry`
-- `ToolExecutor` trait
-- `ToolRouter`
-- provider-emitted tool calls
-- read-only tool execution
-- approval-required suspension event path
-- tool result persistence and injection into follow-up model context
+- Multi-step agent loop skeleton.
+- `running / waiting_tool / suspended / failed / cancelled / completed`.
+- Run cancellation.
+- Run replay from events.
+- Multi-session runtime cursor.
+- Tool-call and tool-result continuation slots, without implementing registry
+  or Swift execution yet.
 
-Why this is next:
+### Plan 4: Tool Orchestration
 
-Swift should remain the real iOS tool layer, but Rust first needs a tested
-orchestration contract. Without this, the UniFFI bridge would expose unstable
-shapes and Swift would be forced to compensate for missing runtime semantics.
+Plan file:
+`local-ios-agent/docs/superpowers/plans/2026-06-18-tool-orchestration.md`
 
-### Plan 4: Persistent Runtime and Context Debugging
+Owns:
 
-Status: planned after Plan 3.
+- `ToolRegistry`.
+- Tool call JSON parse and validation.
+- Policy route into allow, deny, approval, or Swift execution request.
+- `ToolExecutionRequest`.
+- Swift result submission entry point.
+- Recoverable tool errors.
 
-Builds:
+### Plan 5: Context Controller
 
-- Runtime construction with SQLite-backed sessions.
-- Session creation and branch continuation that survive runtime recreation.
-- Run state model for running, suspended, waiting-tool, failed, cancelled, and
-  completed states.
-- Run cancellation that appends `RunCancelled` without deleting prior events.
-- Replay from persisted events into runtime state after restart.
-- Provider settings storage.
-- Audit log writes for tool lifecycle.
-- Prompt debug snapshots for the last model call.
-- Conservative context truncation at message/tool-result boundaries.
+Plan file:
+`local-ios-agent/docs/superpowers/plans/2026-06-18-context-controller.md`
 
-Why this follows Plan 3:
+Owns:
 
-Tool results and audit rows must be known before designing the final persistent
-runtime schema and prompt debug export.
+- Active branch projection.
+- System/policy/memory prompt layering.
+- Tool schema injection strategy.
+- Tool result retention and sensitivity filtering.
+- Context budget management.
+- Provider tokenizer alignment interface.
+- Summary and compaction events.
 
-### Plan 5: UniFFI Runtime Bridge
+### Plan 6: Memory Foundation
 
-Status: planned after Plan 4.
+Plan file:
+`local-ios-agent/docs/superpowers/plans/2026-06-18-memory-foundation.md`
 
-Builds:
+Owns:
 
-- UniFFI-compatible DTOs.
-- `AgentCoordinator` facade.
-- Swift-callable runtime creation.
-- Swift-callable `create_session`, `send_message`, `cancel`,
-  `register_tool`, `submit_approval_decision`, and `submit_tool_result`.
-- Event subscription surface with batched assistant deltas.
-- FFI-safe error mapping.
-- FFI-safe approval and tool-result submission shape.
+- Long-term memory tables.
+- Memory extraction candidates.
+- Keyword index.
+- Branch summary persistence.
+- Blob/image reference strategy.
+- Audit and provider settings persistence.
 
-Why this follows Plan 4:
+### Plan 7: Security Manager
 
-The FFI boundary should expose stable runtime semantics, not temporary Rust
-internals. SQLite-backed sessions and prompt debug snapshots need to exist
-before SwiftUI depends on them.
+Plan file:
+`local-ios-agent/docs/superpowers/plans/2026-06-18-security-manager.md`
 
-### Plan 6: SwiftUI Shell With Mock Runtime
+Owns:
 
-Status: planned after Plan 5.
+- Policy engine.
+- Permission scopes.
+- Per-tool risk policy.
+- Approval pending queue.
+- Audit log writing policy.
+- Rust-Swift approval protocol.
+- LocalAuthentication integration-point protocol.
 
-Builds:
+## After Plan 7
 
-- `ios-app` SwiftUI project.
-- Chat timeline.
-- Session creation and message sending through UniFFI.
-- Provider selector with mock provider as the first option.
-- Basic branch indicator.
-- Debug `PromptFrame` viewer.
-- Runtime event rendering smoke tests.
+Only after these runtime foundations are stable, write the next plans:
 
-Why this follows Plan 5:
-
-SwiftUI should consume the generated bridge and runtime event stream instead of
-inventing a parallel local state model.
-
-### Plan 7: Swift Native Toolkit and Approval Flow
-
-Status: planned after Plan 6.
-
-Builds:
-
-- Swift native tool registry.
-- One read tool backed by an iOS framework.
-- One confirmation-required write tool.
-- Approval sheet.
-- LocalAuthentication integration point for confirmation-required tools when
-  enabled by policy.
-- Permission-state surfacing.
-- Structured `ToolResult` return to Rust.
-- Shortcuts bridge skeleton for `INVoiceShortcutCenter`.
-
-Why this follows Plan 6:
-
-The UI and bridge must exist before native tools can safely request permissions,
-display approvals, and stream tool lifecycle events back to the user.
-
-### Plan 8: Desktop MiniCPM Provider
-
-Status: planned after Plan 7.
-
-Builds:
-
-- Local endpoint configuration.
-- Desktop MiniCPM provider adapter for simulator development.
-- Streaming HTTP response parsing.
-- Provider tokenizer contract with conservative safety margin.
-- Real text smoke test against a Mac-local OpenAI-compatible endpoint.
-- Optional image payload path when the endpoint supports it.
-
-Why this follows Plan 7:
-
-The runtime, UI, and tool path should be stable before introducing a real model.
-This keeps model issues separate from runtime/tooling issues.
-
-### Plan 9: MVP Acceptance Hardening
-
-Status: planned after Plan 8.
-
-Builds:
-
-- End-to-end mock-provider smoke test.
-- End-to-end Desktop MiniCPM smoke test.
-- Tool lifecycle audit verification.
-- Prompt debug verification.
-- Cancellation and provider error path tests.
-- MVP acceptance checklist against the design spec.
-- Post-MVP backlog split for long-term memory, semantic retrieval, SQLCipher,
-  and true on-device C++ inference.
-
-Why this is last:
-
-It verifies the full MVP rather than adding a new architectural subsystem.
+- Plan 8: UniFFI bridge.
+- Plan 9: SwiftUI shell.
+- Plan 10: Swift Native Toolkit implementation.
+- Plan 11: Desktop MiniCPM provider.
+- Plan 12: MVP acceptance hardening.
 
 ## Development Rules
 
-- Use TDD for runtime behavior.
-- Use small commits after each completed task.
+- Use TDD for every runtime behavior.
+- Commit after each completed task.
 - Stage explicit paths only; never stage `pi/`.
-- Keep Swift native tools in Swift; Rust orchestrates and records.
-- Keep C++ inference out of the MVP except for the future provider boundary.
-- Avoid adding abstractions until a plan needs them for a real test.
-
-## Recommended Execution Mode
-
-Use inline execution with `superpowers:executing-plans` for Plans 3 and 4 because
-runtime modules are tightly coupled. Reconsider subagent execution for SwiftUI
-or Desktop MiniCPM work once the boundaries become more independent.
+- Rust orchestrates; Swift executes iOS APIs.
+- Keep long-term memory and SQLCipher/Data Protection scoped to memory/security
+  plans rather than scattering them across UI work.
