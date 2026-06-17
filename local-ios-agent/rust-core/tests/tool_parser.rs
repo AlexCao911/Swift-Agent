@@ -20,3 +20,21 @@ fn parser_rejects_missing_tool_name() {
 
     assert!(matches!(error, AgentError::ToolParse(_)));
 }
+
+#[test]
+fn parser_rejects_missing_arguments() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"id":"call_1","name":"calendar.search_events"}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}
+
+#[test]
+fn parser_rejects_non_object_arguments() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"id":"call_1","name":"calendar.search_events","arguments":null}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}

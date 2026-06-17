@@ -77,3 +77,33 @@ fn router_denies_destructive_tool_as_recoverable_error() {
 
     assert!(matches!(outcome, ToolRouteOutcome::Denied(_)));
 }
+
+#[test]
+fn router_routes_confirm_tool_to_approval_required_with_reason() {
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(schema("calendar.create_event", RiskLevel::Confirm))
+        .unwrap();
+    let router = ToolRouter::new(registry);
+
+    let outcome = router
+        .route(
+            &RunId("run_1".into()),
+            &SessionId("session_1".into()),
+            &EntryId("entry_1".into()),
+            ToolCall {
+                id: "call_1".into(),
+                name: "calendar.create_event".into(),
+                arguments_json: "{}".into(),
+            },
+        )
+        .unwrap();
+
+    match outcome {
+        ToolRouteOutcome::ApprovalRequired { request, reason } => {
+            assert_eq!(request.tool_name, "calendar.create_event");
+            assert!(reason.contains("calendar.create_event"));
+        }
+        _ => panic!("expected approval required route"),
+    }
+}

@@ -1,13 +1,22 @@
 use std::collections::HashMap;
 
+use serde_json::{json, Value};
+
 use crate::context::{ContextController, TokenizerAdapter};
 use crate::core::{
     AgentError, AgentTurnResult, EntryId, EventKind, ModelProvider, ModelProviderOutput, RunId,
     RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore};
-use crate::tool::{ToolExecutionRequest, ToolResult, ToolRouteOutcome, ToolRouter};
+use crate::tool::{ToolCall, ToolExecutionRequest, ToolResult, ToolRouteOutcome, ToolRouter};
 use crate::utils::id::IdGenerator;
+
+#[derive(Clone, Debug)]
+struct RoutedToolCall {
+    event_id: EntryId,
+    pending_tool_call_id: String,
+    denied_result: Option<ToolResult>,
+}
 
 pub struct AgentRuntimeConfig {
     pub system_prompt: String,
@@ -49,15 +58,19 @@ impl<S: EventStore> AgentRuntime<S> {
                 SessionCursor::from_last_event(session_id.clone(), store.last_event(&session_id)?);
             sessions.insert(session_id, cursor);
         }
+        let session_ids: Vec<_> = sessions.keys().cloned().collect();
+        let next_id = next_replayed_id(&store, &session_ids)?;
 
-        Ok(Self {
+        let mut runtime = Self {
             config,
-            ids: IdGenerator::new(),
+            ids: IdGenerator::starting_at(next_id),
             store,
             sessions,
             runs: HashMap::new(),
             pending_tool_requests: Vec::new(),
-        })
+        };
+        runtime.replay_waiting_runs()?;
+        Ok(runtime)
     }
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
@@ -185,31 +198,20 @@ impl<S: EventStore> AgentRuntime<S> {
                         parent = delta_id.clone();
                         emitted.push(self.store.get(&input.session_id, &delta_id)?);
                     }
-                    let pending_tool_call_id = tool_call.id.clone();
-                    let tool_call_id = self.append_event(
+                    let routed_tool_call = self.append_tool_call_requested(
                         &input.session_id,
                         Some(parent.clone()),
-                        Some(run_id.clone()),
-                        EventKind::ToolCallRequested,
-                        format!("{} {}", tool_call.name, tool_call.arguments_json),
+                        &run_id,
+                        tool_call,
                     )?;
-                    let mut denied_result = None;
-                    if let Some(router) = &self.config.tool_router {
-                        match router.route(&run_id, &input.session_id, &tool_call_id, tool_call)? {
-                            ToolRouteOutcome::ExecuteInSwift(request)
-                            | ToolRouteOutcome::ApprovalRequired(request) => {
-                                self.pending_tool_requests.push(request);
-                            }
-                            ToolRouteOutcome::Denied(result) => {
-                                denied_result = Some(result);
-                            }
-                        }
-                    }
                     if let Some(run) = self.runs.get_mut(&run_id) {
                         run.mark_waiting_tool()?;
                     }
-                    emitted.push(self.store.get(&input.session_id, &tool_call_id)?);
-                    if let Some(result) = denied_result {
+                    emitted.push(
+                        self.store
+                            .get(&input.session_id, &routed_tool_call.event_id)?,
+                    );
+                    if let Some(result) = routed_tool_call.denied_result {
                         let resumed = self.submit_tool_result(run_id_string.clone(), result)?;
                         let state = resumed.state;
                         let pending_tool_call_id = resumed.pending_tool_call_id;
@@ -225,7 +227,7 @@ impl<S: EventStore> AgentRuntime<S> {
                         run_id: run_id_string,
                         state: RunState::WaitingTool,
                         events: emitted,
-                        pending_tool_call_id: Some(pending_tool_call_id),
+                        pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
                     });
                 }
                 ModelProviderOutput::Completed(completed) => {
@@ -290,6 +292,7 @@ impl<S: EventStore> AgentRuntime<S> {
         if let Some(run) = self.runs.get_mut(&run_key) {
             run.mark_running()?;
         }
+        self.consume_pending_tool_requests(&run_key);
 
         let parent_id = self
             .sessions
@@ -364,23 +367,33 @@ impl<S: EventStore> AgentRuntime<S> {
                         parent = delta_id.clone();
                         emitted.push(self.store.get(&session_id, &delta_id)?);
                     }
-                    let pending_tool_call_id = tool_call.id.clone();
-                    let tool_call_id = self.append_event(
+                    let routed_tool_call = self.append_tool_call_requested(
                         &session_id,
                         Some(parent.clone()),
-                        Some(run_key.clone()),
-                        EventKind::ToolCallRequested,
-                        format!("{} {}", tool_call.name, tool_call.arguments_json),
+                        &run_key,
+                        tool_call,
                     )?;
                     if let Some(run) = self.runs.get_mut(&run_key) {
                         run.mark_waiting_tool()?;
                     }
-                    emitted.push(self.store.get(&session_id, &tool_call_id)?);
+                    emitted.push(self.store.get(&session_id, &routed_tool_call.event_id)?);
+                    if let Some(result) = routed_tool_call.denied_result {
+                        let resumed = self.submit_tool_result(run_id.clone(), result)?;
+                        let state = resumed.state;
+                        let pending_tool_call_id = resumed.pending_tool_call_id;
+                        emitted.extend(resumed.events);
+                        return Ok(AgentTurnResult {
+                            run_id,
+                            state,
+                            events: emitted,
+                            pending_tool_call_id,
+                        });
+                    }
                     return Ok(AgentTurnResult {
                         run_id,
                         state: RunState::WaitingTool,
                         events: emitted,
-                        pending_tool_call_id: Some(pending_tool_call_id),
+                        pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
                     });
                 }
                 ModelProviderOutput::Completed(completed) => {
@@ -452,8 +465,119 @@ impl<S: EventStore> AgentRuntime<S> {
         self.store.get(&session_id, &event_id)
     }
 
+    fn replay_waiting_runs(&mut self) -> Result<(), AgentError> {
+        let session_ids: Vec<_> = self.sessions.keys().cloned().collect();
+        for session_id in session_ids {
+            let Some(active_leaf_id) = self.store.active_leaf(&session_id)? else {
+                continue;
+            };
+            let branch = self.store.active_branch(&session_id, &active_leaf_id)?;
+            let Some(last_event) = branch.last() else {
+                continue;
+            };
+            if last_event.kind != EventKind::ToolCallRequested {
+                continue;
+            }
+            let Some(run_id) = last_event.run_id.clone() else {
+                continue;
+            };
+
+            let mut run = RunRecord::new(run_id.clone(), session_id.clone());
+            run.mark_waiting_tool()?;
+            self.runs.insert(run_id.clone(), run);
+
+            if let Some(router) = &self.config.tool_router {
+                let tool_call = tool_call_from_event(last_event)?;
+                match router.route(&run_id, &session_id, &last_event.id, tool_call)? {
+                    ToolRouteOutcome::ExecuteInSwift(request) => {
+                        self.pending_tool_requests.push(request);
+                    }
+                    ToolRouteOutcome::ApprovalRequired { request, reason: _ } => {
+                        // Plan 7 will turn this route into a suspended approval lifecycle.
+                        self.pending_tool_requests.push(request);
+                    }
+                    ToolRouteOutcome::Denied(_) => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn append_tool_call_requested(
+        &mut self,
+        session_id: &SessionId,
+        parent_id: Option<EntryId>,
+        run_id: &RunId,
+        tool_call: ToolCall,
+    ) -> Result<RoutedToolCall, AgentError> {
+        let entry_id = EntryId(self.ids.next_id("entry"));
+        let pending_tool_call_id = tool_call.id.clone();
+        let mut route_state = "unrouted";
+        let mut route_reason = None;
+        let mut pending_request = None;
+        let mut denied_result = None;
+
+        if let Some(router) = &self.config.tool_router {
+            match router.route(run_id, session_id, &entry_id, tool_call.clone())? {
+                ToolRouteOutcome::ExecuteInSwift(request) => {
+                    route_state = "execute_in_swift";
+                    pending_request = Some(request);
+                }
+                ToolRouteOutcome::ApprovalRequired { request, reason } => {
+                    route_state = "approval_required";
+                    route_reason = Some(reason);
+                    // Plan 7 will turn this route into a suspended approval lifecycle.
+                    pending_request = Some(request);
+                }
+                ToolRouteOutcome::Denied(result) => {
+                    route_state = "denied";
+                    route_reason = Some(result.audit_text.clone());
+                    denied_result = Some(result);
+                }
+            }
+        }
+
+        let payload = tool_call_payload(&tool_call, route_state, route_reason.as_deref());
+        let event_id = self.append_event_with_id(
+            entry_id,
+            session_id,
+            parent_id,
+            Some(run_id.clone()),
+            EventKind::ToolCallRequested,
+            payload,
+        )?;
+        if let Some(request) = pending_request {
+            self.pending_tool_requests.push(request);
+        }
+
+        Ok(RoutedToolCall {
+            event_id,
+            pending_tool_call_id,
+            denied_result,
+        })
+    }
+
+    fn consume_pending_tool_requests(&mut self, run_id: &RunId) {
+        self.pending_tool_requests
+            .retain(|request| &request.run_id != run_id);
+    }
+
     fn append_event(
         &mut self,
+        session_id: &SessionId,
+        parent_id: Option<EntryId>,
+        run_id: Option<RunId>,
+        kind: EventKind,
+        payload: impl Into<String>,
+    ) -> Result<EntryId, AgentError> {
+        let entry_id = EntryId(self.ids.next_id("entry"));
+        self.append_event_with_id(entry_id, session_id, parent_id, run_id, kind, payload)
+    }
+
+    fn append_event_with_id(
+        &mut self,
+        entry_id: EntryId,
         session_id: &SessionId,
         parent_id: Option<EntryId>,
         run_id: Option<RunId>,
@@ -469,7 +593,6 @@ impl<S: EventStore> AgentRuntime<S> {
             Some(parent_id) => self.store.get(session_id, parent_id)?.depth + 1,
             None => 0,
         };
-        let entry_id = EntryId(self.ids.next_id("entry"));
         let event = RuntimeEvent::new(
             entry_id.clone(),
             session_id.clone(),
@@ -491,4 +614,80 @@ impl<S: EventStore> AgentRuntime<S> {
 
         Ok(entry_id)
     }
+}
+
+fn tool_call_payload(call: &ToolCall, route_state: &str, route_reason: Option<&str>) -> String {
+    json!({
+        "call_id": call.id,
+        "name": call.name,
+        "arguments_json": call.arguments_json,
+        "route_state": route_state,
+        "route_reason": route_reason,
+    })
+    .to_string()
+}
+
+fn tool_call_from_event(event: &RuntimeEvent) -> Result<ToolCall, AgentError> {
+    let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
+        AgentError::ToolParse(format!("invalid persisted tool call payload: {error}"))
+    })?;
+    let id = value
+        .get("call_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::ToolParse("persisted tool call missing call_id".to_string()))?
+        .to_string();
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::ToolParse("persisted tool call missing name".to_string()))?
+        .to_string();
+    let arguments_json = value
+        .get("arguments_json")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AgentError::ToolParse("persisted tool call missing arguments_json".to_string())
+        })?
+        .to_string();
+    let arguments: Value = serde_json::from_str(&arguments_json).map_err(|error| {
+        AgentError::ToolParse(format!("invalid persisted tool arguments JSON: {error}"))
+    })?;
+    if !arguments.is_object() {
+        return Err(AgentError::ToolParse(
+            "persisted tool arguments must be a JSON object".to_string(),
+        ));
+    }
+
+    Ok(ToolCall {
+        id,
+        name,
+        arguments_json,
+    })
+}
+
+fn next_replayed_id<S: EventStore>(
+    store: &S,
+    session_ids: &[SessionId],
+) -> Result<u64, AgentError> {
+    let mut max_id = 0;
+
+    for session_id in session_ids {
+        max_id = max_id.max(numeric_suffix(&session_id.0).unwrap_or(0));
+
+        let Some(active_leaf_id) = store.active_leaf(session_id)? else {
+            continue;
+        };
+        let branch = store.active_branch(session_id, &active_leaf_id)?;
+        for event in branch {
+            max_id = max_id.max(numeric_suffix(&event.id.0).unwrap_or(0));
+            if let Some(run_id) = event.run_id {
+                max_id = max_id.max(numeric_suffix(&run_id.0).unwrap_or(0));
+            }
+        }
+    }
+
+    Ok(max_id + 1)
+}
+
+fn numeric_suffix(id: &str) -> Option<u64> {
+    id.rsplit_once('_')?.1.parse().ok()
 }

@@ -19,7 +19,15 @@ impl ToolCallParser {
             .as_str()
             .ok_or_else(|| AgentError::ToolParse("missing tool name".to_string()))?
             .to_string();
-        let arguments_json = value["arguments"].to_string();
+        let arguments = value
+            .get("arguments")
+            .ok_or_else(|| AgentError::ToolParse("missing tool arguments".to_string()))?;
+        if !arguments.is_object() {
+            return Err(AgentError::ToolParse(
+                "tool arguments must be a JSON object".to_string(),
+            ));
+        }
+        let arguments_json = arguments.to_string();
 
         Ok(ToolCall {
             id,

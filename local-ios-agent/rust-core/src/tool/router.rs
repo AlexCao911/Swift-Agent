@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{PolicyDecision, PolicyEngine};
 use crate::tool::{
@@ -7,7 +9,10 @@ use crate::tool::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolRouteOutcome {
     ExecuteInSwift(ToolExecutionRequest),
-    ApprovalRequired(ToolExecutionRequest),
+    ApprovalRequired {
+        request: ToolExecutionRequest,
+        reason: String,
+    },
     Denied(ToolResult),
 }
 
@@ -32,6 +37,7 @@ impl ToolRouter {
         tool_call_entry_id: &EntryId,
         call: ToolCall,
     ) -> Result<ToolRouteOutcome, AgentError> {
+        validate_arguments_json(&call)?;
         let schema = self
             .registry
             .schema(&call.name)
@@ -45,7 +51,9 @@ impl ToolRouter {
 
         match self.policy.decide(&schema.risk_level, &schema.name) {
             PolicyDecision::Allow => Ok(ToolRouteOutcome::ExecuteInSwift(request)),
-            PolicyDecision::RequireApproval(_) => Ok(ToolRouteOutcome::ApprovalRequired(request)),
+            PolicyDecision::RequireApproval(reason) => {
+                Ok(ToolRouteOutcome::ApprovalRequired { request, reason })
+            }
             PolicyDecision::Deny(reason) => Ok(ToolRouteOutcome::Denied(ToolResult {
                 display_text: reason.clone(),
                 model_text: reason.clone(),
@@ -57,4 +65,21 @@ impl ToolRouter {
             })),
         }
     }
+}
+
+fn validate_arguments_json(call: &ToolCall) -> Result<(), AgentError> {
+    let arguments: Value = serde_json::from_str(&call.arguments_json).map_err(|error| {
+        AgentError::ToolValidation(format!(
+            "invalid arguments for tool `{}`: {error}",
+            call.name
+        ))
+    })?;
+    if !arguments.is_object() {
+        return Err(AgentError::ToolValidation(format!(
+            "arguments for tool `{}` must be a JSON object",
+            call.name
+        )));
+    }
+
+    Ok(())
 }
