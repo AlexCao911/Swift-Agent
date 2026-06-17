@@ -50,3 +50,16 @@ fn session_tree_tracks_active_leaf() {
     let payloads: Vec<_> = branch.iter().map(|event| event.payload.as_str()).collect();
     assert_eq!(payloads, vec!["created", "hello"]);
 }
+
+#[test]
+fn session_tree_can_be_constructed_with_explicit_store() {
+    let mut tree = SessionTree::with_store(
+        SessionId("session_3".to_string()),
+        InMemoryEventStore::new(),
+    );
+    let root = tree
+        .append(None, EventKind::SessionCreated, "created")
+        .unwrap();
+
+    assert_eq!(tree.active_leaf(), Some(&root));
+}
