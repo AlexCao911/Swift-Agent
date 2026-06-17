@@ -39,6 +39,18 @@ impl SqliteEventStore {
         Ok(names)
     }
 
+    pub fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        <Self as EventStore>::list_sessions(self)
+    }
+
+    pub fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
+        <Self as EventStore>::active_leaf(self, session_id)
+    }
+
+    pub fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
+        <Self as EventStore>::last_event(self, session_id)
+    }
+
     fn migrate(&self) -> Result<(), AgentError> {
         self.conn
             .execute_batch(
@@ -251,6 +263,66 @@ impl EventStore for SqliteEventStore {
             events.push(self.get(session_id, &ancestor_id)?);
         }
         Ok(events)
+    }
+
+    fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare("select id from sessions order by id")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(SessionId(row.map_err(storage_error)?));
+        }
+        Ok(sessions)
+    }
+
+    fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare("select active_leaf_id from sessions where id = ?1")
+            .map_err(storage_error)?;
+        let mut rows = statement
+            .query(params![session_id.0.as_str()])
+            .map_err(storage_error)?;
+
+        match rows.next().map_err(storage_error)? {
+            Some(row) => {
+                let active_leaf_id: Option<String> = row.get(0).map_err(storage_error)?;
+                Ok(active_leaf_id.map(EntryId))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "
+                select id
+                from events
+                where session_id = ?1
+                order by sequence desc
+                limit 1
+                ",
+            )
+            .map_err(storage_error)?;
+        let mut rows = statement
+            .query(params![session_id.0.as_str()])
+            .map_err(storage_error)?;
+
+        match rows.next().map_err(storage_error)? {
+            Some(row) => {
+                let entry_id: String = row.get(0).map_err(storage_error)?;
+                self.get(session_id, &EntryId(entry_id)).map(Some)
+            }
+            None => Ok(None),
+        }
     }
 }
 

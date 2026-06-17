@@ -8,4 +8,7 @@ pub trait EventStore {
         session_id: &SessionId,
         leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError>;
+    fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError>;
+    fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError>;
+    fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError>;
 }

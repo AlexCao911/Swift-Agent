@@ -96,3 +96,36 @@ fn sqlite_store_reconstructs_active_branch_from_closure_table() {
 
     assert_eq!(payloads, vec!["root", "plan", "done"]);
 }
+
+#[test]
+fn sqlite_store_exposes_replay_queries() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let mut store = SqliteEventStore::open(&db_path).unwrap();
+
+    store
+        .append(sqlite_event("root", None, 1, 0, "root"))
+        .unwrap();
+    store
+        .append(sqlite_event("leaf", Some("root"), 2, 1, "leaf"))
+        .unwrap();
+
+    assert_eq!(
+        store.list_sessions().unwrap(),
+        vec![SessionId("session_sqlite".into())]
+    );
+    assert_eq!(
+        store
+            .active_leaf(&SessionId("session_sqlite".into()))
+            .unwrap(),
+        Some(EntryId("leaf".into()))
+    );
+    assert_eq!(
+        store
+            .last_event(&SessionId("session_sqlite".into()))
+            .unwrap()
+            .unwrap()
+            .payload,
+        "leaf"
+    );
+}

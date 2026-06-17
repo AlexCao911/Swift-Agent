@@ -48,6 +48,18 @@ impl InMemoryEventStore {
         <Self as EventStore>::active_branch(self, session_id, leaf_id)
     }
 
+    pub fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        <Self as EventStore>::list_sessions(self)
+    }
+
+    pub fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
+        <Self as EventStore>::active_leaf(self, session_id)
+    }
+
+    pub fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
+        <Self as EventStore>::last_event(self, session_id)
+    }
+
     fn insert_paths(&mut self, event: &RuntimeEvent) {
         self.paths.push(PathRow {
             key: PathKey {
@@ -149,5 +161,30 @@ impl EventStore for InMemoryEventStore {
         }
         events.sort_by_key(|event| (event.depth, event.sequence));
         Ok(events)
+    }
+
+    fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        let mut sessions: Vec<_> = self
+            .events
+            .keys()
+            .map(|(session_id, _)| session_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        sessions.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(sessions)
+    }
+
+    fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
+        Ok(self.last_event(session_id)?.map(|event| event.id))
+    }
+
+    fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
+        Ok(self
+            .events
+            .values()
+            .filter(|event| event.session_id == *session_id)
+            .max_by_key(|event| event.sequence)
+            .cloned())
     }
 }
