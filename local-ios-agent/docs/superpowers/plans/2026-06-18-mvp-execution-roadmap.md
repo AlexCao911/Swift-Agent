@@ -59,21 +59,21 @@ missing, and which gaps are assigned to that plan.
 Status: complete.
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-17-rust-runtime-mock-provider.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-17-plan-01-rust-runtime-mock-provider.md`
 
 ### Plan 2: SQLite Memory Store
 
 Status: complete.
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-17-sqlite-memory-store.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-17-plan-02-sqlite-memory-store.md`
 
 ### Plan 3: Core Agent Loop + Run State Machine
 
 Status: next.
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-core-agent-loop-run-state.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-plan-03-core-agent-loop-run-state.md`
 
 Owns:
 
@@ -88,7 +88,7 @@ Owns:
 ### Plan 4: Tool Orchestration
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-tool-orchestration.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-plan-04-tool-orchestration.md`
 
 Owns:
 
@@ -102,7 +102,7 @@ Owns:
 ### Plan 5: Context Controller
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-context-controller.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-plan-05-context-controller.md`
 
 Owns:
 
@@ -117,7 +117,7 @@ Owns:
 ### Plan 6: Memory Foundation
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-memory-foundation.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-plan-06-memory-foundation.md`
 
 Owns:
 
@@ -131,7 +131,7 @@ Owns:
 ### Plan 7: Security Manager
 
 Plan file:
-`local-ios-agent/docs/superpowers/plans/2026-06-18-security-manager.md`
+`local-ios-agent/docs/superpowers/plans/2026-06-18-plan-07-security-manager.md`
 
 Owns:
 
