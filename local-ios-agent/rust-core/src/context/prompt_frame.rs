@@ -1,4 +1,4 @@
-use crate::context::{BranchProjector, TokenizerAdapter};
+use crate::context::{BranchProjector, PromptLayers, TokenizerAdapter};
 use crate::core::{AgentError, RuntimeEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,8 +25,7 @@ pub struct PromptFrame {
 }
 
 pub struct ContextController {
-    system_prompt: String,
-    runtime_policy: String,
+    layers: PromptLayers,
     tool_schemas: Vec<String>,
     tokenizer: Box<dyn TokenizerAdapter>,
 }
@@ -39,8 +38,11 @@ impl ContextController {
         tokenizer: Box<dyn TokenizerAdapter>,
     ) -> Self {
         Self {
-            system_prompt: system_prompt.into(),
-            runtime_policy: runtime_policy.into(),
+            layers: PromptLayers {
+                system: system_prompt.into(),
+                policy: runtime_policy.into(),
+                memory: Vec::new(),
+            },
             tool_schemas,
             tokenizer,
         }
@@ -50,8 +52,8 @@ impl ContextController {
         let messages = BranchProjector::new().project(branch);
 
         let frame = PromptFrame {
-            system_prompt: self.system_prompt.clone(),
-            runtime_policy: self.runtime_policy.clone(),
+            system_prompt: self.layers.render_system_prompt(),
+            runtime_policy: self.layers.policy.clone(),
             tool_schemas: self.tool_schemas.clone(),
             messages,
         };

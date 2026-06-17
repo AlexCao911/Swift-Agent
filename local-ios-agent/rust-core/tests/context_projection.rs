@@ -1,3 +1,4 @@
+use local_ios_agent_runtime::context::PromptLayers;
 use local_ios_agent_runtime::context::{BranchProjector, PromptMessage};
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 
@@ -32,4 +33,16 @@ fn projector_preserves_model_visible_branch_events() {
             PromptMessage::Assistant("done".into()),
         ]
     );
+}
+
+#[test]
+fn prompt_layers_render_system_policy_and_memory() {
+    let layers = PromptLayers {
+        system: "system".into(),
+        policy: "policy".into(),
+        memory: vec!["memory one".into()],
+    };
+
+    assert!(layers.render_system_prompt().contains("system"));
+    assert!(layers.render_system_prompt().contains("memory one"));
 }
