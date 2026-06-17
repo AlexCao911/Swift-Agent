@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
+use crate::memory::EventStore;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct PathKey {
@@ -28,35 +29,7 @@ impl InMemoryEventStore {
     }
 
     pub fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError> {
-        let key = (event.session_id.clone(), event.id.clone());
-        if self.events.contains_key(&key) {
-            return Err(AgentError::Storage(format!(
-                "event already exists: {}",
-                event.id.0
-            )));
-        }
-
-        if let Some(parent_id) = &event.parent_id {
-            let parent_key = (event.session_id.clone(), parent_id.clone());
-            if !self.events.contains_key(&parent_key) {
-                return Err(AgentError::Storage(format!(
-                    "missing parent event: {}",
-                    parent_id.0
-                )));
-            }
-        }
-
-        self.insert_paths(&event);
-
-        if let Some(parent_id) = &event.parent_id {
-            self.children
-                .entry((event.session_id.clone(), parent_id.clone()))
-                .or_default()
-                .insert(event.id.clone());
-        }
-
-        self.events.insert(key, event);
-        Ok(())
+        <Self as EventStore>::append(self, event)
     }
 
     pub fn get(
@@ -64,10 +37,7 @@ impl InMemoryEventStore {
         session_id: &SessionId,
         entry_id: &EntryId,
     ) -> Result<RuntimeEvent, AgentError> {
-        self.events
-            .get(&(session_id.clone(), entry_id.clone()))
-            .cloned()
-            .ok_or_else(|| AgentError::Storage(format!("event not found: {}", entry_id.0)))
+        <Self as EventStore>::get(self, session_id, entry_id)
     }
 
     pub fn active_branch(
@@ -75,28 +45,7 @@ impl InMemoryEventStore {
         session_id: &SessionId,
         leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError> {
-        let mut rows: Vec<_> = self
-            .paths
-            .iter()
-            .filter(|row| row.key.session_id == *session_id && row.key.descendant_id == *leaf_id)
-            .collect();
-
-        if rows.is_empty() {
-            return Err(AgentError::Storage(format!(
-                "leaf has no path rows: {}",
-                leaf_id.0
-            )));
-        }
-
-        rows.sort_by_key(|row| row.depth_delta);
-        rows.reverse();
-
-        let mut events = Vec::with_capacity(rows.len());
-        for row in rows {
-            events.push(self.get(session_id, &row.key.ancestor_id)?);
-        }
-        events.sort_by_key(|event| (event.depth, event.sequence));
-        Ok(events)
+        <Self as EventStore>::active_branch(self, session_id, leaf_id)
     }
 
     fn insert_paths(&mut self, event: &RuntimeEvent) {
@@ -130,5 +79,75 @@ impl InMemoryEventStore {
                 });
             }
         }
+    }
+}
+
+impl EventStore for InMemoryEventStore {
+    fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError> {
+        let key = (event.session_id.clone(), event.id.clone());
+        if self.events.contains_key(&key) {
+            return Err(AgentError::Storage(format!(
+                "event already exists: {}",
+                event.id.0
+            )));
+        }
+
+        if let Some(parent_id) = &event.parent_id {
+            let parent_key = (event.session_id.clone(), parent_id.clone());
+            if !self.events.contains_key(&parent_key) {
+                return Err(AgentError::Storage(format!(
+                    "missing parent event: {}",
+                    parent_id.0
+                )));
+            }
+        }
+
+        self.insert_paths(&event);
+
+        if let Some(parent_id) = &event.parent_id {
+            self.children
+                .entry((event.session_id.clone(), parent_id.clone()))
+                .or_default()
+                .insert(event.id.clone());
+        }
+
+        self.events.insert(key, event);
+        Ok(())
+    }
+
+    fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {
+        self.events
+            .get(&(session_id.clone(), entry_id.clone()))
+            .cloned()
+            .ok_or_else(|| AgentError::Storage(format!("event not found: {}", entry_id.0)))
+    }
+
+    fn active_branch(
+        &self,
+        session_id: &SessionId,
+        leaf_id: &EntryId,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let mut rows: Vec<_> = self
+            .paths
+            .iter()
+            .filter(|row| row.key.session_id == *session_id && row.key.descendant_id == *leaf_id)
+            .collect();
+
+        if rows.is_empty() {
+            return Err(AgentError::Storage(format!(
+                "leaf has no path rows: {}",
+                leaf_id.0
+            )));
+        }
+
+        rows.sort_by_key(|row| row.depth_delta);
+        rows.reverse();
+
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            events.push(self.get(session_id, &row.key.ancestor_id)?);
+        }
+        events.sort_by_key(|event| (event.depth, event.sequence));
+        Ok(events)
     }
 }
