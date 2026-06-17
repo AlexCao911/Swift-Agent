@@ -46,3 +46,17 @@ fn prompt_layers_render_system_policy_and_memory() {
     assert!(layers.render_system_prompt().contains("system"));
     assert!(layers.render_system_prompt().contains("memory one"));
 }
+
+#[test]
+fn context_sorts_tool_schemas_for_stable_prompt_frames() {
+    let controller = local_ios_agent_runtime::context::ContextController::new(
+        "system",
+        "policy",
+        vec!["z.tool".into(), "a.tool".into()],
+        Box::new(local_ios_agent_runtime::context::MockTokenizer::new(100)),
+    );
+
+    let frame = controller.build_prompt_frame(Vec::new()).unwrap();
+
+    assert_eq!(frame.tool_schemas, vec!["a.tool", "z.tool"]);
+}

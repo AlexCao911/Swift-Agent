@@ -34,9 +34,12 @@ impl ContextController {
     pub fn new(
         system_prompt: impl Into<String>,
         runtime_policy: impl Into<String>,
-        tool_schemas: Vec<String>,
+        mut tool_schemas: Vec<String>,
         tokenizer: Box<dyn TokenizerAdapter>,
     ) -> Self {
+        tool_schemas.sort();
+        tool_schemas.dedup();
+
         Self {
             layers: PromptLayers {
                 system: system_prompt.into(),
