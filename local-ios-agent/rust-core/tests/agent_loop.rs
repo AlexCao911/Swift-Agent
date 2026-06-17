@@ -25,6 +25,7 @@ fn runtime_stops_at_tool_call_and_marks_waiting_tool() {
         tool_schemas: vec!["debug.echo".into()],
         tokenizer: Box::new(MockTokenizer::new(100)),
         provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
     });
     let session_id = runtime.create_session().unwrap();
 
@@ -51,6 +52,7 @@ fn runtime_resumes_from_tool_result_and_completes() {
         tool_schemas: vec!["debug.echo".into()],
         tokenizer: Box::new(MockTokenizer::new(100)),
         provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
     });
     let session_id = runtime.create_session().unwrap();
     let turn = runtime
@@ -95,6 +97,7 @@ fn runtime_cancel_appends_run_cancelled() {
         tool_schemas: vec!["debug.echo".into()],
         tokenizer: Box::new(MockTokenizer::new(100)),
         provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
     });
     let session_id = runtime.create_session().unwrap();
     let turn = runtime

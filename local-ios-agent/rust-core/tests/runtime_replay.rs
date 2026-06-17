@@ -31,6 +31,7 @@ fn config() -> AgentRuntimeConfig {
         tool_schemas: Vec::new(),
         tokenizer: Box::new(MockTokenizer::new(100)),
         provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
     }
 }
 

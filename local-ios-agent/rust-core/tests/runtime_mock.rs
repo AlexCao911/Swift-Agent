@@ -11,6 +11,7 @@ fn runtime_streams_mock_response_and_persists_events() {
         tool_schemas: Vec::new(),
         tokenizer: Box::new(MockTokenizer::new(100)),
         provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
     });
 
     let session_id = runtime.create_session().unwrap();

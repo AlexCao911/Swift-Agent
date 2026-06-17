@@ -6,7 +6,7 @@ use crate::core::{
     RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore};
-use crate::tool::ToolResult;
+use crate::tool::{ToolExecutionRequest, ToolResult, ToolRouteOutcome, ToolRouter};
 use crate::utils::id::IdGenerator;
 
 pub struct AgentRuntimeConfig {
@@ -15,6 +15,7 @@ pub struct AgentRuntimeConfig {
     pub tool_schemas: Vec<String>,
     pub tokenizer: Box<dyn TokenizerAdapter>,
     pub provider: Box<dyn ModelProvider>,
+    pub tool_router: Option<ToolRouter>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +31,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     store: S,
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
+    pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
 impl AgentRuntime<InMemoryEventStore> {
@@ -54,7 +56,12 @@ impl<S: EventStore> AgentRuntime<S> {
             store,
             sessions,
             runs: HashMap::new(),
+            pending_tool_requests: Vec::new(),
         })
+    }
+
+    pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
+        &self.pending_tool_requests
     }
 
     pub fn session_ids(&self) -> Vec<SessionId> {
@@ -186,10 +193,34 @@ impl<S: EventStore> AgentRuntime<S> {
                         EventKind::ToolCallRequested,
                         format!("{} {}", tool_call.name, tool_call.arguments_json),
                     )?;
+                    let mut denied_result = None;
+                    if let Some(router) = &self.config.tool_router {
+                        match router.route(&run_id, &input.session_id, &tool_call_id, tool_call)? {
+                            ToolRouteOutcome::ExecuteInSwift(request)
+                            | ToolRouteOutcome::ApprovalRequired(request) => {
+                                self.pending_tool_requests.push(request);
+                            }
+                            ToolRouteOutcome::Denied(result) => {
+                                denied_result = Some(result);
+                            }
+                        }
+                    }
                     if let Some(run) = self.runs.get_mut(&run_id) {
                         run.mark_waiting_tool()?;
                     }
                     emitted.push(self.store.get(&input.session_id, &tool_call_id)?);
+                    if let Some(result) = denied_result {
+                        let resumed = self.submit_tool_result(run_id_string.clone(), result)?;
+                        let state = resumed.state;
+                        let pending_tool_call_id = resumed.pending_tool_call_id;
+                        emitted.extend(resumed.events);
+                        return Ok(AgentTurnResult {
+                            run_id: run_id_string,
+                            state,
+                            events: emitted,
+                            pending_tool_call_id,
+                        });
+                    }
                     return Ok(AgentTurnResult {
                         run_id: run_id_string,
                         state: RunState::WaitingTool,
