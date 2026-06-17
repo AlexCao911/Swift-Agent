@@ -65,3 +65,34 @@ fn sqlite_store_appends_and_reads_event() {
     assert_eq!(event.payload, "root");
     assert_eq!(event.kind, EventKind::UserMessage);
 }
+
+#[test]
+fn sqlite_store_reconstructs_active_branch_from_closure_table() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let mut store = SqliteEventStore::open(&db_path).unwrap();
+
+    store
+        .append(sqlite_event("root", None, 1, 0, "root"))
+        .unwrap();
+    store
+        .append(sqlite_event("plan", Some("root"), 2, 1, "plan"))
+        .unwrap();
+    store
+        .append(sqlite_event("done", Some("plan"), 3, 2, "done"))
+        .unwrap();
+    store
+        .append(sqlite_event("side", Some("root"), 4, 1, "side"))
+        .unwrap();
+
+    let branch = store
+        .active_branch(
+            &SessionId("session_sqlite".to_string()),
+            &EntryId("done".to_string()),
+        )
+        .unwrap();
+
+    let payloads: Vec<_> = branch.iter().map(|event| event.payload.as_str()).collect();
+
+    assert_eq!(payloads, vec!["root", "plan", "done"]);
+}

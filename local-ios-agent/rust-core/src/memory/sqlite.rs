@@ -213,12 +213,44 @@ impl EventStore for SqliteEventStore {
 
     fn active_branch(
         &self,
-        _session_id: &SessionId,
-        _leaf_id: &EntryId,
+        session_id: &SessionId,
+        leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError> {
-        Err(AgentError::Storage(
-            "sqlite active_branch is not implemented yet".to_string(),
-        ))
+        let mut statement = self
+            .conn
+            .prepare(
+                "
+                select ancestor_id
+                from event_paths
+                where session_id = ?1 and descendant_id = ?2
+                order by depth_delta desc
+                ",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map(params![session_id.0.as_str(), leaf_id.0.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(storage_error)?;
+
+        let mut ancestor_ids = Vec::new();
+        for row in rows {
+            ancestor_ids.push(EntryId(row.map_err(storage_error)?));
+        }
+
+        if ancestor_ids.is_empty() {
+            return Err(AgentError::Storage(format!(
+                "leaf has no path rows: {}",
+                leaf_id.0
+            )));
+        }
+
+        let mut events = Vec::with_capacity(ancestor_ids.len());
+        for ancestor_id in ancestor_ids {
+            events.push(self.get(session_id, &ancestor_id)?);
+        }
+        Ok(events)
     }
 }
 
