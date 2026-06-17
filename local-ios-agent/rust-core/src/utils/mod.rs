@@ -1,1 +1,1 @@
-//! Shared utility module.
+pub mod id;
