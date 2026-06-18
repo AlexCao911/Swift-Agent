@@ -112,16 +112,19 @@ impl ContextController {
         let dropped_count = messages.len().saturating_sub(kept.len());
         let summary = if dropped_count > 0 {
             let dropped_messages: Vec<_> = messages.iter().take(dropped_count).collect();
-            if dropped_messages
+            let summary_start = dropped_messages
                 .iter()
-                .any(|message| matches!(message, PromptMessage::Summary(_)))
-            {
+                .rposition(|message| matches!(message, PromptMessage::Summary(_)))
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let dropped = dropped_messages
+                .iter()
+                .skip(summary_start)
+                .map(|message| message.content().to_string())
+                .collect::<Vec<_>>();
+            if dropped.is_empty() {
                 None
             } else {
-                let dropped = dropped_messages
-                    .iter()
-                    .map(|message| message.content().to_string())
-                    .collect();
                 Some(CompactionCandidate::new(dropped).summary_text())
             }
         } else {

@@ -67,6 +67,9 @@ Deferred:
 - `BranchSummaryCreated` is a history boundary: projector output before the
   latest summary is discarded, preventing repeated summaries of the same old
   prefix.
+- Future compaction after an existing summary may summarize newly dropped
+  post-summary messages, but must exclude the existing summary text itself to
+  avoid summary nesting.
 - Legacy plain-text tool result payloads remain model-visible, but payloads that
   declare `type=tool_result` and fail structured parsing are fail-closed and are
   not injected.

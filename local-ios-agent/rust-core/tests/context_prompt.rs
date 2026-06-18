@@ -64,3 +64,31 @@ fn prompt_frame_truncates_oldest_messages_instead_of_erroring() {
         vec![PromptMessage::User("new five six".to_string())]
     );
 }
+
+#[test]
+fn prompt_frame_compacts_dropped_messages_after_existing_summary() {
+    let controller = ContextController::new(
+        "system",
+        "policy",
+        Vec::new(),
+        Box::new(MockTokenizer::new(16)),
+    );
+
+    let result = controller
+        .build_prompt_frame_with_compaction(vec![
+            message(EventKind::BranchSummaryCreated, "old compacted context"),
+            message(EventKind::UserMessage, "middle one two"),
+            message(EventKind::AssistantMessageCompleted, "middle three four"),
+            message(EventKind::UserMessage, "latest five"),
+        ])
+        .unwrap();
+
+    assert_eq!(result.compaction_summary, Some("middle one two".into()));
+    assert_eq!(
+        result.frame.messages,
+        vec![
+            PromptMessage::Assistant("middle three four".into()),
+            PromptMessage::User("latest five".into()),
+        ]
+    );
+}

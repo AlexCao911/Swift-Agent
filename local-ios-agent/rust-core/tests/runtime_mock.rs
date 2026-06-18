@@ -140,7 +140,7 @@ fn compaction_keeps_current_user_message_last_in_provider_prompt() {
 }
 
 #[test]
-fn existing_summary_prevents_recompacting_same_history_prefix() {
+fn existing_summary_allows_compacting_new_suffix_without_nesting_old_summary() {
     let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
         system_prompt: "system".to_string(),
         runtime_policy: "policy".to_string(),
@@ -176,7 +176,19 @@ fn existing_summary_prevents_recompacting_same_history_prefix() {
     assert!(second_events
         .iter()
         .any(|event| event.kind == EventKind::BranchSummaryCreated));
-    assert!(!third_events
+    let second_summary = second_events
         .iter()
-        .any(|event| event.kind == EventKind::BranchSummaryCreated));
+        .find(|event| event.kind == EventKind::BranchSummaryCreated)
+        .unwrap()
+        .payload
+        .clone();
+    let third_summary = third_events
+        .iter()
+        .find(|event| event.kind == EventKind::BranchSummaryCreated)
+        .unwrap()
+        .payload
+        .clone();
+
+    assert!(third_summary.contains("second turn"));
+    assert!(!third_summary.contains(&second_summary));
 }
