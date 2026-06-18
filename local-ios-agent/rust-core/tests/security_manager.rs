@@ -52,3 +52,12 @@ fn policy_denies_destructive_tools() {
         PolicyDecision::Deny(_)
     ));
 }
+
+use local_ios_agent_runtime::security::AuditPolicy;
+
+#[test]
+fn audit_policy_requires_audit_for_tools_and_approvals() {
+    assert!(AuditPolicy::default().should_audit_event("ToolExecutionCompleted"));
+    assert!(AuditPolicy::default().should_audit_event("RunSuspended"));
+    assert!(!AuditPolicy::default().should_audit_event("AssistantTextDelta"));
+}
