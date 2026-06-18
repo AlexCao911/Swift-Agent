@@ -104,6 +104,9 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var submitApprovalResponse: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var cancel: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var latestPromptDebugSnapshot: (RuntimeHandle?) -> StringResult
+    public var providerProfiles: (RuntimeHandle?) -> StringResult
+    public var activeProvider: (RuntimeHandle?) -> StringResult
+    public var setProvider: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
 
     public init(
         makeRuntime: @escaping () -> RuntimeHandle?,
@@ -123,7 +126,10 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         ) -> StringResult,
         submitApprovalResponse: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         cancel: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        latestPromptDebugSnapshot: @escaping (RuntimeHandle?) -> StringResult
+        latestPromptDebugSnapshot: @escaping (RuntimeHandle?) -> StringResult,
+        providerProfiles: @escaping (RuntimeHandle?) -> StringResult,
+        activeProvider: @escaping (RuntimeHandle?) -> StringResult,
+        setProvider: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     ) {
         self.makeRuntime = makeRuntime
         self.freeRuntime = freeRuntime
@@ -139,6 +145,9 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.submitApprovalResponse = submitApprovalResponse
         self.cancel = cancel
         self.latestPromptDebugSnapshot = latestPromptDebugSnapshot
+        self.providerProfiles = providerProfiles
+        self.activeProvider = activeProvider
+        self.setProvider = setProvider
     }
 
     public static func live(configuration: RustRuntimeConfiguration) throws -> Self {
@@ -205,12 +214,24 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                 local_agent_runtime_bridge_latest_prompt_debug_snapshot(
                     runtime.map { OpaquePointer($0) }
                 )
+            },
+            providerProfiles: { runtime in
+                local_agent_runtime_bridge_provider_profiles(runtime.map { OpaquePointer($0) })
+            },
+            activeProvider: { runtime in
+                local_agent_runtime_bridge_active_provider(runtime.map { OpaquePointer($0) })
+            },
+            setProvider: { runtime, requestJson in
+                local_agent_runtime_bridge_set_provider(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson
+                )
             }
         )
     }
 }
 
-public final class RustRuntimeClient: RuntimeClient, @unchecked Sendable {
+public final class RustRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -326,6 +347,22 @@ public final class RustRuntimeClient: RuntimeClient, @unchecked Sendable {
         )
     }
 
+    public func providerProfiles() async throws -> [ProviderProfileDTO] {
+        try decode(functions.providerProfiles(handle), as: [ProviderProfileDTO].self)
+    }
+
+    public func activeProvider() async throws -> ProviderProfileDTO {
+        try decode(functions.activeProvider(handle), as: ProviderProfileDTO.self)
+    }
+
+    public func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO {
+        let request = SetProviderRequest(sessionId: sessionId, providerId: providerId)
+        let json = try encode(request)
+        return try json.withCString { pointer in
+            try decode(functions.setProvider(handle, pointer), as: RuntimeEventDTO.self)
+        }
+    }
+
     private func decode<T: Decodable>(
         _ response: RustRuntimeCFunctionTable.StringResult,
         as type: T.Type
@@ -373,6 +410,16 @@ private struct SendMessageRequest: Encodable {
 private struct SetPermissionStateRequest: Encodable {
     var scope: String
     var state: PermissionStateDTO
+}
+
+private struct SetProviderRequest: Encodable {
+    var sessionId: String
+    var providerId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case providerId = "provider_id"
+    }
 }
 
 private struct BridgeErrorEnvelope: Decodable {

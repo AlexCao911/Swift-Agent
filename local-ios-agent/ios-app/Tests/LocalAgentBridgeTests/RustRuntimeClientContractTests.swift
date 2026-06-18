@@ -15,7 +15,21 @@ struct RustRuntimeClientContractTests {
         let mock = MockRuntimeClient(
             sessionIds: ["session_existing"],
             turnResult: turn,
-            promptDebugSnapshot: PromptDebugSnapshotDTO(renderedText: "debug")
+            promptDebugSnapshot: PromptDebugSnapshotDTO(renderedText: "debug"),
+            providerProfiles: [
+                ProviderProfileDTO(
+                    id: "mock",
+                    displayName: "Mock Provider",
+                    kind: .mock,
+                    maxContextTokens: 100
+                )
+            ],
+            activeProvider: ProviderProfileDTO(
+                id: "mock",
+                displayName: "Mock Provider",
+                kind: .mock,
+                maxContextTokens: 100
+            )
         )
 
         let created = try await mock.createSession()
@@ -26,6 +40,9 @@ struct RustRuntimeClientContractTests {
             text: "hello"
         )
         let snapshot = try await mock.latestPromptDebugSnapshot()
+        let profiles = try await mock.providerProfiles()
+        let activeProvider = try await mock.activeProvider()
+        let providerEvent = try await mock.setProvider(sessionId: created, providerId: "mock")
         try await mock.setPermissionState(scope: "calendar.events", state: .denied)
         let messages = await mock.sentMessages
         let permissions = await mock.permissionStates
@@ -34,6 +51,9 @@ struct RustRuntimeClientContractTests {
         #expect(ids == ["session_existing", "session_2"])
         #expect(sent == turn)
         #expect(snapshot?.renderedText == "debug")
+        #expect(profiles.map(\.id) == ["mock"])
+        #expect(activeProvider.id == "mock")
+        #expect(providerEvent.kind == .providerChanged)
         #expect(messages == [
             MockRuntimeClient.SentMessage(
                 sessionId: "session_2",
@@ -92,6 +112,12 @@ struct RustRuntimeClientContractTests {
         )
         let cancelled = try await client?.cancel(runId: "run_3")
         let snapshot = try await client?.latestPromptDebugSnapshot()
+        let profiles = try await client?.providerProfiles()
+        let activeProvider = try await client?.activeProvider()
+        let providerEvent = try await client?.setProvider(
+            sessionId: "session_1",
+            providerId: "mock"
+        )
 
         #expect(turn?.state == .waitingTool)
         #expect(pendingTools?.first?.runId == "run_3")
@@ -102,12 +128,16 @@ struct RustRuntimeClientContractTests {
         #expect(submittedApproval?.runId == "run_3")
         #expect(cancelled?.kind == .runCancelled)
         #expect(snapshot?.renderedText == "system\npolicy")
+        #expect(profiles?.map(\.id) == ["mock"])
+        #expect(activeProvider?.id == "mock")
+        #expect(providerEvent?.kind == .providerChanged)
 
         let registeredSchema = try decodedObject(try #require(probe.registeredSchemaJson))
         let permissionState = try decodedObject(try #require(probe.permissionStateJson))
         let sentMessage = try decodedObject(try #require(probe.sentMessageJson))
         let submittedResult = try decodedObject(try #require(probe.submittedToolResultJson))
         let approvalResponse = try decodedObject(try #require(probe.submittedApprovalResponseJson))
+        let setProvider = try decodedObject(try #require(probe.setProviderJson))
 
         #expect(registeredSchema["risk_level"] as? String == "confirm")
         #expect(permissionState["scope"] as? String == "calendar.events")
@@ -116,11 +146,13 @@ struct RustRuntimeClientContractTests {
         #expect(sentMessage["text"] as? String == "use tool")
         #expect(submittedResult["retention"] as? String == "run_only")
         #expect(approvalResponse["reason"] is NSNull)
+        #expect(setProvider["session_id"] as? String == "session_1")
+        #expect(setProvider["provider_id"] as? String == "mock")
 
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 11)
+        #expect(probe.freedStrings == 14)
     }
 
     @Test
@@ -176,6 +208,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var sentMessageJson: String?
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
+    var setProviderJson: String?
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
 
@@ -194,7 +227,10 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             submitToolResult: submitToolResult,
             submitApprovalResponse: submitApprovalResponse,
             cancel: cancel,
-            latestPromptDebugSnapshot: latestPromptDebugSnapshot
+            latestPromptDebugSnapshot: latestPromptDebugSnapshot,
+            providerProfiles: providerProfiles,
+            activeProvider: activeProvider,
+            setProvider: setProvider
         )
     }
 
@@ -308,6 +344,48 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
 
     func latestPromptDebugSnapshot(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
         makeCString(#"{"rendered_text":"system\npolicy"}"#)
+    }
+
+    func providerProfiles(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
+        makeCString("""
+        [{
+          "id": "mock",
+          "display_name": "Mock Provider",
+          "kind": "mock",
+          "max_context_tokens": 100
+        }]
+        """)
+    }
+
+    func activeProvider(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
+        makeCString("""
+        {
+          "id": "mock",
+          "display_name": "Mock Provider",
+          "kind": "mock",
+          "max_context_tokens": 100
+        }
+        """)
+    }
+
+    func setProvider(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        setProviderJson = String(cString: requestJson!)
+        return makeCString("""
+        {
+          "id": "entry_10",
+          "session_id": "session_1",
+          "parent_id": "entry_9",
+          "run_id": null,
+          "sequence": 9,
+          "depth": 5,
+          "kind": "provider_changed",
+          "payload": "{\\"provider_id\\":\\"mock\\"}",
+          "blob_refs": []
+        }
+        """)
     }
 
     private func makeCString(_ string: String) -> UnsafeMutablePointer<CChar> {

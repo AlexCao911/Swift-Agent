@@ -156,6 +156,35 @@ impl RuntimeJsonBridge {
         };
         to_json(&snapshot)
     }
+
+    pub fn provider_profiles_json(&self) -> Result<String, AgentError> {
+        let profiles = match self {
+            Self::InMemory(runtime) => runtime.provider_profiles(),
+            Self::Sqlite(runtime) => runtime.provider_profiles(),
+        };
+        to_json(&profiles)
+    }
+
+    pub fn active_provider_json(&self) -> Result<String, AgentError> {
+        let profile = match self {
+            Self::InMemory(runtime) => runtime.active_provider(),
+            Self::Sqlite(runtime) => runtime.active_provider(),
+        };
+        to_json(&profile)
+    }
+
+    pub fn set_provider_json(&mut self, request_json: &str) -> Result<String, AgentError> {
+        let request: SetProviderJson = from_json(request_json)?;
+        let event = match self {
+            Self::InMemory(runtime) => {
+                runtime.set_provider(SessionId(request.session_id), &request.provider_id)?
+            }
+            Self::Sqlite(runtime) => {
+                runtime.set_provider(SessionId(request.session_id), &request.provider_id)?
+            }
+        };
+        to_json(&RuntimeEventJson::from_event(&event))
+    }
 }
 
 #[no_mangle]
@@ -293,11 +322,42 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_latest_prompt_debug_snapshot
     c_result(|| bridge_ref(runtime)?.latest_prompt_debug_snapshot_json())
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_provider_profiles(
+    runtime: *mut RuntimeJsonBridge,
+) -> *mut c_char {
+    c_result(|| bridge_ref(runtime)?.provider_profiles_json())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_active_provider(
+    runtime: *mut RuntimeJsonBridge,
+) -> *mut c_char {
+    c_result(|| bridge_ref(runtime)?.active_provider_json())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_set_provider(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_mut(runtime)?.set_provider_json(request_json)
+    })
+}
+
 #[derive(Deserialize)]
 struct SendMessageJson {
     session_id: String,
     parent_event_id: Option<String>,
     text: String,
+}
+
+#[derive(Deserialize)]
+struct SetProviderJson {
+    session_id: String,
+    provider_id: String,
 }
 
 #[derive(Deserialize)]

@@ -5,10 +5,10 @@ use serde_json::{json, Value};
 use crate::context::{ContextController, PromptDebugSnapshot, PromptFrame, TokenizerAdapter};
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
-    ModelProviderOutput, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
-    StreamBatcher,
+    ModelProviderOutput, ProviderKind, ProviderProfile, ProviderRegistry, RunId, RunRecord,
+    RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
 };
-use crate::memory::{EventStore, InMemoryEventStore};
+use crate::memory::{EventStore, InMemoryEventStore, ProviderSetting};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
     PermissionScope,
@@ -47,6 +47,8 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     config: AgentRuntimeConfig,
     ids: IdGenerator,
     store: S,
+    provider_registry: ProviderRegistry,
+    active_provider_profile: ProviderProfile,
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
     provider_cancellations: HashMap<RunId, CancellationToken>,
@@ -63,6 +65,14 @@ impl AgentRuntime<InMemoryEventStore> {
 
 impl<S: EventStore> AgentRuntime<S> {
     pub fn with_store(config: AgentRuntimeConfig, store: S) -> Result<Self, AgentError> {
+        Self::with_store_and_registry(config, store, ProviderRegistry::with_mock())
+    }
+
+    pub fn with_store_and_registry(
+        mut config: AgentRuntimeConfig,
+        store: S,
+        provider_registry: ProviderRegistry,
+    ) -> Result<Self, AgentError> {
         let mut sessions = HashMap::new();
         for session_id in store.list_sessions()? {
             let cursor =
@@ -71,11 +81,22 @@ impl<S: EventStore> AgentRuntime<S> {
         }
         let session_ids: Vec<_> = sessions.keys().cloned().collect();
         let next_id = next_replayed_id(&store, &session_ids)?;
+        let mut active_provider_profile = active_profile_for_config(&config, &provider_registry);
+        if let Some(provider_id) = persisted_provider_id(&store, &session_ids)? {
+            let bundle = provider_registry.build(&provider_id)?;
+            active_provider_profile = provider_registry.profile(&provider_id).ok_or_else(|| {
+                AgentError::Provider(format!("unknown provider profile: {provider_id}"))
+            })?;
+            config.provider = bundle.provider;
+            config.tokenizer = bundle.tokenizer;
+        }
 
         let mut runtime = Self {
             config,
             ids: IdGenerator::starting_at(next_id),
             store,
+            provider_registry,
+            active_provider_profile,
             sessions,
             runs: HashMap::new(),
             provider_cancellations: HashMap::new(),
@@ -90,8 +111,65 @@ impl<S: EventStore> AgentRuntime<S> {
         &self.pending_tool_requests
     }
 
+    pub fn provider_profiles(&self) -> Vec<ProviderProfile> {
+        self.provider_registry.profiles()
+    }
+
+    pub fn active_provider(&self) -> ProviderProfile {
+        self.active_provider_profile.clone()
+    }
+
     pub fn latest_prompt_debug_snapshot(&self) -> Option<PromptDebugSnapshot> {
         self.latest_prompt_debug_snapshot.clone()
+    }
+
+    pub fn set_provider(
+        &mut self,
+        session_id: SessionId,
+        provider_id: &str,
+    ) -> Result<RuntimeEvent, AgentError> {
+        if !self.sessions.contains_key(&session_id) {
+            return Err(AgentError::Storage(format!(
+                "missing session: {}",
+                session_id.0
+            )));
+        }
+        if let Some(run_id) = self.blocking_provider_switch_run(&session_id) {
+            return Err(AgentError::Provider(format!(
+                "provider_switch_blocked({})",
+                run_id.0
+            )));
+        }
+
+        let bundle = self.provider_registry.build(provider_id)?;
+        let profile = self
+            .provider_registry
+            .profile(provider_id)
+            .ok_or_else(|| AgentError::Provider(format!("unknown provider: {provider_id}")))?;
+
+        self.config.provider = bundle.provider;
+        self.config.tokenizer = bundle.tokenizer;
+        self.active_provider_profile = profile.clone();
+        self.store.save_provider_setting(ProviderSetting {
+            key: active_provider_key(&session_id),
+            value: profile.id.clone(),
+        })?;
+
+        let parent_id = self
+            .sessions
+            .get(&session_id)
+            .and_then(|cursor| cursor.active_leaf.clone())
+            .ok_or_else(|| {
+                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
+            })?;
+        let event_id = self.append_event(
+            &session_id,
+            Some(parent_id),
+            None,
+            EventKind::ProviderChanged,
+            json!({ "provider_id": profile.id }).to_string(),
+        )?;
+        self.store.get(&session_id, &event_id)
     }
 
     pub fn register_tool(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
@@ -658,6 +736,19 @@ impl<S: EventStore> AgentRuntime<S> {
         self.latest_prompt_debug_snapshot = Some(PromptDebugSnapshot::from_frame(frame));
     }
 
+    fn blocking_provider_switch_run(&self, session_id: &SessionId) -> Option<RunId> {
+        self.runs
+            .values()
+            .find(|run| {
+                run.session_id == *session_id
+                    && matches!(
+                        run.state,
+                        RunState::Running | RunState::WaitingTool | RunState::Suspended
+                    )
+            })
+            .map(|run| run.run_id.clone())
+    }
+
     fn replay_waiting_runs(&mut self) -> Result<(), AgentError> {
         let session_ids: Vec<_> = self.sessions.keys().cloned().collect();
         for session_id in session_ids {
@@ -1064,6 +1155,38 @@ fn next_replayed_id<S: EventStore>(
 
 fn numeric_suffix(id: &str) -> Option<u64> {
     id.rsplit_once('_')?.1.parse().ok()
+}
+
+fn active_provider_key(session_id: &SessionId) -> String {
+    format!("active_provider:{}", session_id.0)
+}
+
+fn persisted_provider_id<S: EventStore>(
+    store: &S,
+    session_ids: &[SessionId],
+) -> Result<Option<String>, AgentError> {
+    let mut session_ids = session_ids.to_vec();
+    session_ids.sort_by(|left, right| left.0.cmp(&right.0));
+    for session_id in session_ids {
+        if let Some(setting) = store.load_provider_setting(&active_provider_key(&session_id))? {
+            return Ok(Some(setting.value));
+        }
+    }
+    Ok(None)
+}
+
+fn active_profile_for_config(
+    config: &AgentRuntimeConfig,
+    registry: &ProviderRegistry,
+) -> ProviderProfile {
+    registry
+        .profile(config.provider.id())
+        .unwrap_or_else(|| ProviderProfile {
+            id: config.provider.id().to_string(),
+            display_name: config.provider.id().to_string(),
+            kind: ProviderKind::Mock,
+            max_context_tokens: config.tokenizer.max_context_tokens(),
+        })
 }
 
 #[cfg(test)]

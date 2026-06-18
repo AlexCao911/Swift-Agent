@@ -5,6 +5,7 @@ use rusqlite::{params, Connection};
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
 use crate::memory::{
     AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord, MemoryCandidate,
+    ProviderSetting,
 };
 
 pub struct SqliteEventStore {
@@ -672,6 +673,17 @@ impl EventStore for SqliteEventStore {
             }
             None => Ok(None),
         }
+    }
+
+    fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError> {
+        SqliteEventStore::save_provider_setting(self, &setting.key, &setting.value)
+    }
+
+    fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError> {
+        Ok(self.provider_setting(key)?.map(|value| ProviderSetting {
+            key: key.to_string(),
+            value,
+        }))
     }
 }
 

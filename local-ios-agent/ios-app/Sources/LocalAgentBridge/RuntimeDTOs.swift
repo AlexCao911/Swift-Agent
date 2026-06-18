@@ -307,3 +307,36 @@ public struct PromptDebugSnapshotDTO: Codable, Equatable, Sendable {
         case renderedText = "rendered_text"
     }
 }
+
+public enum ProviderKindDTO: String, Codable, Equatable, Sendable {
+    case mock
+    case desktopMiniCpm = "desktop_mini_cpm"
+    case onDeviceMiniCpm = "on_device_mini_cpm"
+    case openAiCompatibleLocal = "open_ai_compatible_local"
+}
+
+public struct ProviderProfileDTO: Codable, Equatable, Sendable {
+    public var id: String
+    public var displayName: String
+    public var kind: ProviderKindDTO
+    public var maxContextTokens: Int
+
+    public init(
+        id: String,
+        displayName: String,
+        kind: ProviderKindDTO,
+        maxContextTokens: Int
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.kind = kind
+        self.maxContextTokens = maxContextTokens
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case kind
+        case maxContextTokens = "max_context_tokens"
+    }
+}

@@ -44,6 +44,16 @@ char *local_agent_runtime_bridge_cancel(
 char *local_agent_runtime_bridge_latest_prompt_debug_snapshot(
     LocalAgentRuntimeBridge *runtime
 );
+char *local_agent_runtime_bridge_provider_profiles(
+    LocalAgentRuntimeBridge *runtime
+);
+char *local_agent_runtime_bridge_active_provider(
+    LocalAgentRuntimeBridge *runtime
+);
+char *local_agent_runtime_bridge_set_provider(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
 
 #ifdef __cplusplus
 }

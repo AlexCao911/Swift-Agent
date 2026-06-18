@@ -1,5 +1,6 @@
 use local_ios_agent_runtime::memory::{
-    BlobRecord, BranchSummaryRecord, LongTermMemoryRecord, MemoryCandidate, SqliteEventStore,
+    BlobRecord, BranchSummaryRecord, EventStore, InMemoryEventStore, LongTermMemoryRecord,
+    MemoryCandidate, ProviderSetting, SqliteEventStore,
 };
 
 #[test]
@@ -177,5 +178,49 @@ fn sqlite_persists_audit_rows_and_provider_settings() {
     assert_eq!(
         store.provider_setting("active_provider").unwrap(),
         Some("mock".into())
+    );
+}
+
+#[test]
+fn event_store_trait_persists_provider_settings() {
+    let mut in_memory = InMemoryEventStore::new();
+    <InMemoryEventStore as EventStore>::save_provider_setting(
+        &mut in_memory,
+        ProviderSetting {
+            key: "active_provider:session_1".into(),
+            value: "mock".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        in_memory
+            .load_provider_setting("active_provider:session_1")
+            .unwrap(),
+        Some(ProviderSetting {
+            key: "active_provider:session_1".into(),
+            value: "mock".into(),
+        })
+    );
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut sqlite = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
+    <SqliteEventStore as EventStore>::save_provider_setting(
+        &mut sqlite,
+        ProviderSetting {
+            key: "active_provider:session_1".into(),
+            value: "alt".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        sqlite
+            .load_provider_setting("active_provider:session_1")
+            .unwrap(),
+        Some(ProviderSetting {
+            key: "active_provider:session_1".into(),
+            value: "alt".into(),
+        })
     );
 }

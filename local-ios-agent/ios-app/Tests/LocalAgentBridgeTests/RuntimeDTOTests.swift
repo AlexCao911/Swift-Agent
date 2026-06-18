@@ -92,6 +92,38 @@ struct RuntimeDTOTests {
     }
 
     @Test
+    func decodesProviderProfileJSONIntoSwiftDTO() throws {
+        let json = """
+        {
+          "id": "mock",
+          "display_name": "Mock Provider",
+          "kind": "mock",
+          "max_context_tokens": 100
+        }
+        """.data(using: .utf8)!
+
+        let profile = try JSONDecoder().decode(ProviderProfileDTO.self, from: json)
+
+        #expect(profile.id == "mock")
+        #expect(profile.displayName == "Mock Provider")
+        #expect(profile.kind == .mock)
+        #expect(profile.maxContextTokens == 100)
+
+        let onDevice = try JSONDecoder().decode(
+            ProviderProfileDTO.self,
+            from: """
+            {
+              "id": "on_device_minicpm",
+              "display_name": "On-device MiniCPM",
+              "kind": "on_device_mini_cpm",
+              "max_context_tokens": 2048
+            }
+            """.data(using: .utf8)!
+        )
+        #expect(onDevice.kind == .onDeviceMiniCpm)
+    }
+
+    @Test
     func encodesToolResultInRustExpectedShape() throws {
         let result = ToolResultDTO(
             displayText: "Shown to user",

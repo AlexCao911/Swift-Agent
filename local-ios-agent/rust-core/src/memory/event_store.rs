@@ -1,4 +1,5 @@
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
+use crate::memory::ProviderSetting;
 
 pub trait EventStore {
     fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError>;
@@ -19,4 +20,6 @@ pub trait EventStore {
     fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError>;
     fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError>;
     fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError>;
+    fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError>;
+    fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError>;
 }

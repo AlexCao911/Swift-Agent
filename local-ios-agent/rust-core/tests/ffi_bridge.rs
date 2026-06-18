@@ -88,6 +88,30 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
 }
 
 #[test]
+fn bridge_exposes_provider_control_json() {
+    let mut bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+
+    let profiles = decode(&bridge.provider_profiles_json().unwrap());
+    assert_eq!(profiles[0]["id"], "mock");
+    assert_eq!(profiles[0]["kind"], "mock");
+
+    let active = decode(&bridge.active_provider_json().unwrap());
+    assert_eq!(active["id"], "mock");
+
+    let event = decode(
+        &bridge
+            .set_provider_json(&format!(
+                r#"{{"session_id":"{session_id}","provider_id":"mock"}}"#
+            ))
+            .unwrap(),
+    );
+    assert_eq!(event["kind"], "provider_changed");
+    assert!(event["payload"].as_str().unwrap().contains("mock"));
+}
+
+#[test]
 fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
     let mut bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());

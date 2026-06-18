@@ -20,3 +20,9 @@ public protocol RuntimeClient: Sendable {
     func cancel(runId: String) async throws -> RuntimeEventDTO
     func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO?
 }
+
+public protocol ProviderControllingRuntimeClient: Sendable {
+    func providerProfiles() async throws -> [ProviderProfileDTO]
+    func activeProvider() async throws -> ProviderProfileDTO
+    func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO
+}

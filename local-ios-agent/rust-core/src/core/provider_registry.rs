@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::context::TokenizerAdapter;
-use crate::core::{AgentError, ModelProvider, ProviderProfile};
+use crate::context::{MockTokenizer, TokenizerAdapter};
+use crate::core::{
+    AgentError, MockStreamingProvider, ModelProvider, ProviderKind, ProviderProfile,
+};
 
 pub struct ProviderBundle {
     pub provider: Box<dyn ModelProvider>,
@@ -21,6 +23,25 @@ pub struct ProviderRegistry {
 impl ProviderRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_mock() -> Self {
+        let mut registry = Self::new();
+        registry
+            .register_factory(
+                ProviderProfile {
+                    id: "mock".into(),
+                    display_name: "Mock Provider".into(),
+                    kind: ProviderKind::Mock,
+                    max_context_tokens: 100,
+                },
+                || ProviderBundle {
+                    provider: Box::new(MockStreamingProvider::new()),
+                    tokenizer: Box::new(MockTokenizer::new(100)),
+                },
+            )
+            .expect("built-in mock provider profile should be unique");
+        registry
     }
 
     pub fn register_factory(
@@ -50,6 +71,12 @@ impl ProviderRegistry {
             .values()
             .map(|entry| entry.profile.clone())
             .collect()
+    }
+
+    pub fn profile(&self, provider_id: &str) -> Option<ProviderProfile> {
+        self.entries
+            .get(provider_id)
+            .map(|entry| entry.profile.clone())
     }
 
     pub fn build(&self, provider_id: &str) -> Result<ProviderBundle, AgentError> {

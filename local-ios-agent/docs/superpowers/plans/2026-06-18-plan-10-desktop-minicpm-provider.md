@@ -2,11 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the replaceable LLM provider layer and connect Desktop MiniCPM as the first real local-model provider.
+**Goal:** Build the replaceable LLM provider management layer, then connect
+Desktop MiniCPM as a desktop-only validation provider behind that layer.
 
-**Architecture:** Plan 10 owns model provider selection and text-generation provider behavior. Provider selection is not UI state; it changes the Rust runtime provider bundle and tokenizer together. Provider cancellation is part of the provider contract, so SwiftUI cancel can eventually interrupt real generation instead of only appending `RunCancelled`. Desktop MiniCPM is a provider behind the same provider abstraction as the mock provider. C++ on-device inference stays in Plan 11.
+**Architecture:** Plan 10 has two intentionally separate parts. The provider
+management layer is platform-neutral: provider profiles, registry, provider
+selection, provider/tokenizer bundle switching, tokenizer-aware context
+fitting, cancellation, prompt debug capture, provider-setting persistence, and
+the Swift `ProviderControllingRuntimeClient` capability. Desktop MiniCPM is a
+desktop-only adapter behind that contract for development and validation. It
+must not define the mobile runtime path. The mobile production path is a
+separate `OnDeviceMiniCPMProvider` that reuses the Plan 10 provider contract
+and connects to the Plan 11 C ABI / C++ / Metal / Core ML / llama.cpp backend.
 
-**Tech Stack:** Rust 2021, existing `ModelProvider`, existing `TokenizerAdapter`, existing `PromptFrame`, `serde_json`, localhost HTTP transport, cargo tests, TDD.
+**Tech Stack:** Rust 2021, existing `ModelProvider`, existing
+`TokenizerAdapter`, existing `PromptFrame`, `serde_json`, cargo tests, Swift
+tests, TDD. Localhost HTTP transport is desktop-adapter-only and must stay out
+of the platform-neutral provider management layer.
 
 ---
 
@@ -28,24 +40,42 @@ Existing provider state:
 
 ## Ownership Boundary
 
-Plan 10 owns:
+Plan 10A owns the platform-neutral provider management layer:
 
 - provider profile DTOs and runtime provider registry;
 - provider-generation cancellation semantics;
 - provider selection in Rust runtime;
 - tokenizer swap with provider swap;
 - runtime prompt snapshot capture around provider calls;
-- Desktop MiniCPM provider;
-- OpenAI-compatible local endpoint adapter;
-- deadlock-safe localhost HTTP transport;
 - provider list and `setProvider` bridge capability.
 
-Plan 10 does not own:
+Plan 10B owns only the desktop development adapter:
+
+- `DesktopMiniCPMProvider`;
+- OpenAI-compatible local endpoint adapter;
+- deadlock-safe localhost HTTP transport;
+- desktop endpoint settings, ports, paths, and model service assumptions.
+
+Plan 10 does not own the mobile inference backend:
 
 - C++/Metal/llama.cpp inference internals;
+- `OnDeviceMiniCPMProvider` backend execution beyond the provider contract
+  shape; Plan 11 supplies the C ABI/backend primitive;
 - Swift native tools;
 - SwiftUI provider picker layout;
 - app bootstrap composition.
+
+Final provider shape:
+
+```text
+Rust Runtime
+  -> ProviderRegistry
+      -> MockProvider
+      -> DesktopMiniCPMProvider        // desktop/dev validation only
+      -> OnDeviceMiniCPMProvider       // mobile production path
+            -> Plan 11 C ABI
+            -> C++ / Metal / Core ML / llama.cpp backend
+```
 
 ## Integration Points
 
@@ -256,7 +286,8 @@ local-ios-agent/ios-app/Sources/LocalAgentBridge/RustRuntimeClient.swift
 
 ### Milestone 10A Verification Checkpoint
 
-Run this checkpoint before starting the HTTP transport work in Milestone 10B:
+Run this checkpoint before starting any desktop-only provider adapter work in
+Milestone 10B:
 
 ```bash
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
@@ -275,7 +306,14 @@ Expected coverage:
 - `set_provider` rejects active/suspended runs and emits `ProviderChanged` only
   after a successful swap.
 
-## Milestone 10B: Desktop MiniCPM Provider
+## Milestone 10B: Desktop MiniCPM Provider (Desktop-Only Adapter)
+
+Milestone 10B must stay isolated from the platform-neutral provider management
+layer. It may depend on localhost HTTP, an OpenAI-compatible desktop server, a
+desktop model process, desktop paths/ports, and `Content-Length` socket
+transport. None of those assumptions may be required by `ModelProvider`,
+`ProviderRegistry`, `ProviderControllingRuntimeClient`, or
+`OnDeviceMiniCPMProvider`.
 
 ### Task 6: Add Desktop MiniCPM Provider
 
@@ -307,6 +345,12 @@ swift test
 ## Self-Review
 
 - Plan 10 is about LLM providers, not UI.
+- Plan 10A provider management is platform-neutral and reusable by both desktop
+  and mobile providers.
+- Plan 10B Desktop MiniCPM is a desktop/dev validation adapter only; it must
+  not become the phone runtime path.
+- The phone runtime path is `OnDeviceMiniCPMProvider` behind the same provider
+  contract, connected through Plan 11's C ABI/backend boundary.
 - Provider selection is included only because provider choice must affect Rust
   runtime provider/tokenizer state.
 - Provider cancellation is included because real provider generation must be
