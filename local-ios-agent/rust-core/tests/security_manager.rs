@@ -61,3 +61,34 @@ fn audit_policy_requires_audit_for_tools_and_approvals() {
     assert!(AuditPolicy::default().should_audit_event("RunSuspended"));
     assert!(!AuditPolicy::default().should_audit_event("AssistantTextDelta"));
 }
+
+use local_ios_agent_runtime::security::SecurityManager;
+
+#[test]
+fn security_manager_queues_local_auth_approval() {
+    let mut manager = SecurityManager::new();
+    let request = manager.request_approval("approval_1", "Allow write?", true);
+
+    assert!(request.requires_local_authentication);
+    assert_eq!(manager.pending_approvals().len(), 1);
+}
+
+#[test]
+fn security_manager_tracks_permission_state_by_scope_name() {
+    let mut manager = SecurityManager::new();
+
+    assert_eq!(
+        manager.permission_state("calendar.read"),
+        PermissionState::NotDetermined
+    );
+
+    manager.set_permission(PermissionScope {
+        name: "calendar.read".into(),
+        state: PermissionState::Granted,
+    });
+
+    assert_eq!(
+        manager.permission_state("calendar.read"),
+        PermissionState::Granted
+    );
+}
