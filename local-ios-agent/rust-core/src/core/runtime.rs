@@ -12,8 +12,8 @@ use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
 };
 use crate::tool::{
-    RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolResult, ToolRouteOutcome,
-    ToolRouter,
+    RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
+    ToolRouteOutcome, ToolRouter, ToolSchema,
 };
 use crate::utils::id::IdGenerator;
 
@@ -82,6 +82,16 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
         &self.pending_tool_requests
+    }
+
+    pub fn register_tool(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
+        let router = self
+            .config
+            .tool_router
+            .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()));
+        router.register(schema)?;
+        self.config.tool_schemas = router.prompt_schemas();
+        Ok(())
     }
 
     pub fn pending_approval_requests(&self) -> Vec<ApprovalProtocolRequest> {

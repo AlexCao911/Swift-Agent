@@ -1,0 +1,4 @@
+module CLocalAgentRuntime {
+    header "include/CLocalAgentRuntime.h"
+    export *
+}

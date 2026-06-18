@@ -7,6 +7,7 @@ use crate::security::{
 };
 use crate::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
+    ToolSchema,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +88,14 @@ impl ToolRouter {
                 is_error: true,
             })),
         }
+    }
+
+    pub fn register(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
+        self.registry.register(schema)
+    }
+
+    pub fn prompt_schemas(&self) -> Vec<String> {
+        self.registry.prompt_schemas()
     }
 
     pub fn pending_approvals(&self) -> Vec<ApprovalRequest> {
