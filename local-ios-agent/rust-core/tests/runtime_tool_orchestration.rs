@@ -15,6 +15,27 @@ struct FollowUpToolProvider {
     calls: AtomicUsize,
 }
 
+#[derive(Debug)]
+struct InvalidToolProvider {
+    call: ToolCall,
+}
+
+impl InvalidToolProvider {
+    fn new(call: ToolCall) -> Self {
+        Self { call }
+    }
+}
+
+impl ModelProvider for InvalidToolProvider {
+    fn id(&self) -> &str {
+        "invalid-tool"
+    }
+
+    fn stream_chat(&self, _frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        Ok(vec![ModelProviderOutput::ToolCall(self.call.clone())])
+    }
+}
+
 impl FollowUpToolProvider {
     fn new() -> Self {
         Self {
@@ -213,4 +234,32 @@ fn runtime_routes_follow_up_tool_call_after_tool_result() {
     assert_eq!(resumed.pending_tool_call_id, Some("call_2".into()));
     assert_eq!(runtime.pending_tool_requests().len(), 1);
     assert_eq!(runtime.pending_tool_requests()[0].tool_call_id, "call_2");
+}
+
+#[test]
+fn runtime_rejects_provider_tool_call_with_empty_id() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(InvalidToolProvider::new(ToolCall {
+            id: "".into(),
+            name: "debug.echo".into(),
+            arguments_json: "{}".into(),
+        })),
+        tool_router: None,
+    });
+    let session_id = runtime.create_session().unwrap();
+
+    let error = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "start".into(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolValidation(_)));
+    assert!(runtime.pending_tool_requests().is_empty());
 }

@@ -562,6 +562,7 @@ impl<S: EventStore> AgentRuntime<S> {
         run_id: &RunId,
         tool_call: ToolCall,
     ) -> Result<RoutedToolCall, AgentError> {
+        tool_call.validate_shape()?;
         let entry_id = EntryId(self.ids.next_id("entry"));
         let pending_tool_call_id = tool_call.id.clone();
         let mut route_state = "unrouted";
@@ -708,11 +709,13 @@ fn tool_call_from_event(event: &RuntimeEvent) -> Result<ToolCall, AgentError> {
         ));
     }
 
-    Ok(ToolCall {
+    let tool_call = ToolCall {
         id,
         name,
         arguments_json,
-    })
+    };
+    tool_call.validate_shape()?;
+    Ok(tool_call)
 }
 
 fn next_replayed_id<S: EventStore>(

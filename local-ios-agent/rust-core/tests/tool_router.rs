@@ -107,3 +107,30 @@ fn router_routes_confirm_tool_to_approval_required_with_reason() {
         _ => panic!("expected approval required route"),
     }
 }
+
+#[test]
+fn router_rejects_empty_tool_call_name_before_registry_lookup() {
+    let registry = ToolRegistry::new();
+    let router = ToolRouter::new(registry);
+
+    let error = router
+        .route(
+            &RunId("run_1".into()),
+            &SessionId("session_1".into()),
+            &EntryId("entry_1".into()),
+            ToolCall {
+                id: "call_1".into(),
+                name: "".into(),
+                arguments_json: "{}".into(),
+            },
+        )
+        .unwrap_err();
+
+    match error {
+        local_ios_agent_runtime::core::AgentError::ToolValidation(message) => {
+            assert!(message.contains("name"));
+            assert!(!message.contains("unknown tool"));
+        }
+        _ => panic!("expected tool validation error"),
+    }
+}

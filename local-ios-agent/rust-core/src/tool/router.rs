@@ -1,5 +1,3 @@
-use serde_json::Value;
-
 use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{PolicyDecision, PolicyEngine};
 use crate::tool::{
@@ -37,7 +35,7 @@ impl ToolRouter {
         tool_call_entry_id: &EntryId,
         call: ToolCall,
     ) -> Result<ToolRouteOutcome, AgentError> {
-        validate_arguments_json(&call)?;
+        call.validate_shape()?;
         let schema = self
             .registry
             .schema(&call.name)
@@ -65,21 +63,4 @@ impl ToolRouter {
             })),
         }
     }
-}
-
-fn validate_arguments_json(call: &ToolCall) -> Result<(), AgentError> {
-    let arguments: Value = serde_json::from_str(&call.arguments_json).map_err(|error| {
-        AgentError::ToolValidation(format!(
-            "invalid arguments for tool `{}`: {error}",
-            call.name
-        ))
-    })?;
-    if !arguments.is_object() {
-        return Err(AgentError::ToolValidation(format!(
-            "arguments for tool `{}` must be a JSON object",
-            call.name
-        )));
-    }
-
-    Ok(())
 }
