@@ -487,18 +487,69 @@ impl<S: EventStore> AgentRuntime<S> {
             self.runs.insert(run_id.clone(), run);
 
             if let Some(router) = &self.config.tool_router {
-                let tool_call = tool_call_from_event(last_event)?;
-                match router.route(&run_id, &session_id, &last_event.id, tool_call)? {
-                    ToolRouteOutcome::ExecuteInSwift(request) => {
+                let tool_call = match tool_call_from_event(last_event) {
+                    Ok(tool_call) => tool_call,
+                    Err(error) => {
+                        self.fail_replayed_waiting_tool(
+                            &session_id,
+                            &last_event.id,
+                            &run_id,
+                            format!("replay failed pending tool call: {error}"),
+                        )?;
+                        continue;
+                    }
+                };
+                let route_outcome = router.route(&run_id, &session_id, &last_event.id, tool_call);
+                match route_outcome {
+                    Ok(ToolRouteOutcome::ExecuteInSwift(request)) => {
                         self.pending_tool_requests.push(request);
                     }
-                    ToolRouteOutcome::ApprovalRequired { request, reason: _ } => {
+                    Ok(ToolRouteOutcome::ApprovalRequired { request, reason: _ }) => {
                         // Plan 7 will turn this route into a suspended approval lifecycle.
                         self.pending_tool_requests.push(request);
                     }
-                    ToolRouteOutcome::Denied(_) => {}
+                    Ok(ToolRouteOutcome::Denied(result)) => {
+                        self.fail_replayed_waiting_tool(
+                            &session_id,
+                            &last_event.id,
+                            &run_id,
+                            format!(
+                                "replay denied pending tool call `{}`: {}",
+                                result.audit_text, result.model_text
+                            ),
+                        )?;
+                    }
+                    Err(error) => {
+                        self.fail_replayed_waiting_tool(
+                            &session_id,
+                            &last_event.id,
+                            &run_id,
+                            format!("replay failed pending tool call: {error}"),
+                        )?;
+                    }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    fn fail_replayed_waiting_tool(
+        &mut self,
+        session_id: &SessionId,
+        parent_id: &EntryId,
+        run_id: &RunId,
+        message: String,
+    ) -> Result<(), AgentError> {
+        self.append_event(
+            session_id,
+            Some(parent_id.clone()),
+            Some(run_id.clone()),
+            EventKind::RunFailed,
+            message,
+        )?;
+        if let Some(run) = self.runs.get_mut(run_id) {
+            run.mark_failed()?;
         }
 
         Ok(())

@@ -40,16 +40,31 @@ fn config() -> AgentRuntimeConfig {
 }
 
 fn tool_config() -> AgentRuntimeConfig {
+    tool_config_with_registry(tool_registry(RiskLevel::ReadOnly))
+}
+
+fn destructive_tool_config() -> AgentRuntimeConfig {
+    tool_config_with_registry(tool_registry(RiskLevel::Destructive))
+}
+
+fn empty_tool_registry_config() -> AgentRuntimeConfig {
+    tool_config_with_registry(ToolRegistry::new())
+}
+
+fn tool_registry(risk_level: RiskLevel) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry
         .register(ToolSchema {
             name: "debug.echo".into(),
             description: "Echo".into(),
             parameters_json_schema: r#"{"type":"object"}"#.into(),
-            risk_level: RiskLevel::ReadOnly,
+            risk_level,
         })
         .unwrap();
+    registry
+}
 
+fn tool_config_with_registry(registry: ToolRegistry) -> AgentRuntimeConfig {
     AgentRuntimeConfig {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
@@ -131,4 +146,61 @@ fn runtime_replays_waiting_tool_run_and_pending_request_from_sqlite() {
 
     assert_eq!(resumed.state, RunState::Completed);
     assert!(runtime.pending_tool_requests().is_empty());
+}
+
+#[test]
+fn runtime_replay_marks_waiting_tool_failed_when_policy_now_denies() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let session_id = create_waiting_tool_run(&db_path);
+
+    {
+        let store = SqliteEventStore::open(&db_path).unwrap();
+        let runtime = AgentRuntime::with_store(destructive_tool_config(), store).unwrap();
+        assert!(runtime.pending_tool_requests().is_empty());
+    }
+
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let last_event = store.last_event(&session_id).unwrap().unwrap();
+
+    assert_eq!(last_event.kind, EventKind::RunFailed);
+    assert!(last_event.payload.contains("replay"));
+    assert!(last_event.payload.contains("denied"));
+}
+
+#[test]
+fn runtime_replay_marks_waiting_tool_failed_when_tool_is_no_longer_registered() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let session_id = create_waiting_tool_run(&db_path);
+
+    {
+        let store = SqliteEventStore::open(&db_path).unwrap();
+        let runtime = AgentRuntime::with_store(empty_tool_registry_config(), store).unwrap();
+        assert!(runtime.pending_tool_requests().is_empty());
+    }
+
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let last_event = store.last_event(&session_id).unwrap().unwrap();
+
+    assert_eq!(last_event.kind, EventKind::RunFailed);
+    assert!(last_event.payload.contains("replay"));
+    assert!(last_event.payload.contains("unknown tool"));
+}
+
+fn create_waiting_tool_run(db_path: &std::path::Path) -> SessionId {
+    let store = SqliteEventStore::open(db_path).unwrap();
+    let mut runtime = AgentRuntime::with_store(tool_config(), store).unwrap();
+    let session_id = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id: session_id.clone(),
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+
+    assert_eq!(turn.state, RunState::WaitingTool);
+    assert_eq!(runtime.pending_tool_requests().len(), 1);
+    session_id
 }
