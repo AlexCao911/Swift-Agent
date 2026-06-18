@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
-use crate::memory::{EventStore, LongTermMemoryRecord};
+use crate::memory::{BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord};
 
 pub struct SqliteEventStore {
     conn: Connection,
@@ -105,6 +105,20 @@ impl SqliteEventStore {
                   keywords text not null,
                   confirmed integer not null
                 );
+
+                create table if not exists blobs (
+                  id text primary key,
+                  path text not null,
+                  mime_type text not null,
+                  byte_count integer not null
+                );
+
+                create table if not exists branch_summaries (
+                  session_id text not null,
+                  leaf_id text not null,
+                  summary text not null,
+                  primary key (session_id, leaf_id)
+                );
                 ",
             )
             .map_err(storage_error)?;
@@ -176,6 +190,92 @@ impl SqliteEventStore {
             }
         }
         Ok(records)
+    }
+
+    pub fn put_blob(&self, record: BlobRecord) -> Result<(), AgentError> {
+        self.conn
+            .execute(
+                "
+                insert into blobs(id, path, mime_type, byte_count)
+                values (?1, ?2, ?3, ?4)
+                on conflict(id) do update set
+                  path = excluded.path,
+                  mime_type = excluded.mime_type,
+                  byte_count = excluded.byte_count
+                ",
+                params![
+                    record.id,
+                    record.path,
+                    record.mime_type,
+                    record.byte_count as i64
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn get_blob(&self, id: &str) -> Result<Option<BlobRecord>, AgentError> {
+        match self.conn.query_row(
+            "
+            select id, path, mime_type, byte_count
+            from blobs
+            where id = ?1
+            ",
+            params![id],
+            |row| {
+                Ok(BlobRecord {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    mime_type: row.get(2)?,
+                    byte_count: row.get::<_, i64>(3)? as u64,
+                })
+            },
+        ) {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(storage_error(error)),
+        }
+    }
+
+    pub fn put_branch_summary(&self, record: BranchSummaryRecord) -> Result<(), AgentError> {
+        self.conn
+            .execute(
+                "
+                insert into branch_summaries(session_id, leaf_id, summary)
+                values (?1, ?2, ?3)
+                on conflict(session_id, leaf_id) do update set
+                  summary = excluded.summary
+                ",
+                params![record.session_id, record.leaf_id, record.summary],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn branch_summary(
+        &self,
+        session_id: &str,
+        leaf_id: &str,
+    ) -> Result<Option<BranchSummaryRecord>, AgentError> {
+        match self.conn.query_row(
+            "
+            select session_id, leaf_id, summary
+            from branch_summaries
+            where session_id = ?1 and leaf_id = ?2
+            ",
+            params![session_id, leaf_id],
+            |row| {
+                Ok(BranchSummaryRecord {
+                    session_id: row.get(0)?,
+                    leaf_id: row.get(1)?,
+                    summary: row.get(2)?,
+                })
+            },
+        ) {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(storage_error(error)),
+        }
     }
 }
 

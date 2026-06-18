@@ -1,4 +1,6 @@
-use local_ios_agent_runtime::memory::{LongTermMemoryRecord, MemoryCandidate, SqliteEventStore};
+use local_ios_agent_runtime::memory::{
+    BlobRecord, BranchSummaryRecord, LongTermMemoryRecord, MemoryCandidate, SqliteEventStore,
+};
 
 #[test]
 fn sqlite_stores_and_searches_confirmed_memory() {
@@ -23,4 +25,39 @@ fn memory_candidate_requires_confirmation() {
 
     assert!(!candidate.confirmed);
     assert_eq!(candidate.text, "likes local agents");
+}
+
+#[test]
+fn sqlite_stores_blob_and_branch_summary() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let store = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
+
+    store
+        .put_blob(BlobRecord {
+            id: "blob_1".into(),
+            path: "/tmp/image.png".into(),
+            mime_type: "image/png".into(),
+            byte_count: 42,
+        })
+        .unwrap();
+    store
+        .put_branch_summary(BranchSummaryRecord {
+            session_id: "session_1".into(),
+            leaf_id: "entry_9".into(),
+            summary: "summary".into(),
+        })
+        .unwrap();
+
+    assert_eq!(
+        store.get_blob("blob_1").unwrap().unwrap().mime_type,
+        "image/png"
+    );
+    assert_eq!(
+        store
+            .branch_summary("session_1", "entry_9")
+            .unwrap()
+            .unwrap()
+            .summary,
+        "summary"
+    );
 }
