@@ -48,7 +48,14 @@ public struct RemindersCreateReminderTool: NativeTool {
     public let schema = NativeToolSchema(
         name: "reminders.create_reminder",
         description: "Create a local reminder.",
-        inputSchema: .object(),
+        inputSchema: .object(
+            properties: [
+                "title": .string(),
+                "notes": .string(),
+                "due_date": .string(),
+            ],
+            required: ["title"]
+        ),
         riskLevel: .confirm,
         permissionScope: NativePermissionScope("reminders"),
         availability: .available

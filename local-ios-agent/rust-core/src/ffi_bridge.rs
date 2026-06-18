@@ -315,6 +315,7 @@ struct ToolSchemaJson {
     description: String,
     parameters_json_schema: String,
     risk_level: String,
+    metadata_json: Option<String>,
 }
 
 impl ToolSchemaJson {
@@ -324,6 +325,7 @@ impl ToolSchemaJson {
             description: self.description,
             parameters_json_schema: self.parameters_json_schema,
             risk_level: parse_risk_level(&self.risk_level)?,
+            metadata_json: self.metadata_json,
         })
     }
 }
@@ -612,5 +614,25 @@ fn event_kind_json(kind: &EventKind) -> &'static str {
         EventKind::BranchSummaryCreated => "branch_summary_created",
         EventKind::RunCancelled => "run_cancelled",
         EventKind::RunFailed => "run_failed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_schema_json_preserves_metadata_json() {
+        let schema: ToolSchemaJson = from_json(
+            r#"{"name":"calendar.search_events","description":"Search","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"read_only","metadata_json":"{\"native_permission_scope\":\"calendar.events\"}"}"#,
+        )
+        .unwrap();
+
+        let schema = schema.into_tool_schema().unwrap();
+
+        assert_eq!(
+            schema.metadata_json.as_deref(),
+            Some(r#"{"native_permission_scope":"calendar.events"}"#)
+        );
     }
 }

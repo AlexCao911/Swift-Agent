@@ -6,7 +6,7 @@
 
 **Architecture:** Plan 9 is a native-toolkit plan, not a runtime bridge plan. The toolkit defines what native tools exist and how Swift executes them. It does not own Rust runtime state, app composition, or SwiftUI flow control. It exports schemas and executes requests; Plan 12 decides when to register schemas and when to submit tool results.
 
-**Tech Stack:** Swift Package Manager, Swift 5.9, XCTest, Foundation, Plan 8 DTOs, TDD.
+**Tech Stack:** Swift Package Manager, Swift tools 6.0, Swift Testing, Foundation, Plan 8 DTOs, TDD.
 
 ---
 

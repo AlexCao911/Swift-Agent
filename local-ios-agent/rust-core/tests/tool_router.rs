@@ -29,6 +29,7 @@ fn schema(name: &str, risk_level: RiskLevel) -> ToolSchema {
         description: format!("{name} description"),
         parameters_json_schema: r#"{"type":"object"}"#.into(),
         risk_level,
+        metadata_json: None,
     }
 }
 

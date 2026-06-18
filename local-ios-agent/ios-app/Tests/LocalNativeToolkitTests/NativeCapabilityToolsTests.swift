@@ -20,6 +20,7 @@ struct NativeCapabilityToolsTests {
         #expect(tool.schema.name == "calendar.search_events")
         #expect(tool.schema.riskLevel == .readOnly)
         #expect(tool.schema.permissionScope == NativePermissionScope("calendar.events"))
+        #expect(tool.schema.inputSchema.jsonString == #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#)
 
         let result = await tool.execute(argumentsJson: #"{"query":"standup"}"#)
         let object = try decodedJSONObject(result.structuredJson)
@@ -44,6 +45,7 @@ struct NativeCapabilityToolsTests {
         #expect(tool.schema.name == "reminders.create_reminder")
         #expect(tool.schema.riskLevel == .confirm)
         #expect(tool.schema.permissionScope == NativePermissionScope("reminders"))
+        #expect(tool.schema.inputSchema.jsonString == #"{"type":"object","properties":{"due_date":{"type":"string"},"notes":{"type":"string"},"title":{"type":"string"}},"required":["title"]}"#)
 
         let result = await tool.execute(
             argumentsJson: #"{"title":"Buy milk","notes":"2%","due_date":"2026-06-20T09:00:00Z"}"#

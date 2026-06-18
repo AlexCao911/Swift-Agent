@@ -35,7 +35,12 @@ public struct CalendarSearchEventsTool: NativeTool {
     public let schema = NativeToolSchema(
         name: "calendar.search_events",
         description: "Search local calendar events.",
-        inputSchema: .object(),
+        inputSchema: .object(
+            properties: [
+                "query": .string(),
+            ],
+            required: ["query"]
+        ),
         riskLevel: .readOnly,
         permissionScope: NativePermissionScope("calendar.events"),
         availability: .available

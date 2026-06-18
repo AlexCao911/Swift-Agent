@@ -14,18 +14,33 @@ public struct JSONSchemaDTO: Sendable, Equatable {
         self.jsonString = jsonString
     }
 
-    public static func object(properties: [String: JSONSchemaDTO] = [:]) -> JSONSchemaDTO {
-        guard !properties.isEmpty else {
+    public static func object(
+        properties: [String: JSONSchemaDTO] = [:],
+        required: [String] = []
+    ) -> JSONSchemaDTO {
+        guard !properties.isEmpty || !required.isEmpty else {
             return JSONSchemaDTO(jsonString: #"{"type":"object"}"#)
         }
 
-        let renderedProperties = properties
-            .sorted { $0.key < $1.key }
-            .map { key, schema in
-                "\(jsonStringLiteral(key)):\(schema.jsonString)"
-            }
-            .joined(separator: ",")
-        return JSONSchemaDTO(jsonString: #"{"type":"object","properties":{\#(renderedProperties)}}"#)
+        var parts = [#""type":"object""#]
+        if !properties.isEmpty {
+            let renderedProperties = properties
+                .sorted { $0.key < $1.key }
+                .map { key, schema in
+                    "\(jsonStringLiteral(key)):\(schema.jsonString)"
+                }
+                .joined(separator: ",")
+            parts.append(#""properties":{\#(renderedProperties)}"#)
+        }
+        if !required.isEmpty {
+            let renderedRequired = required
+                .sorted()
+                .map(jsonStringLiteral)
+                .joined(separator: ",")
+            parts.append(#""required":[\#(renderedRequired)]"#)
+        }
+
+        return JSONSchemaDTO(jsonString: "{\(parts.joined(separator: ","))}")
     }
 
     public static func string() -> JSONSchemaDTO {

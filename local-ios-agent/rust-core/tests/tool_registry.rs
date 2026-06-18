@@ -10,6 +10,7 @@ fn registry_registers_and_formats_prompt_schemas() {
             description: "Search calendar events.".into(),
             parameters_json_schema: r#"{"type":"object"}"#.into(),
             risk_level: RiskLevel::ReadOnly,
+            metadata_json: None,
         })
         .unwrap();
 

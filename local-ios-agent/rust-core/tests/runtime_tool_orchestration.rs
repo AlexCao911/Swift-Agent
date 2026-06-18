@@ -106,6 +106,7 @@ fn echo_registry(risk_level: RiskLevel) -> ToolRegistry {
             description: "Echo".into(),
             parameters_json_schema: r#"{"type":"object"}"#.into(),
             risk_level,
+            metadata_json: None,
         })
         .unwrap();
     registry

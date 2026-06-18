@@ -9,6 +9,7 @@ pub struct ToolSchema {
     pub description: String,
     pub parameters_json_schema: String,
     pub risk_level: RiskLevel,
+    pub metadata_json: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

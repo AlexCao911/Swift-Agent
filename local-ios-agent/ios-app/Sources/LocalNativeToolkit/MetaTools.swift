@@ -11,14 +11,18 @@ public struct NativeListToolsTool: NativeTool {
         availability: .available
     )
 
-    private let catalog: NativeToolCatalog
+    private let catalogProvider: @Sendable () -> NativeToolCatalog
 
     public init(catalog: NativeToolCatalog) {
-        self.catalog = catalog
+        self.catalogProvider = { catalog }
+    }
+
+    public init(catalogProvider: @escaping @Sendable () -> NativeToolCatalog) {
+        self.catalogProvider = catalogProvider
     }
 
     public func execute(argumentsJson: String) async -> ToolResultDTO {
-        let tools = catalog.schemas
+        let tools = catalogProvider().schemas
             .filter { $0.availability == .available }
             .map { schema in
                 NativeToolListEntry(

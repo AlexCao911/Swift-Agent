@@ -33,6 +33,30 @@ struct MetaToolsTests {
     }
 
     @Test
+    func listToolsCanReportTheFinalCatalogIncludingMetaTools() async throws {
+        let catalogBox = CatalogBox(try NativeToolCatalog(tools: []))
+        let permissionStore = PermissionStore()
+        let listTool = NativeListToolsTool(catalogProvider: { catalogBox.catalog })
+        let permissionTool = NativePermissionStatusTool(permissionStore: permissionStore)
+
+        catalogBox.catalog = try NativeToolCatalog(tools: [
+            MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil),
+            listTool,
+            permissionTool,
+        ])
+
+        let result = await listTool.execute(argumentsJson: "{}")
+        let object = try decodedJSONObject(result.structuredJson)
+        let tools = try #require(object["tools"] as? [[String: Any]])
+
+        #expect(tools.map { $0["name"] as? String } == [
+            "alpha.tool",
+            "native.list_tools",
+            "native.permission_status",
+        ])
+    }
+
+    @Test
     func permissionStatusReportsPermissionStoreStatesAsPublicRunScopedResult() async throws {
         let store = PermissionStore()
         await store.setState(.granted, for: NativePermissionScope("calendar.events"))
@@ -58,6 +82,14 @@ struct MetaToolsTests {
     private func decodedJSONObject(_ json: String) throws -> [String: Any] {
         let data = try #require(json.data(using: .utf8))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+private final class CatalogBox: @unchecked Sendable {
+    var catalog: NativeToolCatalog
+
+    init(_ catalog: NativeToolCatalog) {
+        self.catalog = catalog
     }
 }
 
