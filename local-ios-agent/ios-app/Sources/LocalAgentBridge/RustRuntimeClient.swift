@@ -23,17 +23,20 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
     public var runtimePolicy: String
     public var providerId: String
     public var store: RustRuntimeStoreConfiguration
+    public var providers: [RustRuntimeProviderConfiguration]
 
     public init(
         systemPrompt: String,
         runtimePolicy: String,
         providerId: String,
-        store: RustRuntimeStoreConfiguration
+        store: RustRuntimeStoreConfiguration,
+        providers: [RustRuntimeProviderConfiguration] = []
     ) {
         self.systemPrompt = systemPrompt
         self.runtimePolicy = runtimePolicy
         self.providerId = providerId
         self.store = store
+        self.providers = providers
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -41,6 +44,48 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
         case runtimePolicy = "runtime_policy"
         case providerId = "provider_id"
         case store
+        case providers
+    }
+}
+
+public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
+    case desktopMiniCPM(endpoint: String, model: String, maxContextTokens: Int)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "desktop_minicpm", "desktop_mini_cpm":
+            self = .desktopMiniCPM(
+                endpoint: try container.decode(String.self, forKey: .endpoint),
+                model: try container.decode(String.self, forKey: .model),
+                maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
+            )
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unknown provider kind: \(kind)"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .desktopMiniCPM(let endpoint, let model, let maxContextTokens):
+            try container.encode("desktop_minicpm", forKey: .kind)
+            try container.encode(endpoint, forKey: .endpoint)
+            try container.encode(model, forKey: .model)
+            try container.encode(maxContextTokens, forKey: .maxContextTokens)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case endpoint
+        case model
+        case maxContextTokens = "max_context_tokens"
     }
 }
 

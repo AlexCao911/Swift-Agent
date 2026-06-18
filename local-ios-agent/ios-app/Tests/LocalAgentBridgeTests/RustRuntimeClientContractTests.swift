@@ -70,6 +70,34 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeConfigurationEncodesDesktopProviderConfiguration() throws {
+        let configuration = RustRuntimeConfiguration(
+            systemPrompt: "configured system",
+            runtimePolicy: "configured policy",
+            providerId: "desktop_minicpm",
+            store: .inMemory,
+            providers: [
+                .desktopMiniCPM(
+                    endpoint: "http://127.0.0.1:8000/v1/chat/completions",
+                    model: "minicpm",
+                    maxContextTokens: 4096
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(configuration)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let providers = try #require(object["providers"] as? [[String: Any]])
+        let desktop = try #require(providers.first)
+
+        #expect(object["provider_id"] as? String == "desktop_minicpm")
+        #expect(desktop["kind"] as? String == "desktop_minicpm")
+        #expect(desktop["endpoint"] as? String == "http://127.0.0.1:8000/v1/chat/completions")
+        #expect(desktop["model"] as? String == "minicpm")
+        #expect(desktop["max_context_tokens"] as? Int == 4096)
+    }
+
+    @Test
     func rustRuntimeClientDecodesResponsesEncodesRequestsAndFreesStrings() async throws {
         let probe = RuntimeCFunctionProbe()
         var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
