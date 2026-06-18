@@ -28,3 +28,27 @@ fn approval_queue_tracks_pending_requests() {
     assert!(queue.take("approval_1").is_some());
     assert!(queue.pending().is_empty());
 }
+
+use local_ios_agent_runtime::security::{PolicyDecision, PolicyEngine, RiskLevel};
+
+#[test]
+fn policy_requires_approval_when_permission_is_not_granted() {
+    let engine = PolicyEngine::default();
+    let decision = engine.decide_with_permission(
+        &RiskLevel::ReadOnly,
+        "calendar.search_events",
+        PermissionState::NotDetermined,
+    );
+
+    assert!(matches!(decision, PolicyDecision::RequireApproval(_)));
+}
+
+#[test]
+fn policy_denies_destructive_tools() {
+    let engine = PolicyEngine::default();
+
+    assert!(matches!(
+        engine.decide(&RiskLevel::Destructive, "files.delete_all"),
+        PolicyDecision::Deny(_)
+    ));
+}
