@@ -43,6 +43,18 @@ Deferred:
 - Permission scopes and approval queue: Plan 7.
 - Real Swift execution: later Swift Native Toolkit plan.
 
+## MVP Architecture Constraints
+
+- Tool call `id`, `name`, and `arguments` are required. Missing `id` is rejected
+  instead of defaulting to `call_1`, because duplicate IDs make tool-result
+  replay and Swift request correlation ambiguous.
+- MVP argument validation is shape-level only: `arguments` must be a JSON
+  object, and `arguments_json` routed to Swift must parse back to a JSON object.
+  Full JSON Schema validation against `parameters_json_schema` is intentionally
+  deferred until the tool surface stabilizes.
+- Swift remains the execution owner for iOS APIs. Rust only parses, validates,
+  routes, records, and emits `ToolExecutionRequest`.
+
 ## File Structure
 
 Create:
@@ -107,6 +119,33 @@ fn parser_rejects_missing_tool_name() {
 
     assert!(matches!(error, AgentError::ToolParse(_)));
 }
+
+#[test]
+fn parser_rejects_missing_tool_call_id() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"name":"calendar.search_events","arguments":{}}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}
+
+#[test]
+fn parser_rejects_missing_arguments() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"id":"call_1","name":"calendar.search_events"}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}
+
+#[test]
+fn parser_rejects_non_object_arguments() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"id":"call_1","name":"calendar.search_events","arguments":null}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}
 ```
 
 - [ ] **Step 3: Implement parser**
@@ -130,12 +169,23 @@ impl ToolCallParser {
     pub fn parse(&self, json: &str) -> Result<ToolCall, AgentError> {
         let value: Value = serde_json::from_str(json)
             .map_err(|error| AgentError::ToolParse(format!("invalid tool call JSON: {error}")))?;
-        let id = value["id"].as_str().unwrap_or("call_1").to_string();
+        let id = value["id"]
+            .as_str()
+            .ok_or_else(|| AgentError::ToolParse("missing tool call id".to_string()))?
+            .to_string();
         let name = value["name"]
             .as_str()
             .ok_or_else(|| AgentError::ToolParse("missing tool name".to_string()))?
             .to_string();
-        let arguments_json = value["arguments"].to_string();
+        let arguments = value
+            .get("arguments")
+            .ok_or_else(|| AgentError::ToolParse("missing tool arguments".to_string()))?;
+        if !arguments.is_object() {
+            return Err(AgentError::ToolParse(
+                "tool arguments must be a JSON object".to_string(),
+            ));
+        }
+        let arguments_json = arguments.to_string();
         Ok(ToolCall { id, name, arguments_json })
     }
 }

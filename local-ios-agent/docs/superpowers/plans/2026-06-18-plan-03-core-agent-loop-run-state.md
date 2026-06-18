@@ -48,6 +48,18 @@ Deferred:
 - Security policy and approval queue: Plan 7.
 - Context compaction and memory prompt: Plan 5.
 
+## MVP Architecture Constraints
+
+- Replay restores the active leaf for each session and only recovers the active
+  branch's pending tool run. MVP assumes at most one active pending run per
+  session, matching the iOS chat UI's single visible branch cursor.
+- Non-active branches may still exist in the session tree, but their suspended
+  tool calls are treated as dormant history until a later branch-activation
+  design adds a persisted pending-run index.
+- A future multi-branch agent runtime should add a durable `runs` or
+  `pending_tool_calls` table keyed by `run_id`, `session_id`, and branch leaf so
+  replay does not depend on the session's active leaf.
+
 ## File Structure
 
 Create:

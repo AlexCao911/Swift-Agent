@@ -22,6 +22,15 @@ fn parser_rejects_missing_tool_name() {
 }
 
 #[test]
+fn parser_rejects_missing_tool_call_id() {
+    let error = ToolCallParser::new()
+        .parse(r#"{"name":"calendar.search_events","arguments":{}}"#)
+        .unwrap_err();
+
+    assert!(matches!(error, AgentError::ToolParse(_)));
+}
+
+#[test]
 fn parser_rejects_missing_arguments() {
     let error = ToolCallParser::new()
         .parse(r#"{"id":"call_1","name":"calendar.search_events"}"#)
