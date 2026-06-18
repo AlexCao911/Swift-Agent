@@ -127,7 +127,7 @@ Status: complete.
 Plan file:
 `local-ios-agent/docs/superpowers/plans/2026-06-18-plan-07-security-manager.md`
 
-### Plan 8: Swift Runtime Bridge Foundation
+### Plan 8: Swift Runtime Bridge
 
 Status: planned.
 
@@ -139,16 +139,22 @@ Plan file:
 
 Owns:
 
-- `ios-app` Swift package skeleton.
-- Swift DTOs matching Rust runtime events, turn results, tool execution
-  requests, approval requests, approval responses, and tool results.
-- Swift runtime client protocol plus deterministic mock client.
-- Rust C-compatible JSON bridge for mock runtime calls, used as a stable bridge
-  until a generated UniFFI layer is introduced.
-- Cross-language fixture tests proving Swift DTOs and Rust bridge JSON use the
-  same field names.
+- `ios-app` Swift package skeleton for bridge targets.
+- Swift DTOs matching Rust runtime events, turn results, tool schemas, tool
+  execution requests, approval requests, approval responses, tool results,
+  session IDs, and prompt debug snapshots.
+- `RuntimeClient`, `MockRuntimeClient`, and `RustRuntimeClient`.
+- C ABI or UniFFI-ready bridge functions for the existing Rust runtime.
+- Generic tool schema registration as a bridge capability, without defining
+  native tools.
 
-### Plan 9: Swift Native Toolkit + Basic Meta Tools
+Does not own:
+
+- native tool implementations;
+- provider implementations;
+- SwiftUI view orchestration.
+
+### Plan 9: Swift Native Toolkit
 
 Status: planned.
 
@@ -161,14 +167,22 @@ Plan file:
 Owns:
 
 - Native tool protocol and catalog.
+- Native tool schema export into bridge DTOs.
 - Basic meta tools: list registered tools and report permission status.
 - First read tool: calendar event search through an injectable calendar facade.
 - First confirmation-required write tool: reminder creation through an
   injectable reminders facade.
 - Shortcuts read boundary for voice shortcut listing.
-- Native executor that converts `ToolExecutionRequestDTO` into `ToolResultDTO`.
+- Native executor that converts `ToolExecutionRequestDTO` into `ToolResultDTO`,
+  without submitting results to Rust itself.
 
-### Plan 10: Desktop MiniCPM Provider + Provider Selection
+Does not own:
+
+- app startup registration into Rust;
+- pending-tool drain loops;
+- approval sheet UI.
+
+### Plan 10: LLM Provider Layer
 
 Status: planned.
 
@@ -180,14 +194,26 @@ Plan file:
 
 Owns:
 
-- Provider profile/config types.
-- Provider registry and provider selection.
+- Provider profile/config types and provider registry.
+- Runtime provider selection, because provider choice must update provider and
+  tokenizer state in Rust.
+- Provider-generation cancellation, because runtime cancel must be able to
+  signal real model generation.
 - Desktop MiniCPM provider using an OpenAI-compatible local HTTP endpoint.
 - Chat completion request/response adapter for text-first MVP.
-- Conservative tokenizer adapter for Desktop MiniCPM.
+- Provider-tokenizer alignment and tokenizer-aware budget fitting.
+- `CancellationToken`-based provider cancellation.
+- Provider settings persistence through `EventStore`.
+- Active-run rejection for provider switching.
+- Runtime prompt debug snapshot capture around provider calls.
 - Local endpoint runbook and smoke test strategy.
 
-### Plan 11: C++ On-Device Provider Boundary
+Does not own:
+
+- C++/Metal inference internals;
+- provider picker UI.
+
+### Plan 11: C++ Inference Backend Boundary
 
 Status: planned.
 
@@ -201,13 +227,21 @@ Owns:
 
 - `inference` directory with a narrow C ABI header.
 - Mock C++ backend implementing load, stream, cancel, and release semantics.
-- Rust on-device provider boundary that depends on a backend trait before real
-  llama.cpp linkage.
+- Opaque stream-handle C ABI so backend cancel targets a specific stream.
+- Rust backend adapter and `OnDeviceMiniCPMProvider` behind the Plan 10 provider
+  abstraction.
 - Resource lifecycle and cancellation tests.
+- C ABI-backed smoke coverage, not only Rust mock backend tests.
 - Notes for future GGUF/Metal integration without mixing inference concerns into
   Rust runtime state.
 
-### Plan 12: SwiftUI MVP Shell + Acceptance Hardening
+Does not own:
+
+- provider registry design;
+- Swift bridge internals;
+- SwiftUI.
+
+### Plan 12: SwiftUI Frontend MVP
 
 Status: planned.
 
@@ -219,13 +253,23 @@ Plan file:
 
 Owns:
 
+- App bootstrap/composition across Plans 8-10.
 - SwiftUI chat shell.
 - Provider selector and endpoint settings.
 - Approval sheet.
 - Tool/audit rows.
 - Prompt debug view.
-- View model integration with runtime client and native toolkit executor.
+- View model integration with runtime client and native toolkit executor,
+  including run-filtered and loop-guarded pending-tool drain.
+- Provider selector that depends on the Plan 10 provider-control capability.
 - MVP acceptance checklist and developer runbook.
+
+Does not own:
+
+- runtime bridge internals;
+- native tool definitions;
+- LLM or C++ provider implementations.
+- temporary SwiftUI-only substitutes for missing lower-layer contracts.
 
 ## Development Rules
 

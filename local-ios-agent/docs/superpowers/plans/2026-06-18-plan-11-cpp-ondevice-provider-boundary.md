@@ -1,12 +1,12 @@
-# Plan 11: C++ On-Device Provider Boundary Implementation Plan
+# Plan 11: C++ Inference Backend Boundary Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Establish the C++ inference boundary and Rust on-device provider adapter without pulling llama.cpp, Metal resource ownership, or model files into the Rust runtime.
+**Goal:** Establish the on-device inference backend boundary for future llama.cpp / GGUF / Metal integration.
 
-**Architecture:** C++ exposes a small C ABI for model lifecycle and streaming. Rust depends first on a `LocalInferenceBackend` trait and a mock backend, then maps that backend into `ModelProvider` so the agent runtime can select an on-device provider through the same provider boundary as mock and Desktop MiniCPM.
+**Architecture:** Plan 11 owns inference backend mechanics only. C++ owns model loading, resource lifetime, token production, backend-local cancellation, and release. Rust adapts that backend into an `OnDeviceMiniCPMProvider` that conforms to the provider abstraction from Plan 10. Runtime sessions, tools, memory, policy, and UI never enter the C++ layer.
 
-**Tech Stack:** C ABI header, C++17 mock backend, Rust 2021, existing `ModelProvider`, existing `ProviderProfile`, `cargo test`, TDD.
+**Tech Stack:** C ABI, C++17 mock backend, Rust 2021, Plan 10 provider abstraction, cargo tests, clang smoke build, TDD.
 
 ---
 
@@ -14,34 +14,111 @@
 
 Expected after Plan 10:
 
-- `ProviderKind::OnDeviceMiniCPM` exists.
-- `ProviderRegistry` exists.
-- `ModelProvider` remains the Rust runtime boundary.
-- `DesktopMiniCPMProvider` proves provider replacement works without touching
-  session, context, tools, memory, or security modules.
+- Rust has a provider profile/registry layer.
+- Desktop MiniCPM proves non-mock provider replacement.
+- Provider selection is a runtime operation.
 
 Still missing:
 
-- `inference` directory.
-- C ABI header.
-- C++ backend contract.
-- Rust on-device provider adapter.
-- Resource lifecycle and cancellation tests.
+- `inference` directory;
+- C ABI header;
+- mock C++ backend;
+- Rust backend adapter;
+- smoke test that links or calls the mock C ABI;
+- cancellation semantics at the backend boundary.
 
-Assigned to this plan:
+## Ownership Boundary
 
-- Add `inference/include/local_agent_inference.h`.
-- Add mock C++ backend source documenting the real ABI behavior.
-- Add Rust `LocalInferenceBackend` trait and `MockLocalInferenceBackend`.
-- Add `OnDeviceMiniCPMProvider<B>`.
-- Test load, stream, cancel, release lifecycle through Rust backend trait.
+Plan 11 owns:
 
-Deferred:
+- inference C ABI;
+- C++ mock backend;
+- Rust `LocalInferenceBackend` abstraction;
+- C ABI-backed Rust adapter;
+- `OnDeviceMiniCPMProvider`;
+- backend lifecycle tests for load, stream, cancel, and release;
+- documentation for future llama.cpp / Metal replacement.
 
-- Real llama.cpp linkage.
-- Real GGUF loading.
-- Metal resource configuration.
-- Multimodal image tensor conversion.
+Plan 11 does not own:
+
+- provider registry design;
+- Desktop MiniCPM HTTP provider;
+- Swift bridge;
+- SwiftUI;
+- native iOS tools.
+
+## Integration Points
+
+- Plan 10 owns provider selection and provider-generation cancellation. Plan 11
+  exposes backend `cancel`; Plan 10 is responsible for invoking that backend
+  primitive from runtime cancellation.
+- Plan 12 may expose an on-device provider choice, but the provider works
+  through Plan 10, not directly through UI.
+- The C ABI should remain narrow enough that real llama.cpp can replace the mock
+  backend without touching Rust runtime state.
+
+## Cancellation Scope
+
+Plan 11 cancellation is backend-scoped smoke coverage:
+
+```text
+backend_cancel(stream_handle)
+  -> interrupts backend stream loop
+  -> returns cancelled status
+  -> releases backend resources safely
+```
+
+It is not sufficient by itself for app-level cancellation. The runtime-to-provider
+cancel signal is owned by Plan 10 and must call into this backend primitive when
+the active provider is on-device.
+
+## C ABI Contract
+
+The C ABI must make stream ownership explicit. `stream_chat` returns an opaque
+stream handle, and `cancel` takes that exact handle:
+
+```c
+typedef struct LocalAgentBackend LocalAgentBackend;
+typedef struct LocalAgentBackendStream LocalAgentBackendStream;
+
+typedef void (*local_agent_token_callback)(
+    const char *token_json,
+    void *user_data
+);
+
+LocalAgentStatus local_agent_backend_init(
+    LocalAgentBackend **out_backend
+);
+
+LocalAgentStatus local_agent_backend_load_model(
+    LocalAgentBackend *backend,
+    const char *model_config_json
+);
+
+LocalAgentStatus local_agent_backend_stream_chat(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    local_agent_token_callback callback,
+    void *user_data,
+    LocalAgentBackendStream **out_stream
+);
+
+LocalAgentStatus local_agent_backend_cancel(
+    LocalAgentBackendStream *stream
+);
+
+LocalAgentStatus local_agent_backend_release_stream(
+    LocalAgentBackendStream *stream
+);
+
+LocalAgentStatus local_agent_backend_release(
+    LocalAgentBackend *backend
+);
+```
+
+The Rust `CAbiLocalInferenceBackend` must hold the stream handle while tokens
+are being produced, call `local_agent_backend_cancel(stream)` for backend-local
+cancellation, and always release the stream handle exactly once.
 
 ## File Structure
 
@@ -61,428 +138,59 @@ Modify:
 local-ios-agent/rust-core/src/core/mod.rs
 ```
 
-## Task 1: Add C ABI Header and Mock Backend Source
+## Task 1: Define the Inference C ABI
 
-**Files:**
-- Create: `local-ios-agent/inference/include/local_agent_inference.h`
-- Create: `local-ios-agent/inference/mock/local_agent_inference_mock.cpp`
-- Create: `local-ios-agent/docs/model-providers/ondevice-minicpm-boundary.md`
+- [ ] Add `local_agent_backend_init`.
+- [ ] Add `local_agent_backend_load_model`.
+- [ ] Add `local_agent_backend_stream_chat` returning
+  `LocalAgentBackendStream **out_stream`.
+- [ ] Add `local_agent_backend_cancel(LocalAgentBackendStream *stream)`.
+- [ ] Add `local_agent_backend_release_stream(LocalAgentBackendStream *stream)`.
+- [ ] Add `local_agent_backend_release`.
+- [ ] Keep all session/tool/UI concerns out of the header.
 
-- [ ] **Step 1: Create C ABI header**
+## Task 2: Add Mock C++ Backend
 
-Create `local-ios-agent/inference/include/local_agent_inference.h`:
+- [ ] Implement the C ABI in C++17.
+- [ ] Track loaded/cancelled state.
+- [ ] Emit deterministic token callbacks.
+- [ ] Verify `local_agent_backend_cancel(stream)` interrupts a mock stream and
+  returns a cancelled status.
+- [ ] Compile the mock backend with `clang++` as a smoke check.
 
-```c
-#ifndef LOCAL_AGENT_INFERENCE_H
-#define LOCAL_AGENT_INFERENCE_H
+## Task 3: Add Rust Backend Adapter
 
-#include <stddef.h>
-#include <stdint.h>
+- [ ] Add `LocalInferenceBackend`.
+- [ ] Add `MockLocalInferenceBackend` for Rust-only tests.
+- [ ] Add `CAbiLocalInferenceBackend` that calls the mock C ABI.
+- [ ] Add tests proving Rust can load, stream, cancel, and release through the
+  backend abstraction.
+- [ ] Add one smoke test that exercises the C ABI-backed adapter rather than
+  only the Rust mock backend.
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+## Task 4: Add On-Device Provider Adapter
 
-typedef struct LocalAgentBackend LocalAgentBackend;
+- [ ] Add `OnDeviceMiniCPMProvider`.
+- [ ] Convert `PromptFrame` into backend prompt JSON.
+- [ ] Convert backend tokens into `ModelProviderOutput`.
+- [ ] Surface cancellation and backend errors as `AgentError`.
 
-typedef enum LocalAgentInferenceStatus {
-    LOCAL_AGENT_INFERENCE_OK = 0,
-    LOCAL_AGENT_INFERENCE_ERROR = 1,
-    LOCAL_AGENT_INFERENCE_CANCELLED = 2
-} LocalAgentInferenceStatus;
-
-typedef void (*LocalAgentTokenCallback)(const char *token, void *user_data);
-
-LocalAgentBackend *local_agent_backend_init(void);
-
-LocalAgentInferenceStatus local_agent_backend_load_model(
-    LocalAgentBackend *backend,
-    const char *model_path
-);
-
-LocalAgentInferenceStatus local_agent_backend_stream_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    LocalAgentTokenCallback callback,
-    void *user_data
-);
-
-void local_agent_backend_cancel(LocalAgentBackend *backend);
-
-void local_agent_backend_release(LocalAgentBackend *backend);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-```
-
-- [ ] **Step 2: Create mock C++ backend**
-
-Create `local-ios-agent/inference/mock/local_agent_inference_mock.cpp`:
-
-```cpp
-#include "../include/local_agent_inference.h"
-
-#include <atomic>
-#include <string>
-
-struct LocalAgentBackend {
-    std::atomic<bool> cancelled{false};
-    bool loaded{false};
-    std::string model_path;
-};
-
-LocalAgentBackend *local_agent_backend_init(void) {
-    return new LocalAgentBackend();
-}
-
-LocalAgentInferenceStatus local_agent_backend_load_model(
-    LocalAgentBackend *backend,
-    const char *model_path
-) {
-    if (backend == nullptr || model_path == nullptr) {
-        return LOCAL_AGENT_INFERENCE_ERROR;
-    }
-    backend->model_path = model_path;
-    backend->loaded = true;
-    backend->cancelled = false;
-    return LOCAL_AGENT_INFERENCE_OK;
-}
-
-LocalAgentInferenceStatus local_agent_backend_stream_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    LocalAgentTokenCallback callback,
-    void *user_data
-) {
-    if (backend == nullptr || prompt_json == nullptr || callback == nullptr || !backend->loaded) {
-        return LOCAL_AGENT_INFERENCE_ERROR;
-    }
-    if (backend->cancelled) {
-        return LOCAL_AGENT_INFERENCE_CANCELLED;
-    }
-    callback("mock ", user_data);
-    if (backend->cancelled) {
-        return LOCAL_AGENT_INFERENCE_CANCELLED;
-    }
-    callback("on-device response", user_data);
-    return LOCAL_AGENT_INFERENCE_OK;
-}
-
-void local_agent_backend_cancel(LocalAgentBackend *backend) {
-    if (backend != nullptr) {
-        backend->cancelled = true;
-    }
-}
-
-void local_agent_backend_release(LocalAgentBackend *backend) {
-    delete backend;
-}
-```
-
-- [ ] **Step 3: Create boundary docs**
-
-Create `local-ios-agent/docs/model-providers/ondevice-minicpm-boundary.md`:
-
-```markdown
-# On-Device MiniCPM Boundary
-
-The on-device provider boundary keeps inference concerns out of Rust runtime
-state. C++ owns model loading, tensor preparation, KV cache, Metal resources,
-streaming, cancellation, and release.
-
-Rust calls a narrow backend interface:
-
-```text
-init
-load_model(model_path)
-stream_chat(prompt_json, token_callback)
-cancel
-release
-```
-
-The MVP uses a mock backend and a Rust trait adapter. Real llama.cpp / GGUF /
-Metal integration must preserve this boundary.
-```
-
-- [ ] **Step 4: Verify mock backend compiles**
+## Verification
 
 Run:
 
 ```bash
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent
 clang++ -std=c++17 -I inference/include -c inference/mock/local_agent_inference_mock.cpp -o /tmp/local_agent_inference_mock.o
-```
-
-Expected: command exits 0.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/inference/include/local_agent_inference.h local-ios-agent/inference/mock/local_agent_inference_mock.cpp local-ios-agent/docs/model-providers/ondevice-minicpm-boundary.md
-git commit -m "feat: add inference C ABI boundary"
-```
-
-## Task 2: Add Rust Backend Trait and Mock Backend
-
-**Files:**
-- Create: `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs`
-- Create: `local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs`
-- Modify: `local-ios-agent/rust-core/src/core/mod.rs`
-
-- [ ] **Step 1: Write failing backend lifecycle test**
-
-Create `local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs`:
-
-```rust
-use local_ios_agent_runtime::core::{LocalInferenceBackend, MockLocalInferenceBackend};
-
-#[test]
-fn mock_local_backend_loads_streams_and_cancels() {
-    let mut backend = MockLocalInferenceBackend::new();
-
-    backend.load_model("/models/minicpm.gguf").unwrap();
-    let first = backend.stream_chat(r#"{"messages":[]}"#).unwrap();
-    backend.cancel();
-    let cancelled = backend.stream_chat(r#"{"messages":[]}"#);
-
-    assert_eq!(first, vec!["mock ".to_string(), "on-device response".to_string()]);
-    assert!(cancelled.is_err());
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run:
-
-```bash
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
-cargo test --test ondevice_minicpm_provider mock_local_backend_loads_streams_and_cancels
-```
-
-Expected: FAIL because on-device backend types do not exist.
-
-- [ ] **Step 3: Implement trait and mock backend**
-
-Create `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs`:
-
-```rust
-use crate::core::AgentError;
-
-pub trait LocalInferenceBackend: Send + Sync {
-    fn load_model(&mut self, model_path: &str) -> Result<(), AgentError>;
-    fn stream_chat(&mut self, prompt_json: &str) -> Result<Vec<String>, AgentError>;
-    fn cancel(&mut self);
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct MockLocalInferenceBackend {
-    loaded_model: Option<String>,
-    cancelled: bool,
-}
-
-impl MockLocalInferenceBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl LocalInferenceBackend for MockLocalInferenceBackend {
-    fn load_model(&mut self, model_path: &str) -> Result<(), AgentError> {
-        self.loaded_model = Some(model_path.to_string());
-        self.cancelled = false;
-        Ok(())
-    }
-
-    fn stream_chat(&mut self, _prompt_json: &str) -> Result<Vec<String>, AgentError> {
-        if self.loaded_model.is_none() {
-            return Err(AgentError::Provider("local model is not loaded".into()));
-        }
-        if self.cancelled {
-            return Err(AgentError::Cancelled("local inference cancelled".into()));
-        }
-        Ok(vec!["mock ".into(), "on-device response".into()])
-    }
-
-    fn cancel(&mut self) {
-        self.cancelled = true;
-    }
-}
-```
-
-Modify `local-ios-agent/rust-core/src/core/mod.rs`:
-
-```rust
-pub mod ondevice_minicpm;
-pub use ondevice_minicpm::{LocalInferenceBackend, MockLocalInferenceBackend};
-```
-
-- [ ] **Step 4: Run test to verify pass**
-
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
-cargo fmt
-cargo test --test ondevice_minicpm_provider mock_local_backend_loads_streams_and_cancels
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/rust-core/src/core/ondevice_minicpm.rs local-ios-agent/rust-core/src/core/mod.rs local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs
-git commit -m "feat: add local inference backend trait"
-```
-
-## Task 3: Add OnDeviceMiniCPMProvider Adapter
-
-**Files:**
-- Modify: `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs`
-- Modify: `local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs`
-- Modify: `local-ios-agent/rust-core/src/core/mod.rs`
-
-- [ ] **Step 1: Add failing provider adapter test**
-
-Append to `local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs`:
-
-```rust
-use std::sync::{Arc, Mutex};
-
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
-use local_ios_agent_runtime::core::{
-    ModelProvider, ModelProviderOutput, OnDeviceMiniCPMProvider,
-};
-
-#[test]
-fn ondevice_provider_maps_backend_tokens_to_model_outputs() {
-    let backend = Arc::new(Mutex::new(MockLocalInferenceBackend::new()));
-    backend.lock().unwrap().load_model("/models/minicpm.gguf").unwrap();
-    let provider = OnDeviceMiniCPMProvider::new("on-device-minicpm", "MiniCPM-V-4.6", backend);
-    let frame = PromptFrame {
-        system_prompt: "system".into(),
-        runtime_policy: "policy".into(),
-        tool_schemas: Vec::new(),
-        messages: vec![PromptMessage::User("hello".into())],
-    };
-
-    let outputs = provider.stream_chat(&frame).unwrap();
-
-    assert_eq!(provider.id(), "on-device-minicpm");
-    assert_eq!(outputs, vec![
-        ModelProviderOutput::TextDelta("mock ".into()),
-        ModelProviderOutput::TextDelta("on-device response".into()),
-        ModelProviderOutput::Completed("mock on-device response".into())
-    ]);
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
-cargo test --test ondevice_minicpm_provider ondevice_provider_maps_backend_tokens_to_model_outputs
-```
-
-Expected: FAIL because `OnDeviceMiniCPMProvider` does not exist.
-
-- [ ] **Step 3: Implement provider adapter**
-
-Append to `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs`:
-
-```rust
-use std::sync::{Arc, Mutex};
-
-use crate::context::PromptFrame;
-use crate::core::{openai_chat_request_json, ModelProvider, ModelProviderOutput};
-
-pub struct OnDeviceMiniCPMProvider<B: LocalInferenceBackend> {
-    id: String,
-    model_id: String,
-    backend: Arc<Mutex<B>>,
-}
-
-impl<B: LocalInferenceBackend> OnDeviceMiniCPMProvider<B> {
-    pub fn new(id: impl Into<String>, model_id: impl Into<String>, backend: Arc<Mutex<B>>) -> Self {
-        Self {
-            id: id.into(),
-            model_id: model_id.into(),
-            backend,
-        }
-    }
-}
-
-impl<B: LocalInferenceBackend> ModelProvider for OnDeviceMiniCPMProvider<B> {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
-        let prompt_json = openai_chat_request_json(&self.model_id, frame)?;
-        let tokens = self
-            .backend
-            .lock()
-            .map_err(|_| AgentError::Provider("local backend lock poisoned".into()))?
-            .stream_chat(&prompt_json)?;
-        let mut outputs = tokens
-            .iter()
-            .cloned()
-            .map(ModelProviderOutput::TextDelta)
-            .collect::<Vec<_>>();
-        outputs.push(ModelProviderOutput::Completed(tokens.join("")));
-        Ok(outputs)
-    }
-}
-```
-
-Modify `local-ios-agent/rust-core/src/core/mod.rs` export:
-
-```rust
-pub use ondevice_minicpm::{LocalInferenceBackend, MockLocalInferenceBackend, OnDeviceMiniCPMProvider};
-```
-
-- [ ] **Step 4: Run tests to verify pass**
-
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
-cargo fmt
 cargo test --test ondevice_minicpm_provider
 cargo test
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/rust-core/src/core/ondevice_minicpm.rs local-ios-agent/rust-core/src/core/mod.rs local-ios-agent/rust-core/tests/ondevice_minicpm_provider.rs
-git commit -m "feat: add on-device provider adapter"
-```
-
 ## Self-Review
 
-Spec coverage:
-
-- C++ boundary is narrow and inference-only.
-- Rust provider adapter uses existing `ModelProvider` output types.
-- Resource lifecycle is modeled through load, stream, cancel, and release.
-- No session, memory, tool, security, or UI logic enters C++.
-
-Placeholder scan:
-
-- No placeholder terms are used as implementation instructions.
-
-Type consistency:
-
-- `OnDeviceMiniCPMProvider` consumes the same prompt adapter used by Desktop
-  MiniCPM and emits the same `ModelProviderOutput` variants.
+- Plan 11 owns inference, not provider selection UI.
+- C++ only sees prompt JSON and emits tokens/status.
+- Backend cancel remains a primitive; Plan 10 owns runtime/provider cancellation
+  closure.
+- Rust runtime state stays outside the inference backend.

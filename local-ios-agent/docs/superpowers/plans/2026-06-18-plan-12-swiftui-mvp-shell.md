@@ -1,12 +1,12 @@
-# Plan 12: SwiftUI MVP Shell + Acceptance Hardening Implementation Plan
+# Plan 12: SwiftUI Frontend MVP Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the SwiftUI MVP shell that can send messages, render streamed runtime events, surface tool approval requests, execute pending native tools, switch providers, and show prompt/debug state.
+**Goal:** Build the SwiftUI MVP that composes the runtime bridge, native toolkit, and provider layer into a usable local iOS agent shell.
 
-**Architecture:** SwiftUI is a projection of runtime state. `AgentViewModel` coordinates `RuntimeClient` and `NativeToolExecutor`, while Rust remains authoritative for sessions, events, run states, tool policy, and prompt context.
+**Architecture:** Plan 12 is the composition and presentation layer. SwiftUI does not own runtime state, native tool definitions, provider behavior, or inference. It wires Plan 8 `RuntimeClient`, Plan 9 `NativeToolCatalog`/`NativeToolExecutor`, and Plan 10 `ProviderControllingRuntimeClient` into an app flow: register schemas at startup, send messages, render events, handle approvals, drain pending tools, and display provider/debug state.
 
-**Tech Stack:** Swift Package Manager, Swift 5.9, SwiftUI, Observation on supported platforms through `ObservableObject`, XCTest, Plan 8 `LocalAgentBridge`, Plan 9 `LocalNativeToolkit`, TDD.
+**Tech Stack:** Swift Package Manager, Swift 5.9, SwiftUI, XCTest, Plan 8 `LocalAgentBridge`, Plan 9 `LocalNativeToolkit`, Plan 10 `ProviderControllingRuntimeClient`, TDD.
 
 ---
 
@@ -14,47 +14,124 @@
 
 Expected after Plans 8-11:
 
-- `LocalAgentBridge` exposes runtime DTOs, `RuntimeClient`, and `MockRuntimeClient`.
-- `LocalNativeToolkit` exposes `NativeToolCatalog`, `NativeToolExecutor`, and
-  basic native/meta tools.
-- Rust provider registry and provider docs exist.
-- Desktop and on-device provider boundaries are testable independently.
+- `RuntimeClient` can call Rust.
+- Native toolkit can export schemas and execute tool requests.
+- Provider selection is exposed through the runtime bridge.
+- On-device provider exists as a selectable boundary option.
 
 Still missing:
 
-- SwiftUI app/view target.
-- Chat state projection.
-- Provider settings view model.
-- Approval sheet state.
-- Tool/audit rendering.
-- Prompt debug view.
+- SwiftUI app target;
+- app bootstrap/composition;
+- chat state projection;
+- provider settings UI;
+- approval sheet;
+- tool/audit rows;
+- prompt debug view;
 - MVP acceptance runbook.
 
-Assigned to this plan:
+Hard constraint:
 
-- Add `LocalAgentApp` Swift target.
-- Add `AgentViewModel`.
-- Add chat, provider settings, approvals, tool rows, and debug views.
-- Add view-model tests for send-message and native-tool execution loops.
-- Add acceptance hardening docs.
+- If the bridge, provider, or toolkit contract is missing, Plan 12 must stop at
+  protocol integration and tests. It must not add temporary SwiftUI-only mocks
+  or local state that pretends to implement missing lower-layer behavior.
 
-Deferred:
+## Ownership Boundary
 
-- Xcode project signing and device deployment.
-- Real app icons and launch screen.
-- Real generated bridge packaging.
+Plan 12 owns:
+
+- app composition/bootstrap;
+- SwiftUI views;
+- `AgentViewModel`;
+- registering native schemas with runtime at startup;
+- draining pending tool requests;
+- submitting native tool results back to runtime;
+- provider selector UI that calls runtime provider APIs;
+- approval sheet UI;
+- prompt debug UI;
+- MVP acceptance runbook.
+
+Plan 12 does not own:
+
+- Rust bridge internals;
+- native tool definitions;
+- LLM provider implementation;
+- C++ inference backend;
+- Rust runtime state machine.
+
+## Integration Flow
+
+Startup:
+
+```text
+Create RuntimeClient
+Require ProviderControllingRuntimeClient for provider UI
+Create NativeToolCatalog
+Create NativeToolExecutor
+Register catalog.schemas through RuntimeClient.registerToolSchema
+Load provider profiles through ProviderControllingRuntimeClient
+```
+
+User turn:
+
+```text
+sendMessage
+  -> apply returned runtime events
+  -> refresh pending approvals
+  -> drain pending tool requests until completed, suspended, failed, or empty
+```
+
+Tool drain:
+
+```text
+pendingToolRequests
+  -> filter request.runId == activeTurn.runId
+  -> NativeToolExecutor.execute(request)
+  -> RuntimeClient.submitToolResult(runId, result)
+  -> apply continuation turn
+  -> repeat
+```
+
+Provider selection:
+
+```text
+ProviderSettingsView selection
+  -> ProviderControllingRuntimeClient.setProvider(sessionId, providerId)
+  -> render ProviderChanged event
+```
+
+## Run Safety Rules
+
+- `RuntimeClient.pendingToolRequests()` is global. `AgentViewModel` must filter
+  requests by the current turn's `runId` before executing any native tool.
+- The drain loop must track an execution key per user turn:
+
+```text
+runId + toolName + canonicalArgumentsJson
+```
+
+- If the same key appears again without a new user action, stop draining and
+  surface a model-visible duplicate-tool-loop error instead of executing the same
+  native side effect repeatedly.
+- The drain loop must also enforce a small continuation cap, such as 16 tool
+  executions per user turn, and stop with a visible error if the cap is reached.
+- Provider switching is disabled in UI while the current session has an active,
+  suspended, streaming, waiting-tool, or waiting-approval run. Plan 10 still owns
+  the authoritative runtime rejection for racy calls.
 
 ## File Structure
 
 Create:
 
 ```text
+local-ios-agent/ios-app/Sources/LocalAgentApp/AppBootstrap.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/AgentViewModel.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/ChatView.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/ProviderSettingsView.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/ApprovalSheetView.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/PromptDebugView.swift
 local-ios-agent/ios-app/Sources/LocalAgentApp/ToolAuditRow.swift
+local-ios-agent/ios-app/Tests/LocalAgentAppTests/AppBootstrapTests.swift
 local-ios-agent/ios-app/Tests/LocalAgentAppTests/AgentViewModelTests.swift
 local-ios-agent/docs/mvp-acceptance.md
 ```
@@ -65,564 +142,87 @@ Modify:
 local-ios-agent/ios-app/Package.swift
 ```
 
-## Task 1: Add App Target and Agent View Model
+## Task 1: Add App Bootstrap
 
-**Files:**
-- Modify: `local-ios-agent/ios-app/Package.swift`
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/AgentViewModel.swift`
-- Create: `local-ios-agent/ios-app/Tests/LocalAgentAppTests/AgentViewModelTests.swift`
+- [ ] Build the default native tool catalog.
+- [ ] Build the native tool executor.
+- [ ] Register exported tool schemas into `RuntimeClient`.
+- [ ] Load provider profile state through `ProviderControllingRuntimeClient`.
+- [ ] Fail fast in tests if a real provider-control capability is not supplied
+  for provider UI.
+- [ ] Add tests proving bootstrap registers every native schema exactly once.
 
-- [ ] **Step 1: Write failing view model test**
+## Task 2: Add Agent View Model
 
-Create `local-ios-agent/ios-app/Tests/LocalAgentAppTests/AgentViewModelTests.swift`:
+- [ ] Create session on first send.
+- [ ] Apply runtime events into view state.
+- [ ] Fetch pending approvals after each turn.
+- [ ] Implement `drainPendingToolRequests`.
+- [ ] Filter pending tool requests by the active turn `runId`.
+- [ ] Track duplicate drain keys using `runId + toolName +
+  canonicalArgumentsJson`.
+- [ ] Stop and surface an error when a duplicate drain key or continuation cap
+  is reached.
+- [ ] Stop draining when runtime is suspended, failed, cancelled, completed with
+  no pending tool, or when executor returns unrecoverable error.
+- [ ] Add tests proving tool requests are executed and submitted back to runtime.
+- [ ] Add tests proving another run's pending tools are not executed.
+- [ ] Add tests proving repeated identical tool calls stop instead of looping
+  forever.
 
-```swift
-import XCTest
-import LocalAgentBridge
-import LocalNativeToolkit
-@testable import LocalAgentApp
+## Task 3: Add Chat and Tool/Audit UI
 
-final class AgentViewModelTests: XCTestCase {
-    func testSendMessageCreatesSessionAndRendersAssistantMessage() async throws {
-        let viewModel = AgentViewModel(
-            runtime: MockRuntimeClient(),
-            toolExecutor: NativeToolExecutor(catalog: NativeToolCatalog(), permissionStore: PermissionStore())
-        )
+- [ ] Add chat message list.
+- [ ] Add composer.
+- [ ] Add tool/audit disclosure rows.
+- [ ] Keep UI as projection of view-model state.
 
-        await viewModel.send("hello")
+## Task 4: Add Approval UI
 
-        XCTAssertEqual(viewModel.messages.map(\.role), [.user, .assistant])
-        XCTAssertEqual(viewModel.messages.last?.text, "Mock response to: hello")
-        XCTAssertEqual(viewModel.runState, .completed)
-    }
+- [ ] Add approval sheet.
+- [ ] Approve calls `RuntimeClient.submitApprovalResponse`.
+- [ ] Reject calls `RuntimeClient.submitApprovalResponse` with rejected state.
+- [ ] Continue event application after approval response.
 
-    func testPendingToolRequestExecutesThroughNativeExecutor() async throws {
-        var catalog = NativeToolCatalog()
-        try catalog.register(PermissionStatusTool())
-        let viewModel = AgentViewModel(
-            runtime: MockRuntimeClient(),
-            toolExecutor: NativeToolExecutor(
-                catalog: catalog,
-                permissionStore: PermissionStore(states: ["calendar.read": .granted])
-            )
-        )
+## Task 5: Add Provider Settings UI
 
-        await viewModel.send("use tool debug.echo")
+- [ ] Render provider profiles from runtime.
+- [ ] Render active provider from runtime.
+- [ ] Require `ProviderControllingRuntimeClient`.
+- [ ] Call `ProviderControllingRuntimeClient.setProvider` on selection.
+- [ ] Disable provider selection while the current session has an active or
+  suspended run.
+- [ ] Render the runtime's provider-switch-blocked error if a racy call is
+  rejected anyway.
+- [ ] Render `ProviderChanged` outcome.
+- [ ] Do not store provider selection as UI-only state.
 
-        XCTAssertEqual(viewModel.runState, .waitingTool)
-        XCTAssertFalse(viewModel.toolRows.isEmpty)
-    }
-}
-```
+## Task 6: Add Prompt Debug View and Acceptance Runbook
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] Render latest prompt debug snapshot from runtime.
+- [ ] Add MVP acceptance runbook covering mock chat, tool lifecycle, approval
+  lifecycle, provider switching, and prompt debug visibility.
 
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/ios-app
-swift test --filter AgentViewModelTests
-```
-
-Expected: FAIL because `LocalAgentApp` and `AgentViewModel` do not exist.
-
-- [ ] **Step 3: Add package target and view model**
-
-Modify `local-ios-agent/ios-app/Package.swift` to add:
-
-```swift
-.library(name: "LocalAgentApp", targets: ["LocalAgentApp"])
-```
-
-Add target entries:
-
-```swift
-.target(
-    name: "LocalAgentApp",
-    dependencies: ["LocalAgentBridge", "LocalNativeToolkit"]
-),
-.testTarget(
-    name: "LocalAgentAppTests",
-    dependencies: ["LocalAgentApp", "LocalAgentBridge", "LocalNativeToolkit"]
-)
-```
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/AgentViewModel.swift`:
-
-```swift
-import Foundation
-import LocalAgentBridge
-import LocalNativeToolkit
-
-public enum ChatRole: Equatable, Sendable {
-    case user
-    case assistant
-    case tool
-}
-
-public struct ChatMessage: Identifiable, Equatable, Sendable {
-    public var id: String
-    public var role: ChatRole
-    public var text: String
-}
-
-public struct ToolAuditDisplayRow: Identifiable, Equatable, Sendable {
-    public var id: String
-    public var title: String
-    public var detail: String
-    public var isError: Bool
-}
-
-@MainActor
-public final class AgentViewModel: ObservableObject {
-    @Published public private(set) var messages: [ChatMessage] = []
-    @Published public private(set) var toolRows: [ToolAuditDisplayRow] = []
-    @Published public private(set) var pendingApprovals: [ApprovalProtocolRequestDTO] = []
-    @Published public private(set) var runState: RunStateDTO?
-    @Published public var draftText: String = ""
-
-    private let runtime: any RuntimeClient
-    private let toolExecutor: NativeToolExecutor
-    private var sessionId: String?
-
-    public init(runtime: any RuntimeClient, toolExecutor: NativeToolExecutor) {
-        self.runtime = runtime
-        self.toolExecutor = toolExecutor
-    }
-
-    public func send(_ text: String) async {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-
-        do {
-            let session = try await existingOrNewSession()
-            messages.append(ChatMessage(id: "local_user_\(messages.count)", role: .user, text: text))
-            let turn = try await runtime.sendMessage(sessionId: session, parentEventId: nil, text: text)
-            apply(turn)
-            let requests = try await runtime.pendingToolRequests()
-            for request in requests {
-                toolRows.append(ToolAuditDisplayRow(
-                    id: request.toolCallId,
-                    title: request.toolName,
-                    detail: request.argumentsJson,
-                    isError: false
-                ))
-            }
-            pendingApprovals = try await runtime.pendingApprovalRequests()
-        } catch {
-            messages.append(ChatMessage(id: "local_error_\(messages.count)", role: .assistant, text: error.localizedDescription))
-            runState = .failed
-        }
-    }
-
-    public func approve(_ approval: ApprovalProtocolRequestDTO) async {
-        do {
-            let turn = try await runtime.submitApprovalResponse(
-                ApprovalProtocolResponseDTO(approvalId: approval.approvalId, approved: true)
-            )
-            apply(turn)
-            pendingApprovals.removeAll { $0.approvalId == approval.approvalId }
-        } catch {
-            messages.append(ChatMessage(id: "approval_error_\(messages.count)", role: .assistant, text: error.localizedDescription))
-            runState = .failed
-        }
-    }
-
-    private func existingOrNewSession() async throws -> String {
-        if let sessionId {
-            return sessionId
-        }
-        let created = try await runtime.createSession()
-        sessionId = created
-        return created
-    }
-
-    private func apply(_ turn: AgentTurnResultDTO) {
-        runState = turn.state
-        for event in turn.events {
-            switch event.kind {
-            case .assistantTextDelta:
-                appendAssistantDelta(event.payload)
-            case .assistantMessageCompleted:
-                replaceOrAppendAssistant(event.payload)
-            case .toolResultMessage:
-                toolRows.append(ToolAuditDisplayRow(id: event.id, title: "Tool result", detail: event.payload, isError: false))
-            case .runFailed:
-                messages.append(ChatMessage(id: event.id, role: .assistant, text: event.payload))
-            default:
-                break
-            }
-        }
-    }
-
-    private func appendAssistantDelta(_ text: String) {
-        if let last = messages.last, last.role == .assistant {
-            messages[messages.count - 1].text += text
-        } else {
-            messages.append(ChatMessage(id: "assistant_\(messages.count)", role: .assistant, text: text))
-        }
-    }
-
-    private func replaceOrAppendAssistant(_ text: String) {
-        if let last = messages.last, last.role == .assistant {
-            messages[messages.count - 1].text = text
-        } else {
-            messages.append(ChatMessage(id: "assistant_\(messages.count)", role: .assistant, text: text))
-        }
-    }
-}
-```
-
-- [ ] **Step 4: Run test to verify pass**
+## Verification
 
 Run:
 
 ```bash
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/ios-app
-swift test --filter AgentViewModelTests
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/ios-app/Package.swift local-ios-agent/ios-app/Sources/LocalAgentApp/AgentViewModel.swift local-ios-agent/ios-app/Tests/LocalAgentAppTests/AgentViewModelTests.swift
-git commit -m "feat: add agent view model"
-```
-
-## Task 2: Add SwiftUI Chat and Tool Rows
-
-**Files:**
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/ChatView.swift`
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/ToolAuditRow.swift`
-
-- [ ] **Step 1: Implement chat view**
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/ChatView.swift`:
-
-```swift
-import SwiftUI
-
-public struct ChatView: View {
-    @ObservedObject private var viewModel: AgentViewModel
-
-    public init(viewModel: AgentViewModel) {
-        self.viewModel = viewModel
-    }
-
-    public var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(viewModel.messages) { message in
-                        MessageBubble(message: message)
-                    }
-                    ForEach(viewModel.toolRows) { row in
-                        ToolAuditRow(row: row)
-                    }
-                }
-                .padding()
-            }
-
-            HStack(spacing: 8) {
-                TextField("Message", text: $viewModel.draftText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    let text = viewModel.draftText
-                    viewModel.draftText = ""
-                    Task { await viewModel.send(text) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Send")
-            }
-            .padding()
-        }
-    }
-}
-
-private struct MessageBubble: View {
-    var message: ChatMessage
-
-    var body: some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 48) }
-            Text(message.text)
-                .padding(10)
-                .background(message.role == .user ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            if message.role != .user { Spacer(minLength: 48) }
-        }
-    }
-}
-```
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/ToolAuditRow.swift`:
-
-```swift
-import SwiftUI
-
-public struct ToolAuditRow: View {
-    var row: ToolAuditDisplayRow
-
-    public init(row: ToolAuditDisplayRow) {
-        self.row = row
-    }
-
-    public var body: some View {
-        DisclosureGroup {
-            Text(row.detail)
-                .font(.caption)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            Label(row.title, systemImage: row.isError ? "exclamationmark.triangle" : "wrench.and.screwdriver")
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-```
-
-- [ ] **Step 2: Build Swift package**
-
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/ios-app
-swift build
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/ios-app/Sources/LocalAgentApp/ChatView.swift local-ios-agent/ios-app/Sources/LocalAgentApp/ToolAuditRow.swift
-git commit -m "feat: add SwiftUI chat shell"
-```
-
-## Task 3: Add Provider Settings, Approval Sheet, and Prompt Debug Views
-
-**Files:**
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/ProviderSettingsView.swift`
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/ApprovalSheetView.swift`
-- Create: `local-ios-agent/ios-app/Sources/LocalAgentApp/PromptDebugView.swift`
-
-- [ ] **Step 1: Implement provider settings view**
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/ProviderSettingsView.swift`:
-
-```swift
-import SwiftUI
-
-public struct ProviderSettingsView: View {
-    @Binding private var selectedProvider: String
-    @Binding private var endpoint: String
-
-    public init(selectedProvider: Binding<String>, endpoint: Binding<String>) {
-        self._selectedProvider = selectedProvider
-        self._endpoint = endpoint
-    }
-
-    public var body: some View {
-        Form {
-            Picker("Provider", selection: $selectedProvider) {
-                Text("Mock").tag("mock")
-                Text("Desktop MiniCPM").tag("desktop-minicpm")
-                Text("On-device MiniCPM").tag("on-device-minicpm")
-            }
-            TextField("Endpoint", text: $endpoint)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-        }
-    }
-}
-```
-
-- [ ] **Step 2: Implement approval sheet**
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/ApprovalSheetView.swift`:
-
-```swift
-import SwiftUI
-import LocalAgentBridge
-
-public struct ApprovalSheetView: View {
-    var request: ApprovalProtocolRequestDTO
-    var approve: () -> Void
-    var reject: () -> Void
-
-    public init(
-        request: ApprovalProtocolRequestDTO,
-        approve: @escaping () -> Void,
-        reject: @escaping () -> Void
-    ) {
-        self.request = request
-        self.approve = approve
-        self.reject = reject
-    }
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Approval Required")
-                .font(.headline)
-            Text(request.message)
-            if request.requiresLocalAuthentication {
-                Label("Local authentication required", systemImage: "faceid")
-                    .font(.caption)
-            }
-            HStack {
-                Button("Reject", role: .cancel, action: reject)
-                Spacer()
-                Button("Approve", action: approve)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding()
-    }
-}
-```
-
-- [ ] **Step 3: Implement prompt debug view**
-
-Create `local-ios-agent/ios-app/Sources/LocalAgentApp/PromptDebugView.swift`:
-
-```swift
-import SwiftUI
-
-public struct PromptDebugView: View {
-    var title: String
-    var promptJSON: String
-
-    public init(title: String, promptJSON: String) {
-        self.title = title
-        self.promptJSON = promptJSON
-    }
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            ScrollView {
-                Text(promptJSON)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding()
-    }
-}
-```
-
-- [ ] **Step 4: Build Swift package**
-
-Run:
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/ios-app
-swift build
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/ios-app/Sources/LocalAgentApp/ProviderSettingsView.swift local-ios-agent/ios-app/Sources/LocalAgentApp/ApprovalSheetView.swift local-ios-agent/ios-app/Sources/LocalAgentApp/PromptDebugView.swift
-git commit -m "feat: add settings approval and debug views"
-```
-
-## Task 4: Add MVP Acceptance Runbook
-
-**Files:**
-- Create: `local-ios-agent/docs/mvp-acceptance.md`
-
-- [ ] **Step 1: Create acceptance checklist**
-
-Create `local-ios-agent/docs/mvp-acceptance.md`:
-
-```markdown
-# Local iOS Agent MVP Acceptance
-
-## Branch Inputs
-
-- `codex/local-ios-agent-native-toolkit` provides Plan 8 and Plan 9.
-- `codex/local-ios-agent-ai-model` provides Plan 10 and Plan 11.
-- `codex/local-ios-agent-frontend` provides Plan 12.
-
-## Required Checks
-
-```bash
-cd local-ios-agent/rust-core
-cargo test
-```
-
-```bash
-cd local-ios-agent/ios-app
 swift test
 swift build
-```
-
-## Acceptance Scenarios
-
-1. Mock chat turn:
-   - Create session.
-   - Send `hello`.
-   - Render user message and assistant completion.
-
-2. Tool lifecycle:
-   - Send `use tool debug.echo`.
-   - Runtime exposes a pending tool request.
-   - Native toolkit executor returns a `ToolResultDTO`.
-   - Runtime accepts the tool result and completes the turn.
-
-3. Approval lifecycle:
-   - Confirm-level tool produces an approval request.
-   - SwiftUI shows approval sheet.
-   - Approval response resumes the run.
-
-4. Provider selection:
-   - Mock provider remains default.
-   - Desktop MiniCPM profile accepts a localhost endpoint.
-   - On-device MiniCPM profile remains selectable as a boundary provider.
-
-5. Debug visibility:
-   - Tool rows show tool name and arguments/result detail.
-   - Prompt debug view can render captured prompt JSON text.
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/docs/mvp-acceptance.md
-git commit -m "docs: add MVP acceptance runbook"
+cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
+cargo test
 ```
 
 ## Self-Review
 
-Spec coverage:
-
-- Chat UI, provider selector, approval UI, tool rows, and prompt debug view are
-  all assigned.
-- View-model tests cover the runtime client path.
-- The runbook includes Rust, Swift, and MVP acceptance scenarios.
-
-Placeholder scan:
-
-- No placeholder terms are used as implementation instructions.
-
-Type consistency:
-
-- View model uses `RuntimeClient`, `NativeToolExecutor`, `RunStateDTO`,
-  `RuntimeEventDTO`, and `ApprovalProtocolRequestDTO` from earlier plans.
+- Plan 12 composes existing layers; it does not redefine them.
+- Plan 12 never fills lower-layer contract gaps with SwiftUI-only behavior.
+- Tool draining belongs here because it is app workflow orchestration.
+- Tool draining is run-scoped and loop-guarded; it must not execute pending
+  requests from another run.
+- Provider selection UI calls runtime provider APIs instead of mutating local UI
+  state only.
+- Provider switching during active runs is blocked by UI affordance and by the
+  Plan 10 runtime contract.
