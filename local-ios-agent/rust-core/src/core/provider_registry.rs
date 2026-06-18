@@ -80,9 +80,38 @@ impl ProviderRegistry {
     }
 
     pub fn build(&self, provider_id: &str) -> Result<ProviderBundle, AgentError> {
-        self.entries
+        let entry = self
+            .entries
             .get(provider_id)
-            .map(|entry| (entry.factory)())
-            .ok_or_else(|| AgentError::Provider(format!("unknown provider: {provider_id}")))
+            .ok_or_else(|| AgentError::Provider(format!("unknown provider: {provider_id}")))?;
+        let bundle = (entry.factory)();
+        validate_bundle(&entry.profile, &bundle)?;
+        Ok(bundle)
     }
+}
+
+fn validate_bundle(profile: &ProviderProfile, bundle: &ProviderBundle) -> Result<(), AgentError> {
+    if bundle.provider.id() != profile.id {
+        return Err(AgentError::Provider(format!(
+            "provider id mismatch for profile {}: {}",
+            profile.id,
+            bundle.provider.id()
+        )));
+    }
+    if bundle.tokenizer.provider_id() != profile.id {
+        return Err(AgentError::Provider(format!(
+            "tokenizer id mismatch for profile {}: {}",
+            profile.id,
+            bundle.tokenizer.provider_id()
+        )));
+    }
+    if bundle.tokenizer.max_context_tokens() != profile.max_context_tokens {
+        return Err(AgentError::Provider(format!(
+            "tokenizer context mismatch for profile {}: {} != {}",
+            profile.id,
+            bundle.tokenizer.max_context_tokens(),
+            profile.max_context_tokens
+        )));
+    }
+    Ok(())
 }
