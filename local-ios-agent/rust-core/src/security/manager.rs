@@ -66,7 +66,7 @@ impl SecurityManager {
         &mut self,
         approval_id: impl Into<String>,
         run_id: RunId,
-        tool_call_id: EntryId,
+        tool_call_entry_id: EntryId,
         message: impl Into<String>,
         requires_local_authentication: bool,
     ) -> ApprovalProtocolRequest {
@@ -74,13 +74,15 @@ impl SecurityManager {
         let message = message.into();
         self.approvals.push(ApprovalRequest {
             approval_id: approval_id.clone(),
-            run_id,
-            tool_call_id,
+            run_id: run_id.clone(),
+            tool_call_entry_id: tool_call_entry_id.clone(),
             message: message.clone(),
             requires_local_authentication,
         });
         ApprovalProtocolRequest {
             approval_id,
+            run_id,
+            tool_call_entry_id,
             message,
             requires_local_authentication,
         }
@@ -95,6 +97,8 @@ impl SecurityManager {
             .into_iter()
             .map(|request| ApprovalProtocolRequest {
                 approval_id: request.approval_id,
+                run_id: request.run_id,
+                tool_call_entry_id: request.tool_call_entry_id,
                 message: request.message,
                 requires_local_authentication: request.requires_local_authentication,
             })

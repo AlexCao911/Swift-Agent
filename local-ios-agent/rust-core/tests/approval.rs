@@ -6,7 +6,7 @@ fn suspended_run_resumes_with_matching_approval_id() {
     let request = ApprovalRequest {
         approval_id: "approval_1".to_string(),
         run_id: RunId("run_1".to_string()),
-        tool_call_id: EntryId("tool_1".to_string()),
+        tool_call_entry_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
         requires_local_authentication: false,
     };
@@ -25,7 +25,7 @@ fn suspended_run_rejects_wrong_approval_id() {
     let request = ApprovalRequest {
         approval_id: "approval_1".to_string(),
         run_id: RunId("run_1".to_string()),
-        tool_call_id: EntryId("tool_1".to_string()),
+        tool_call_entry_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
         requires_local_authentication: false,
     };

@@ -196,8 +196,10 @@ fn router_queues_approval_with_real_run_and_entry_ids() {
 
             assert_eq!(pending.len(), 1);
             assert_eq!(pending[0].run_id, RunId("run_1".into()));
-            assert_eq!(pending[0].tool_call_id, EntryId("entry_1".into()));
+            assert_eq!(pending[0].tool_call_entry_id, EntryId("entry_1".into()));
             assert_eq!(approval.approval_id, pending[0].approval_id);
+            assert_eq!(approval.run_id, RunId("run_1".into()));
+            assert_eq!(approval.tool_call_entry_id, EntryId("entry_1".into()));
             assert!(approval.requires_local_authentication);
         }
         _ => panic!("expected approval required route"),

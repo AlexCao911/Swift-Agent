@@ -87,6 +87,8 @@ struct RustRuntimeClientContractTests {
         #expect(turn?.state == .waitingTool)
         #expect(pendingTools?.first?.runId == "run_3")
         #expect(pendingApprovals?.first?.approvalId == "approval_1")
+        #expect(pendingApprovals?.first?.runId == "run_3")
+        #expect(pendingApprovals?.first?.toolCallEntryId == "entry_6")
         #expect(submittedTool?.state == .completed)
         #expect(submittedApproval?.runId == "run_3")
         #expect(cancelled?.kind == .runCancelled)
@@ -238,6 +240,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         makeCString("""
         [{
           "approval_id": "approval_1",
+          "run_id": "run_3",
+          "tool_call_entry_id": "entry_6",
           "message": "Approve?",
           "requires_local_authentication": true
         }]

@@ -448,6 +448,8 @@ impl ToolExecutionRequestJson {
 #[derive(Serialize)]
 struct ApprovalProtocolRequestJson {
     approval_id: String,
+    run_id: String,
+    tool_call_entry_id: String,
     message: String,
     requires_local_authentication: bool,
 }
@@ -456,6 +458,8 @@ impl ApprovalProtocolRequestJson {
     fn from_request(request: &ApprovalProtocolRequest) -> Self {
         Self {
             approval_id: request.approval_id.clone(),
+            run_id: request.run_id.0.clone(),
+            tool_call_entry_id: request.tool_call_entry_id.0.clone(),
             message: request.message.clone(),
             requires_local_authentication: request.requires_local_authentication,
         }

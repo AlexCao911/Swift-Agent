@@ -60,6 +60,8 @@ struct RuntimeDTOTests {
         let approvalJSON = """
         {
           "approval_id": "approval_entry_tool",
+          "run_id": "run_7",
+          "tool_call_entry_id": "entry_tool",
           "message": "Allow tool `debug.echo` to run?",
           "requires_local_authentication": true
         }
@@ -82,6 +84,8 @@ struct RuntimeDTOTests {
         #expect(tool.toolName == "debug.echo")
         #expect(tool.argumentsJson == #"{"text":"hello"}"#)
         #expect(approval.approvalId == "approval_entry_tool")
+        #expect(approval.runId == "run_7")
+        #expect(approval.toolCallEntryId == "entry_tool")
         #expect(approval.message == "Allow tool `debug.echo` to run?")
         #expect(approval.requiresLocalAuthentication)
         #expect(prompt.renderedText == "system\nruntime\ntool")

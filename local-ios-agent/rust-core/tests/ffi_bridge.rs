@@ -145,6 +145,14 @@ fn bridge_exposes_and_resolves_approval_requests_json() {
     );
 
     assert_eq!(turn["state"], "suspended");
+    let run_id = turn["run_id"].as_str().unwrap();
+    let tool_call_entry_id = turn["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "tool_call_requested")
+        .and_then(|event| event["id"].as_str())
+        .unwrap();
     assert_eq!(
         decode(&bridge.pending_tool_requests_json().unwrap()),
         json!([])
@@ -154,6 +162,8 @@ fn bridge_exposes_and_resolves_approval_requests_json() {
     assert_eq!(approvals.as_array().unwrap().len(), 1);
     let approval_id = approvals[0]["approval_id"].as_str().unwrap();
     assert!(approval_id.starts_with("approval_"));
+    assert_eq!(approvals[0]["run_id"], run_id);
+    assert_eq!(approvals[0]["tool_call_entry_id"], tool_call_entry_id);
     assert_eq!(approvals[0]["requires_local_authentication"], true);
 
     let resumed = decode(

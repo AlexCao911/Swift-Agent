@@ -224,21 +224,29 @@ public struct ToolResultDTO: Codable, Equatable, Sendable {
 
 public struct ApprovalProtocolRequestDTO: Codable, Equatable, Sendable {
     public var approvalId: String
+    public var runId: String
+    public var toolCallEntryId: String
     public var message: String
     public var requiresLocalAuthentication: Bool
 
     public init(
         approvalId: String,
+        runId: String,
+        toolCallEntryId: String,
         message: String,
         requiresLocalAuthentication: Bool
     ) {
         self.approvalId = approvalId
+        self.runId = runId
+        self.toolCallEntryId = toolCallEntryId
         self.message = message
         self.requiresLocalAuthentication = requiresLocalAuthentication
     }
 
     private enum CodingKeys: String, CodingKey {
         case approvalId = "approval_id"
+        case runId = "run_id"
+        case toolCallEntryId = "tool_call_entry_id"
         case message
         case requiresLocalAuthentication = "requires_local_authentication"
     }

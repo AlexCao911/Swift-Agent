@@ -20,7 +20,7 @@ fn approval_queue_tracks_pending_requests() {
     queue.push(ApprovalRequest {
         approval_id: "approval_1".into(),
         run_id: RunId("run_1".into()),
-        tool_call_id: EntryId("entry_1".into()),
+        tool_call_entry_id: EntryId("entry_1".into()),
         message: "Allow?".into(),
         requires_local_authentication: false,
     });

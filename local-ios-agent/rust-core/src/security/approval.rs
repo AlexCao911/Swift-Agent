@@ -11,7 +11,7 @@ pub enum ApprovalDecision {
 pub struct ApprovalRequest {
     pub approval_id: String,
     pub run_id: RunId,
-    pub tool_call_id: EntryId,
+    pub tool_call_entry_id: EntryId,
     pub message: String,
     pub requires_local_authentication: bool,
 }
