@@ -45,6 +45,7 @@ pub struct SendMessageInput {
 
 pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     config: AgentRuntimeConfig,
+    context_controller: ContextController,
     ids: IdGenerator,
     store: S,
     provider_registry: ProviderRegistry,
@@ -91,8 +92,10 @@ impl<S: EventStore> AgentRuntime<S> {
             config.tokenizer = bundle.tokenizer;
         }
 
+        let context_controller = build_context_controller(&config);
         let mut runtime = Self {
             config,
+            context_controller,
             ids: IdGenerator::starting_at(next_id),
             store,
             provider_registry,
@@ -149,6 +152,7 @@ impl<S: EventStore> AgentRuntime<S> {
 
         self.config.provider = bundle.provider;
         self.config.tokenizer = bundle.tokenizer;
+        self.rebuild_context_controller();
         self.active_provider_profile = profile.clone();
         self.store.save_provider_setting(ProviderSetting {
             key: active_provider_key(&session_id),
@@ -179,6 +183,7 @@ impl<S: EventStore> AgentRuntime<S> {
             .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()));
         router.register(schema)?;
         self.config.tool_schemas = router.prompt_schemas();
+        self.rebuild_context_controller();
         Ok(())
     }
 
@@ -913,13 +918,12 @@ impl<S: EventStore> AgentRuntime<S> {
         Ok((Some(summary_id), events))
     }
 
-    fn context_controller(&self) -> ContextController {
-        ContextController::new(
-            self.config.system_prompt.clone(),
-            self.config.runtime_policy.clone(),
-            self.config.tool_schemas.clone(),
-            self.config.tokenizer.boxed_clone(),
-        )
+    fn context_controller(&self) -> &ContextController {
+        &self.context_controller
+    }
+
+    fn rebuild_context_controller(&mut self) {
+        self.context_controller = build_context_controller(&self.config);
     }
 
     fn append_tool_call_requested(
@@ -1159,6 +1163,15 @@ fn numeric_suffix(id: &str) -> Option<u64> {
 
 fn active_provider_key(session_id: &SessionId) -> String {
     format!("active_provider:{}", session_id.0)
+}
+
+fn build_context_controller(config: &AgentRuntimeConfig) -> ContextController {
+    ContextController::new(
+        config.system_prompt.clone(),
+        config.runtime_policy.clone(),
+        config.tool_schemas.clone(),
+        config.tokenizer.boxed_clone(),
+    )
 }
 
 fn persisted_provider_id<S: EventStore>(

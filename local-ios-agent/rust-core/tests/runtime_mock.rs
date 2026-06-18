@@ -1,6 +1,9 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{
+    MockTokenizer, PromptFrame, PromptMessage, TokenizerAdapter,
+};
 use local_ios_agent_runtime::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, CancellationToken, EventKind,
     MockStreamingProvider, ModelProvider, ModelProviderOutput, SendMessageInput,
@@ -61,6 +64,50 @@ impl ModelProvider for CaptureCancellationProvider {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CountingCloneTokenizer {
+    clone_count: Arc<AtomicUsize>,
+    max_context_tokens: usize,
+}
+
+impl TokenizerAdapter for CountingCloneTokenizer {
+    fn provider_id(&self) -> &str {
+        "counting"
+    }
+
+    fn max_context_tokens(&self) -> usize {
+        self.max_context_tokens
+    }
+
+    fn safety_margin_tokens(&self) -> usize {
+        0
+    }
+
+    fn count_text(&self, text: &str) -> usize {
+        text.split_whitespace().count()
+    }
+
+    fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
+        self.count_text(&frame.system_prompt)
+            + self.count_text(&frame.runtime_policy)
+            + frame
+                .tool_schemas
+                .iter()
+                .map(|tool| self.count_text(tool))
+                .sum::<usize>()
+            + frame
+                .messages
+                .iter()
+                .map(|message| self.count_text(message.content()))
+                .sum::<usize>()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn TokenizerAdapter> {
+        self.clone_count.fetch_add(1, Ordering::SeqCst);
+        Box::new(self.clone())
+    }
+}
+
 #[test]
 fn runtime_streams_mock_response_and_persists_events() {
     let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
@@ -90,6 +137,40 @@ fn runtime_streams_mock_response_and_persists_events() {
     assert!(events
         .iter()
         .any(|event| event.kind == EventKind::AssistantMessageCompleted));
+}
+
+#[test]
+fn runtime_reuses_context_controller_between_turns() {
+    let clone_count = Arc::new(AtomicUsize::new(0));
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".to_string(),
+        runtime_policy: "policy".to_string(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(CountingCloneTokenizer {
+            clone_count: clone_count.clone(),
+            max_context_tokens: 100,
+        }),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
+    });
+
+    let session_id = runtime.create_session().unwrap();
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id: session_id.clone(),
+            parent_event_id: None,
+            text: "first".to_string(),
+        })
+        .unwrap();
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "second".to_string(),
+        })
+        .unwrap();
+
+    assert_eq!(clone_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
