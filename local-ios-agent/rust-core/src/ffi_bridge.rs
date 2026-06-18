@@ -9,78 +9,96 @@ use crate::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, AgentTurnResult, EntryId, EventKind,
     MockStreamingProvider, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
-use crate::memory::InMemoryEventStore;
+use crate::memory::{InMemoryEventStore, SqliteEventStore};
 use crate::security::{ApprovalProtocolRequest, ApprovalProtocolResponse, RiskLevel};
 use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult, ToolSchema};
 
-pub struct RuntimeJsonBridge {
-    runtime: AgentRuntime<InMemoryEventStore>,
+pub enum RuntimeJsonBridge {
+    InMemory(AgentRuntime<InMemoryEventStore>),
+    Sqlite(AgentRuntime<SqliteEventStore>),
 }
 
 impl RuntimeJsonBridge {
     pub fn new(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
-        Self { runtime }
+        Self::InMemory(runtime)
     }
 
-    pub fn new_mock_runtime() -> Self {
-        Self::new(AgentRuntime::new(AgentRuntimeConfig {
-            system_prompt: "system".into(),
-            runtime_policy: "policy".into(),
-            tool_schemas: Vec::new(),
-            tokenizer: Box::new(MockTokenizer::new(100)),
-            provider: Box::new(MockStreamingProvider::new()),
-            tool_router: None,
-        }))
+    pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
+        let config: RuntimeBridgeConfigJson = from_json(config_json)?;
+        let runtime_config = config.runtime_config()?;
+        match config.store {
+            StoreConfigJson::InMemory { .. } => {
+                Ok(Self::InMemory(AgentRuntime::new(runtime_config)))
+            }
+            StoreConfigJson::Sqlite { path, .. } => Ok(Self::Sqlite(AgentRuntime::with_store(
+                runtime_config,
+                SqliteEventStore::open(path)?,
+            )?)),
+        }
     }
 
     pub fn create_session_json(&mut self) -> Result<String, AgentError> {
-        let session_id = self.runtime.create_session()?;
+        let session_id = match self {
+            Self::InMemory(runtime) => runtime.create_session()?,
+            Self::Sqlite(runtime) => runtime.create_session()?,
+        };
         to_json(&session_id.0)
     }
 
     pub fn session_ids_json(&self) -> Result<String, AgentError> {
-        let session_ids: Vec<_> = self
-            .runtime
-            .session_ids()
-            .into_iter()
-            .map(|session_id| session_id.0)
-            .collect();
+        let session_ids: Vec<_> = match self {
+            Self::InMemory(runtime) => runtime.session_ids(),
+            Self::Sqlite(runtime) => runtime.session_ids(),
+        }
+        .into_iter()
+        .map(|session_id| session_id.0)
+        .collect();
         to_json(&session_ids)
     }
 
     pub fn register_tool_schema_json(&mut self, schema_json: &str) -> Result<String, AgentError> {
         let schema: ToolSchemaJson = from_json(schema_json)?;
-        self.runtime.register_tool(schema.into_tool_schema()?)?;
+        let schema = schema.into_tool_schema()?;
+        match self {
+            Self::InMemory(runtime) => runtime.register_tool(schema)?,
+            Self::Sqlite(runtime) => runtime.register_tool(schema)?,
+        }
         Ok("null".to_string())
     }
 
     pub fn send_message_json(&mut self, input_json: &str) -> Result<String, AgentError> {
         let input: SendMessageJson = from_json(input_json)?;
-        let result = self.runtime.send_message_turn(SendMessageInput {
+        let input = SendMessageInput {
             session_id: SessionId(input.session_id),
             parent_event_id: input.parent_event_id.map(EntryId),
             text: input.text,
-        })?;
+        };
+        let result = match self {
+            Self::InMemory(runtime) => runtime.send_message_turn(input)?,
+            Self::Sqlite(runtime) => runtime.send_message_turn(input)?,
+        };
         to_json(&AgentTurnResultJson::from_result(&result))
     }
 
     pub fn pending_tool_requests_json(&self) -> Result<String, AgentError> {
-        let requests: Vec<_> = self
-            .runtime
-            .pending_tool_requests()
-            .iter()
-            .map(ToolExecutionRequestJson::from_request)
-            .collect();
+        let requests: Vec<_> = match self {
+            Self::InMemory(runtime) => runtime.pending_tool_requests(),
+            Self::Sqlite(runtime) => runtime.pending_tool_requests(),
+        }
+        .iter()
+        .map(ToolExecutionRequestJson::from_request)
+        .collect();
         to_json(&requests)
     }
 
     pub fn pending_approval_requests_json(&self) -> Result<String, AgentError> {
-        let requests: Vec<_> = self
-            .runtime
-            .pending_approval_requests()
-            .iter()
-            .map(ApprovalProtocolRequestJson::from_request)
-            .collect();
+        let requests: Vec<_> = match self {
+            Self::InMemory(runtime) => runtime.pending_approval_requests(),
+            Self::Sqlite(runtime) => runtime.pending_approval_requests(),
+        }
+        .iter()
+        .map(ApprovalProtocolRequestJson::from_request)
+        .collect();
         to_json(&requests)
     }
 
@@ -90,9 +108,11 @@ impl RuntimeJsonBridge {
         result_json: &str,
     ) -> Result<String, AgentError> {
         let result: ToolResultJson = from_json(result_json)?;
-        let turn = self
-            .runtime
-            .submit_tool_result(run_id.to_string(), result.into_tool_result()?);
+        let result = result.into_tool_result()?;
+        let turn = match self {
+            Self::InMemory(runtime) => runtime.submit_tool_result(run_id.to_string(), result),
+            Self::Sqlite(runtime) => runtime.submit_tool_result(run_id.to_string(), result),
+        };
         to_json(&AgentTurnResultJson::from_result(&turn?))
     }
 
@@ -101,14 +121,19 @@ impl RuntimeJsonBridge {
         response_json: &str,
     ) -> Result<String, AgentError> {
         let response: ApprovalProtocolResponseJson = from_json(response_json)?;
-        let turn = self
-            .runtime
-            .submit_approval_response(response.into_approval_response());
+        let response = response.into_approval_response();
+        let turn = match self {
+            Self::InMemory(runtime) => runtime.submit_approval_response(response),
+            Self::Sqlite(runtime) => runtime.submit_approval_response(response),
+        };
         to_json(&AgentTurnResultJson::from_result(&turn?))
     }
 
     pub fn cancel_json(&mut self, run_id: &str) -> Result<String, AgentError> {
-        let event = self.runtime.cancel(run_id.to_string())?;
+        let event = match self {
+            Self::InMemory(runtime) => runtime.cancel(run_id.to_string())?,
+            Self::Sqlite(runtime) => runtime.cancel(run_id.to_string())?,
+        };
         to_json(&RuntimeEventJson::from_event(&event))
     }
 
@@ -119,7 +144,20 @@ impl RuntimeJsonBridge {
 
 #[no_mangle]
 pub extern "C" fn local_agent_runtime_bridge_new() -> *mut RuntimeJsonBridge {
-    Box::into_raw(Box::new(RuntimeJsonBridge::new_mock_runtime()))
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_new_with_config(
+    config_json: *const c_char,
+) -> *mut RuntimeJsonBridge {
+    let Ok(config_json) = c_str_arg(config_json, "config_json") else {
+        return std::ptr::null_mut();
+    };
+    match RuntimeJsonBridge::from_config_json(config_json) {
+        Ok(bridge) => Box::into_raw(Box::new(bridge)),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 #[no_mangle]
@@ -233,6 +271,42 @@ struct SendMessageJson {
     session_id: String,
     parent_event_id: Option<String>,
     text: String,
+}
+
+#[derive(Deserialize)]
+struct RuntimeBridgeConfigJson {
+    system_prompt: String,
+    runtime_policy: String,
+    provider_id: String,
+    store: StoreConfigJson,
+}
+
+impl RuntimeBridgeConfigJson {
+    fn runtime_config(&self) -> Result<AgentRuntimeConfig, AgentError> {
+        let provider: Box<dyn crate::core::ModelProvider> = match self.provider_id.as_str() {
+            "mock" => Box::new(MockStreamingProvider::new()),
+            other => {
+                return Err(AgentError::Provider(format!(
+                    "unknown provider_id for bridge runtime: {other}"
+                )))
+            }
+        };
+        Ok(AgentRuntimeConfig {
+            system_prompt: self.system_prompt.clone(),
+            runtime_policy: self.runtime_policy.clone(),
+            tool_schemas: Vec::new(),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+            provider,
+            tool_router: None,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StoreConfigJson {
+    InMemory {},
+    Sqlite { path: String },
 }
 
 #[derive(Deserialize)]

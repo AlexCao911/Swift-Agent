@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 
 import PackageDescription
 
@@ -21,7 +21,11 @@ let package = Package(
         ),
         .target(
             name: "LocalAgentBridge",
-            dependencies: ["CLocalAgentRuntime"]
+            dependencies: ["CLocalAgentRuntime"],
+            linkerSettings: [
+                .linkedLibrary("local_ios_agent_runtime"),
+                .unsafeFlags(["-L../rust-core/target/debug"]),
+            ]
         ),
         .testTarget(
             name: "LocalAgentBridgeTests",

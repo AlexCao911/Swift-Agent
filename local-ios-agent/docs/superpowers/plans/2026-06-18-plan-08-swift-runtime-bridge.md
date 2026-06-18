@@ -6,7 +6,7 @@
 
 **Architecture:** Plan 8 is a bridge plan, not a product-feature plan. Rust remains authoritative for sessions, run state, events, tool routing, approvals, and prompt construction. Swift receives typed DTOs through `RuntimeClient`; the concrete `RustRuntimeClient` owns C/FFI calls and JSON decoding, while `MockRuntimeClient` is only a test double. Provider-specific control, native tool execution, and UI orchestration are deliberately outside the base bridge.
 
-**Tech Stack:** Rust 2021, existing `AgentRuntime`, C ABI or UniFFI-ready JSON boundary, Swift Package Manager, Swift 5.9, XCTest, TDD.
+**Tech Stack:** Rust 2021, existing `AgentRuntime`, C ABI or UniFFI-ready JSON boundary, Swift Package Manager, Swift 6, Swift Testing, TDD.
 
 ---
 
@@ -169,6 +169,7 @@ Run:
 ```bash
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/rust-core
 cargo test
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build
 cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent/ios-app
 swift test
 swift build

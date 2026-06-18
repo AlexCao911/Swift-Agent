@@ -128,6 +128,29 @@ struct RustRuntimeClientContractTests {
         #expect(probe.freedStrings == 1)
         #expect(probe.freedRuntimeHandles == 1)
     }
+
+    @Test
+    func rustRuntimeClientLiveUsesLinkedCBridge() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("sqlite")
+        let configuration = RustRuntimeConfiguration(
+            systemPrompt: "configured system",
+            runtimePolicy: "configured policy",
+            providerId: "mock",
+            store: .sqlite(path: databaseURL.path)
+        )
+
+        var firstClient: RustRuntimeClient? = try RustRuntimeClient(configuration: configuration)
+        let createdSession = try await firstClient?.createSession()
+        firstClient = nil
+
+        let secondClient = try RustRuntimeClient(configuration: configuration)
+        let sessionIds = try await secondClient.sessionIds()
+
+        #expect(createdSession != nil)
+        #expect(sessionIds.contains(try #require(createdSession)))
+    }
 }
 
 private final class RuntimeCFunctionProbe: @unchecked Sendable {

@@ -8,6 +8,7 @@ extern "C" {
 typedef struct LocalAgentRuntimeBridge LocalAgentRuntimeBridge;
 
 LocalAgentRuntimeBridge *local_agent_runtime_bridge_new(void);
+LocalAgentRuntimeBridge *local_agent_runtime_bridge_new_with_config(const char *config_json);
 void local_agent_runtime_bridge_free(LocalAgentRuntimeBridge *runtime);
 void local_agent_runtime_bridge_string_free(char *value);
 
