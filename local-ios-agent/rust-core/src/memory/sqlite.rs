@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
-use crate::memory::{BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord};
+use crate::memory::{AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord};
 
 pub struct SqliteEventStore {
     conn: Connection,
@@ -118,6 +118,11 @@ impl SqliteEventStore {
                   leaf_id text not null,
                   summary text not null,
                   primary key (session_id, leaf_id)
+                );
+
+                create table if not exists provider_settings (
+                  key text primary key,
+                  value text not null
                 );
                 ",
             )
@@ -273,6 +278,84 @@ impl SqliteEventStore {
             },
         ) {
             Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(storage_error(error)),
+        }
+    }
+
+    pub fn write_audit(
+        &self,
+        session_id: &str,
+        event_id: &str,
+        summary: &str,
+    ) -> Result<(), AgentError> {
+        self.conn
+            .execute(
+                "
+                insert into audit_log(session_id, event_id, summary)
+                values (?1, ?2, ?3)
+                ",
+                params![session_id, event_id, summary],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn audit_rows(&self, session_id: &str) -> Result<Vec<AuditRow>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "
+                select session_id, event_id, summary
+                from audit_log
+                where session_id = ?1
+                order by id
+                ",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map(params![session_id], |row| {
+                Ok(AuditRow {
+                    session_id: row.get(0)?,
+                    event_id: row.get(1)?,
+                    summary: row.get(2)?,
+                })
+            })
+            .map_err(storage_error)?;
+
+        let mut audit_rows = Vec::new();
+        for row in rows {
+            audit_rows.push(row.map_err(storage_error)?);
+        }
+        Ok(audit_rows)
+    }
+
+    pub fn save_provider_setting(&self, key: &str, value: &str) -> Result<(), AgentError> {
+        self.conn
+            .execute(
+                "
+                insert into provider_settings(key, value)
+                values (?1, ?2)
+                on conflict(key) do update set value = excluded.value
+                ",
+                params![key, value],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn provider_setting(&self, key: &str) -> Result<Option<String>, AgentError> {
+        match self.conn.query_row(
+            "
+            select value
+            from provider_settings
+            where key = ?1
+            ",
+            params![key],
+            |row| row.get(0),
+        ) {
+            Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(error) => Err(storage_error(error)),
         }

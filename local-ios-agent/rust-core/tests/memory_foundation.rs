@@ -61,3 +61,25 @@ fn sqlite_stores_blob_and_branch_summary() {
         "summary"
     );
 }
+
+#[test]
+fn sqlite_persists_audit_rows_and_provider_settings() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let store = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
+
+    store
+        .write_audit("session_1", "entry_1", "tool executed")
+        .unwrap();
+    store
+        .save_provider_setting("active_provider", "mock")
+        .unwrap();
+
+    assert_eq!(
+        store.audit_rows("session_1").unwrap()[0].summary,
+        "tool executed"
+    );
+    assert_eq!(
+        store.provider_setting("active_provider").unwrap(),
+        Some("mock".into())
+    );
+}
