@@ -1,6 +1,7 @@
 use local_ios_agent_runtime::context::MockTokenizer;
 use local_ios_agent_runtime::core::{
-    MockStreamingProvider, ProviderBundle, ProviderKind, ProviderProfile, ProviderRegistry,
+    register_desktop_minicpm_provider, DesktopMiniCPMSettings, MockStreamingProvider,
+    ProviderBundle, ProviderKind, ProviderProfile, ProviderRegistry,
 };
 
 fn profile(id: &str, display_name: &str) -> ProviderProfile {
@@ -71,4 +72,29 @@ fn registry_builds_provider_and_tokenizer_together() {
 
     assert_eq!(bundle.provider.id(), "mock");
     assert_eq!(bundle.tokenizer.provider_id(), "mock");
+}
+
+#[test]
+fn desktop_minicpm_registration_builds_matching_provider_and_tokenizer() {
+    let mut registry = ProviderRegistry::with_mock();
+
+    register_desktop_minicpm_provider(
+        &mut registry,
+        DesktopMiniCPMSettings {
+            endpoint: "http://127.0.0.1:8000/v1/chat/completions".into(),
+            model: "minicpm".into(),
+            max_context_tokens: 4096,
+        },
+    )
+    .unwrap();
+
+    let profile = registry.profile("desktop_minicpm").unwrap();
+    assert_eq!(profile.kind, ProviderKind::DesktopMiniCpm);
+    assert_eq!(profile.max_context_tokens, 4096);
+
+    let bundle = registry.build("desktop_minicpm").unwrap();
+    assert_eq!(bundle.provider.id(), "desktop_minicpm");
+    assert_eq!(bundle.tokenizer.provider_id(), "desktop_minicpm");
+    assert_eq!(bundle.tokenizer.max_context_tokens(), 4096);
+    assert!(bundle.tokenizer.count_text("abcdefghij") > 1);
 }

@@ -2,10 +2,11 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use crate::context::PromptFrame;
+use crate::context::{PromptFrame, TokenizerAdapter};
 use crate::core::{
     build_openai_chat_request, parse_openai_chat_response, AgentError, CancellationToken,
-    ModelProvider, ModelProviderOutput,
+    ModelProvider, ModelProviderOutput, ProviderBundle, ProviderKind, ProviderProfile,
+    ProviderRegistry,
 };
 
 pub trait DesktopMiniCPMTransport: Send + Sync {
@@ -22,10 +23,106 @@ pub struct DesktopMiniCPMProvider {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopMiniCPMSettings {
+    pub endpoint: String,
+    pub model: String,
+    pub max_context_tokens: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopMiniCPMTokenizer {
+    max_context_tokens: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalhostHttpTransport {
     host: String,
     port: u16,
     path: String,
+}
+
+pub fn register_desktop_minicpm_provider(
+    registry: &mut ProviderRegistry,
+    settings: DesktopMiniCPMSettings,
+) -> Result<(), AgentError> {
+    let transport = LocalhostHttpTransport::new(&settings.endpoint)?;
+    let model = settings.model.clone();
+    let max_context_tokens = settings.max_context_tokens;
+
+    registry.register_factory(
+        ProviderProfile {
+            id: "desktop_minicpm".into(),
+            display_name: "Desktop MiniCPM".into(),
+            kind: ProviderKind::DesktopMiniCpm,
+            max_context_tokens,
+        },
+        move || ProviderBundle {
+            provider: Box::new(DesktopMiniCPMProvider::new(
+                model.clone(),
+                Box::new(transport.clone()),
+            )),
+            tokenizer: Box::new(DesktopMiniCPMTokenizer::new(max_context_tokens)),
+        },
+    )
+}
+
+impl DesktopMiniCPMTokenizer {
+    pub fn new(max_context_tokens: usize) -> Self {
+        Self { max_context_tokens }
+    }
+}
+
+impl TokenizerAdapter for DesktopMiniCPMTokenizer {
+    fn provider_id(&self) -> &str {
+        "desktop_minicpm"
+    }
+
+    fn max_context_tokens(&self) -> usize {
+        self.max_context_tokens
+    }
+
+    fn safety_margin_tokens(&self) -> usize {
+        let scaled = self.max_context_tokens / 16;
+        scaled.max(32).min(512).min(self.max_context_tokens / 2)
+    }
+
+    fn count_text(&self, text: &str) -> usize {
+        let mut tokens = 0;
+        let mut ascii_run_bytes = 0;
+        for character in text.chars() {
+            if character.is_ascii_whitespace() {
+                tokens += ascii_token_estimate(ascii_run_bytes);
+                ascii_run_bytes = 0;
+            } else if character.is_ascii() {
+                ascii_run_bytes += character.len_utf8();
+            } else {
+                tokens += ascii_token_estimate(ascii_run_bytes);
+                ascii_run_bytes = 0;
+                tokens += character.len_utf8().max(1);
+            }
+        }
+        tokens + ascii_token_estimate(ascii_run_bytes)
+    }
+
+    fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
+        let mut count = self.count_text(&frame.system_prompt);
+        count += self.count_text(&frame.runtime_policy);
+        count += frame
+            .tool_schemas
+            .iter()
+            .map(|tool| self.count_text(tool))
+            .sum::<usize>();
+        count += frame
+            .messages
+            .iter()
+            .map(|message| self.count_text(message.content()))
+            .sum::<usize>();
+        count
+    }
+
+    fn boxed_clone(&self) -> Box<dyn TokenizerAdapter> {
+        Box::new(self.clone())
+    }
 }
 
 impl LocalhostHttpTransport {
@@ -147,6 +244,14 @@ fn parse_authority(authority: &str) -> Result<(String, u16), AgentError> {
 
 fn is_loopback_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
+fn ascii_token_estimate(bytes: usize) -> usize {
+    if bytes == 0 {
+        0
+    } else {
+        (bytes + 3) / 4
+    }
 }
 
 fn read_http_response_body(
