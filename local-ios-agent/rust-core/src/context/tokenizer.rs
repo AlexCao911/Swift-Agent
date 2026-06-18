@@ -4,6 +4,7 @@ pub trait TokenizerAdapter: Send + Sync {
     fn provider_id(&self) -> &str;
     fn max_context_tokens(&self) -> usize;
     fn safety_margin_tokens(&self) -> usize;
+    fn count_text(&self, text: &str) -> usize;
     fn count_prompt_frame(&self, frame: &PromptFrame) -> usize;
     fn boxed_clone(&self) -> Box<dyn TokenizerAdapter>;
 }
@@ -32,18 +33,22 @@ impl TokenizerAdapter for MockTokenizer {
         8
     }
 
+    fn count_text(&self, text: &str) -> usize {
+        text.split_whitespace().count()
+    }
+
     fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
-        let mut count = frame.system_prompt.split_whitespace().count();
-        count += frame.runtime_policy.split_whitespace().count();
+        let mut count = self.count_text(&frame.system_prompt);
+        count += self.count_text(&frame.runtime_policy);
         count += frame
             .tool_schemas
             .iter()
-            .map(|tool| tool.split_whitespace().count())
+            .map(|tool| self.count_text(tool))
             .sum::<usize>();
         count += frame
             .messages
             .iter()
-            .map(|message| message.content().split_whitespace().count())
+            .map(|message| self.count_text(message.content()))
             .sum::<usize>();
         count
     }

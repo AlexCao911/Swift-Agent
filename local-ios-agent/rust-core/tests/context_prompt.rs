@@ -1,4 +1,6 @@
-use local_ios_agent_runtime::context::{ContextController, MockTokenizer, PromptMessage};
+use local_ios_agent_runtime::context::{
+    ContextController, MockTokenizer, PromptFrame, PromptMessage, TokenizerAdapter,
+};
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 
 fn message(kind: EventKind, payload: &str) -> RuntimeEvent {
@@ -12,6 +14,48 @@ fn message(kind: EventKind, payload: &str) -> RuntimeEvent {
         kind,
         payload,
     )
+}
+
+#[derive(Clone)]
+struct CharacterTokenizer {
+    max_context_tokens: usize,
+}
+
+impl TokenizerAdapter for CharacterTokenizer {
+    fn provider_id(&self) -> &str {
+        "character"
+    }
+
+    fn max_context_tokens(&self) -> usize {
+        self.max_context_tokens
+    }
+
+    fn safety_margin_tokens(&self) -> usize {
+        0
+    }
+
+    fn count_text(&self, text: &str) -> usize {
+        text.len()
+    }
+
+    fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
+        self.count_text(&frame.system_prompt)
+            + self.count_text(&frame.runtime_policy)
+            + frame
+                .tool_schemas
+                .iter()
+                .map(|tool| self.count_text(tool))
+                .sum::<usize>()
+            + frame
+                .messages
+                .iter()
+                .map(|message| self.count_text(message.content()))
+                .sum::<usize>()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn TokenizerAdapter> {
+        Box::new(self.clone())
+    }
 }
 
 #[test]
@@ -62,6 +106,30 @@ fn prompt_frame_truncates_oldest_messages_instead_of_erroring() {
     assert_eq!(
         frame.messages,
         vec![PromptMessage::User("new five six".to_string())]
+    );
+}
+
+#[test]
+fn prompt_frame_fits_messages_using_tokenizer_counts() {
+    let controller = ContextController::new(
+        "",
+        "",
+        Vec::new(),
+        Box::new(CharacterTokenizer {
+            max_context_tokens: 10,
+        }),
+    );
+
+    let frame = controller
+        .build_prompt_frame(vec![
+            message(EventKind::UserMessage, "abcdef"),
+            message(EventKind::AssistantMessageCompleted, "ghijkl"),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        frame.messages,
+        vec![PromptMessage::Assistant("ghijkl".to_string())]
     );
 }
 

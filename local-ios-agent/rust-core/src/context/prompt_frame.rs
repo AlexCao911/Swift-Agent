@@ -108,7 +108,10 @@ impl ContextController {
         let fixed_frame = self.frame(Vec::new());
         let fixed_count = self.tokenizer.count_prompt_frame(&fixed_frame);
         let message_budget = usable.saturating_sub(fixed_count);
-        let kept = ContextBudget::new(message_budget).fit_messages(messages.clone());
+        let kept = ContextBudget::with_token_counter(message_budget, |text| {
+            self.tokenizer.count_text(text)
+        })
+        .fit_messages(messages.clone());
         let dropped_count = messages.len().saturating_sub(kept.len());
         let summary = if dropped_count > 0 {
             self.compaction_summary_for_dropped(&messages[..dropped_count])
