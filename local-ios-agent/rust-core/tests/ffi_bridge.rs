@@ -112,6 +112,39 @@ fn bridge_exposes_provider_control_json() {
 }
 
 #[test]
+fn bridge_config_can_create_runtime_with_desktop_minicpm_provider() {
+    let bridge = RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "desktop_minicpm",
+          "providers": [
+            {
+              "kind": "desktop_minicpm",
+              "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+              "model": "minicpm",
+              "max_context_tokens": 4096
+            }
+          ],
+          "store": {"kind": "in_memory"}
+        }"#,
+    )
+    .unwrap();
+
+    let profiles = decode(&bridge.provider_profiles_json().unwrap());
+    assert!(profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|profile| profile["id"] == "desktop_minicpm"));
+
+    let active = decode(&bridge.active_provider_json().unwrap());
+    assert_eq!(active["id"], "desktop_minicpm");
+    assert_eq!(active["kind"], "desktop_mini_cpm");
+    assert_eq!(active["max_context_tokens"], 4096);
+}
+
+#[test]
 fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
     let mut bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());

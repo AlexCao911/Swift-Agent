@@ -4,10 +4,10 @@ use std::os::raw::c_char;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::context::MockTokenizer;
 use crate::core::{
-    AgentError, AgentRuntime, AgentRuntimeConfig, AgentTurnResult, EntryId, EventKind,
-    MockStreamingProvider, RunState, RuntimeEvent, SendMessageInput, SessionId,
+    register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
+    AgentTurnResult, DesktopMiniCPMSettings, EntryId, EventKind, ProviderRegistry, RunState,
+    RuntimeEvent, SendMessageInput, SessionId,
 };
 use crate::memory::{InMemoryEventStore, SqliteEventStore};
 use crate::security::{
@@ -27,15 +27,23 @@ impl RuntimeJsonBridge {
 
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
         let config: RuntimeBridgeConfigJson = from_json(config_json)?;
-        let runtime_config = config.runtime_config()?;
+        let registry = config.provider_registry()?;
+        let runtime_config = config.runtime_config(&registry)?;
         match config.store {
             StoreConfigJson::InMemory { .. } => {
-                Ok(Self::InMemory(AgentRuntime::new(runtime_config)))
+                Ok(Self::InMemory(AgentRuntime::with_store_and_registry(
+                    runtime_config,
+                    InMemoryEventStore::new(),
+                    registry,
+                )?))
             }
-            StoreConfigJson::Sqlite { path, .. } => Ok(Self::Sqlite(AgentRuntime::with_store(
-                runtime_config,
-                SqliteEventStore::open(path)?,
-            )?)),
+            StoreConfigJson::Sqlite { path, .. } => {
+                Ok(Self::Sqlite(AgentRuntime::with_store_and_registry(
+                    runtime_config,
+                    SqliteEventStore::open(path)?,
+                    registry,
+                )?))
+            }
         }
     }
 
@@ -365,27 +373,68 @@ struct RuntimeBridgeConfigJson {
     system_prompt: String,
     runtime_policy: String,
     provider_id: String,
+    #[serde(default)]
+    providers: Vec<RuntimeProviderConfigJson>,
     store: StoreConfigJson,
 }
 
 impl RuntimeBridgeConfigJson {
-    fn runtime_config(&self) -> Result<AgentRuntimeConfig, AgentError> {
-        let provider: Box<dyn crate::core::ModelProvider> = match self.provider_id.as_str() {
-            "mock" => Box::new(MockStreamingProvider::new()),
-            other => {
-                return Err(AgentError::Provider(format!(
-                    "unknown provider_id for bridge runtime: {other}"
-                )))
-            }
-        };
+    fn provider_registry(&self) -> Result<ProviderRegistry, AgentError> {
+        let mut registry = ProviderRegistry::with_mock();
+        for provider in &self.providers {
+            provider.register(&mut registry)?;
+        }
+        Ok(registry)
+    }
+
+    fn runtime_config(
+        &self,
+        registry: &ProviderRegistry,
+    ) -> Result<AgentRuntimeConfig, AgentError> {
+        let bundle = registry.build(&self.provider_id).map_err(|_| {
+            AgentError::Provider(format!(
+                "unknown provider_id for bridge runtime: {}",
+                self.provider_id
+            ))
+        })?;
         Ok(AgentRuntimeConfig {
             system_prompt: self.system_prompt.clone(),
             runtime_policy: self.runtime_policy.clone(),
             tool_schemas: Vec::new(),
-            tokenizer: Box::new(MockTokenizer::new(100)),
-            provider,
+            tokenizer: bundle.tokenizer,
+            provider: bundle.provider,
             tool_router: None,
         })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind")]
+enum RuntimeProviderConfigJson {
+    #[serde(rename = "desktop_minicpm", alias = "desktop_mini_cpm")]
+    DesktopMiniCpm {
+        endpoint: String,
+        model: String,
+        max_context_tokens: usize,
+    },
+}
+
+impl RuntimeProviderConfigJson {
+    fn register(&self, registry: &mut ProviderRegistry) -> Result<(), AgentError> {
+        match self {
+            Self::DesktopMiniCpm {
+                endpoint,
+                model,
+                max_context_tokens,
+            } => register_desktop_minicpm_provider(
+                registry,
+                DesktopMiniCPMSettings {
+                    endpoint: endpoint.clone(),
+                    model: model.clone(),
+                    max_context_tokens: *max_context_tokens,
+                },
+            ),
+        }
     }
 }
 
