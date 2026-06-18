@@ -144,12 +144,10 @@ fn set_provider_replaces_active_bundle_persists_setting_and_emits_event() {
         .any(|event| event.payload == "Alt response"));
 
     let store = SqliteEventStore::open(&db_path).unwrap();
-    let setting = <SqliteEventStore as EventStore>::load_provider_setting(
-        &store,
-        &format!("active_provider:{}", session_id.0),
-    )
-    .unwrap()
-    .unwrap();
+    let setting =
+        <SqliteEventStore as EventStore>::load_provider_setting(&store, "active_provider")
+            .unwrap()
+            .unwrap();
     assert_eq!(setting.value, "alt");
 }
 
@@ -176,6 +174,28 @@ fn runtime_restores_persisted_active_provider_when_registry_can_build_it() {
 }
 
 #[test]
+fn runtime_restores_last_global_provider_setting_across_sessions() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    {
+        let store = SqliteEventStore::open(&db_path).unwrap();
+        let mut runtime =
+            AgentRuntime::with_store_and_registry(mock_config(), store, registry_with_alt())
+                .unwrap();
+        let first_session = runtime.create_session().unwrap();
+        let second_session = runtime.create_session().unwrap();
+        runtime.set_provider(first_session, "alt").unwrap();
+        runtime.set_provider(second_session, "mock").unwrap();
+    }
+
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let runtime =
+        AgentRuntime::with_store_and_registry(mock_config(), store, registry_with_alt()).unwrap();
+
+    assert_eq!(runtime.active_provider().id, "mock");
+}
+
+#[test]
 fn set_provider_rejects_runs_that_may_continue_generation() {
     let mut runtime = AgentRuntime::with_store_and_registry(
         mock_config(),
@@ -193,6 +213,32 @@ fn set_provider_rejects_runs_that_may_continue_generation() {
         .unwrap();
 
     let error = runtime.set_provider(session_id, "alt").unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains(&format!("provider_switch_blocked({})", turn.run_id)));
+    assert_eq!(runtime.active_provider().id, "mock");
+}
+
+#[test]
+fn set_provider_rejects_runs_that_may_continue_generation_in_other_sessions() {
+    let mut runtime = AgentRuntime::with_store_and_registry(
+        mock_config(),
+        InMemoryEventStore::new(),
+        registry_with_alt(),
+    )
+    .unwrap();
+    let running_session = runtime.create_session().unwrap();
+    let selector_session = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id: running_session,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+
+    let error = runtime.set_provider(selector_session, "alt").unwrap_err();
 
     assert!(error
         .to_string()

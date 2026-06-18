@@ -83,7 +83,7 @@ impl<S: EventStore> AgentRuntime<S> {
         let session_ids: Vec<_> = sessions.keys().cloned().collect();
         let next_id = next_replayed_id(&store, &session_ids)?;
         let mut active_provider_profile = active_profile_for_config(&config, &provider_registry);
-        if let Some(provider_id) = persisted_provider_id(&store, &session_ids)? {
+        if let Some(provider_id) = persisted_provider_id(&store)? {
             let bundle = provider_registry.build(&provider_id)?;
             active_provider_profile = provider_registry.profile(&provider_id).ok_or_else(|| {
                 AgentError::Provider(format!("unknown provider profile: {provider_id}"))
@@ -137,7 +137,7 @@ impl<S: EventStore> AgentRuntime<S> {
                 session_id.0
             )));
         }
-        if let Some(run_id) = self.blocking_provider_switch_run(&session_id) {
+        if let Some(run_id) = self.blocking_provider_switch_run() {
             return Err(AgentError::Provider(format!(
                 "provider_switch_blocked({})",
                 run_id.0
@@ -155,7 +155,7 @@ impl<S: EventStore> AgentRuntime<S> {
         self.rebuild_context_controller();
         self.active_provider_profile = profile.clone();
         self.store.save_provider_setting(ProviderSetting {
-            key: active_provider_key(&session_id),
+            key: active_provider_key(),
             value: profile.id.clone(),
         })?;
 
@@ -741,15 +741,14 @@ impl<S: EventStore> AgentRuntime<S> {
         self.latest_prompt_debug_snapshot = Some(PromptDebugSnapshot::from_frame(frame));
     }
 
-    fn blocking_provider_switch_run(&self, session_id: &SessionId) -> Option<RunId> {
+    fn blocking_provider_switch_run(&self) -> Option<RunId> {
         self.runs
             .values()
             .find(|run| {
-                run.session_id == *session_id
-                    && matches!(
-                        run.state,
-                        RunState::Running | RunState::WaitingTool | RunState::Suspended
-                    )
+                matches!(
+                    run.state,
+                    RunState::Running | RunState::WaitingTool | RunState::Suspended
+                )
             })
             .map(|run| run.run_id.clone())
     }
@@ -1161,8 +1160,8 @@ fn numeric_suffix(id: &str) -> Option<u64> {
     id.rsplit_once('_')?.1.parse().ok()
 }
 
-fn active_provider_key(session_id: &SessionId) -> String {
-    format!("active_provider:{}", session_id.0)
+fn active_provider_key() -> String {
+    "active_provider".into()
 }
 
 fn build_context_controller(config: &AgentRuntimeConfig) -> ContextController {
@@ -1174,18 +1173,10 @@ fn build_context_controller(config: &AgentRuntimeConfig) -> ContextController {
     )
 }
 
-fn persisted_provider_id<S: EventStore>(
-    store: &S,
-    session_ids: &[SessionId],
-) -> Result<Option<String>, AgentError> {
-    let mut session_ids = session_ids.to_vec();
-    session_ids.sort_by(|left, right| left.0.cmp(&right.0));
-    for session_id in session_ids {
-        if let Some(setting) = store.load_provider_setting(&active_provider_key(&session_id))? {
-            return Ok(Some(setting.value));
-        }
-    }
-    Ok(None)
+fn persisted_provider_id<S: EventStore>(store: &S) -> Result<Option<String>, AgentError> {
+    Ok(store
+        .load_provider_setting(&active_provider_key())?
+        .map(|setting| setting.value))
 }
 
 fn active_profile_for_config(
