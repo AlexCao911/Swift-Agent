@@ -3,7 +3,9 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
-use crate::memory::{AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord};
+use crate::memory::{
+    AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord, MemoryCandidate,
+};
 
 pub struct SqliteEventStore {
     conn: Connection,
@@ -106,6 +108,20 @@ impl SqliteEventStore {
                   confirmed integer not null
                 );
 
+                create table if not exists long_term_memory_keywords (
+                  keyword text not null,
+                  memory_id text not null,
+                  primary key (keyword, memory_id)
+                );
+
+                create index if not exists idx_long_term_memory_keywords_keyword
+                on long_term_memory_keywords(keyword);
+
+                create table if not exists memory_candidates (
+                  text text primary key,
+                  confirmed integer not null
+                );
+
                 create table if not exists blobs (
                   id text primary key,
                   path text not null,
@@ -138,7 +154,13 @@ impl SqliteEventStore {
     }
 
     pub fn upsert_memory(&self, record: LongTermMemoryRecord) -> Result<(), AgentError> {
-        let keywords = serde_json::to_string(&record.keywords)
+        let LongTermMemoryRecord {
+            id,
+            text,
+            keywords,
+            confirmed,
+        } = record;
+        let keywords_json = serde_json::to_string(&keywords)
             .map_err(|error| AgentError::Storage(error.to_string()))?;
         self.conn
             .execute(
@@ -150,9 +172,28 @@ impl SqliteEventStore {
                   keywords = excluded.keywords,
                   confirmed = excluded.confirmed
                 ",
-                params![record.id, record.text, keywords, record.confirmed as i64],
+                params![id, text, keywords_json, confirmed as i64],
             )
             .map_err(storage_error)?;
+
+        self.conn
+            .execute(
+                "delete from long_term_memory_keywords where memory_id = ?1",
+                params![id.as_str()],
+            )
+            .map_err(storage_error)?;
+
+        for keyword in &keywords {
+            self.conn
+                .execute(
+                    "
+                    insert or ignore into long_term_memory_keywords(keyword, memory_id)
+                    values (?1, ?2)
+                    ",
+                    params![keyword, id.as_str()],
+                )
+                .map_err(storage_error)?;
+        }
         Ok(())
     }
 
@@ -161,16 +202,17 @@ impl SqliteEventStore {
             .conn
             .prepare(
                 "
-                select id, text, keywords, confirmed
-                from long_term_memory
-                where confirmed = 1
-                order by id
+                select m.id, m.text, m.keywords, m.confirmed
+                from long_term_memory m
+                join long_term_memory_keywords k on k.memory_id = m.id
+                where m.confirmed = 1 and k.keyword = ?1
+                order by m.id
                 ",
             )
             .map_err(storage_error)?;
 
         let rows = statement
-            .query_map([], |row| {
+            .query_map(params![keyword], |row| {
                 let keywords: String = row.get(2)?;
                 Ok(LongTermMemoryRecord {
                     id: row.get(0)?,
@@ -189,15 +231,61 @@ impl SqliteEventStore {
 
         let mut records = Vec::new();
         for row in rows {
-            let record = row.map_err(storage_error)?;
-            if record.keywords.iter().any(|stored| stored == keyword) {
-                records.push(record);
-            }
+            records.push(row.map_err(storage_error)?);
         }
         Ok(records)
     }
 
+    pub fn save_memory_candidate(&self, candidate: MemoryCandidate) -> Result<(), AgentError> {
+        self.conn
+            .execute(
+                "
+                insert into memory_candidates(text, confirmed)
+                values (?1, ?2)
+                on conflict(text) do update set confirmed = excluded.confirmed
+                ",
+                params![candidate.text, candidate.confirmed as i64],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn memory_candidates(&self) -> Result<Vec<MemoryCandidate>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "
+                select text, confirmed
+                from memory_candidates
+                order by text
+                ",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(MemoryCandidate {
+                    text: row.get(0)?,
+                    confirmed: row.get::<_, i64>(1)? != 0,
+                })
+            })
+            .map_err(storage_error)?;
+
+        let mut candidates = Vec::new();
+        for row in rows {
+            candidates.push(row.map_err(storage_error)?);
+        }
+        Ok(candidates)
+    }
+
     pub fn put_blob(&self, record: BlobRecord) -> Result<(), AgentError> {
+        let byte_count = i64::try_from(record.byte_count).map_err(|_| {
+            AgentError::Storage(format!(
+                "blob byte_count exceeds sqlite integer range: {}",
+                record.byte_count
+            ))
+        })?;
+
         self.conn
             .execute(
                 "
@@ -208,12 +296,7 @@ impl SqliteEventStore {
                   mime_type = excluded.mime_type,
                   byte_count = excluded.byte_count
                 ",
-                params![
-                    record.id,
-                    record.path,
-                    record.mime_type,
-                    record.byte_count as i64
-                ],
+                params![record.id, record.path, record.mime_type, byte_count],
             )
             .map_err(storage_error)?;
         Ok(())
@@ -228,11 +311,18 @@ impl SqliteEventStore {
             ",
             params![id],
             |row| {
+                let byte_count: i64 = row.get(3)?;
                 Ok(BlobRecord {
                     id: row.get(0)?,
                     path: row.get(1)?,
                     mime_type: row.get(2)?,
-                    byte_count: row.get::<_, i64>(3)? as u64,
+                    byte_count: u64::try_from(byte_count).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Integer,
+                            Box::new(error),
+                        )
+                    })?,
                 })
             },
         ) {
