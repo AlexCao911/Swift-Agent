@@ -1,6 +1,7 @@
 use crate::context::{ContextInjectionPolicy, PromptMessage};
 use crate::core::{EventKind, RuntimeEvent};
 use crate::tool::ToolResult;
+use serde_json::Value;
 
 #[derive(Clone, Debug, Default)]
 pub struct BranchProjector;
@@ -11,23 +12,35 @@ impl BranchProjector {
     }
 
     pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<PromptMessage> {
-        branch
-            .into_iter()
-            .filter_map(|event| match event.kind {
-                EventKind::UserMessage => Some(PromptMessage::User(event.payload)),
+        let mut messages = Vec::new();
+        for event in branch {
+            match event.kind {
+                EventKind::UserMessage => messages.push(PromptMessage::User(event.payload)),
                 EventKind::AssistantMessageCompleted => {
-                    Some(PromptMessage::Assistant(event.payload))
+                    messages.push(PromptMessage::Assistant(event.payload));
                 }
-                EventKind::ToolResultMessage => project_tool_result(event.payload),
-                EventKind::BranchSummaryCreated => Some(PromptMessage::Summary(event.payload)),
-                _ => None,
-            })
-            .collect()
+                EventKind::ToolResultMessage => {
+                    if let Some(message) = project_tool_result(event.payload) {
+                        messages.push(message);
+                    }
+                }
+                EventKind::BranchSummaryCreated => {
+                    messages.clear();
+                    messages.push(PromptMessage::Summary(event.payload));
+                }
+                _ => {}
+            }
+        }
+
+        messages
     }
 }
 
 fn project_tool_result(payload: String) -> Option<PromptMessage> {
     let Some(result) = ToolResult::from_event_payload(&payload) else {
+        if declares_tool_result_type(&payload) {
+            return None;
+        }
         return Some(PromptMessage::ToolResult(payload));
     };
 
@@ -36,4 +49,16 @@ fn project_tool_result(payload: String) -> Option<PromptMessage> {
     } else {
         None
     }
+}
+
+fn declares_tool_result_type(payload: &str) -> bool {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|kind| kind == "tool_result")
+        })
+        .unwrap_or(false)
 }

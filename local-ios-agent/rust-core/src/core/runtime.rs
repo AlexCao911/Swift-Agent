@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::context::{ContextController, PromptFrame, TokenizerAdapter};
+use crate::context::{ContextController, TokenizerAdapter};
 use crate::core::{
     AgentError, AgentTurnResult, EntryId, EventKind, ModelProvider, ModelProviderOutput, RunId,
     RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
@@ -122,6 +122,13 @@ impl<S: EventStore> AgentRuntime<S> {
             .parent_event_id
             .clone()
             .or_else(|| cursor.active_leaf.clone());
+        let (parent_id, mut emitted) = self.prepare_context_parent(
+            &input.session_id,
+            parent_id,
+            &run_id,
+            EventKind::UserMessage,
+            &input.text,
+        )?;
         let user_id = self.append_event(
             &input.session_id,
             parent_id,
@@ -129,17 +136,13 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::UserMessage,
             input.text,
         )?;
-
-        let mut emitted = Vec::new();
         emitted.push(self.store.get(&input.session_id, &user_id)?);
-
-        let (frame, context_leaf_id, context_events) =
-            self.build_context_frame(&input.session_id, &user_id, &run_id)?;
-        emitted.extend(context_events);
+        let branch = self.store.active_branch(&input.session_id, &user_id)?;
+        let frame = self.context_controller().build_prompt_frame(branch)?;
 
         let assistant_start = self.append_event(
             &input.session_id,
-            Some(context_leaf_id.clone()),
+            Some(user_id.clone()),
             Some(run_id.clone()),
             EventKind::AssistantMessageStarted,
             format!("run {}", run_id_string),
@@ -297,23 +300,31 @@ impl<S: EventStore> AgentRuntime<S> {
                 AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
             })?;
 
-        let tool_result_id = self.append_event(
+        let tool_result_payload = result.to_event_payload();
+        let (parent_id, mut emitted) = self.prepare_context_parent(
             &session_id,
             Some(parent_id),
+            &run_key,
+            EventKind::ToolResultMessage,
+            &tool_result_payload,
+        )?;
+
+        let tool_result_id = self.append_event(
+            &session_id,
+            parent_id,
             Some(run_key.clone()),
             EventKind::ToolResultMessage,
-            result.to_event_payload(),
+            tool_result_payload,
         )?;
-        let mut emitted = vec![self.store.get(&session_id, &tool_result_id)?];
-        let (frame, context_leaf_id, context_events) =
-            self.build_context_frame(&session_id, &tool_result_id, &run_key)?;
-        emitted.extend(context_events);
+        emitted.push(self.store.get(&session_id, &tool_result_id)?);
+        let branch = self.store.active_branch(&session_id, &tool_result_id)?;
+        let frame = self.context_controller().build_prompt_frame(branch)?;
         let provider_events = match self.config.provider.stream_chat(&frame) {
             Ok(events) => events,
             Err(error) => {
                 let failed_id = self.append_event(
                     &session_id,
-                    Some(context_leaf_id.clone()),
+                    Some(tool_result_id.clone()),
                     Some(run_key.clone()),
                     EventKind::RunFailed,
                     error.to_string(),
@@ -327,7 +338,7 @@ impl<S: EventStore> AgentRuntime<S> {
         };
 
         let mut batcher = StreamBatcher::new(24);
-        let mut parent = context_leaf_id;
+        let mut parent = tool_result_id;
 
         for provider_event in provider_events {
             match provider_event {
@@ -544,22 +555,38 @@ impl<S: EventStore> AgentRuntime<S> {
         Ok(())
     }
 
-    fn build_context_frame(
+    fn prepare_context_parent(
         &mut self,
         session_id: &SessionId,
-        leaf_id: &EntryId,
+        parent_id: Option<EntryId>,
         run_id: &RunId,
-    ) -> Result<(PromptFrame, EntryId, Vec<RuntimeEvent>), AgentError> {
+        pending_kind: EventKind,
+        pending_payload: &str,
+    ) -> Result<(Option<EntryId>, Vec<RuntimeEvent>), AgentError> {
+        let Some(parent_id) = parent_id else {
+            return Ok((None, Vec::new()));
+        };
+
         let context = self.context_controller();
-        let branch = self.store.active_branch(session_id, leaf_id)?;
+        let mut branch = self.store.active_branch(session_id, &parent_id)?;
+        branch.push(RuntimeEvent::new(
+            EntryId("__pending_context_leaf__".into()),
+            session_id.clone(),
+            Some(parent_id.clone()),
+            Some(run_id.clone()),
+            0,
+            0,
+            pending_kind,
+            pending_payload,
+        ));
         let result = context.build_prompt_frame_with_compaction(branch)?;
         let Some(summary) = result.compaction_summary else {
-            return Ok((result.frame, leaf_id.clone(), Vec::new()));
+            return Ok((Some(parent_id), Vec::new()));
         };
 
         let compaction_id = self.append_event(
             session_id,
-            Some(leaf_id.clone()),
+            Some(parent_id),
             Some(run_id.clone()),
             EventKind::CompactionCreated,
             summary.clone(),
@@ -576,9 +603,7 @@ impl<S: EventStore> AgentRuntime<S> {
             self.store.get(session_id, &summary_id)?,
         ];
 
-        let branch = self.store.active_branch(session_id, &summary_id)?;
-        let frame = context.build_prompt_frame(branch)?;
-        Ok((frame, summary_id, events))
+        Ok((Some(summary_id), events))
     }
 
     fn context_controller(&self) -> ContextController {

@@ -60,6 +60,16 @@ Deferred:
   the usable tokenizer budget.
 - Runtime must persist `CompactionCreated` and `BranchSummaryCreated` when a
   branch overflows and context compaction is needed before calling the provider.
+- Runtime compaction must happen before appending the current user/tool-result
+  leaf. The active prompt order must be `Summary` then current leaf, never
+  current leaf then `Summary`, so the latest semantic message remains the
+  triggering user message or tool result.
+- `BranchSummaryCreated` is a history boundary: projector output before the
+  latest summary is discarded, preventing repeated summaries of the same old
+  prefix.
+- Legacy plain-text tool result payloads remain model-visible, but payloads that
+  declare `type=tool_result` and fail structured parsing are fail-closed and are
+  not injected.
 - Durable memory is still Plan 6, but Plan 5 exposes a memory-snippet injection
   API (`ContextController::new_with_memory`) so memory prompt integration is not
   an empty shell.

@@ -62,6 +62,53 @@ fn projector_excludes_audit_only_and_secret_tool_results_from_context() {
 }
 
 #[test]
+fn projector_treats_summary_as_history_boundary() {
+    let messages = BranchProjector::new().project(vec![
+        event("old_user", EventKind::UserMessage, "old user"),
+        event(
+            "old_assistant",
+            EventKind::AssistantMessageCompleted,
+            "old assistant",
+        ),
+        event("summary", EventKind::BranchSummaryCreated, "summary so far"),
+        event("new_user", EventKind::UserMessage, "new user"),
+    ]);
+
+    assert_eq!(
+        messages,
+        vec![
+            PromptMessage::Summary("summary so far".into()),
+            PromptMessage::User("new user".into()),
+        ]
+    );
+}
+
+#[test]
+fn projector_drops_malformed_structured_tool_result_payload() {
+    let messages = BranchProjector::new().project(vec![event(
+        "tool",
+        EventKind::ToolResultMessage,
+        r#"{"type":"tool_result","model_text":"secret"}"#,
+    )]);
+
+    assert!(messages.is_empty());
+}
+
+#[test]
+fn projector_keeps_legacy_plain_text_tool_result_payload() {
+    let messages = BranchProjector::new().project(vec![event(
+        "tool",
+        EventKind::ToolResultMessage,
+        "legacy text result",
+    )]);
+
+    assert_eq!(
+        messages,
+        vec![PromptMessage::ToolResult("legacy text result".into())]
+    );
+}
+
+#[test]
 fn prompt_layers_render_system_policy_and_memory() {
     let layers = PromptLayers {
         system: "system".into(),

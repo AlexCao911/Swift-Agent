@@ -111,12 +111,19 @@ impl ContextController {
         let kept = ContextBudget::new(message_budget).fit_messages(messages.clone());
         let dropped_count = messages.len().saturating_sub(kept.len());
         let summary = if dropped_count > 0 {
-            let dropped = messages
+            let dropped_messages: Vec<_> = messages.iter().take(dropped_count).collect();
+            if dropped_messages
                 .iter()
-                .take(dropped_count)
-                .map(|message| message.content().to_string())
-                .collect();
-            Some(CompactionCandidate::new(dropped).summary_text())
+                .any(|message| matches!(message, PromptMessage::Summary(_)))
+            {
+                None
+            } else {
+                let dropped = dropped_messages
+                    .iter()
+                    .map(|message| message.content().to_string())
+                    .collect();
+                Some(CompactionCandidate::new(dropped).summary_text())
+            }
         } else {
             None
         };
