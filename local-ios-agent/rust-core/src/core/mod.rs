@@ -12,7 +12,9 @@ pub mod stream_batcher;
 pub mod turn;
 pub mod types;
 
-pub use desktop_minicpm::{DesktopMiniCPMProvider, DesktopMiniCPMTransport};
+pub use desktop_minicpm::{
+    DesktopMiniCPMProvider, DesktopMiniCPMTransport, LocalhostHttpTransport,
+};
 pub use event::{EventKind, RuntimeEvent};
 pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
 pub use provider::{CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput};
