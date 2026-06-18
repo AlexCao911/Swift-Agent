@@ -140,7 +140,7 @@ fn compaction_keeps_current_user_message_last_in_provider_prompt() {
 }
 
 #[test]
-fn existing_summary_allows_compacting_new_suffix_without_nesting_old_summary() {
+fn repeated_compaction_preserves_existing_summary_in_new_summary_snapshot() {
     let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
         system_prompt: "system".to_string(),
         runtime_policy: "policy".to_string(),
@@ -190,5 +190,5 @@ fn existing_summary_allows_compacting_new_suffix_without_nesting_old_summary() {
         .clone();
 
     assert!(third_summary.contains("second turn"));
-    assert!(!third_summary.contains(&second_summary));
+    assert!(third_summary.contains(&second_summary));
 }

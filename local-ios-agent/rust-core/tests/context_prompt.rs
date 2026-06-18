@@ -83,7 +83,10 @@ fn prompt_frame_compacts_dropped_messages_after_existing_summary() {
         ])
         .unwrap();
 
-    assert_eq!(result.compaction_summary, Some("middle one two".into()));
+    assert_eq!(
+        result.compaction_summary,
+        Some("old compacted context\nmiddle one two".into())
+    );
     assert_eq!(
         result.frame.messages,
         vec![
