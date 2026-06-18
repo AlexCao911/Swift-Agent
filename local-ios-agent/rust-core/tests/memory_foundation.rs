@@ -1,4 +1,4 @@
-use local_ios_agent_runtime::memory::{LongTermMemoryRecord, SqliteEventStore};
+use local_ios_agent_runtime::memory::{LongTermMemoryRecord, MemoryCandidate, SqliteEventStore};
 
 #[test]
 fn sqlite_stores_and_searches_confirmed_memory() {
@@ -15,4 +15,12 @@ fn sqlite_stores_and_searches_confirmed_memory() {
         .unwrap();
 
     assert_eq!(store.search_memory("privacy").unwrap()[0].id, "mem_1");
+}
+
+#[test]
+fn memory_candidate_requires_confirmation() {
+    let candidate = MemoryCandidate::new("likes local agents");
+
+    assert!(!candidate.confirmed);
+    assert_eq!(candidate.text, "likes local agents");
 }
