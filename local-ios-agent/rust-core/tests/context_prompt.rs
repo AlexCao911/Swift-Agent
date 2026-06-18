@@ -41,3 +41,26 @@ fn prompt_frame_injects_policy_tools_and_recent_messages() {
         ]
     );
 }
+
+#[test]
+fn prompt_frame_truncates_oldest_messages_instead_of_erroring() {
+    let controller = ContextController::new(
+        "system",
+        "policy",
+        Vec::new(),
+        Box::new(MockTokenizer::new(14)),
+    );
+
+    let frame = controller
+        .build_prompt_frame(vec![
+            message(EventKind::UserMessage, "old one two three"),
+            message(EventKind::AssistantMessageCompleted, "old four"),
+            message(EventKind::UserMessage, "new five six"),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        frame.messages,
+        vec![PromptMessage::User("new five six".to_string())]
+    );
+}

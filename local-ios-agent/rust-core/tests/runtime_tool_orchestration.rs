@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame};
+use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, EventKind, MockStreamingProvider, ModelProvider,
     ModelProviderOutput, RunState, SendMessageInput,
@@ -18,6 +19,41 @@ struct FollowUpToolProvider {
 #[derive(Debug)]
 struct InvalidToolProvider {
     call: ToolCall,
+}
+
+#[derive(Debug)]
+struct CaptureToolResultFrameProvider {
+    calls: AtomicUsize,
+    captured_frames: Arc<Mutex<Vec<PromptFrame>>>,
+}
+
+impl CaptureToolResultFrameProvider {
+    fn new(captured_frames: Arc<Mutex<Vec<PromptFrame>>>) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            captured_frames,
+        }
+    }
+}
+
+impl ModelProvider for CaptureToolResultFrameProvider {
+    fn id(&self) -> &str {
+        "capture-tool-result-frame"
+    }
+
+    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call_index == 0 {
+            return Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+                id: "call_1".into(),
+                name: "debug.echo".into(),
+                arguments_json: "{}".into(),
+            })]);
+        }
+
+        self.captured_frames.lock().unwrap().push(frame.clone());
+        Ok(vec![ModelProviderOutput::Completed("done".into())])
+    }
 }
 
 impl InvalidToolProvider {
@@ -262,4 +298,47 @@ fn runtime_rejects_provider_tool_call_with_empty_id() {
 
     assert!(matches!(error, AgentError::ToolValidation(_)));
     assert!(runtime.pending_tool_requests().is_empty());
+}
+
+#[test]
+fn runtime_filters_secret_audit_only_tool_result_from_followup_context() {
+    let captured_frames = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(CaptureToolResultFrameProvider::new(captured_frames.clone())),
+        tool_router: None,
+    });
+    let session_id = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "start".into(),
+        })
+        .unwrap();
+
+    runtime
+        .submit_tool_result(
+            turn.run_id,
+            ToolResult {
+                display_text: "hidden".into(),
+                model_text: "secret model text".into(),
+                structured_json: "{}".into(),
+                audit_text: "audit only".into(),
+                sensitivity: Sensitivity::Secret,
+                retention: RetentionPolicy::AuditOnly,
+                is_error: false,
+            },
+        )
+        .unwrap();
+
+    let frames = captured_frames.lock().unwrap();
+    let followup = frames.last().unwrap();
+    assert!(!followup
+        .messages
+        .iter()
+        .any(|message| matches!(message, PromptMessage::ToolResult(content) if content.contains("secret"))));
 }

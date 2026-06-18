@@ -1,4 +1,6 @@
-use crate::context::{BranchProjector, PromptLayers, TokenizerAdapter};
+use crate::context::{
+    BranchProjector, CompactionCandidate, ContextBudget, PromptLayers, TokenizerAdapter,
+};
 use crate::core::{AgentError, RuntimeEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6,12 +8,16 @@ pub enum PromptMessage {
     User(String),
     Assistant(String),
     ToolResult(String),
+    Summary(String),
 }
 
 impl PromptMessage {
     pub fn content(&self) -> &str {
         match self {
-            Self::User(content) | Self::Assistant(content) | Self::ToolResult(content) => content,
+            Self::User(content)
+            | Self::Assistant(content)
+            | Self::ToolResult(content)
+            | Self::Summary(content) => content,
         }
     }
 }
@@ -24,6 +30,11 @@ pub struct PromptFrame {
     pub messages: Vec<PromptMessage>,
 }
 
+pub struct ContextBuildResult {
+    pub frame: PromptFrame,
+    pub compaction_summary: Option<String>,
+}
+
 pub struct ContextController {
     layers: PromptLayers,
     tool_schemas: Vec<String>,
@@ -34,7 +45,23 @@ impl ContextController {
     pub fn new(
         system_prompt: impl Into<String>,
         runtime_policy: impl Into<String>,
+        tool_schemas: Vec<String>,
+        tokenizer: Box<dyn TokenizerAdapter>,
+    ) -> Self {
+        Self::new_with_memory(
+            system_prompt,
+            runtime_policy,
+            tool_schemas,
+            Vec::new(),
+            tokenizer,
+        )
+    }
+
+    pub fn new_with_memory(
+        system_prompt: impl Into<String>,
+        runtime_policy: impl Into<String>,
         mut tool_schemas: Vec<String>,
+        memory: Vec<String>,
         tokenizer: Box<dyn TokenizerAdapter>,
     ) -> Self {
         tool_schemas.sort();
@@ -44,7 +71,7 @@ impl ContextController {
             layers: PromptLayers {
                 system: system_prompt.into(),
                 policy: runtime_policy.into(),
-                memory: Vec::new(),
+                memory,
             },
             tool_schemas,
             tokenizer,
@@ -52,26 +79,71 @@ impl ContextController {
     }
 
     pub fn build_prompt_frame(&self, branch: Vec<RuntimeEvent>) -> Result<PromptFrame, AgentError> {
-        let messages = BranchProjector::new().project(branch);
+        Ok(self.build_prompt_frame_with_compaction(branch)?.frame)
+    }
 
-        let frame = PromptFrame {
-            system_prompt: self.layers.render_system_prompt(),
-            runtime_policy: self.layers.policy.clone(),
-            tool_schemas: self.tool_schemas.clone(),
-            messages,
+    pub fn build_prompt_frame_with_compaction(
+        &self,
+        branch: Vec<RuntimeEvent>,
+    ) -> Result<ContextBuildResult, AgentError> {
+        let messages = BranchProjector::new().project(branch);
+        let result = self.fit_messages(messages)?;
+
+        Ok(ContextBuildResult {
+            frame: result.0,
+            compaction_summary: result.1,
+        })
+    }
+
+    fn fit_messages(
+        &self,
+        messages: Vec<PromptMessage>,
+    ) -> Result<(PromptFrame, Option<String>), AgentError> {
+        let frame = self.frame(messages.clone());
+        let usable = self.usable_context_tokens();
+        if self.tokenizer.count_prompt_frame(&frame) <= usable {
+            return Ok((frame, None));
+        }
+
+        let fixed_frame = self.frame(Vec::new());
+        let fixed_count = self.tokenizer.count_prompt_frame(&fixed_frame);
+        let message_budget = usable.saturating_sub(fixed_count);
+        let kept = ContextBudget::new(message_budget).fit_messages(messages.clone());
+        let dropped_count = messages.len().saturating_sub(kept.len());
+        let summary = if dropped_count > 0 {
+            let dropped = messages
+                .iter()
+                .take(dropped_count)
+                .map(|message| message.content().to_string())
+                .collect();
+            Some(CompactionCandidate::new(dropped).summary_text())
+        } else {
+            None
         };
 
+        let frame = self.frame(kept);
         let count = self.tokenizer.count_prompt_frame(&frame);
-        let usable = self
-            .tokenizer
-            .max_context_tokens()
-            .saturating_sub(self.tokenizer.safety_margin_tokens());
         if count > usable {
             return Err(AgentError::Provider(format!(
                 "prompt frame exceeds mock context budget: {count} > {usable}"
             )));
         }
 
-        Ok(frame)
+        Ok((frame, summary))
+    }
+
+    fn frame(&self, messages: Vec<PromptMessage>) -> PromptFrame {
+        PromptFrame {
+            system_prompt: self.layers.render_system_prompt(),
+            runtime_policy: self.layers.policy.clone(),
+            tool_schemas: self.tool_schemas.clone(),
+            messages,
+        }
+    }
+
+    fn usable_context_tokens(&self) -> usize {
+        self.tokenizer
+            .max_context_tokens()
+            .saturating_sub(self.tokenizer.safety_margin_tokens())
     }
 }

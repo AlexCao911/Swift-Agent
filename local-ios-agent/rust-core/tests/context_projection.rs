@@ -29,12 +29,36 @@ fn projector_preserves_model_visible_branch_events() {
     assert_eq!(
         messages,
         vec![
-            PromptMessage::ToolResult("summary so far".into()),
+            PromptMessage::Summary("summary so far".into()),
             PromptMessage::User("hello".into()),
             PromptMessage::ToolResult("tool result".into()),
             PromptMessage::Assistant("done".into()),
         ]
     );
+}
+
+#[test]
+fn projector_excludes_audit_only_and_secret_tool_results_from_context() {
+    let secret_result = ToolResult {
+        display_text: "display".into(),
+        model_text: "secret model text".into(),
+        structured_json: "{}".into(),
+        audit_text: "audit".into(),
+        sensitivity: Sensitivity::Secret,
+        retention: RetentionPolicy::AuditOnly,
+        is_error: false,
+    };
+
+    let messages = BranchProjector::new().project(vec![
+        event("user", EventKind::UserMessage, "hello"),
+        event(
+            "tool",
+            EventKind::ToolResultMessage,
+            &secret_result.to_event_payload(),
+        ),
+    ]);
+
+    assert_eq!(messages, vec![PromptMessage::User("hello".into())]);
 }
 
 #[test]
@@ -61,6 +85,21 @@ fn context_sorts_tool_schemas_for_stable_prompt_frames() {
     let frame = controller.build_prompt_frame(Vec::new()).unwrap();
 
     assert_eq!(frame.tool_schemas, vec!["a.tool", "z.tool"]);
+}
+
+#[test]
+fn context_controller_injects_memory_snippets_into_system_prompt() {
+    let controller = local_ios_agent_runtime::context::ContextController::new_with_memory(
+        "system",
+        "policy",
+        Vec::new(),
+        vec!["likes quiet mornings".into()],
+        Box::new(local_ios_agent_runtime::context::MockTokenizer::new(100)),
+    );
+
+    let frame = controller.build_prompt_frame(Vec::new()).unwrap();
+
+    assert!(frame.system_prompt.contains("likes quiet mornings"));
 }
 
 #[test]

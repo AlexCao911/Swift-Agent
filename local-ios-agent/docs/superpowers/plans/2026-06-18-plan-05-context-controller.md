@@ -46,6 +46,24 @@ Deferred:
 - Security policy decisions: Plan 7.
 - Desktop MiniCPM exact tokenizer: later provider plan.
 
+## Post-Review Corrections
+
+- `BranchSummaryCreated` must project to `PromptMessage::Summary`, not
+  `PromptMessage::ToolResult`. Summary is independent model context and must not
+  trigger provider tool-result continuation logic.
+- `ToolResultMessage` payloads written by runtime are structured
+  `ToolResult` event payloads. `BranchProjector` applies
+  `ContextInjectionPolicy` before model injection, so `AuditOnly` and secret
+  results are excluded from real follow-up context.
+- `ContextController` must use `ContextBudget` to drop oldest messages at
+  message boundaries. It should only error when fixed prompt layers alone exceed
+  the usable tokenizer budget.
+- Runtime must persist `CompactionCreated` and `BranchSummaryCreated` when a
+  branch overflows and context compaction is needed before calling the provider.
+- Durable memory is still Plan 6, but Plan 5 exposes a memory-snippet injection
+  API (`ContextController::new_with_memory`) so memory prompt integration is not
+  an empty shell.
+
 ## File Structure
 
 Create:
