@@ -516,6 +516,15 @@ impl EventStore for SqliteEventStore {
         Ok(())
     }
 
+    fn write_audit(
+        &self,
+        session_id: &SessionId,
+        entry_id: &EntryId,
+        summary: &str,
+    ) -> Result<(), AgentError> {
+        SqliteEventStore::write_audit(self, &session_id.0, &entry_id.0, summary)
+    }
+
     fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {
         self.conn
             .query_row(

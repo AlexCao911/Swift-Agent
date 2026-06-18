@@ -22,6 +22,7 @@ fn approval_queue_tracks_pending_requests() {
         run_id: RunId("run_1".into()),
         tool_call_id: EntryId("entry_1".into()),
         message: "Allow?".into(),
+        requires_local_authentication: false,
     });
 
     assert_eq!(queue.pending().len(), 1);
@@ -41,6 +42,42 @@ fn policy_requires_approval_when_permission_is_not_granted() {
     );
 
     assert!(matches!(decision, PolicyDecision::RequireApproval(_)));
+}
+
+#[test]
+fn policy_denies_when_permission_is_denied_or_restricted() {
+    let engine = PolicyEngine::default();
+
+    assert!(matches!(
+        engine.decide_with_permission(
+            &RiskLevel::ReadOnly,
+            "calendar.search_events",
+            PermissionState::Denied,
+        ),
+        PolicyDecision::Deny(_)
+    ));
+    assert!(matches!(
+        engine.decide_with_permission(
+            &RiskLevel::ReadOnly,
+            "calendar.search_events",
+            PermissionState::Restricted,
+        ),
+        PolicyDecision::Deny(_)
+    ));
+}
+
+#[test]
+fn policy_granted_permission_falls_back_to_tool_risk() {
+    let engine = PolicyEngine::default();
+
+    assert!(matches!(
+        engine.decide_with_permission(
+            &RiskLevel::Destructive,
+            "files.delete_all",
+            PermissionState::Granted,
+        ),
+        PolicyDecision::Deny(_)
+    ));
 }
 
 #[test]
@@ -67,7 +104,13 @@ use local_ios_agent_runtime::security::SecurityManager;
 #[test]
 fn security_manager_queues_local_auth_approval() {
     let mut manager = SecurityManager::new();
-    let request = manager.request_approval("approval_1", "Allow write?", true);
+    let request = manager.request_approval(
+        "approval_1",
+        RunId("run_1".into()),
+        EntryId("entry_1".into()),
+        "Allow write?",
+        true,
+    );
 
     assert!(request.requires_local_authentication);
     assert_eq!(manager.pending_approvals().len(), 1);
@@ -90,5 +133,26 @@ fn security_manager_tracks_permission_state_by_scope_name() {
     assert_eq!(
         manager.permission_state("calendar.read"),
         PermissionState::Granted
+    );
+}
+
+#[test]
+fn security_manager_decides_tool_with_configured_permission_scope() {
+    let mut manager = SecurityManager::new();
+    manager.set_tool_permission_scope("calendar.search_events", "calendar.read");
+
+    assert!(matches!(
+        manager.decide_tool(&RiskLevel::ReadOnly, "calendar.search_events"),
+        PolicyDecision::RequireApproval(_)
+    ));
+
+    manager.set_permission(PermissionScope {
+        name: "calendar.read".into(),
+        state: PermissionState::Granted,
+    });
+
+    assert_eq!(
+        manager.decide_tool(&RiskLevel::ReadOnly, "calendar.search_events"),
+        PolicyDecision::Allow
     );
 }

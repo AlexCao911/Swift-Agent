@@ -6,7 +6,8 @@ use local_ios_agent_runtime::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, EventKind, MockStreamingProvider, ModelProvider,
     ModelProviderOutput, RunState, SendMessageInput,
 };
-use local_ios_agent_runtime::security::RiskLevel;
+use local_ios_agent_runtime::memory::SqliteEventStore;
+use local_ios_agent_runtime::security::{ApprovalProtocolResponse, RiskLevel};
 use local_ios_agent_runtime::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolRegistry, ToolResult, ToolRouter, ToolSchema,
 };
@@ -147,6 +148,162 @@ fn runtime_exposes_pending_swift_tool_request() {
         .pending_tool_requests()
         .iter()
         .any(|request| request.tool_name == "debug.echo"));
+}
+
+#[test]
+fn runtime_suspends_confirm_tool_until_approval() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: Some(ToolRouter::new(echo_registry(RiskLevel::Confirm))),
+    });
+    let session_id = runtime.create_session().unwrap();
+
+    let result = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+
+    let approvals = runtime.pending_approval_requests();
+
+    assert_eq!(result.state, RunState::Suspended);
+    assert!(runtime.pending_tool_requests().is_empty());
+    assert_eq!(approvals.len(), 1);
+    assert!(approvals[0].requires_local_authentication);
+    assert!(result
+        .events
+        .iter()
+        .any(|event| event.kind == EventKind::RunSuspended));
+}
+
+#[test]
+fn approval_response_resumes_suspended_tool_execution() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: Some(ToolRouter::new(echo_registry(RiskLevel::Confirm))),
+    });
+    let session_id = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+    let approval = runtime.pending_approval_requests()[0].clone();
+
+    let resumed = runtime
+        .submit_approval_response(ApprovalProtocolResponse {
+            approval_id: approval.approval_id,
+            approved: true,
+            reason: None,
+        })
+        .unwrap();
+
+    assert_eq!(turn.state, RunState::Suspended);
+    assert_eq!(resumed.state, RunState::WaitingTool);
+    assert!(runtime.pending_approval_requests().is_empty());
+    assert_eq!(runtime.pending_tool_requests().len(), 1);
+    assert_eq!(runtime.pending_tool_requests()[0].tool_name, "debug.echo");
+    assert!(resumed
+        .events
+        .iter()
+        .any(|event| event.kind == EventKind::ToolCallApproved));
+    assert!(resumed
+        .events
+        .iter()
+        .any(|event| event.kind == EventKind::RunResumed));
+}
+
+#[test]
+fn approval_rejection_resumes_with_tool_error_result() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: Some(ToolRouter::new(echo_registry(RiskLevel::Confirm))),
+    });
+    let session_id = runtime.create_session().unwrap();
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+    let approval = runtime.pending_approval_requests()[0].clone();
+
+    let resumed = runtime
+        .submit_approval_response(ApprovalProtocolResponse {
+            approval_id: approval.approval_id,
+            approved: false,
+            reason: Some("No".into()),
+        })
+        .unwrap();
+
+    assert_eq!(resumed.state, RunState::Completed);
+    assert!(runtime.pending_approval_requests().is_empty());
+    assert!(runtime.pending_tool_requests().is_empty());
+    assert!(resumed
+        .events
+        .iter()
+        .any(|event| event.kind == EventKind::ToolCallRejected));
+    assert!(resumed
+        .events
+        .iter()
+        .any(|event| event.kind == EventKind::ToolResultMessage));
+}
+
+#[test]
+fn runtime_writes_audit_rows_for_security_sensitive_events() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let mut runtime = AgentRuntime::with_store(
+        AgentRuntimeConfig {
+            system_prompt: "system".into(),
+            runtime_policy: "policy".into(),
+            tool_schemas: Vec::new(),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+            provider: Box::new(MockStreamingProvider::new()),
+            tool_router: Some(ToolRouter::new(echo_registry(RiskLevel::Confirm))),
+        },
+        store,
+    )
+    .unwrap();
+    let session_id = runtime.create_session().unwrap();
+    let session_key = session_id.0.clone();
+
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+        })
+        .unwrap();
+    drop(runtime);
+
+    let reopened = SqliteEventStore::open(&db_path).unwrap();
+    let audit_rows = reopened.audit_rows(&session_key).unwrap();
+
+    assert!(audit_rows
+        .iter()
+        .any(|row| row.summary.contains("ToolCallRequested")));
+    assert!(audit_rows
+        .iter()
+        .any(|row| row.summary.contains("RunSuspended")));
 }
 
 #[test]

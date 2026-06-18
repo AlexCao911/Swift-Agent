@@ -47,6 +47,10 @@ fn destructive_tool_config() -> AgentRuntimeConfig {
     tool_config_with_registry(tool_registry(RiskLevel::Destructive))
 }
 
+fn confirm_tool_config() -> AgentRuntimeConfig {
+    tool_config_with_registry(tool_registry(RiskLevel::Confirm))
+}
+
 fn empty_tool_registry_config() -> AgentRuntimeConfig {
     tool_config_with_registry(ToolRegistry::new())
 }
@@ -146,6 +150,43 @@ fn runtime_replays_waiting_tool_run_and_pending_request_from_sqlite() {
 
     assert_eq!(resumed.state, RunState::Completed);
     assert!(runtime.pending_tool_requests().is_empty());
+}
+
+#[test]
+fn runtime_replays_suspended_approval_from_sqlite() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let (session_id, approval_id) = {
+        let store = SqliteEventStore::open(&db_path).unwrap();
+        let mut runtime = AgentRuntime::with_store(confirm_tool_config(), store).unwrap();
+        let session_id = runtime.create_session().unwrap();
+        let turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "use tool debug.echo".into(),
+            })
+            .unwrap();
+
+        assert_eq!(turn.state, RunState::Suspended);
+        assert!(runtime.pending_tool_requests().is_empty());
+        assert_eq!(runtime.pending_approval_requests().len(), 1);
+        (
+            session_id,
+            runtime.pending_approval_requests()[0].approval_id.clone(),
+        )
+    };
+
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let runtime = AgentRuntime::with_store(confirm_tool_config(), store).unwrap();
+
+    assert!(runtime.session_ids().contains(&session_id));
+    assert!(runtime.pending_tool_requests().is_empty());
+    assert_eq!(runtime.pending_approval_requests().len(), 1);
+    assert_eq!(
+        runtime.pending_approval_requests()[0].approval_id,
+        approval_id
+    );
 }
 
 #[test]

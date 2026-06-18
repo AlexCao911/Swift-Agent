@@ -8,6 +8,7 @@ fn suspended_run_resumes_with_matching_approval_id() {
         run_id: RunId("run_1".to_string()),
         tool_call_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
+        requires_local_authentication: false,
     };
     let mut suspended = SuspendedRun::new(request);
 
@@ -26,6 +27,7 @@ fn suspended_run_rejects_wrong_approval_id() {
         run_id: RunId("run_1".to_string()),
         tool_call_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
+        requires_local_authentication: false,
     };
     let mut suspended = SuspendedRun::new(request);
 

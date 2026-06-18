@@ -13,6 +13,7 @@ pub struct ApprovalRequest {
     pub run_id: RunId,
     pub tool_call_id: EntryId,
     pub message: String,
+    pub requires_local_authentication: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

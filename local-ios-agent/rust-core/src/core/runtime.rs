@@ -8,12 +8,19 @@ use crate::core::{
     RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore};
-use crate::tool::{ToolCall, ToolExecutionRequest, ToolResult, ToolRouteOutcome, ToolRouter};
+use crate::security::{
+    ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
+};
+use crate::tool::{
+    RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolResult, ToolRouteOutcome,
+    ToolRouter,
+};
 use crate::utils::id::IdGenerator;
 
 #[derive(Clone, Debug)]
 struct RoutedToolCall {
     event_id: EntryId,
+    suspension_event_id: Option<EntryId>,
     pending_tool_call_id: String,
     denied_result: Option<ToolResult>,
 }
@@ -75,6 +82,115 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
         &self.pending_tool_requests
+    }
+
+    pub fn pending_approval_requests(&self) -> Vec<ApprovalProtocolRequest> {
+        self.config
+            .tool_router
+            .as_ref()
+            .map(ToolRouter::pending_approval_requests)
+            .unwrap_or_default()
+    }
+
+    pub fn submit_approval_response(
+        &mut self,
+        response: ApprovalProtocolResponse,
+    ) -> Result<AgentTurnResult, AgentError> {
+        let (approval, decision, tool_request) = self
+            .config
+            .tool_router
+            .as_mut()
+            .ok_or_else(|| AgentError::PolicyDenied("no tool router configured".into()))?
+            .resolve_approval(response)?;
+        let run_key = approval.run_id.clone();
+        let run_id = run_key.0.clone();
+        let session_id = {
+            let run = self
+                .runs
+                .get(&run_key)
+                .ok_or_else(|| AgentError::Storage(format!("missing run: {}", run_key.0)))?;
+            if run.state != RunState::Suspended {
+                return Err(AgentError::PolicyDenied(format!(
+                    "run is not suspended for approval: {}",
+                    run_key.0
+                )));
+            }
+            run.session_id.clone()
+        };
+        let parent_id = self
+            .sessions
+            .get(&session_id)
+            .and_then(|cursor| cursor.active_leaf.clone())
+            .ok_or_else(|| {
+                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
+            })?;
+        let mut emitted = Vec::new();
+        let decision_kind = match decision {
+            ApprovalDecision::Approved => EventKind::ToolCallApproved,
+            ApprovalDecision::Rejected | ApprovalDecision::Cancelled => EventKind::ToolCallRejected,
+        };
+        let decision_id = self.append_event(
+            &session_id,
+            Some(parent_id),
+            Some(run_key.clone()),
+            decision_kind,
+            approval_decision_payload(&approval.approval_id, &decision),
+        )?;
+        emitted.push(self.store.get(&session_id, &decision_id)?);
+
+        match decision {
+            ApprovalDecision::Approved => {
+                let request = tool_request.ok_or_else(|| {
+                    AgentError::PolicyDenied(format!(
+                        "approved tool request missing for approval: {}",
+                        approval.approval_id
+                    ))
+                })?;
+                let resumed_id = self.append_event(
+                    &session_id,
+                    Some(decision_id),
+                    Some(run_key.clone()),
+                    EventKind::RunResumed,
+                    format!("approval {} accepted", approval.approval_id),
+                )?;
+                emitted.push(self.store.get(&session_id, &resumed_id)?);
+                if let Some(run) = self.runs.get_mut(&run_key) {
+                    run.mark_waiting_tool()?;
+                }
+                let pending_tool_call_id = request.tool_call_id.clone();
+                self.pending_tool_requests.push(request);
+
+                Ok(AgentTurnResult {
+                    run_id,
+                    state: RunState::WaitingTool,
+                    events: emitted,
+                    pending_tool_call_id: Some(pending_tool_call_id),
+                })
+            }
+            ApprovalDecision::Rejected | ApprovalDecision::Cancelled => {
+                if let Some(run) = self.runs.get_mut(&run_key) {
+                    run.mark_waiting_tool()?;
+                }
+                let result = ToolResult {
+                    display_text: approval.message.clone(),
+                    model_text: format!("Tool approval rejected: {}", approval.message),
+                    structured_json: "{}".into(),
+                    audit_text: format!("approval rejected: {}", approval.approval_id),
+                    sensitivity: Sensitivity::Public,
+                    retention: RetentionPolicy::RunOnly,
+                    is_error: true,
+                };
+                let resumed = self.submit_tool_result(run_id, result)?;
+                emitted.extend(resumed.events);
+
+                Ok(AgentTurnResult {
+                    run_id: resumed.run_id,
+                    state: resumed.state,
+                    events: emitted,
+                    pending_tool_call_id: resumed.pending_tool_call_id,
+                })
+            }
+        }
     }
 
     pub fn session_ids(&self) -> Vec<SessionId> {
@@ -203,12 +319,19 @@ impl<S: EventStore> AgentRuntime<S> {
                         tool_call,
                     )?;
                     if let Some(run) = self.runs.get_mut(&run_id) {
-                        run.mark_waiting_tool()?;
+                        if routed_tool_call.suspension_event_id.is_some() {
+                            run.mark_suspended()?;
+                        } else {
+                            run.mark_waiting_tool()?;
+                        }
                     }
                     emitted.push(
                         self.store
                             .get(&input.session_id, &routed_tool_call.event_id)?,
                     );
+                    if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
+                        emitted.push(self.store.get(&input.session_id, suspension_event_id)?);
+                    }
                     if let Some(result) = routed_tool_call.denied_result {
                         let resumed = self.submit_tool_result(run_id_string.clone(), result)?;
                         let state = resumed.state;
@@ -223,7 +346,11 @@ impl<S: EventStore> AgentRuntime<S> {
                     }
                     return Ok(AgentTurnResult {
                         run_id: run_id_string,
-                        state: RunState::WaitingTool,
+                        state: if routed_tool_call.suspension_event_id.is_some() {
+                            RunState::Suspended
+                        } else {
+                            RunState::WaitingTool
+                        },
                         events: emitted,
                         pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
                     });
@@ -374,9 +501,16 @@ impl<S: EventStore> AgentRuntime<S> {
                         tool_call,
                     )?;
                     if let Some(run) = self.runs.get_mut(&run_key) {
-                        run.mark_waiting_tool()?;
+                        if routed_tool_call.suspension_event_id.is_some() {
+                            run.mark_suspended()?;
+                        } else {
+                            run.mark_waiting_tool()?;
+                        }
                     }
                     emitted.push(self.store.get(&session_id, &routed_tool_call.event_id)?);
+                    if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
+                        emitted.push(self.store.get(&session_id, suspension_event_id)?);
+                    }
                     if let Some(result) = routed_tool_call.denied_result {
                         let resumed = self.submit_tool_result(run_id.clone(), result)?;
                         let state = resumed.state;
@@ -391,7 +525,11 @@ impl<S: EventStore> AgentRuntime<S> {
                     }
                     return Ok(AgentTurnResult {
                         run_id,
-                        state: RunState::WaitingTool,
+                        state: if routed_tool_call.suspension_event_id.is_some() {
+                            RunState::Suspended
+                        } else {
+                            RunState::WaitingTool
+                        },
                         events: emitted,
                         pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
                     });
@@ -475,43 +613,66 @@ impl<S: EventStore> AgentRuntime<S> {
             let Some(last_event) = branch.last() else {
                 continue;
             };
-            if last_event.kind != EventKind::ToolCallRequested {
-                continue;
-            }
+            let (tool_call_event, should_suspend) = match last_event.kind {
+                EventKind::ToolCallRequested => (last_event.clone(), false),
+                EventKind::RunSuspended => {
+                    let Some(parent_id) = &last_event.parent_id else {
+                        continue;
+                    };
+                    let parent_event = self.store.get(&session_id, parent_id)?;
+                    if parent_event.kind != EventKind::ToolCallRequested {
+                        continue;
+                    }
+                    (parent_event, true)
+                }
+                _ => continue,
+            };
             let Some(run_id) = last_event.run_id.clone() else {
                 continue;
             };
 
             let mut run = RunRecord::new(run_id.clone(), session_id.clone());
-            run.mark_waiting_tool()?;
+            if should_suspend {
+                run.mark_suspended()?;
+            } else {
+                run.mark_waiting_tool()?;
+            }
             self.runs.insert(run_id.clone(), run);
 
-            if let Some(router) = &self.config.tool_router {
-                let tool_call = match tool_call_from_event(last_event) {
+            if let Some(router) = &mut self.config.tool_router {
+                let tool_call = match tool_call_from_event(&tool_call_event) {
                     Ok(tool_call) => tool_call,
                     Err(error) => {
                         self.fail_replayed_waiting_tool(
                             &session_id,
-                            &last_event.id,
+                            &tool_call_event.id,
                             &run_id,
                             format!("replay failed pending tool call: {error}"),
                         )?;
                         continue;
                     }
                 };
-                let route_outcome = router.route(&run_id, &session_id, &last_event.id, tool_call);
+                let route_outcome =
+                    router.route(&run_id, &session_id, &tool_call_event.id, tool_call);
                 match route_outcome {
                     Ok(ToolRouteOutcome::ExecuteInSwift(request)) => {
-                        self.pending_tool_requests.push(request);
+                        if !should_suspend {
+                            self.pending_tool_requests.push(request);
+                        }
                     }
-                    Ok(ToolRouteOutcome::ApprovalRequired { request, reason: _ }) => {
-                        // Plan 7 will turn this route into a suspended approval lifecycle.
-                        self.pending_tool_requests.push(request);
+                    Ok(ToolRouteOutcome::ApprovalRequired {
+                        request: _,
+                        approval: _,
+                        reason: _,
+                    }) => {
+                        if let Some(run) = self.runs.get_mut(&run_id) {
+                            run.mark_suspended()?;
+                        }
                     }
                     Ok(ToolRouteOutcome::Denied(result)) => {
                         self.fail_replayed_waiting_tool(
                             &session_id,
-                            &last_event.id,
+                            &tool_call_event.id,
                             &run_id,
                             format!(
                                 "replay denied pending tool call `{}`: {}",
@@ -522,7 +683,7 @@ impl<S: EventStore> AgentRuntime<S> {
                     Err(error) => {
                         self.fail_replayed_waiting_tool(
                             &session_id,
-                            &last_event.id,
+                            &tool_call_event.id,
                             &run_id,
                             format!("replay failed pending tool call: {error}"),
                         )?;
@@ -628,19 +789,23 @@ impl<S: EventStore> AgentRuntime<S> {
         let mut route_state = "unrouted";
         let mut route_reason = None;
         let mut pending_request = None;
+        let mut approval_request = None;
         let mut denied_result = None;
 
-        if let Some(router) = &self.config.tool_router {
+        if let Some(router) = &mut self.config.tool_router {
             match router.route(run_id, session_id, &entry_id, tool_call.clone())? {
                 ToolRouteOutcome::ExecuteInSwift(request) => {
                     route_state = "execute_in_swift";
                     pending_request = Some(request);
                 }
-                ToolRouteOutcome::ApprovalRequired { request, reason } => {
+                ToolRouteOutcome::ApprovalRequired {
+                    request: _,
+                    approval,
+                    reason,
+                } => {
                     route_state = "approval_required";
                     route_reason = Some(reason);
-                    // Plan 7 will turn this route into a suspended approval lifecycle.
-                    pending_request = Some(request);
+                    approval_request = Some(approval);
                 }
                 ToolRouteOutcome::Denied(result) => {
                     route_state = "denied";
@@ -662,9 +827,21 @@ impl<S: EventStore> AgentRuntime<S> {
         if let Some(request) = pending_request {
             self.pending_tool_requests.push(request);
         }
+        let suspension_event_id = if let Some(approval) = approval_request {
+            Some(self.append_event(
+                session_id,
+                Some(event_id.clone()),
+                Some(run_id.clone()),
+                EventKind::RunSuspended,
+                approval_payload(&approval, &pending_tool_call_id, &event_id),
+            )?)
+        } else {
+            None
+        };
 
         Ok(RoutedToolCall {
             event_id,
+            suspension_event_id,
             pending_tool_call_id,
             denied_result,
         })
@@ -714,7 +891,13 @@ impl<S: EventStore> AgentRuntime<S> {
             kind,
             payload,
         );
+        let audit_event_kind = format!("{:?}", event.kind);
+        let audit_summary = format!("{}: {}", audit_event_kind, event.payload);
         self.store.append(event)?;
+        if AuditPolicy.should_audit_event(&audit_event_kind) {
+            self.store
+                .write_audit(session_id, &entry_id, &audit_summary)?;
+        }
 
         cursor.active_leaf = Some(entry_id.clone());
         cursor.next_sequence = sequence + 1;
@@ -730,6 +913,33 @@ fn tool_call_payload(call: &ToolCall, route_state: &str, route_reason: Option<&s
         "arguments_json": call.arguments_json,
         "route_state": route_state,
         "route_reason": route_reason,
+    })
+    .to_string()
+}
+
+fn approval_payload(
+    approval: &ApprovalProtocolRequest,
+    tool_call_id: &str,
+    tool_call_entry_id: &EntryId,
+) -> String {
+    json!({
+        "approval_id": &approval.approval_id,
+        "tool_call_id": tool_call_id,
+        "tool_call_entry_id": &tool_call_entry_id.0,
+        "message": &approval.message,
+        "requires_local_authentication": approval.requires_local_authentication,
+    })
+    .to_string()
+}
+
+fn approval_decision_payload(approval_id: &str, decision: &ApprovalDecision) -> String {
+    json!({
+        "approval_id": approval_id,
+        "decision": match decision {
+            ApprovalDecision::Approved => "approved",
+            ApprovalDecision::Rejected => "rejected",
+            ApprovalDecision::Cancelled => "cancelled",
+        },
     })
     .to_string()
 }
