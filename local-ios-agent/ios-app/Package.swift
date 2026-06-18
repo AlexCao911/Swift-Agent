@@ -13,6 +13,10 @@ let package = Package(
             name: "LocalAgentBridge",
             targets: ["LocalAgentBridge"]
         ),
+        .library(
+            name: "LocalNativeToolkit",
+            targets: ["LocalNativeToolkit"]
+        ),
     ],
     targets: [
         .target(
@@ -27,9 +31,17 @@ let package = Package(
                 .unsafeFlags(["-L../rust-core/target/debug"]),
             ]
         ),
+        .target(
+            name: "LocalNativeToolkit",
+            dependencies: ["LocalAgentBridge"]
+        ),
         .testTarget(
             name: "LocalAgentBridgeTests",
             dependencies: ["LocalAgentBridge"]
+        ),
+        .testTarget(
+            name: "LocalNativeToolkitTests",
+            dependencies: ["LocalNativeToolkit"]
         ),
     ]
 )

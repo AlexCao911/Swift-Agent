@@ -129,17 +129,20 @@ public struct ToolSchemaDTO: Codable, Equatable, Sendable {
     public var description: String
     public var parametersJsonSchema: String
     public var riskLevel: RiskLevelDTO
+    public var metadataJson: String?
 
     public init(
         name: String,
         description: String,
         parametersJsonSchema: String,
-        riskLevel: RiskLevelDTO
+        riskLevel: RiskLevelDTO,
+        metadataJson: String? = nil
     ) {
         self.name = name
         self.description = description
         self.parametersJsonSchema = parametersJsonSchema
         self.riskLevel = riskLevel
+        self.metadataJson = metadataJson
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -147,6 +150,7 @@ public struct ToolSchemaDTO: Codable, Equatable, Sendable {
         case description
         case parametersJsonSchema = "parameters_json_schema"
         case riskLevel = "risk_level"
+        case metadataJson = "metadata_json"
     }
 }
 
