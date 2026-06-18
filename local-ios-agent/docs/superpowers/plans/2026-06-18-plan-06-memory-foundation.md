@@ -4,7 +4,7 @@
 
 **Goal:** Add the durable MVP memory layer: long-term memory records, memory extraction candidates, keyword search, branch summaries, blob references, audit rows, and provider settings.
 
-**Architecture:** `memory` owns persistence and retrieval. It does not decide runtime policy, execute tools, or build prompts. SQLite stores MVP memory data with simple keyword search; vector search, SQLCipher, and iOS Data Protection are explicitly later hardening work.
+**Architecture:** `memory` owns persistence and retrieval. It does not decide runtime policy, execute tools, or build prompts. SQLite stores MVP memory data with exact keyword search backed by a normalized keyword table; vector search, SQLCipher, and iOS Data Protection are explicitly later hardening work.
 
 **Tech Stack:** Rust 2021, existing `SqliteEventStore`, SQLite tables, `cargo test`, TDD.
 
@@ -116,6 +116,15 @@ create table if not exists long_term_memory (
   keywords text not null,
   confirmed integer not null
 );
+
+create table if not exists long_term_memory_keywords (
+  keyword text not null,
+  memory_id text not null,
+  primary key (keyword, memory_id)
+);
+
+create index if not exists idx_long_term_memory_keywords_keyword
+on long_term_memory_keywords(keyword);
 ```
 
 Add methods:
@@ -125,6 +134,8 @@ pub fn upsert_memory(&self, record: LongTermMemoryRecord) -> Result<(), AgentErr
 pub fn search_memory(&self, keyword: &str) -> Result<Vec<LongTermMemoryRecord>, AgentError>
 ```
 
+`upsert_memory` must keep `long_term_memory_keywords` in sync by deleting old keyword rows for the memory id and inserting the current keywords. `search_memory` must query through `long_term_memory_keywords` instead of scanning every confirmed memory row.
+
 - [ ] **Step 3: Verify and commit**
 
 Run:
@@ -132,6 +143,7 @@ Run:
 ```bash
 cargo fmt
 cargo test --test memory_foundation sqlite_stores_and_searches_confirmed_memory
+cargo test --test memory_foundation sqlite_uses_keyword_index_for_memory_search
 cargo test
 ```
 
@@ -148,9 +160,10 @@ git commit -m "feat: add long term memory store"
 **Files:**
 - Create: `local-ios-agent/rust-core/src/memory/memory_candidate.rs`
 - Modify: `local-ios-agent/rust-core/src/memory/mod.rs`
+- Modify: `local-ios-agent/rust-core/src/memory/sqlite.rs`
 - Modify: `local-ios-agent/rust-core/tests/memory_foundation.rs`
 
-- [ ] **Step 1: Add candidate test**
+- [ ] **Step 1: Add candidate tests**
 
 Append:
 
@@ -164,9 +177,31 @@ fn memory_candidate_requires_confirmation() {
     assert!(!candidate.confirmed);
     assert_eq!(candidate.text, "likes local agents");
 }
+
+#[test]
+fn sqlite_persists_confirmed_memory_candidate() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let store = SqliteEventStore::open(&db_path).unwrap();
+
+    store
+        .save_memory_candidate(MemoryCandidate::new("likes local agents").confirm())
+        .unwrap();
+    drop(store);
+
+    let reopened = SqliteEventStore::open(&db_path).unwrap();
+
+    assert_eq!(
+        reopened.memory_candidates().unwrap(),
+        vec![MemoryCandidate {
+            text: "likes local agents".into(),
+            confirmed: true,
+        }]
+    );
+}
 ```
 
-- [ ] **Step 2: Implement candidate**
+- [ ] **Step 2: Implement candidate and SQLite APIs**
 
 Create `src/memory/memory_candidate.rs`:
 
@@ -189,6 +224,22 @@ impl MemoryCandidate {
 }
 ```
 
+Add SQLite table:
+
+```sql
+create table if not exists memory_candidates (
+  text text primary key,
+  confirmed integer not null
+);
+```
+
+Add methods:
+
+```rust
+pub fn save_memory_candidate(&self, candidate: MemoryCandidate) -> Result<(), AgentError>
+pub fn memory_candidates(&self) -> Result<Vec<MemoryCandidate>, AgentError>
+```
+
 - [ ] **Step 3: Verify and commit**
 
 Run:
@@ -196,6 +247,7 @@ Run:
 ```bash
 cargo fmt
 cargo test --test memory_foundation memory_candidate_requires_confirmation
+cargo test --test memory_foundation sqlite_persists_confirmed_memory_candidate
 cargo test
 ```
 
@@ -203,7 +255,7 @@ Commit:
 
 ```bash
 cd /Users/alexandercou/Projects/Alex-agent
-git add local-ios-agent/rust-core/src/memory/memory_candidate.rs local-ios-agent/rust-core/src/memory/mod.rs local-ios-agent/rust-core/tests/memory_foundation.rs
+git add local-ios-agent/rust-core/src/memory/memory_candidate.rs local-ios-agent/rust-core/src/memory/mod.rs local-ios-agent/rust-core/src/memory/sqlite.rs local-ios-agent/rust-core/tests/memory_foundation.rs
 git commit -m "feat: add memory candidate"
 ```
 
@@ -243,6 +295,44 @@ fn sqlite_stores_blob_and_branch_summary() {
     assert_eq!(store.get_blob("blob_1").unwrap().unwrap().mime_type, "image/png");
     assert_eq!(store.branch_summary("session_1", "entry_9").unwrap().unwrap().summary, "summary");
 }
+
+#[test]
+fn sqlite_rejects_blob_byte_count_above_sqlite_integer_range() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let store = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
+
+    let result = store.put_blob(BlobRecord {
+        id: "blob_large".into(),
+        path: "/tmp/large.bin".into(),
+        mime_type: "application/octet-stream".into(),
+        byte_count: i64::MAX as u64 + 1,
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn sqlite_rejects_negative_blob_byte_count_from_storage() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    drop(store);
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "
+        insert into blobs(id, path, mime_type, byte_count)
+        values (?1, ?2, ?3, ?4)
+        ",
+        rusqlite::params!["blob_negative", "/tmp/bad.bin", "application/octet-stream", -1],
+    )
+    .unwrap();
+    drop(conn);
+
+    let reopened = SqliteEventStore::open(&db_path).unwrap();
+
+    assert!(reopened.get_blob("blob_negative").is_err());
+}
 ```
 
 - [ ] **Step 2: Implement records and SQLite APIs**
@@ -279,6 +369,8 @@ pub fn put_branch_summary(&self, record: BranchSummaryRecord) -> Result<(), Agen
 pub fn branch_summary(&self, session_id: &str, leaf_id: &str) -> Result<Option<BranchSummaryRecord>, AgentError>
 ```
 
+`put_blob` must reject `byte_count` values that do not fit SQLite's signed integer range. `get_blob` must reject negative stored `byte_count` values instead of casting them to `u64`.
+
 - [ ] **Step 3: Verify and commit**
 
 Run:
@@ -286,6 +378,7 @@ Run:
 ```bash
 cargo fmt
 cargo test --test memory_foundation sqlite_stores_blob_and_branch_summary
+cargo test --test memory_foundation blob_byte_count
 cargo test
 ```
 
@@ -386,9 +479,10 @@ git commit -m "feat: add audit and provider settings"
 ## Exit Criteria
 
 - Confirmed long-term memory can be stored and keyword searched.
-- Memory candidates require confirmation before promotion.
+- Keyword search is backed by `long_term_memory_keywords` and stale keyword rows are removed on update.
+- Memory candidates require confirmation before promotion and are persisted before restart.
 - Branch summaries are persisted.
-- Blob/image metadata is persisted separately from event payloads.
+- Blob/image metadata is persisted separately from event payloads, with checked `byte_count` conversion at the SQLite integer boundary.
 - Audit rows can be written and listed.
 - Provider settings are persisted.
 - `cargo test` passes.
