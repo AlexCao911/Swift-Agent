@@ -1,14 +1,21 @@
-use local_ios_agent_runtime::context::MockTokenizer;
-use local_ios_agent_runtime::core::{AgentRuntime, AgentRuntimeConfig, MockStreamingProvider};
+use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame};
+use local_ios_agent_runtime::core::{
+    AgentError, AgentRuntime, AgentRuntimeConfig, CancellationToken, MockStreamingProvider,
+    ModelProvider, ModelProviderOutput,
+};
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_free,
     local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message,
     local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
     local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
 };
+use local_ios_agent_runtime::tool::ToolCall;
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn bridge() -> RuntimeJsonBridge {
@@ -20,6 +27,85 @@ fn bridge() -> RuntimeJsonBridge {
         provider: Box::new(MockStreamingProvider::new()),
         tool_router: None,
     }))
+}
+
+#[derive(Clone, Debug)]
+struct BlockingUntilCancelledProvider {
+    probe: Arc<CancellationProbe>,
+}
+
+#[derive(Debug)]
+struct CancellationProbe {
+    started: (Mutex<bool>, Condvar),
+    observed_cancelled: (Mutex<bool>, Condvar),
+}
+
+impl CancellationProbe {
+    fn new() -> Self {
+        Self {
+            started: (Mutex::new(false), Condvar::new()),
+            observed_cancelled: (Mutex::new(false), Condvar::new()),
+        }
+    }
+
+    fn mark_started(&self) {
+        let (lock, condition) = &self.started;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+    }
+
+    fn mark_observed_cancelled(&self) {
+        let (lock, condition) = &self.observed_cancelled;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+    }
+
+    fn wait_for_started(&self) {
+        wait_for_flag(&self.started);
+    }
+
+    fn wait_for_observed_cancelled(&self) {
+        wait_for_flag(&self.observed_cancelled);
+    }
+}
+
+impl ModelProvider for BlockingUntilCancelledProvider {
+    fn id(&self) -> &str {
+        "mock"
+    }
+
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        self.probe.mark_started();
+        while !cancellation.is_cancelled() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        self.probe.mark_observed_cancelled();
+        Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+            id: "call_cancelled".into(),
+            name: "debug.echo".into(),
+            arguments_json: r#"{"text":"cancelled"}"#.into(),
+        })])
+    }
+}
+
+fn wait_for_flag(flag: &(Mutex<bool>, Condvar)) {
+    let started_at = Instant::now();
+    let (lock, condition) = flag;
+    let mut value = lock.lock().unwrap();
+    while !*value {
+        let (next_value, timeout) = condition
+            .wait_timeout(value, Duration::from_millis(20))
+            .unwrap();
+        value = next_value;
+        assert!(
+            !timeout.timed_out() || started_at.elapsed() < Duration::from_secs(2),
+            "timed out waiting for cancellation probe"
+        );
+    }
 }
 
 fn decode(json: &str) -> Value {
@@ -48,7 +134,7 @@ unsafe fn new_in_memory_c_bridge() -> *mut RuntimeJsonBridge {
 
 #[test]
 fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
-    let mut bridge = bridge();
+    let bridge = bridge();
 
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
@@ -89,7 +175,7 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
 
 #[test]
 fn bridge_exposes_provider_control_json() {
-    let mut bridge = bridge();
+    let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
 
@@ -145,8 +231,53 @@ fn bridge_config_can_create_runtime_with_desktop_minicpm_provider() {
 }
 
 #[test]
+fn bridge_cancel_signals_provider_while_send_message_is_blocked() {
+    let probe = Arc::new(CancellationProbe::new());
+    let bridge = Arc::new(RuntimeJsonBridge::new(AgentRuntime::new(
+        AgentRuntimeConfig {
+            system_prompt: "system".into(),
+            runtime_policy: "policy".into(),
+            tool_schemas: Vec::new(),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+            provider: Box::new(BlockingUntilCancelledProvider {
+                probe: probe.clone(),
+            }),
+            tool_router: None,
+        },
+    )));
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap().to_string();
+    bridge
+        .register_tool_schema_json(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"read_only"}"#,
+        )
+        .unwrap();
+
+    let sending_bridge = bridge.clone();
+    let sender = thread::spawn(move || {
+        sending_bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"block"}}"#
+            ))
+            .unwrap()
+    });
+    probe.wait_for_started();
+
+    let cancelling_bridge = bridge.clone();
+    let canceller = thread::spawn(move || cancelling_bridge.cancel_json("run_3").unwrap());
+    probe.wait_for_observed_cancelled();
+
+    let turn = decode(&sender.join().unwrap());
+    let cancelled = decode(&canceller.join().unwrap());
+
+    assert_eq!(turn["state"], "waiting_tool");
+    assert_eq!(cancelled["kind"], "run_cancelled");
+    assert_eq!(cancelled["run_id"], "run_3");
+}
+
+#[test]
 fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
-    let mut bridge = bridge();
+    let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
     bridge
@@ -193,7 +324,7 @@ fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
 
 #[test]
 fn bridge_set_permission_state_affects_tool_policy() {
-    let mut bridge = bridge();
+    let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
     bridge
@@ -222,7 +353,7 @@ fn bridge_set_permission_state_affects_tool_policy() {
 
 #[test]
 fn bridge_exposes_and_resolves_approval_requests_json() {
-    let mut bridge = bridge();
+    let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
     bridge
@@ -282,7 +413,7 @@ fn bridge_exposes_and_resolves_approval_requests_json() {
 
 #[test]
 fn bridge_cancel_returns_runtime_event_json() {
-    let mut bridge = bridge();
+    let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
     let session_id = session.as_str().unwrap();
     bridge

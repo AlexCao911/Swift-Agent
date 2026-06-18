@@ -18,7 +18,10 @@ pub use desktop_minicpm::{
 };
 pub use event::{EventKind, RuntimeEvent};
 pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
-pub use provider::{CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput};
+pub use provider::{
+    CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput,
+    ProviderCancellationRegistry,
+};
 pub use provider_profile::{ProviderKind, ProviderProfile};
 pub use provider_registry::{ProviderBundle, ProviderRegistry};
 pub use run_state::{RunRecord, RunState};

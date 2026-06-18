@@ -1,28 +1,54 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
-    AgentTurnResult, DesktopMiniCPMSettings, EntryId, EventKind, ProviderRegistry, RunState,
-    RuntimeEvent, SendMessageInput, SessionId,
+    AgentTurnResult, DesktopMiniCPMSettings, EntryId, EventKind, ProviderCancellationRegistry,
+    ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
-use crate::memory::{InMemoryEventStore, SqliteEventStore};
+use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, PermissionScope, PermissionState, RiskLevel,
 };
 use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult, ToolSchema};
 
 pub enum RuntimeJsonBridge {
-    InMemory(AgentRuntime<InMemoryEventStore>),
-    Sqlite(AgentRuntime<SqliteEventStore>),
+    InMemory(BridgeRuntime<InMemoryEventStore>),
+    Sqlite(BridgeRuntime<SqliteEventStore>),
+}
+
+pub struct BridgeRuntime<S: EventStore> {
+    runtime: Mutex<AgentRuntime<S>>,
+    cancellations: ProviderCancellationRegistry,
+}
+
+impl<S: EventStore> BridgeRuntime<S> {
+    fn new(runtime: AgentRuntime<S>) -> Self {
+        let cancellations = runtime.provider_cancellation_registry();
+        Self {
+            runtime: Mutex::new(runtime),
+            cancellations,
+        }
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, AgentRuntime<S>>, AgentError> {
+        self.runtime
+            .lock()
+            .map_err(|_| AgentError::Ffi("runtime bridge mutex poisoned".into()))
+    }
+
+    fn signal_provider_cancellation(&self, run_id: &RunId) {
+        self.cancellations.signal(run_id);
+    }
 }
 
 impl RuntimeJsonBridge {
     pub fn new(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
-        Self::InMemory(runtime)
+        Self::InMemory(BridgeRuntime::new(runtime))
     }
 
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
@@ -30,35 +56,35 @@ impl RuntimeJsonBridge {
         let registry = config.provider_registry()?;
         let runtime_config = config.runtime_config(&registry)?;
         match config.store {
-            StoreConfigJson::InMemory { .. } => {
-                Ok(Self::InMemory(AgentRuntime::with_store_and_registry(
+            StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::new(
+                AgentRuntime::with_store_and_registry(
                     runtime_config,
                     InMemoryEventStore::new(),
                     registry,
-                )?))
-            }
-            StoreConfigJson::Sqlite { path, .. } => {
-                Ok(Self::Sqlite(AgentRuntime::with_store_and_registry(
+                )?,
+            ))),
+            StoreConfigJson::Sqlite { path, .. } => Ok(Self::Sqlite(BridgeRuntime::new(
+                AgentRuntime::with_store_and_registry(
                     runtime_config,
                     SqliteEventStore::open(path)?,
                     registry,
-                )?))
-            }
+                )?,
+            ))),
         }
     }
 
-    pub fn create_session_json(&mut self) -> Result<String, AgentError> {
+    pub fn create_session_json(&self) -> Result<String, AgentError> {
         let session_id = match self {
-            Self::InMemory(runtime) => runtime.create_session()?,
-            Self::Sqlite(runtime) => runtime.create_session()?,
+            Self::InMemory(runtime) => runtime.lock()?.create_session()?,
+            Self::Sqlite(runtime) => runtime.lock()?.create_session()?,
         };
         to_json(&session_id.0)
     }
 
     pub fn session_ids_json(&self) -> Result<String, AgentError> {
         let session_ids: Vec<_> = match self {
-            Self::InMemory(runtime) => runtime.session_ids(),
-            Self::Sqlite(runtime) => runtime.session_ids(),
+            Self::InMemory(runtime) => runtime.lock()?.session_ids(),
+            Self::Sqlite(runtime) => runtime.lock()?.session_ids(),
         }
         .into_iter()
         .map(|session_id| session_id.0)
@@ -66,27 +92,27 @@ impl RuntimeJsonBridge {
         to_json(&session_ids)
     }
 
-    pub fn register_tool_schema_json(&mut self, schema_json: &str) -> Result<String, AgentError> {
+    pub fn register_tool_schema_json(&self, schema_json: &str) -> Result<String, AgentError> {
         let schema: ToolSchemaJson = from_json(schema_json)?;
         let schema = schema.into_tool_schema()?;
         match self {
-            Self::InMemory(runtime) => runtime.register_tool(schema)?,
-            Self::Sqlite(runtime) => runtime.register_tool(schema)?,
+            Self::InMemory(runtime) => runtime.lock()?.register_tool(schema)?,
+            Self::Sqlite(runtime) => runtime.lock()?.register_tool(schema)?,
         }
         Ok("null".to_string())
     }
 
-    pub fn set_permission_state_json(&mut self, state_json: &str) -> Result<String, AgentError> {
+    pub fn set_permission_state_json(&self, state_json: &str) -> Result<String, AgentError> {
         let state: PermissionStateJson = from_json(state_json)?;
         let permission = state.into_permission_scope()?;
         match self {
-            Self::InMemory(runtime) => runtime.set_permission(permission),
-            Self::Sqlite(runtime) => runtime.set_permission(permission),
+            Self::InMemory(runtime) => runtime.lock()?.set_permission(permission),
+            Self::Sqlite(runtime) => runtime.lock()?.set_permission(permission),
         }
         Ok("null".to_string())
     }
 
-    pub fn send_message_json(&mut self, input_json: &str) -> Result<String, AgentError> {
+    pub fn send_message_json(&self, input_json: &str) -> Result<String, AgentError> {
         let input: SendMessageJson = from_json(input_json)?;
         let input = SendMessageInput {
             session_id: SessionId(input.session_id),
@@ -94,27 +120,38 @@ impl RuntimeJsonBridge {
             text: input.text,
         };
         let result = match self {
-            Self::InMemory(runtime) => runtime.send_message_turn(input)?,
-            Self::Sqlite(runtime) => runtime.send_message_turn(input)?,
+            Self::InMemory(runtime) => runtime.lock()?.send_message_turn(input)?,
+            Self::Sqlite(runtime) => runtime.lock()?.send_message_turn(input)?,
         };
         to_json(&AgentTurnResultJson::from_result(&result))
     }
 
     pub fn pending_tool_requests_json(&self) -> Result<String, AgentError> {
         let requests: Vec<_> = match self {
-            Self::InMemory(runtime) => runtime.pending_tool_requests(),
-            Self::Sqlite(runtime) => runtime.pending_tool_requests(),
-        }
-        .iter()
-        .map(ToolExecutionRequestJson::from_request)
-        .collect();
+            Self::InMemory(runtime) => {
+                let runtime = runtime.lock()?;
+                runtime
+                    .pending_tool_requests()
+                    .iter()
+                    .map(ToolExecutionRequestJson::from_request)
+                    .collect()
+            }
+            Self::Sqlite(runtime) => {
+                let runtime = runtime.lock()?;
+                runtime
+                    .pending_tool_requests()
+                    .iter()
+                    .map(ToolExecutionRequestJson::from_request)
+                    .collect()
+            }
+        };
         to_json(&requests)
     }
 
     pub fn pending_approval_requests_json(&self) -> Result<String, AgentError> {
         let requests: Vec<_> = match self {
-            Self::InMemory(runtime) => runtime.pending_approval_requests(),
-            Self::Sqlite(runtime) => runtime.pending_approval_requests(),
+            Self::InMemory(runtime) => runtime.lock()?.pending_approval_requests(),
+            Self::Sqlite(runtime) => runtime.lock()?.pending_approval_requests(),
         }
         .iter()
         .map(ApprovalProtocolRequestJson::from_request)
@@ -123,73 +160,79 @@ impl RuntimeJsonBridge {
     }
 
     pub fn submit_tool_result_json(
-        &mut self,
+        &self,
         run_id: &str,
         result_json: &str,
     ) -> Result<String, AgentError> {
         let result: ToolResultJson = from_json(result_json)?;
         let result = result.into_tool_result()?;
         let turn = match self {
-            Self::InMemory(runtime) => runtime.submit_tool_result(run_id.to_string(), result),
-            Self::Sqlite(runtime) => runtime.submit_tool_result(run_id.to_string(), result),
+            Self::InMemory(runtime) => runtime
+                .lock()?
+                .submit_tool_result(run_id.to_string(), result),
+            Self::Sqlite(runtime) => runtime
+                .lock()?
+                .submit_tool_result(run_id.to_string(), result),
         };
         to_json(&AgentTurnResultJson::from_result(&turn?))
     }
 
-    pub fn submit_approval_response_json(
-        &mut self,
-        response_json: &str,
-    ) -> Result<String, AgentError> {
+    pub fn submit_approval_response_json(&self, response_json: &str) -> Result<String, AgentError> {
         let response: ApprovalProtocolResponseJson = from_json(response_json)?;
         let response = response.into_approval_response();
         let turn = match self {
-            Self::InMemory(runtime) => runtime.submit_approval_response(response),
-            Self::Sqlite(runtime) => runtime.submit_approval_response(response),
+            Self::InMemory(runtime) => runtime.lock()?.submit_approval_response(response),
+            Self::Sqlite(runtime) => runtime.lock()?.submit_approval_response(response),
         };
         to_json(&AgentTurnResultJson::from_result(&turn?))
     }
 
-    pub fn cancel_json(&mut self, run_id: &str) -> Result<String, AgentError> {
+    pub fn cancel_json(&self, run_id: &str) -> Result<String, AgentError> {
+        let run_id_key = RunId(run_id.to_string());
+        match self {
+            Self::InMemory(runtime) => runtime.signal_provider_cancellation(&run_id_key),
+            Self::Sqlite(runtime) => runtime.signal_provider_cancellation(&run_id_key),
+        }
         let event = match self {
-            Self::InMemory(runtime) => runtime.cancel(run_id.to_string())?,
-            Self::Sqlite(runtime) => runtime.cancel(run_id.to_string())?,
+            Self::InMemory(runtime) => runtime.lock()?.cancel(run_id.to_string())?,
+            Self::Sqlite(runtime) => runtime.lock()?.cancel(run_id.to_string())?,
         };
         to_json(&RuntimeEventJson::from_event(&event))
     }
 
     pub fn latest_prompt_debug_snapshot_json(&self) -> Result<String, AgentError> {
         let snapshot = match self {
-            Self::InMemory(runtime) => runtime.latest_prompt_debug_snapshot(),
-            Self::Sqlite(runtime) => runtime.latest_prompt_debug_snapshot(),
+            Self::InMemory(runtime) => runtime.lock()?.latest_prompt_debug_snapshot(),
+            Self::Sqlite(runtime) => runtime.lock()?.latest_prompt_debug_snapshot(),
         };
         to_json(&snapshot)
     }
 
     pub fn provider_profiles_json(&self) -> Result<String, AgentError> {
         let profiles = match self {
-            Self::InMemory(runtime) => runtime.provider_profiles(),
-            Self::Sqlite(runtime) => runtime.provider_profiles(),
+            Self::InMemory(runtime) => runtime.lock()?.provider_profiles(),
+            Self::Sqlite(runtime) => runtime.lock()?.provider_profiles(),
         };
         to_json(&profiles)
     }
 
     pub fn active_provider_json(&self) -> Result<String, AgentError> {
         let profile = match self {
-            Self::InMemory(runtime) => runtime.active_provider(),
-            Self::Sqlite(runtime) => runtime.active_provider(),
+            Self::InMemory(runtime) => runtime.lock()?.active_provider(),
+            Self::Sqlite(runtime) => runtime.lock()?.active_provider(),
         };
         to_json(&profile)
     }
 
-    pub fn set_provider_json(&mut self, request_json: &str) -> Result<String, AgentError> {
+    pub fn set_provider_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: SetProviderJson = from_json(request_json)?;
         let event = match self {
-            Self::InMemory(runtime) => {
-                runtime.set_provider(SessionId(request.session_id), &request.provider_id)?
-            }
-            Self::Sqlite(runtime) => {
-                runtime.set_provider(SessionId(request.session_id), &request.provider_id)?
-            }
+            Self::InMemory(runtime) => runtime
+                .lock()?
+                .set_provider(SessionId(request.session_id), &request.provider_id)?,
+            Self::Sqlite(runtime) => runtime
+                .lock()?
+                .set_provider(SessionId(request.session_id), &request.provider_id)?,
         };
         to_json(&RuntimeEventJson::from_event(&event))
     }
@@ -231,7 +274,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_string_free(value: *mut c_ch
 pub unsafe extern "C" fn local_agent_runtime_bridge_create_session(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_mut(runtime)?.create_session_json())
+    c_result(|| bridge_ref(runtime)?.create_session_json())
 }
 
 #[no_mangle]
@@ -248,7 +291,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_register_tool_schema(
 ) -> *mut c_char {
     c_result(|| {
         let schema_json = c_str_arg(schema_json, "schema_json")?;
-        bridge_mut(runtime)?.register_tool_schema_json(schema_json)
+        bridge_ref(runtime)?.register_tool_schema_json(schema_json)
     })
 }
 
@@ -259,7 +302,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_permission_state(
 ) -> *mut c_char {
     c_result(|| {
         let state_json = c_str_arg(state_json, "state_json")?;
-        bridge_mut(runtime)?.set_permission_state_json(state_json)
+        bridge_ref(runtime)?.set_permission_state_json(state_json)
     })
 }
 
@@ -270,7 +313,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_send_message(
 ) -> *mut c_char {
     c_result(|| {
         let input_json = c_str_arg(input_json, "input_json")?;
-        bridge_mut(runtime)?.send_message_json(input_json)
+        bridge_ref(runtime)?.send_message_json(input_json)
     })
 }
 
@@ -297,7 +340,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result(
     c_result(|| {
         let run_id = c_str_arg(run_id, "run_id")?;
         let result_json = c_str_arg(result_json, "result_json")?;
-        bridge_mut(runtime)?.submit_tool_result_json(run_id, result_json)
+        bridge_ref(runtime)?.submit_tool_result_json(run_id, result_json)
     })
 }
 
@@ -308,7 +351,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_approval_response(
 ) -> *mut c_char {
     c_result(|| {
         let response_json = c_str_arg(response_json, "response_json")?;
-        bridge_mut(runtime)?.submit_approval_response_json(response_json)
+        bridge_ref(runtime)?.submit_approval_response_json(response_json)
     })
 }
 
@@ -319,7 +362,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_cancel(
 ) -> *mut c_char {
     c_result(|| {
         let run_id = c_str_arg(run_id, "run_id")?;
-        bridge_mut(runtime)?.cancel_json(run_id)
+        bridge_ref(runtime)?.cancel_json(run_id)
     })
 }
 
@@ -351,7 +394,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_provider(
 ) -> *mut c_char {
     c_result(|| {
         let request_json = c_str_arg(request_json, "request_json")?;
-        bridge_mut(runtime)?.set_provider_json(request_json)
+        bridge_ref(runtime)?.set_provider_json(request_json)
     })
 }
 
@@ -645,14 +688,6 @@ fn into_c_string(value: String) -> *mut c_char {
         .expect("static error JSON must not contain nul bytes")
         .into_raw(),
     }
-}
-
-unsafe fn bridge_mut<'a>(
-    runtime: *mut RuntimeJsonBridge,
-) -> Result<&'a mut RuntimeJsonBridge, AgentError> {
-    runtime
-        .as_mut()
-        .ok_or_else(|| AgentError::Ffi("runtime pointer must not be null".into()))
 }
 
 unsafe fn bridge_ref<'a>(

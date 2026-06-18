@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 use crate::context::{ContextController, PromptDebugSnapshot, PromptFrame, TokenizerAdapter};
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
-    ModelProviderOutput, ProviderKind, ProviderProfile, ProviderRegistry, RunId, RunRecord,
-    RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
+    ModelProviderOutput, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
+    ProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
+    StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore, ProviderSetting};
 use crate::security::{
@@ -52,7 +53,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     active_provider_profile: ProviderProfile,
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
-    provider_cancellations: HashMap<RunId, CancellationToken>,
+    provider_cancellations: ProviderCancellationRegistry,
     latest_prompt_debug_snapshot: Option<PromptDebugSnapshot>,
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
@@ -102,7 +103,7 @@ impl<S: EventStore> AgentRuntime<S> {
             active_provider_profile,
             sessions,
             runs: HashMap::new(),
-            provider_cancellations: HashMap::new(),
+            provider_cancellations: ProviderCancellationRegistry::default(),
             latest_prompt_debug_snapshot: None,
             pending_tool_requests: Vec::new(),
         };
@@ -124,6 +125,10 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn latest_prompt_debug_snapshot(&self) -> Option<PromptDebugSnapshot> {
         self.latest_prompt_debug_snapshot.clone()
+    }
+
+    pub fn provider_cancellation_registry(&self) -> ProviderCancellationRegistry {
+        self.provider_cancellations.clone()
     }
 
     pub fn set_provider(
@@ -712,9 +717,8 @@ impl<S: EventStore> AgentRuntime<S> {
                 AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
             })?;
 
-        if let Some(token) = self.provider_cancellations.remove(&run_key) {
-            token.cancel();
-        }
+        self.provider_cancellations.signal(&run_key);
+        self.provider_cancellations.remove(&run_key);
 
         let event_id = self.append_event(
             &session_id,
@@ -1247,6 +1251,6 @@ mod tests {
 
         assert!(token.is_cancelled());
         assert_eq!(event.kind, EventKind::RunCancelled);
-        assert!(!runtime.provider_cancellations.contains_key(&run_id));
+        assert!(!runtime.provider_cancellations.contains(&run_id));
     }
 }

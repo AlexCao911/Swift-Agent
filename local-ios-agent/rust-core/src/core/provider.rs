@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use crate::context::{PromptFrame, PromptMessage};
-use crate::core::AgentError;
+use crate::core::{AgentError, RunId};
 use crate::tool::ToolCall;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +27,35 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.inner.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ProviderCancellationRegistry {
+    inner: Arc<Mutex<HashMap<RunId, CancellationToken>>>,
+}
+
+impl ProviderCancellationRegistry {
+    pub fn insert(&self, run_id: RunId, token: CancellationToken) {
+        self.inner.lock().unwrap().insert(run_id, token);
+    }
+
+    pub fn remove(&self, run_id: &RunId) {
+        self.inner.lock().unwrap().remove(run_id);
+    }
+
+    pub fn contains(&self, run_id: &RunId) -> bool {
+        self.inner.lock().unwrap().contains_key(run_id)
+    }
+
+    pub fn signal(&self, run_id: &RunId) -> bool {
+        let token = self.inner.lock().unwrap().get(run_id).cloned();
+        if let Some(token) = token {
+            token.cancel();
+            true
+        } else {
+            false
+        }
     }
 }
 
