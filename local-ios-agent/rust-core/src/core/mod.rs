@@ -11,7 +11,7 @@ pub mod turn;
 pub mod types;
 
 pub use event::{EventKind, RuntimeEvent};
-pub use provider::{MockStreamingProvider, ModelProvider, ModelProviderOutput};
+pub use provider::{CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput};
 pub use provider_profile::{ProviderKind, ProviderProfile};
 pub use provider_registry::{ProviderBundle, ProviderRegistry};
 pub use run_state::{RunRecord, RunState};

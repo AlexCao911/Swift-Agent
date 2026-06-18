@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 
 use crate::context::{ContextController, TokenizerAdapter};
 use crate::core::{
-    AgentError, AgentTurnResult, EntryId, EventKind, ModelProvider, ModelProviderOutput, RunId,
-    RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId, StreamBatcher,
+    AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
+    ModelProviderOutput, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
+    StreamBatcher,
 };
 use crate::memory::{EventStore, InMemoryEventStore};
 use crate::security::{
@@ -48,6 +49,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     store: S,
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
+    provider_cancellations: HashMap<RunId, CancellationToken>,
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
@@ -75,6 +77,7 @@ impl<S: EventStore> AgentRuntime<S> {
             store,
             sessions,
             runs: HashMap::new(),
+            provider_cancellations: HashMap::new(),
             pending_tool_requests: Vec::new(),
         };
         runtime.replay_waiting_runs()?;
@@ -285,7 +288,10 @@ impl<S: EventStore> AgentRuntime<S> {
         emitted.push(self.store.get(&input.session_id, &assistant_start)?);
 
         let mut batcher = StreamBatcher::new(24);
-        let provider_events = match self.config.provider.stream_chat(&frame) {
+        let cancellation = self.start_provider_call(&run_id);
+        let provider_result = self.config.provider.stream_chat(&frame, cancellation);
+        self.finish_provider_call(&run_id);
+        let provider_events = match provider_result {
             Ok(events) => events,
             Err(error) => {
                 let failed_id = self.append_event(
@@ -465,7 +471,10 @@ impl<S: EventStore> AgentRuntime<S> {
         emitted.push(self.store.get(&session_id, &tool_result_id)?);
         let branch = self.store.active_branch(&session_id, &tool_result_id)?;
         let frame = self.context_controller().build_prompt_frame(branch)?;
-        let provider_events = match self.config.provider.stream_chat(&frame) {
+        let cancellation = self.start_provider_call(&run_key);
+        let provider_result = self.config.provider.stream_chat(&frame, cancellation);
+        self.finish_provider_call(&run_key);
+        let provider_events = match provider_result {
             Ok(events) => events,
             Err(error) => {
                 let failed_id = self.append_event(
@@ -612,6 +621,10 @@ impl<S: EventStore> AgentRuntime<S> {
                 AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
             })?;
 
+        if let Some(token) = self.provider_cancellations.remove(&run_key) {
+            token.cancel();
+        }
+
         let event_id = self.append_event(
             &session_id,
             Some(parent_id),
@@ -620,6 +633,17 @@ impl<S: EventStore> AgentRuntime<S> {
             format!("run {run_id} cancelled"),
         )?;
         self.store.get(&session_id, &event_id)
+    }
+
+    fn start_provider_call(&mut self, run_id: &RunId) -> CancellationToken {
+        let token = CancellationToken::default();
+        self.provider_cancellations
+            .insert(run_id.clone(), token.clone());
+        token
+    }
+
+    fn finish_provider_call(&mut self, run_id: &RunId) {
+        self.provider_cancellations.remove(run_id);
     }
 
     fn replay_waiting_runs(&mut self) -> Result<(), AgentError> {
@@ -1064,5 +1088,26 @@ mod tests {
         assert!(
             matches!(result, Err(AgentError::Storage(message)) if message.contains("missing session cursor"))
         );
+    }
+
+    #[test]
+    fn cancel_signals_matching_provider_cancellation_token() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        let run_id = RunId("run_active".to_string());
+        let token = CancellationToken::default();
+        runtime.runs.insert(
+            run_id.clone(),
+            RunRecord::new(run_id.clone(), session_id.clone()),
+        );
+        runtime
+            .provider_cancellations
+            .insert(run_id.clone(), token.clone());
+
+        let event = runtime.cancel(run_id.0.clone()).unwrap();
+
+        assert!(token.is_cancelled());
+        assert_eq!(event.kind, EventKind::RunCancelled);
+        assert!(!runtime.provider_cancellations.contains_key(&run_id));
     }
 }

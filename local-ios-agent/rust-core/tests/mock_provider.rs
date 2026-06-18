@@ -1,5 +1,7 @@
 use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
-use local_ios_agent_runtime::core::{MockStreamingProvider, ModelProvider, ModelProviderOutput};
+use local_ios_agent_runtime::core::{
+    CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput,
+};
 use local_ios_agent_runtime::tool::ToolCall;
 
 #[test]
@@ -16,7 +18,9 @@ fn mock_provider_streams_response_to_last_user_message() {
         ],
     };
 
-    let output = provider.stream_chat(&frame).unwrap();
+    let output = provider
+        .stream_chat(&frame, CancellationToken::default())
+        .unwrap();
 
     assert_eq!(
         output,
@@ -39,7 +43,10 @@ fn mock_provider_can_emit_tool_call() {
     };
 
     assert!(matches!(
-        provider.stream_chat(&frame).unwrap().first(),
+        provider
+            .stream_chat(&frame, CancellationToken::default())
+            .unwrap()
+            .first(),
         Some(ModelProviderOutput::ToolCall(ToolCall { name, .. })) if name == "debug.echo"
     ));
 }

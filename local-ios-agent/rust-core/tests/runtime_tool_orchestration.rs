@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
-    AgentError, AgentRuntime, AgentRuntimeConfig, EventKind, MockStreamingProvider, ModelProvider,
-    ModelProviderOutput, RunState, SendMessageInput,
+    AgentError, AgentRuntime, AgentRuntimeConfig, CancellationToken, EventKind,
+    MockStreamingProvider, ModelProvider, ModelProviderOutput, RunState, SendMessageInput,
 };
 use local_ios_agent_runtime::memory::SqliteEventStore;
 use local_ios_agent_runtime::security::{ApprovalProtocolResponse, RiskLevel};
@@ -42,7 +42,11 @@ impl ModelProvider for CaptureToolResultFrameProvider {
         "capture-tool-result-frame"
     }
 
-    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        _cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
         if call_index == 0 {
             return Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
@@ -68,7 +72,11 @@ impl ModelProvider for InvalidToolProvider {
         "invalid-tool"
     }
 
-    fn stream_chat(&self, _frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        _cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
         Ok(vec![ModelProviderOutput::ToolCall(self.call.clone())])
     }
 }
@@ -86,7 +94,11 @@ impl ModelProvider for FollowUpToolProvider {
         "follow-up-tool"
     }
 
-    fn stream_chat(&self, _frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        _cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
         let id = if call_index == 0 { "call_1" } else { "call_2" };
 

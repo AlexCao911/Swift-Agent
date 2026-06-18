@@ -1,3 +1,8 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use crate::context::{PromptFrame, PromptMessage};
 use crate::core::AgentError;
 use crate::tool::ToolCall;
@@ -9,9 +14,28 @@ pub enum ModelProviderOutput {
     Completed(String),
 }
 
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    inner: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        self.inner.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.load(Ordering::SeqCst)
+    }
+}
+
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &str;
-    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError>;
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -28,7 +52,15 @@ impl ModelProvider for MockStreamingProvider {
         "mock"
     }
 
-    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled("mock provider cancelled".into()));
+        }
+
         if let Some(tool_result) = frame
             .messages
             .iter()

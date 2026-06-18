@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
-    AgentError, AgentRuntime, AgentRuntimeConfig, EventKind, MockStreamingProvider, ModelProvider,
-    ModelProviderOutput, SendMessageInput,
+    AgentError, AgentRuntime, AgentRuntimeConfig, CancellationToken, EventKind,
+    MockStreamingProvider, ModelProvider, ModelProviderOutput, SendMessageInput,
 };
 
 #[derive(Debug)]
@@ -22,8 +22,41 @@ impl ModelProvider for CaptureFramesProvider {
         "capture-frames"
     }
 
-    fn stream_chat(&self, frame: &PromptFrame) -> Result<Vec<ModelProviderOutput>, AgentError> {
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        _cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
         self.frames.lock().unwrap().push(frame.clone());
+        Ok(vec![ModelProviderOutput::Completed("captured".into())])
+    }
+}
+
+#[derive(Debug)]
+struct CaptureCancellationProvider {
+    observed_states: Arc<Mutex<Vec<bool>>>,
+}
+
+impl CaptureCancellationProvider {
+    fn new(observed_states: Arc<Mutex<Vec<bool>>>) -> Self {
+        Self { observed_states }
+    }
+}
+
+impl ModelProvider for CaptureCancellationProvider {
+    fn id(&self) -> &str {
+        "capture-cancellation"
+    }
+
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        self.observed_states
+            .lock()
+            .unwrap()
+            .push(cancellation.is_cancelled());
         Ok(vec![ModelProviderOutput::Completed("captured".into())])
     }
 }
@@ -57,6 +90,30 @@ fn runtime_streams_mock_response_and_persists_events() {
     assert!(events
         .iter()
         .any(|event| event.kind == EventKind::AssistantMessageCompleted));
+}
+
+#[test]
+fn runtime_passes_cancellation_token_to_provider_calls() {
+    let observed_states = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".to_string(),
+        runtime_policy: "policy".to_string(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(CaptureCancellationProvider::new(observed_states.clone())),
+        tool_router: None,
+    });
+
+    let session_id = runtime.create_session().unwrap();
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "hello".to_string(),
+        })
+        .unwrap();
+
+    assert_eq!(*observed_states.lock().unwrap(), vec![false]);
 }
 
 #[test]
