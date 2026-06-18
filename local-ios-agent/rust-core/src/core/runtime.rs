@@ -696,11 +696,10 @@ impl<S: EventStore> AgentRuntime<S> {
         kind: EventKind,
         payload: impl Into<String>,
     ) -> Result<EntryId, AgentError> {
-        let sequence = self
-            .sessions
-            .get(session_id)
-            .map(|cursor| cursor.next_sequence)
-            .unwrap_or(1);
+        let cursor = self.sessions.get_mut(session_id).ok_or_else(|| {
+            AgentError::Storage(format!("missing session cursor: {}", session_id.0))
+        })?;
+        let sequence = cursor.next_sequence;
         let depth = match &parent_id {
             Some(parent_id) => self.store.get(session_id, parent_id)?.depth + 1,
             None => 0,
@@ -717,10 +716,6 @@ impl<S: EventStore> AgentRuntime<S> {
         );
         self.store.append(event)?;
 
-        let cursor = self
-            .sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| SessionCursor::new(session_id.clone()));
         cursor.active_leaf = Some(entry_id.clone());
         cursor.next_sequence = sequence + 1;
 
@@ -804,4 +799,41 @@ fn next_replayed_id<S: EventStore>(
 
 fn numeric_suffix(id: &str) -> Option<u64> {
     id.rsplit_once('_')?.1.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::MockTokenizer;
+    use crate::core::MockStreamingProvider;
+
+    fn config() -> AgentRuntimeConfig {
+        AgentRuntimeConfig {
+            system_prompt: "system".into(),
+            runtime_policy: "policy".into(),
+            tool_schemas: Vec::new(),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+            provider: Box::new(MockStreamingProvider::new()),
+            tool_router: None,
+        }
+    }
+
+    #[test]
+    fn append_event_errors_when_session_cursor_is_missing() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        runtime.sessions.remove(&session_id);
+
+        let result = runtime.append_event(
+            &session_id,
+            None,
+            None,
+            EventKind::UserMessage,
+            "orphaned event",
+        );
+
+        assert!(
+            matches!(result, Err(AgentError::Storage(message)) if message.contains("missing session cursor"))
+        );
+    }
 }
