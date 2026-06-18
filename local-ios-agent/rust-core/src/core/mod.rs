@@ -1,5 +1,7 @@
 pub mod event;
 pub mod provider;
+pub mod provider_profile;
+pub mod provider_registry;
 pub mod run_state;
 pub mod runtime;
 pub mod session_cursor;
@@ -10,6 +12,8 @@ pub mod types;
 
 pub use event::{EventKind, RuntimeEvent};
 pub use provider::{MockStreamingProvider, ModelProvider, ModelProviderOutput};
+pub use provider_profile::{ProviderKind, ProviderProfile};
+pub use provider_registry::{ProviderBundle, ProviderRegistry};
 pub use run_state::{RunRecord, RunState};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SendMessageInput};
 pub use session_cursor::SessionCursor;
