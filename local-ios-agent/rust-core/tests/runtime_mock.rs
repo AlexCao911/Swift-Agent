@@ -117,6 +117,33 @@ fn runtime_passes_cancellation_token_to_provider_calls() {
 }
 
 #[test]
+fn runtime_captures_latest_prompt_debug_snapshot_at_provider_call() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".to_string(),
+        runtime_policy: "policy".to_string(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
+    });
+
+    assert_eq!(runtime.latest_prompt_debug_snapshot(), None);
+
+    let session_id = runtime.create_session().unwrap();
+    runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "hello".to_string(),
+        })
+        .unwrap();
+
+    let snapshot = runtime.latest_prompt_debug_snapshot().unwrap();
+    assert!(snapshot.rendered_text.contains("system\npolicy"));
+    assert!(snapshot.rendered_text.contains("hello"));
+}
+
+#[test]
 fn runtime_persists_compaction_events_when_context_exceeds_budget() {
     let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
         system_prompt: "system".to_string(),

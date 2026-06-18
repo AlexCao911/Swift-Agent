@@ -57,6 +57,10 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
         decode(&bridge.session_ids_json().unwrap()),
         json!([session_id])
     );
+    assert_eq!(
+        decode(&bridge.latest_prompt_debug_snapshot_json().unwrap()),
+        Value::Null
+    );
 
     let turn = decode(
         &bridge
@@ -72,10 +76,15 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
     assert_eq!(turn["events"][0]["kind"], "user_message");
     assert_eq!(turn["events"][0]["session_id"], session_id);
     assert_eq!(turn["events"][0]["blob_refs"], json!([]));
-    assert_eq!(
-        decode(&bridge.latest_prompt_debug_snapshot_json().unwrap()),
-        Value::Null
-    );
+    let snapshot = decode(&bridge.latest_prompt_debug_snapshot_json().unwrap());
+    assert!(snapshot["rendered_text"]
+        .as_str()
+        .unwrap()
+        .contains("system\npolicy"));
+    assert!(snapshot["rendered_text"]
+        .as_str()
+        .unwrap()
+        .contains("hello"));
 }
 
 #[test]

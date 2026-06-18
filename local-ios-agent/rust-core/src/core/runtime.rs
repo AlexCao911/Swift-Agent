@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::context::{ContextController, TokenizerAdapter};
+use crate::context::{ContextController, PromptDebugSnapshot, PromptFrame, TokenizerAdapter};
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
     ModelProviderOutput, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
@@ -50,6 +50,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
     provider_cancellations: HashMap<RunId, CancellationToken>,
+    latest_prompt_debug_snapshot: Option<PromptDebugSnapshot>,
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
@@ -78,6 +79,7 @@ impl<S: EventStore> AgentRuntime<S> {
             sessions,
             runs: HashMap::new(),
             provider_cancellations: HashMap::new(),
+            latest_prompt_debug_snapshot: None,
             pending_tool_requests: Vec::new(),
         };
         runtime.replay_waiting_runs()?;
@@ -86,6 +88,10 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
         &self.pending_tool_requests
+    }
+
+    pub fn latest_prompt_debug_snapshot(&self) -> Option<PromptDebugSnapshot> {
+        self.latest_prompt_debug_snapshot.clone()
     }
 
     pub fn register_tool(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
@@ -288,6 +294,7 @@ impl<S: EventStore> AgentRuntime<S> {
         emitted.push(self.store.get(&input.session_id, &assistant_start)?);
 
         let mut batcher = StreamBatcher::new(24);
+        self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_id);
         let provider_result = self.config.provider.stream_chat(&frame, cancellation);
         self.finish_provider_call(&run_id);
@@ -471,6 +478,7 @@ impl<S: EventStore> AgentRuntime<S> {
         emitted.push(self.store.get(&session_id, &tool_result_id)?);
         let branch = self.store.active_branch(&session_id, &tool_result_id)?;
         let frame = self.context_controller().build_prompt_frame(branch)?;
+        self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_key);
         let provider_result = self.config.provider.stream_chat(&frame, cancellation);
         self.finish_provider_call(&run_key);
@@ -644,6 +652,10 @@ impl<S: EventStore> AgentRuntime<S> {
 
     fn finish_provider_call(&mut self, run_id: &RunId) {
         self.provider_cancellations.remove(run_id);
+    }
+
+    fn capture_prompt_debug_snapshot(&mut self, frame: &PromptFrame) {
+        self.latest_prompt_debug_snapshot = Some(PromptDebugSnapshot::from_frame(frame));
     }
 
     fn replay_waiting_runs(&mut self) -> Result<(), AgentError> {

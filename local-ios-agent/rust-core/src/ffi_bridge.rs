@@ -150,7 +150,11 @@ impl RuntimeJsonBridge {
     }
 
     pub fn latest_prompt_debug_snapshot_json(&self) -> Result<String, AgentError> {
-        Ok("null".to_string())
+        let snapshot = match self {
+            Self::InMemory(runtime) => runtime.latest_prompt_debug_snapshot(),
+            Self::Sqlite(runtime) => runtime.latest_prompt_debug_snapshot(),
+        };
+        to_json(&snapshot)
     }
 }
 

@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::context::PromptFrame;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PromptDebugSnapshot {
     pub rendered_text: String,
 }
