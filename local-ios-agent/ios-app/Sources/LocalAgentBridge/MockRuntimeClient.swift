@@ -21,6 +21,16 @@ public actor MockRuntimeClient: RuntimeClient {
         }
     }
 
+    public struct PermissionStateSubmission: Equatable, Sendable {
+        public var scope: String
+        public var state: PermissionStateDTO
+
+        public init(scope: String, state: PermissionStateDTO) {
+            self.scope = scope
+            self.state = state
+        }
+    }
+
     private var storedSessionIds: [String]
     private var turnResult: AgentTurnResultDTO
     private var promptDebugSnapshot: PromptDebugSnapshotDTO?
@@ -28,6 +38,7 @@ public actor MockRuntimeClient: RuntimeClient {
     private var approvalRequests: [ApprovalProtocolRequestDTO]
 
     public private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
+    public private(set) var permissionStates: [PermissionStateSubmission] = []
     public private(set) var sentMessages: [SentMessage] = []
     public private(set) var submittedToolResults: [ToolResultSubmission] = []
     public private(set) var submittedApprovalResponses: [ApprovalProtocolResponseDTO] = []
@@ -64,6 +75,10 @@ public actor MockRuntimeClient: RuntimeClient {
 
     public func registerToolSchema(_ schema: ToolSchemaDTO) async throws {
         registeredToolSchemas.append(schema)
+    }
+
+    public func setPermissionState(scope: String, state: PermissionStateDTO) async throws {
+        permissionStates.append(PermissionStateSubmission(scope: scope, state: state))
     }
 
     public func sendMessage(

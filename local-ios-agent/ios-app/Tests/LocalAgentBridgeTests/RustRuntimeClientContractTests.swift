@@ -26,7 +26,9 @@ struct RustRuntimeClientContractTests {
             text: "hello"
         )
         let snapshot = try await mock.latestPromptDebugSnapshot()
+        try await mock.setPermissionState(scope: "calendar.events", state: .denied)
         let messages = await mock.sentMessages
+        let permissions = await mock.permissionStates
 
         #expect(created == "session_2")
         #expect(ids == ["session_existing", "session_2"])
@@ -37,6 +39,12 @@ struct RustRuntimeClientContractTests {
                 sessionId: "session_2",
                 parentEventId: nil,
                 text: "hello"
+            )
+        ])
+        #expect(permissions == [
+            MockRuntimeClient.PermissionStateSubmission(
+                scope: "calendar.events",
+                state: .denied
             )
         ])
     }
@@ -55,6 +63,7 @@ struct RustRuntimeClientContractTests {
             parametersJsonSchema: #"{"type":"object"}"#,
             riskLevel: .confirm
         ))
+        try await client?.setPermissionState(scope: "calendar.events", state: .denied)
         let turn = try await client?.sendMessage(
             sessionId: "session_1",
             parentEventId: "entry_parent",
@@ -95,11 +104,14 @@ struct RustRuntimeClientContractTests {
         #expect(snapshot?.renderedText == "system\npolicy")
 
         let registeredSchema = try decodedObject(try #require(probe.registeredSchemaJson))
+        let permissionState = try decodedObject(try #require(probe.permissionStateJson))
         let sentMessage = try decodedObject(try #require(probe.sentMessageJson))
         let submittedResult = try decodedObject(try #require(probe.submittedToolResultJson))
         let approvalResponse = try decodedObject(try #require(probe.submittedApprovalResponseJson))
 
         #expect(registeredSchema["risk_level"] as? String == "confirm")
+        #expect(permissionState["scope"] as? String == "calendar.events")
+        #expect(permissionState["state"] as? String == "denied")
         #expect(sentMessage["parent_event_id"] as? String == "entry_parent")
         #expect(sentMessage["text"] as? String == "use tool")
         #expect(submittedResult["retention"] as? String == "run_only")
@@ -108,7 +120,7 @@ struct RustRuntimeClientContractTests {
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 10)
+        #expect(probe.freedStrings == 11)
     }
 
     @Test
@@ -160,6 +172,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var freedStrings = 0
     var freedRuntimeHandles = 0
     var registeredSchemaJson: String?
+    var permissionStateJson: String?
     var sentMessageJson: String?
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
@@ -174,6 +187,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             createSession: createSession,
             sessionIds: sessionIds,
             registerToolSchema: registerToolSchema,
+            setPermissionState: setPermissionState,
             sendMessage: sendMessage,
             pendingToolRequests: pendingToolRequests,
             pendingApprovalRequests: pendingApprovalRequests,
@@ -212,6 +226,14 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         _ schemaJson: UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>? {
         registeredSchemaJson = String(cString: schemaJson!)
+        return makeCString("null")
+    }
+
+    func setPermissionState(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ stateJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        permissionStateJson = String(cString: stateJson!)
         return makeCString("null")
     }
 

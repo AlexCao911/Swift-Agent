@@ -10,7 +10,9 @@ use crate::core::{
     MockStreamingProvider, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
 use crate::memory::{InMemoryEventStore, SqliteEventStore};
-use crate::security::{ApprovalProtocolRequest, ApprovalProtocolResponse, RiskLevel};
+use crate::security::{
+    ApprovalProtocolRequest, ApprovalProtocolResponse, PermissionScope, PermissionState, RiskLevel,
+};
 use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult, ToolSchema};
 
 pub enum RuntimeJsonBridge {
@@ -62,6 +64,16 @@ impl RuntimeJsonBridge {
         match self {
             Self::InMemory(runtime) => runtime.register_tool(schema)?,
             Self::Sqlite(runtime) => runtime.register_tool(schema)?,
+        }
+        Ok("null".to_string())
+    }
+
+    pub fn set_permission_state_json(&mut self, state_json: &str) -> Result<String, AgentError> {
+        let state: PermissionStateJson = from_json(state_json)?;
+        let permission = state.into_permission_scope()?;
+        match self {
+            Self::InMemory(runtime) => runtime.set_permission(permission),
+            Self::Sqlite(runtime) => runtime.set_permission(permission),
         }
         Ok("null".to_string())
     }
@@ -200,6 +212,17 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_register_tool_schema(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_set_permission_state(
+    runtime: *mut RuntimeJsonBridge,
+    state_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let state_json = c_str_arg(state_json, "state_json")?;
+        bridge_mut(runtime)?.set_permission_state_json(state_json)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_send_message(
     runtime: *mut RuntimeJsonBridge,
     input_json: *const c_char,
@@ -326,6 +349,21 @@ impl ToolSchemaJson {
             parameters_json_schema: self.parameters_json_schema,
             risk_level: parse_risk_level(&self.risk_level)?,
             metadata_json: self.metadata_json,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct PermissionStateJson {
+    scope: String,
+    state: String,
+}
+
+impl PermissionStateJson {
+    fn into_permission_scope(self) -> Result<PermissionScope, AgentError> {
+        Ok(PermissionScope {
+            name: self.scope,
+            state: parse_permission_state(&self.state)?,
         })
     }
 }
@@ -553,6 +591,18 @@ fn parse_risk_level(value: &str) -> Result<RiskLevel, AgentError> {
         "destructive" => Ok(RiskLevel::Destructive),
         other => Err(AgentError::ToolValidation(format!(
             "unknown risk_level: {other}"
+        ))),
+    }
+}
+
+fn parse_permission_state(value: &str) -> Result<PermissionState, AgentError> {
+    match value {
+        "not_determined" => Ok(PermissionState::NotDetermined),
+        "granted" => Ok(PermissionState::Granted),
+        "denied" => Ok(PermissionState::Denied),
+        "restricted" => Ok(PermissionState::Restricted),
+        other => Err(AgentError::ToolValidation(format!(
+            "unknown permission state: {other}"
         ))),
     }
 }

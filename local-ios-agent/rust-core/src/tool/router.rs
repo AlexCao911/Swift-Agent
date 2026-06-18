@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalRequest,
-    PolicyDecision, SecurityManager,
+    PermissionScope, PolicyDecision, SecurityManager,
 };
 use crate::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
@@ -91,7 +93,15 @@ impl ToolRouter {
     }
 
     pub fn register(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
+        if let Some(scope_name) = native_permission_scope(&schema.metadata_json)? {
+            self.security
+                .set_tool_permission_scope(schema.name.clone(), scope_name);
+        }
         self.registry.register(schema)
+    }
+
+    pub fn set_permission(&mut self, permission: PermissionScope) {
+        self.security.set_permission(permission);
     }
 
     pub fn prompt_schemas(&self) -> Vec<String> {
@@ -122,4 +132,19 @@ impl ToolRouter {
 
         Ok((request, decision, tool_request))
     }
+}
+
+#[derive(Deserialize)]
+struct NativeToolMetadata {
+    native_permission_scope: Option<String>,
+}
+
+fn native_permission_scope(metadata_json: &Option<String>) -> Result<Option<String>, AgentError> {
+    let Some(metadata_json) = metadata_json else {
+        return Ok(None);
+    };
+    let metadata: NativeToolMetadata = serde_json::from_str(metadata_json).map_err(|error| {
+        AgentError::ToolValidation(format!("invalid tool metadata_json: {error}"))
+    })?;
+    Ok(metadata.native_permission_scope)
 }

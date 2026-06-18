@@ -52,6 +52,13 @@ public enum RiskLevelDTO: String, Codable, Sendable {
     case destructive
 }
 
+public enum PermissionStateDTO: String, Codable, Sendable {
+    case notDetermined = "not_determined"
+    case granted
+    case denied
+    case restricted
+}
+
 public struct RuntimeEventDTO: Codable, Equatable, Sendable {
     public var id: String
     public var sessionId: String

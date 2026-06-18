@@ -3,8 +3,8 @@ use local_ios_agent_runtime::core::{AgentRuntime, AgentRuntimeConfig, MockStream
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_free,
     local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message,
-    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_string_free,
-    RuntimeJsonBridge,
+    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
+    local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
 };
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
@@ -126,6 +126,35 @@ fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
 }
 
 #[test]
+fn bridge_set_permission_state_affects_tool_policy() {
+    let mut bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+    bridge
+        .register_tool_schema_json(
+            r#"{"name":"calendar.search_events","description":"Search events","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"read_only","metadata_json":"{\"native_permission_scope\":\"calendar.events\"}"}"#,
+        )
+        .unwrap();
+    bridge
+        .set_permission_state_json(r#"{"scope":"calendar.events","state":"denied"}"#)
+        .unwrap();
+
+    let turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"use tool calendar.search_events"}}"#
+            ))
+            .unwrap(),
+    );
+
+    assert_eq!(turn["state"], "completed");
+    assert_eq!(
+        decode(&bridge.pending_tool_requests_json().unwrap()),
+        json!([])
+    );
+}
+
+#[test]
 fn bridge_exposes_and_resolves_approval_requests_json() {
     let mut bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
@@ -226,6 +255,24 @@ fn c_abi_returns_caller_owned_json_strings() {
 
         let session_ids = take_bridge_string(local_agent_runtime_bridge_session_ids(runtime));
         assert_eq!(decode(&session_ids), json!([session_id]));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_accepts_permission_state_json() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        assert!(!runtime.is_null());
+        let input = CString::new(r#"{"scope":"calendar.events","state":"denied"}"#).unwrap();
+
+        let result = take_bridge_string(local_agent_runtime_bridge_set_permission_state(
+            runtime,
+            input.as_ptr(),
+        ));
+
+        assert_eq!(decode(&result), Value::Null);
 
         local_agent_runtime_bridge_free(runtime);
     }

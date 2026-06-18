@@ -171,6 +171,36 @@ fn router_uses_security_manager_permission_scope_for_tool_policy() {
 }
 
 #[test]
+fn router_registers_permission_scope_from_schema_metadata() {
+    let registry = ToolRegistry::new();
+    let mut security = SecurityManager::new();
+    security.set_permission(PermissionScope {
+        name: "calendar.events".into(),
+        state: PermissionState::Denied,
+    });
+    let mut router = ToolRouter::with_security_manager(registry, security);
+    let mut tool_schema = schema("calendar.search_events", RiskLevel::ReadOnly);
+    tool_schema.metadata_json = Some(r#"{"native_permission_scope":"calendar.events"}"#.into());
+
+    router.register(tool_schema).unwrap();
+
+    let outcome = router
+        .route(
+            &RunId("run_1".into()),
+            &SessionId("session_1".into()),
+            &EntryId("entry_1".into()),
+            ToolCall {
+                id: "call_1".into(),
+                name: "calendar.search_events".into(),
+                arguments_json: "{}".into(),
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, ToolRouteOutcome::Denied(_)));
+}
+
+#[test]
 fn router_queues_approval_with_real_run_and_entry_ids() {
     let mut registry = ToolRegistry::new();
     registry

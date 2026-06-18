@@ -92,6 +92,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var createSession: (RuntimeHandle?) -> StringResult
     public var sessionIds: (RuntimeHandle?) -> StringResult
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var sendMessage: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var pendingToolRequests: (RuntimeHandle?) -> StringResult
     public var pendingApprovalRequests: (RuntimeHandle?) -> StringResult
@@ -111,6 +112,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         createSession: @escaping (RuntimeHandle?) -> StringResult,
         sessionIds: @escaping (RuntimeHandle?) -> StringResult,
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         sendMessage: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         pendingToolRequests: @escaping (RuntimeHandle?) -> StringResult,
         pendingApprovalRequests: @escaping (RuntimeHandle?) -> StringResult,
@@ -129,6 +131,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.createSession = createSession
         self.sessionIds = sessionIds
         self.registerToolSchema = registerToolSchema
+        self.setPermissionState = setPermissionState
         self.sendMessage = sendMessage
         self.pendingToolRequests = pendingToolRequests
         self.pendingApprovalRequests = pendingApprovalRequests
@@ -165,6 +168,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                 local_agent_runtime_bridge_register_tool_schema(
                     runtime.map { OpaquePointer($0) },
                     schemaJson
+                )
+            },
+            setPermissionState: { runtime, stateJson in
+                local_agent_runtime_bridge_set_permission_state(
+                    runtime.map { OpaquePointer($0) },
+                    stateJson
                 )
             },
             sendMessage: { runtime, inputJson in
@@ -236,6 +245,14 @@ public final class RustRuntimeClient: RuntimeClient, @unchecked Sendable {
         let json = try encode(schema)
         _ = try json.withCString { pointer in
             try consume(functions.registerToolSchema(handle, pointer))
+        }
+    }
+
+    public func setPermissionState(scope: String, state: PermissionStateDTO) async throws {
+        let request = SetPermissionStateRequest(scope: scope, state: state)
+        let json = try encode(request)
+        _ = try json.withCString { pointer in
+            try consume(functions.setPermissionState(handle, pointer))
         }
     }
 
@@ -351,6 +368,11 @@ private struct SendMessageRequest: Encodable {
         case parentEventId = "parent_event_id"
         case text
     }
+}
+
+private struct SetPermissionStateRequest: Encodable {
+    var scope: String
+    var state: PermissionStateDTO
 }
 
 private struct BridgeErrorEnvelope: Decodable {

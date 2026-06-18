@@ -10,6 +10,7 @@ use crate::core::{
 use crate::memory::{EventStore, InMemoryEventStore};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
+    PermissionScope,
 };
 use crate::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
@@ -92,6 +93,14 @@ impl<S: EventStore> AgentRuntime<S> {
         router.register(schema)?;
         self.config.tool_schemas = router.prompt_schemas();
         Ok(())
+    }
+
+    pub fn set_permission(&mut self, permission: PermissionScope) {
+        let router = self
+            .config
+            .tool_router
+            .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()));
+        router.set_permission(permission);
     }
 
     pub fn pending_approval_requests(&self) -> Vec<ApprovalProtocolRequest> {

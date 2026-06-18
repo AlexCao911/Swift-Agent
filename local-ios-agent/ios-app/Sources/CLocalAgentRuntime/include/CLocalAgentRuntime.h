@@ -18,6 +18,10 @@ char *local_agent_runtime_bridge_register_tool_schema(
     LocalAgentRuntimeBridge *runtime,
     const char *schema_json
 );
+char *local_agent_runtime_bridge_set_permission_state(
+    LocalAgentRuntimeBridge *runtime,
+    const char *state_json
+);
 char *local_agent_runtime_bridge_send_message(
     LocalAgentRuntimeBridge *runtime,
     const char *input_json
