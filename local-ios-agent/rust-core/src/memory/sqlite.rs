@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
-use crate::memory::EventStore;
+use crate::memory::{EventStore, LongTermMemoryRecord};
 
 pub struct SqliteEventStore {
     conn: Connection,
@@ -98,6 +98,13 @@ impl SqliteEventStore {
                   event_id text not null,
                   summary text not null
                 );
+
+                create table if not exists long_term_memory (
+                  id text primary key,
+                  text text not null,
+                  keywords text not null,
+                  confirmed integer not null
+                );
                 ",
             )
             .map_err(storage_error)?;
@@ -109,6 +116,66 @@ impl SqliteEventStore {
             )));
         }
         Ok(())
+    }
+
+    pub fn upsert_memory(&self, record: LongTermMemoryRecord) -> Result<(), AgentError> {
+        let keywords = serde_json::to_string(&record.keywords)
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        self.conn
+            .execute(
+                "
+                insert into long_term_memory(id, text, keywords, confirmed)
+                values (?1, ?2, ?3, ?4)
+                on conflict(id) do update set
+                  text = excluded.text,
+                  keywords = excluded.keywords,
+                  confirmed = excluded.confirmed
+                ",
+                params![record.id, record.text, keywords, record.confirmed as i64],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub fn search_memory(&self, keyword: &str) -> Result<Vec<LongTermMemoryRecord>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "
+                select id, text, keywords, confirmed
+                from long_term_memory
+                where confirmed = 1
+                order by id
+                ",
+            )
+            .map_err(storage_error)?;
+
+        let rows = statement
+            .query_map([], |row| {
+                let keywords: String = row.get(2)?;
+                Ok(LongTermMemoryRecord {
+                    id: row.get(0)?,
+                    text: row.get(1)?,
+                    keywords: serde_json::from_str(&keywords).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
+                    confirmed: row.get::<_, i64>(3)? != 0,
+                })
+            })
+            .map_err(storage_error)?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            let record = row.map_err(storage_error)?;
+            if record.keywords.iter().any(|stored| stored == keyword) {
+                records.push(record);
+            }
+        }
+        Ok(records)
     }
 }
 
