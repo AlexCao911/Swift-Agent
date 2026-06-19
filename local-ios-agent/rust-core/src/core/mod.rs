@@ -1,5 +1,6 @@
 pub mod desktop_minicpm;
 pub mod event;
+pub mod ondevice_minicpm;
 pub mod openai_chat;
 pub mod provider;
 pub mod provider_profile;
@@ -17,6 +18,11 @@ pub use desktop_minicpm::{
     DesktopMiniCPMTokenizer, DesktopMiniCPMTransport, LocalhostHttpTransport,
 };
 pub use event::{EventKind, RuntimeEvent};
+pub use ondevice_minicpm::{
+    CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
+    CAbiLocalInferenceBackend, CAbiTokenCallback, LocalAgentStatus, LocalInferenceBackend,
+    MockLocalInferenceBackend,
+};
 pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
 pub use provider::{
     CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput,
