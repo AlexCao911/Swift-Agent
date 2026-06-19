@@ -43,6 +43,79 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text) == ["hello", "Mock response to: hello"])
     }
 
+    @Test("second send is rejected while first send is still in flight")
+    func secondSendIsRejectedWhileFirstSendIsInFlight() async throws {
+        let client = BlockingSendRuntimeClient()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = try await service.prepare()
+
+        async let firstSend = service.sendMessage("first", state: state)
+        await client.waitForSendStarted()
+
+        do {
+            _ = try await service.sendMessage("second", state: state)
+            Issue.record("Expected duplicate run rejection")
+        } catch let error as AgentRuntimeServiceError {
+            #expect(error == .duplicateRun)
+        }
+
+        await client.completeSend(with: AgentTurnResultDTO(
+            runId: "run_1",
+            state: .completed,
+            events: [
+                event(id: "user_1", kind: .userMessage, payload: "first"),
+                event(id: "assistant_started", kind: .assistantMessageStarted, payload: "run run_1"),
+                event(id: "completed", kind: .assistantMessageCompleted, payload: "Mock response to: first"),
+            ],
+            pendingToolCallId: nil
+        ))
+        _ = try await firstSend
+
+        #expect(await client.sentMessages.map(\.text) == ["first"])
+    }
+
+    @Test("failed tool continuation releases active run guard")
+    func failedToolContinuationReleasesActiveRunGuard() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .waitingTool,
+                events: [
+                    event(id: "user_1", kind: .userMessage, payload: "use tool debug.echo"),
+                    event(
+                        id: "tool_call",
+                        kind: .toolCallRequested,
+                        payload: #"{"call_id":"call_missing","name":"debug.echo","arguments_json":"{\"text\":\"hello\"}","route_state":"ready","route_reason":null}"#
+                    ),
+                ],
+                pendingToolCallId: "call_missing"
+            ),
+            AgentTurnResultDTO(
+                runId: "run_2",
+                state: .completed,
+                events: [
+                    event(id: "user_2", kind: .userMessage, payload: "hello", runId: "run_2"),
+                    event(id: "assistant_started_2", kind: .assistantMessageStarted, payload: "run run_2", runId: "run_2"),
+                    event(id: "completed_2", kind: .assistantMessageCompleted, payload: "Mock response to: hello", runId: "run_2"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.prepare()
+        do {
+            _ = try await service.sendMessage("use tool debug.echo", state: state)
+            Issue.record("Expected missing pending tool request")
+        } catch let error as AgentRuntimeServiceError {
+            #expect(error == .missingPendingToolRequest("call_missing"))
+        }
+
+        let recovered = try await service.sendMessage("hello", state: state)
+        #expect(recovered.phase == .ready)
+        #expect(recovered.messages.map(\.text).contains("Mock response to: hello"))
+    }
+
     @Test("waiting tool turn is executed and submitted once")
     func waitingToolTurnIsExecutedAndSubmittedOnce() async throws {
         let client = ScriptedRuntimeClient(
@@ -105,18 +178,102 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text).contains("Mock response after tool: debug.echo: hello"))
     }
 
-    private func event(id: String, kind: RuntimeEventKindDTO, payload: String) -> RuntimeEventDTO {
+    private func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String,
+        runId: String = "run_1"
+    ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
             sessionId: "session_1",
             parentId: nil,
-            runId: "run_1",
+            runId: runId,
             sequence: 1,
             depth: 0,
             kind: kind,
             payload: payload,
             blobRefs: []
         )
+    }
+}
+
+private actor BlockingSendRuntimeClient: RuntimeClient {
+    private var sendContinuation: CheckedContinuation<AgentTurnResultDTO, Never>?
+    private var sendStartedContinuation: CheckedContinuation<Void, Never>?
+
+    private(set) var sentMessages: [ScriptedRuntimeClient.SentMessage] = []
+
+    func waitForSendStarted() async {
+        if !sentMessages.isEmpty {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            sendStartedContinuation = continuation
+        }
+    }
+
+    func completeSend(with turn: AgentTurnResultDTO) {
+        sendContinuation?.resume(returning: turn)
+        sendContinuation = nil
+    }
+
+    func createSession() async throws -> String {
+        "session_1"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        sentMessages.append(ScriptedRuntimeClient.SentMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text
+        ))
+        sendStartedContinuation?.resume()
+        sendStartedContinuation = nil
+        return await withCheckedContinuation { continuation in
+            sendContinuation = continuation
+        }
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        AgentTurnResultDTO(runId: runId, state: .completed, events: [], pendingToolCallId: nil)
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        AgentTurnResultDTO(runId: "run_1", state: .completed, events: [], pendingToolCallId: nil)
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: "cancelled",
+            sessionId: "session_1",
+            parentId: nil,
+            runId: runId,
+            sequence: 1,
+            depth: 0,
+            kind: .runCancelled,
+            payload: "cancelled",
+            blobRefs: []
+        )
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
     }
 }
 

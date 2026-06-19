@@ -12,9 +12,14 @@ enum AgentRuntimeServiceError: Error, Equatable, Sendable {
 }
 
 actor AgentRuntimeService: AgentRuntimeServicing {
+    private enum ActiveRun: Sendable, Equatable {
+        case starting
+        case running(String)
+    }
+
     private let runtimeClient: any RuntimeClient
     private let toolDriver: MinimalHostToolDriver
-    private var activeRunId: String?
+    private var activeRun: ActiveRun?
     private var hasPrepared = false
 
     init(runtimeClient: any RuntimeClient, toolDriver: MinimalHostToolDriver) {
@@ -35,8 +40,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
     }
 
     func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
-        guard activeRunId == nil else {
+        guard activeRun == nil else {
             throw AgentRuntimeServiceError.duplicateRun
+        }
+        activeRun = .starting
+        defer {
+            activeRun = nil
         }
 
         var nextState = state
@@ -53,24 +62,24 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             parentEventId: nil,
             text: text
         )
-        activeRunId = initialTurn.runId
+        activeRun = .running(initialTurn.runId)
         nextState.phase = .running(runId: initialTurn.runId)
         apply(initialTurn.events, to: &nextState)
 
-        let completedState = try await continueToolsIfNeeded(from: initialTurn, state: nextState)
-        activeRunId = nil
-        return completedState
+        return try await continueToolsIfNeeded(from: initialTurn, state: nextState)
     }
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {
-        guard let activeRunId else {
+        guard case .running(let activeRunId) = activeRun else {
             return state
+        }
+        defer {
+            activeRun = nil
         }
 
         let event = try await runtimeClient.cancel(runId: activeRunId)
         var nextState = state
         RuntimeEventReducer.apply(event, to: &nextState)
-        self.activeRunId = nil
         return nextState
     }
 
