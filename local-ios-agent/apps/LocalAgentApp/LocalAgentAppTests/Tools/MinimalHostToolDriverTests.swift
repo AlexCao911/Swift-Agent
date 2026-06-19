@@ -9,8 +9,8 @@ struct MinimalHostToolDriverTests {
         let driver = MinimalHostToolDriver()
         let request = toolRequest(argumentsJson: #"{"text":"hello"}"#)
 
-        let first = try await driver.execute(request, continuationIndex: 0)
-        let second = try await driver.execute(request, continuationIndex: 1)
+        let first = await driver.execute(request, continuationIndex: 0)
+        let second = await driver.execute(request, continuationIndex: 1)
 
         #expect(first?.displayText == "Echo: hello")
         #expect(first?.modelText == "debug.echo: hello")
@@ -24,12 +24,12 @@ struct MinimalHostToolDriverTests {
     func continuationIndexIsCapped() async throws {
         let driver = MinimalHostToolDriver(maxContinuations: 4)
 
-        do {
-            _ = try await driver.execute(toolRequest(), continuationIndex: 4)
-            Issue.record("Expected continuation limit to throw")
-        } catch let error as MinimalHostToolDriverError {
-            #expect(error == .continuationLimitExceeded)
-        }
+        let result = await driver.execute(toolRequest(), continuationIndex: 4)
+
+        #expect(result?.isError == true)
+        #expect(result?.displayText == "Tool stopped: continuation limit exceeded.")
+        #expect(result?.modelText == "debug.echo stopped: continuation limit exceeded.")
+        #expect(result?.structuredJson.contains("continuation_limit_exceeded") == true)
     }
 
     private func toolRequest(argumentsJson: String = #"{"text":"hello"}"#) -> ToolExecutionRequestDTO {

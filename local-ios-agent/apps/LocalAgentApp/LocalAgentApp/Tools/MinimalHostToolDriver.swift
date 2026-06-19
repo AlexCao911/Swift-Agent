@@ -1,10 +1,6 @@
 import Foundation
 import LocalAgentBridge
 
-enum MinimalHostToolDriverError: Error, Equatable, Sendable {
-    case continuationLimitExceeded
-}
-
 actor MinimalHostToolDriver {
     nonisolated static let debugEchoSchema = ToolSchemaDTO(
         name: "debug.echo",
@@ -24,9 +20,14 @@ actor MinimalHostToolDriver {
         Self.debugEchoSchema
     }
 
-    func execute(_ request: ToolExecutionRequestDTO, continuationIndex: Int) async throws -> ToolResultDTO? {
+    func execute(_ request: ToolExecutionRequestDTO, continuationIndex: Int) async -> ToolResultDTO? {
         guard continuationIndex < maxContinuations else {
-            throw MinimalHostToolDriverError.continuationLimitExceeded
+            return errorResult(
+                displayText: "Tool stopped: continuation limit exceeded.",
+                modelText: "\(request.toolName) stopped: continuation limit exceeded.",
+                structuredJson: errorPayload("continuation_limit_exceeded", toolName: request.toolName),
+                auditText: "Stopped \(request.toolName): continuation limit exceeded."
+            )
         }
         guard request.toolName == Self.debugEchoSchema.name else {
             return errorResult(

@@ -178,6 +178,69 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text).contains("Mock response after tool: debug.echo: hello"))
     }
 
+    @Test("continuation limit submits an error tool result to finish the run")
+    func continuationLimitSubmitsErrorToolResultToFinishRun() async throws {
+        let client = ScriptedRuntimeClient(
+            sendTurns: [
+                AgentTurnResultDTO(
+                    runId: "run_1",
+                    state: .waitingTool,
+                    events: [
+                        event(id: "user_1", kind: .userMessage, payload: "use tool debug.echo"),
+                        event(
+                            id: "tool_call",
+                            kind: .toolCallRequested,
+                            payload: #"{"call_id":"call_1","name":"debug.echo","arguments_json":"{\"text\":\"hello\"}","route_state":"ready","route_reason":null}"#
+                        ),
+                    ],
+                    pendingToolCallId: "call_1"
+                ),
+            ],
+            submitTurns: [
+                AgentTurnResultDTO(
+                    runId: "run_1",
+                    state: .completed,
+                    events: [
+                        event(
+                            id: "tool_result",
+                            kind: .toolResultMessage,
+                            payload: #"{"type":"tool_result","display_text":"Tool stopped: continuation limit exceeded.","model_text":"debug.echo stopped: continuation limit exceeded.","structured_json":"{\"error\":\"continuation_limit_exceeded\",\"tool_name\":\"debug.echo\"}","audit_text":"Stopped debug.echo: continuation limit exceeded.","sensitivity":"public","retention":"run_only","is_error":true}"#
+                        ),
+                        event(
+                            id: "completed",
+                            kind: .assistantMessageCompleted,
+                            payload: "Mock response after tool: debug.echo stopped: continuation limit exceeded."
+                        ),
+                    ],
+                    pendingToolCallId: nil
+                ),
+            ],
+            pendingToolRequests: [
+                ToolExecutionRequestDTO(
+                    runId: "run_1",
+                    sessionId: "session_1",
+                    toolCallEntryId: "tool_call",
+                    toolCallId: "call_1",
+                    toolName: "debug.echo",
+                    argumentsJson: #"{"text":"hello"}"#
+                ),
+            ]
+        )
+        let service = AgentRuntimeService(
+            runtimeClient: client,
+            toolDriver: MinimalHostToolDriver(maxContinuations: 0)
+        )
+
+        var state = try await service.prepare()
+        state = try await service.sendMessage("use tool debug.echo", state: state)
+
+        #expect(await client.submittedToolResults.count == 1)
+        #expect(await client.submittedToolResults.first?.result.isError == true)
+        #expect(await client.submittedToolResults.first?.result.structuredJson.contains("continuation_limit_exceeded") == true)
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text).contains("Tool stopped: continuation limit exceeded."))
+    }
+
     private func event(
         id: String,
         kind: RuntimeEventKindDTO,

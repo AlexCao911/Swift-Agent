@@ -99,7 +99,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             guard let request = pending.first(where: { $0.runId == nextTurn.runId && $0.toolCallId == pendingToolCallId }) else {
                 throw AgentRuntimeServiceError.missingPendingToolRequest(pendingToolCallId)
             }
-            guard let result = try await toolDriver.execute(request, continuationIndex: continuationIndex) else {
+            guard let result = await toolDriver.execute(request, continuationIndex: continuationIndex) else {
                 return nextState
             }
 
