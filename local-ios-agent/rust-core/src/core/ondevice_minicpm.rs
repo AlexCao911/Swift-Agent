@@ -1,6 +1,9 @@
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -34,12 +37,15 @@ pub type CAbiInitFn =
     unsafe extern "C" fn(*mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 pub type CAbiLoadModelFn =
     unsafe extern "C" fn(*mut CAbiLocalAgentBackend, *const c_char) -> LocalAgentStatus;
-pub type CAbiStreamChatFn = unsafe extern "C" fn(
+pub type CAbiStartChatFn = unsafe extern "C" fn(
     *mut CAbiLocalAgentBackend,
     *const c_char,
+    *mut *mut CAbiLocalAgentBackendStream,
+) -> LocalAgentStatus;
+pub type CAbiReadStreamFn = unsafe extern "C" fn(
+    *mut CAbiLocalAgentBackendStream,
     CAbiTokenCallback,
     *mut c_void,
-    *mut *mut CAbiLocalAgentBackendStream,
 ) -> LocalAgentStatus;
 pub type CAbiCancelFn =
     unsafe extern "C" fn(*mut CAbiLocalAgentBackendStream) -> LocalAgentStatus;
@@ -52,7 +58,8 @@ pub type CAbiReleaseBackendFn =
 pub struct CAbiFunctions {
     pub init: CAbiInitFn,
     pub load_model: CAbiLoadModelFn,
-    pub stream_chat: CAbiStreamChatFn,
+    pub start_chat: CAbiStartChatFn,
+    pub read_stream: CAbiReadStreamFn,
     pub cancel: CAbiCancelFn,
     pub release_stream: CAbiReleaseStreamFn,
     pub release_backend: CAbiReleaseBackendFn,
@@ -90,10 +97,21 @@ struct CAbiBackendHandle(*mut CAbiLocalAgentBackend);
 
 unsafe impl Send for CAbiBackendHandle {}
 
+#[derive(Clone, Copy)]
+struct CAbiStreamHandle(*mut CAbiLocalAgentBackendStream);
+
+unsafe impl Send for CAbiStreamHandle {}
+
+impl CAbiStreamHandle {
+    fn as_ptr(self) -> *mut CAbiLocalAgentBackendStream {
+        self.0
+    }
+}
+
 struct CallbackState<'a> {
     on_token: &'a mut dyn FnMut(&str) -> Result<(), AgentError>,
     cancellation: CancellationToken,
-    stream_slot: *mut *mut CAbiLocalAgentBackendStream,
+    stream: *mut CAbiLocalAgentBackendStream,
     cancel: CAbiCancelFn,
     error: &'a mut Option<AgentError>,
 }
@@ -105,12 +123,15 @@ extern "C" {
         backend: *mut CAbiLocalAgentBackend,
         model_config_json: *const c_char,
     ) -> LocalAgentStatus;
-    fn local_agent_backend_stream_chat(
+    fn local_agent_backend_start_chat(
         backend: *mut CAbiLocalAgentBackend,
         prompt_json: *const c_char,
+        out_stream: *mut *mut CAbiLocalAgentBackendStream,
+    ) -> LocalAgentStatus;
+    fn local_agent_backend_read_stream(
+        stream: *mut CAbiLocalAgentBackendStream,
         callback: CAbiTokenCallback,
         user_data: *mut c_void,
-        out_stream: *mut *mut CAbiLocalAgentBackendStream,
     ) -> LocalAgentStatus;
     fn local_agent_backend_cancel(
         stream: *mut CAbiLocalAgentBackendStream,
@@ -128,7 +149,8 @@ impl CAbiFunctions {
         Self {
             init: local_agent_backend_init,
             load_model: local_agent_backend_load_model,
-            stream_chat: local_agent_backend_stream_chat,
+            start_chat: local_agent_backend_start_chat,
+            read_stream: local_agent_backend_read_stream,
             cancel: local_agent_backend_cancel,
             release_stream: local_agent_backend_release_stream,
             release_backend: local_agent_backend_release,
@@ -306,43 +328,82 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         }
 
         let prompt = c_string(prompt_json, "prompt")?;
-        let backend = self.backend.lock().unwrap();
-        if backend.0.is_null() {
+        let backend_ptr = {
+            let backend = self.backend.lock().unwrap();
+            if backend.0.is_null() {
+                return Err(AgentError::Provider(
+                    "on-device backend has been released".into(),
+                ));
+            }
+            backend.0
+        };
+
+        let mut stream = ptr::null_mut();
+        let start_status = unsafe {
+            (self.functions.start_chat)(backend_ptr, prompt.as_ptr(), &mut stream)
+        };
+        status_to_result(start_status, "start on-device stream")?;
+        if stream.is_null() {
             return Err(AgentError::Provider(
-                "on-device backend has been released".into(),
+                "on-device stream start returned null".into(),
             ));
         }
 
-        let mut stream = ptr::null_mut();
+        let done = Arc::new(AtomicBool::new(false));
+        let cancel_called = Arc::new(AtomicBool::new(false));
+        let watcher = spawn_cancellation_watcher(
+            CAbiStreamHandle(stream),
+            cancellation.clone(),
+            self.functions.cancel,
+            done.clone(),
+            cancel_called.clone(),
+        );
+
         let mut callback_error = None;
         let mut state = CallbackState {
             on_token,
-            cancellation,
-            stream_slot: &mut stream,
+            cancellation: cancellation.clone(),
+            stream,
             cancel: self.functions.cancel,
             error: &mut callback_error,
         };
 
-        let status = unsafe {
-            (self.functions.stream_chat)(
-                backend.0,
-                prompt.as_ptr(),
+        let read_status = unsafe {
+            (self.functions.read_stream)(
+                stream,
                 collect_c_token,
                 &mut state as *mut CallbackState<'_> as *mut c_void,
-                &mut stream,
             )
         };
+        done.store(true, Ordering::SeqCst);
+        let watcher_panicked = watcher.join().is_err();
+        if watcher_panicked {
+            unsafe {
+                (self.functions.cancel)(stream);
+            }
+        }
+        let release_status = unsafe { (self.functions.release_stream)(stream) };
 
-        let release_status = if stream.is_null() {
-            LocalAgentStatus::Ok
-        } else {
-            unsafe { (self.functions.release_stream)(stream) }
-        };
+        if watcher_panicked {
+            status_to_result(release_status, "release on-device stream")?;
+            return Err(AgentError::Provider(
+                "on-device cancellation watcher panicked".into(),
+            ));
+        }
 
         if let Some(error) = callback_error {
             return Err(error);
         }
-        status_to_result(status, "stream on-device chat")?;
+        if cancellation.is_cancelled()
+            || cancel_called.load(Ordering::SeqCst)
+            || read_status == LocalAgentStatus::Cancelled
+        {
+            status_to_result(release_status, "release on-device stream")?;
+            return Err(AgentError::Cancelled(
+                "on-device backend cancelled".into(),
+            ));
+        }
+        status_to_result(read_status, "read on-device stream")?;
         status_to_result(release_status, "release on-device stream")
     }
 }
@@ -415,14 +476,30 @@ unsafe extern "C" fn collect_c_token(token_json: *const c_char, user_data: *mut 
 }
 
 unsafe fn cancel_stream(state: &mut CallbackState<'_>) {
-    if state.stream_slot.is_null() {
-        return;
+    if !state.stream.is_null() {
+        (state.cancel)(state.stream);
     }
+}
 
-    let stream = *state.stream_slot;
-    if !stream.is_null() {
-        (state.cancel)(stream);
-    }
+fn spawn_cancellation_watcher(
+    stream: CAbiStreamHandle,
+    cancellation: CancellationToken,
+    cancel: CAbiCancelFn,
+    done: Arc<AtomicBool>,
+    cancel_called: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) {
+            if cancellation.is_cancelled() {
+                unsafe {
+                    cancel(stream.as_ptr());
+                }
+                cancel_called.store(true, Ordering::SeqCst);
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    })
 }
 
 fn c_string(value: &str, label: &str) -> Result<CString, AgentError> {

@@ -37,6 +37,18 @@ LocalAgentStatus local_agent_backend_stream_chat(
     LocalAgentBackendStream **out_stream
 );
 
+LocalAgentStatus local_agent_backend_start_chat(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    LocalAgentBackendStream **out_stream
+);
+
+LocalAgentStatus local_agent_backend_read_stream(
+    LocalAgentBackendStream *stream,
+    local_agent_token_callback callback,
+    void *user_data
+);
+
 LocalAgentStatus local_agent_backend_cancel(
     LocalAgentBackendStream *stream
 );

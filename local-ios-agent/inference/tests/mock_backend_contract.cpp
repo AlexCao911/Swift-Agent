@@ -50,6 +50,26 @@ int main() {
                "{\"model_path\":\"mock.gguf\"}"
            ) == LOCAL_AGENT_STATUS_OK);
 
+    LocalAgentBackendStream *split_stream = nullptr;
+    CollectedTokens split_collected;
+    assert(local_agent_backend_start_chat(
+               backend,
+               "{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}",
+               &split_stream
+           ) == LOCAL_AGENT_STATUS_OK);
+    assert(split_stream != nullptr);
+    assert(local_agent_backend_read_stream(
+               split_stream,
+               collect_token,
+               &split_collected
+           ) == LOCAL_AGENT_STATUS_OK);
+    assert(split_collected.tokens == (std::vector<std::string>{
+        "{\"type\":\"text_delta\",\"text\":\"On-device \"}",
+        "{\"type\":\"text_delta\",\"text\":\"mock response\"}",
+        "{\"type\":\"completed\",\"text\":\"On-device mock response\"}",
+    }));
+    assert(local_agent_backend_release_stream(split_stream) == LOCAL_AGENT_STATUS_OK);
+
     LocalAgentBackendStream *stream = nullptr;
     CollectedTokens collected;
     assert(local_agent_backend_stream_chat(

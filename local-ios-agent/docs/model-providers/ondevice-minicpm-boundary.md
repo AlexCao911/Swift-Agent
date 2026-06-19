@@ -43,15 +43,27 @@ LocalAgentStatus local_agent_backend_stream_chat(
     void *user_data,
     LocalAgentBackendStream **out_stream
 );
+LocalAgentStatus local_agent_backend_start_chat(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    LocalAgentBackendStream **out_stream
+);
+LocalAgentStatus local_agent_backend_read_stream(
+    LocalAgentBackendStream *stream,
+    local_agent_token_callback callback,
+    void *user_data
+);
 LocalAgentStatus local_agent_backend_cancel(LocalAgentBackendStream *stream);
 LocalAgentStatus local_agent_backend_release_stream(LocalAgentBackendStream *stream);
 LocalAgentStatus local_agent_backend_release(LocalAgentBackend *backend);
 ```
 
-`stream_chat` must make stream ownership explicit by writing `out_stream` before
-emitting callbacks. Rust can then hold the same opaque stream handle while token
-callbacks are in flight, call `local_agent_backend_cancel(stream)` when provider
-cancellation is observed, and release the stream exactly once.
+Rust uses the split `start_chat` / `read_stream` path. `start_chat` must return
+the opaque stream handle before token production enters a blocking loop. Rust can
+then hold that handle while `read_stream` is active, call
+`local_agent_backend_cancel(stream)` from cancellation watcher timing, and
+release the stream exactly once. `stream_chat` remains a C-side convenience
+wrapper for smoke tests and simple callers.
 
 ## Token Contract
 
@@ -72,7 +84,9 @@ Plan 11 cancellation is backend-scoped:
 
 ```text
 Provider cancellation token
-  -> CAbiLocalInferenceBackend callback observes cancellation
+  -> CAbiLocalInferenceBackend starts a stream and holds its handle
+  -> read_stream enters the backend loop
+  -> Rust cancellation watcher observes cancellation
   -> local_agent_backend_cancel(stream)
   -> backend stream loop returns LOCAL_AGENT_STATUS_CANCELLED
   -> Rust maps to AgentError::Cancelled
@@ -92,7 +106,11 @@ implementation behind `local_agent_inference.h`:
 - keep the opaque backend and stream types;
 - keep prompt input as JSON;
 - keep token output as JSON callbacks;
-- preserve `cancel(stream)` as a stream-local primitive;
+- preserve `start_chat` as the point where a cancellable stream handle becomes
+  available;
+- preserve `read_stream` as the token production loop;
+- preserve `cancel(stream)` as a stream-local primitive that can interrupt
+  `read_stream`;
 - preserve explicit release for streams and backend resources.
 
 If replacing the mock requires Rust runtime, session, tool, or UI types inside

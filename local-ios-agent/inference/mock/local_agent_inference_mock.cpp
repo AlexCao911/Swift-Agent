@@ -61,6 +61,27 @@ LocalAgentStatus local_agent_backend_stream_chat(
     void *user_data,
     LocalAgentBackendStream **out_stream
 ) {
+    LocalAgentStatus status = local_agent_backend_start_chat(
+        backend,
+        prompt_json,
+        out_stream
+    );
+    if (status != LOCAL_AGENT_STATUS_OK) {
+        return status;
+    }
+
+    return local_agent_backend_read_stream(
+        *out_stream,
+        callback,
+        user_data
+    );
+}
+
+LocalAgentStatus local_agent_backend_start_chat(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    LocalAgentBackendStream **out_stream
+) {
     if (out_stream == nullptr) {
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
@@ -68,8 +89,7 @@ LocalAgentStatus local_agent_backend_stream_chat(
 
     if (
         backend == nullptr ||
-        prompt_json == nullptr ||
-        callback == nullptr
+        prompt_json == nullptr
     ) {
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
@@ -81,6 +101,18 @@ LocalAgentStatus local_agent_backend_stream_chat(
     auto *stream = new LocalAgentBackendStream();
     stream->backend = backend;
     *out_stream = stream;
+
+    return LOCAL_AGENT_STATUS_OK;
+}
+
+LocalAgentStatus local_agent_backend_read_stream(
+    LocalAgentBackendStream *stream,
+    local_agent_token_callback callback,
+    void *user_data
+) {
+    if (stream == nullptr || callback == nullptr) {
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
 
     const char *tokens[] = {
         "{\"type\":\"text_delta\",\"text\":\"On-device \"}",

@@ -19,6 +19,18 @@ int main(void) {
         0,
         &stream
     );
+    status = local_agent_backend_release_stream(stream);
+    stream = 0;
+    status = local_agent_backend_start_chat(
+        backend,
+        "{\"messages\":[]}",
+        &stream
+    );
+    status = local_agent_backend_read_stream(
+        stream,
+        callback,
+        0
+    );
     status = local_agent_backend_cancel(stream);
     status = local_agent_backend_release_stream(stream);
     status = local_agent_backend_release(backend);

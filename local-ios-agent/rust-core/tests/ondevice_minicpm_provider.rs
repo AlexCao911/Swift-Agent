@@ -1,6 +1,8 @@
 use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
@@ -272,6 +274,7 @@ fn c_abi_backend_streams_through_linked_mock_backend() {
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_STREAM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_BACKEND_CALLS: AtomicUsize = AtomicUsize::new(0);
+static C_ABI_FAKE_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" fn fake_init(out_backend: *mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus {
     *out_backend = 0x11usize as *mut CAbiLocalAgentBackend;
@@ -285,19 +288,39 @@ unsafe extern "C" fn fake_load_model(
     LocalAgentStatus::Ok
 }
 
-unsafe extern "C" fn fake_stream_chat(
+unsafe extern "C" fn fake_start_chat(
     _backend: *mut CAbiLocalAgentBackend,
     _prompt_json: *const c_char,
-    callback: CAbiTokenCallback,
-    user_data: *mut c_void,
     out_stream: *mut *mut CAbiLocalAgentBackendStream,
 ) -> LocalAgentStatus {
     *out_stream = 0x22usize as *mut CAbiLocalAgentBackendStream;
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_read_stream(
+    _stream: *mut CAbiLocalAgentBackendStream,
+    callback: CAbiTokenCallback,
+    user_data: *mut c_void,
+) -> LocalAgentStatus {
     callback(FAKE_TOKEN_JSON.as_ptr() as *const c_char, user_data);
     if CANCEL_CALLS.load(Ordering::SeqCst) == 0 {
         return LocalAgentStatus::Ok;
     }
     LocalAgentStatus::Cancelled
+}
+
+unsafe extern "C" fn fake_blocking_read_stream(
+    _stream: *mut CAbiLocalAgentBackendStream,
+    _callback: CAbiTokenCallback,
+    _user_data: *mut c_void,
+) -> LocalAgentStatus {
+    for _ in 0..200 {
+        if CANCEL_CALLS.load(Ordering::SeqCst) > 0 {
+            return LocalAgentStatus::Cancelled;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    LocalAgentStatus::Error
 }
 
 unsafe extern "C" fn fake_cancel(
@@ -323,6 +346,7 @@ unsafe extern "C" fn fake_release_backend(
 
 #[test]
 fn c_abi_backend_calls_cancel_and_releases_stream_once() {
+    let _guard = C_ABI_FAKE_LOCK.lock().unwrap();
     CANCEL_CALLS.store(0, Ordering::SeqCst);
     RELEASE_STREAM_CALLS.store(0, Ordering::SeqCst);
     RELEASE_BACKEND_CALLS.store(0, Ordering::SeqCst);
@@ -331,7 +355,8 @@ fn c_abi_backend_calls_cancel_and_releases_stream_once() {
         CAbiLocalInferenceBackend::with_functions(CAbiFunctions {
             init: fake_init,
             load_model: fake_load_model,
-            stream_chat: fake_stream_chat,
+            start_chat: fake_start_chat,
+            read_stream: fake_read_stream,
             cancel: fake_cancel,
             release_stream: fake_release_stream,
             release_backend: fake_release_backend,
@@ -361,4 +386,45 @@ fn c_abi_backend_calls_cancel_and_releases_stream_once() {
 
     drop(backend);
     assert_eq!(RELEASE_BACKEND_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn c_abi_backend_cancels_blocked_read_from_cancellation_token() {
+    let _guard = C_ABI_FAKE_LOCK.lock().unwrap();
+    CANCEL_CALLS.store(0, Ordering::SeqCst);
+    RELEASE_STREAM_CALLS.store(0, Ordering::SeqCst);
+    RELEASE_BACKEND_CALLS.store(0, Ordering::SeqCst);
+
+    let backend = unsafe {
+        CAbiLocalInferenceBackend::with_functions(CAbiFunctions {
+            init: fake_init,
+            load_model: fake_load_model,
+            start_chat: fake_start_chat,
+            read_stream: fake_blocking_read_stream,
+            cancel: fake_cancel,
+            release_stream: fake_release_stream,
+            release_backend: fake_release_backend,
+        })
+    }
+    .unwrap();
+    backend.load_model(r#"{"model_path":"mock.gguf"}"#).unwrap();
+    let cancellation = CancellationToken::default();
+    let cancellation_from_runtime = cancellation.clone();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(10));
+        cancellation_from_runtime.cancel();
+    });
+
+    let error = backend
+        .stream_chat(
+            r#"{"messages":[{"role":"user","content":"cancel while blocked"}]}"#,
+            cancellation,
+            &mut |_token| Ok(()),
+        )
+        .unwrap_err();
+
+    canceller.join().unwrap();
+    assert!(matches!(error, AgentError::Cancelled(_)));
+    assert!(CANCEL_CALLS.load(Ordering::SeqCst) > 0);
+    assert_eq!(RELEASE_STREAM_CALLS.load(Ordering::SeqCst), 1);
 }
