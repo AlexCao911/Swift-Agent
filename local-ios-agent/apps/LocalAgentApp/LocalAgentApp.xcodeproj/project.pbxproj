@@ -1,0 +1,632 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0A0000010000000000000001 /* LocalAgentApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000101 /* LocalAgentApp.swift */; };
+		0A0000010000000000000002 /* AppBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000102 /* AppBootstrapper.swift */; };
+		0A0000010000000000000003 /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000103 /* AppContainer.swift */; };
+		0A0000010000000000000004 /* AgentViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000104 /* AgentViewModel.swift */; };
+		0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000105 /* AgentRuntimeService.swift */; };
+		0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000106 /* RuntimeEventReducer.swift */; };
+		0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000107 /* MinimalHostToolDriver.swift */; };
+		0A0000010000000000000008 /* AgentViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000108 /* AgentViewState.swift */; };
+		0A0000010000000000000009 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000109 /* ChatView.swift */; };
+		0A000001000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010A /* Assets.xcassets */; };
+		0A000001000000000000000B /* LocalAgentBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000301 /* LocalAgentBridge */; };
+		0A000001000000000000000C /* LocalNativeToolkit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000302 /* LocalNativeToolkit */; };
+		0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000111 /* RuntimeEventReducerTests.swift */; };
+		0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */; };
+		0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */; };
+		0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000114 /* AgentViewModelTests.swift */; };
+		0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */; };
+		0A0000010000000000000012 /* LocalAgentBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000301 /* LocalAgentBridge */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0A0000010000000000000025 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0A0000010000000000000020 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0A0000010000000000000021;
+			remoteInfo = LocalAgentApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0A0000010000000000000022 /* LocalAgentApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocalAgentApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0A0000010000000000000023 /* LocalAgentAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalAgentAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0A0000010000000000000101 /* LocalAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentApp.swift; sourceTree = "<group>"; };
+		0A0000010000000000000102 /* AppBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapper.swift; sourceTree = "<group>"; };
+		0A0000010000000000000103 /* AppContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainer.swift; sourceTree = "<group>"; };
+		0A0000010000000000000104 /* AgentViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModel.swift; sourceTree = "<group>"; };
+		0A0000010000000000000105 /* AgentRuntimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeService.swift; sourceTree = "<group>"; };
+		0A0000010000000000000106 /* RuntimeEventReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEventReducer.swift; sourceTree = "<group>"; };
+		0A0000010000000000000107 /* MinimalHostToolDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimalHostToolDriver.swift; sourceTree = "<group>"; };
+		0A0000010000000000000108 /* AgentViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewState.swift; sourceTree = "<group>"; };
+		0A0000010000000000000109 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		0A000001000000000000010A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		0A000001000000000000010B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		0A0000010000000000000111 /* RuntimeEventReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEventReducerTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimalHostToolDriverTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeServiceTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000114 /* AgentViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModelTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustRuntimeAppIntegrationTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0A0000010000000000000041 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A000001000000000000000B /* LocalAgentBridge in Frameworks */,
+				0A000001000000000000000C /* LocalNativeToolkit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0A0000010000000000000042 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A0000010000000000000012 /* LocalAgentBridge in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0A0000010000000000000050 = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000051 /* LocalAgentApp */,
+				0A0000010000000000000052 /* LocalAgentAppTests */,
+				0A0000010000000000000053 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000051 /* LocalAgentApp */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000501 /* App */,
+				0A0000010000000000000502 /* Composition */,
+				0A0000010000000000000503 /* Runtime */,
+				0A0000010000000000000504 /* Tools */,
+				0A0000010000000000000505 /* State */,
+				0A0000010000000000000506 /* Presentation */,
+				0A0000010000000000000508 /* Resources */,
+			);
+			path = LocalAgentApp;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000052 /* LocalAgentAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000511 /* Runtime */,
+				0A0000010000000000000512 /* Tools */,
+				0A0000010000000000000513 /* State */,
+				0A0000010000000000000514 /* Presentation */,
+				0A0000010000000000000516 /* Integration */,
+			);
+			path = LocalAgentAppTests;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000501 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000101 /* LocalAgentApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000502 /* Composition */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000102 /* AppBootstrapper.swift */,
+				0A0000010000000000000103 /* AppContainer.swift */,
+			);
+			path = Composition;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000503 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000105 /* AgentRuntimeService.swift */,
+			);
+			path = Runtime;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000504 /* Tools */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000107 /* MinimalHostToolDriver.swift */,
+			);
+			path = Tools;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000505 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000108 /* AgentViewState.swift */,
+				0A0000010000000000000106 /* RuntimeEventReducer.swift */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000506 /* Presentation */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000507 /* Chat */,
+			);
+			path = Presentation;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000507 /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000104 /* AgentViewModel.swift */,
+				0A0000010000000000000109 /* ChatView.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000508 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0A000001000000000000010B /* Info.plist */,
+				0A000001000000000000010A /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000511 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
+			);
+			path = Runtime;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000512 /* Tools */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */,
+			);
+			path = Tools;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000513 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000111 /* RuntimeEventReducerTests.swift */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000514 /* Presentation */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000515 /* Chat */,
+			);
+			path = Presentation;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000515 /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000114 /* AgentViewModelTests.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000516 /* Integration */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
+			);
+			path = Integration;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000053 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000022 /* LocalAgentApp.app */,
+				0A0000010000000000000023 /* LocalAgentAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0A0000010000000000000021 /* LocalAgentApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A0000010000000000000091 /* Build configuration list for PBXNativeTarget "LocalAgentApp" */;
+			buildPhases = (
+				0A0000010000000000000061 /* Sources */,
+				0A0000010000000000000041 /* Frameworks */,
+				0A0000010000000000000062 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LocalAgentApp;
+			packageProductDependencies = (
+				0A0000010000000000000301 /* LocalAgentBridge */,
+				0A0000010000000000000302 /* LocalNativeToolkit */,
+			);
+			productName = LocalAgentApp;
+			productReference = 0A0000010000000000000022 /* LocalAgentApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		0A0000010000000000000024 /* LocalAgentAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A0000010000000000000092 /* Build configuration list for PBXNativeTarget "LocalAgentAppTests" */;
+			buildPhases = (
+				0A0000010000000000000063 /* Sources */,
+				0A0000010000000000000042 /* Frameworks */,
+				0A0000010000000000000064 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0A0000010000000000000026 /* PBXTargetDependency */,
+			);
+			name = LocalAgentAppTests;
+			packageProductDependencies = (
+				0A0000010000000000000301 /* LocalAgentBridge */,
+			);
+			productName = LocalAgentAppTests;
+			productReference = 0A0000010000000000000023 /* LocalAgentAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0A0000010000000000000020 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					0A0000010000000000000021 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					0A0000010000000000000024 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 0A0000010000000000000021;
+					};
+				};
+			};
+			buildConfigurationList = 0A0000010000000000000090 /* Build configuration list for PBXProject "LocalAgentApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 0A0000010000000000000050;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0A0000010000000000000053 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				0A0000010000000000000021 /* LocalAgentApp */,
+				0A0000010000000000000024 /* LocalAgentAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0A0000010000000000000062 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A000001000000000000000A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0A0000010000000000000064 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0A0000010000000000000061 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A0000010000000000000001 /* LocalAgentApp.swift in Sources */,
+				0A0000010000000000000002 /* AppBootstrapper.swift in Sources */,
+				0A0000010000000000000003 /* AppContainer.swift in Sources */,
+				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
+				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
+				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
+				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
+				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
+				0A0000010000000000000009 /* ChatView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0A0000010000000000000063 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */,
+				0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */,
+				0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */,
+				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
+				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0A0000010000000000000026 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0A0000010000000000000021 /* LocalAgentApp */;
+			targetProxy = 0A0000010000000000000025 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0A0000010000000000000071 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		0A0000010000000000000072 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		0A0000010000000000000073 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LocalAgentApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LocalAgentApp";
+			};
+			name = Debug;
+		};
+		0A0000010000000000000074 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LocalAgentApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LocalAgentApp";
+			};
+			name = Release;
+		};
+		0A0000010000000000000075 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		0A0000010000000000000076 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0A0000010000000000000090 /* Build configuration list for PBXProject "LocalAgentApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A0000010000000000000075 /* Debug */,
+				0A0000010000000000000076 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0A0000010000000000000091 /* Build configuration list for PBXNativeTarget "LocalAgentApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A0000010000000000000071 /* Debug */,
+				0A0000010000000000000072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0A0000010000000000000092 /* Build configuration list for PBXNativeTarget "LocalAgentAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A0000010000000000000073 /* Debug */,
+				0A0000010000000000000074 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../toolkit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0A0000010000000000000301 /* LocalAgentBridge */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalAgentBridge;
+		};
+		0A0000010000000000000302 /* LocalNativeToolkit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalNativeToolkit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 0A0000010000000000000020 /* Project object */;
+}

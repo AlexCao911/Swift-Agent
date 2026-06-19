@@ -1,2 +1,4 @@
 rust-core/target/
-ios-app/.build/
+toolkit/.build/
+.derivedData/
+.xcode-home/

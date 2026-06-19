@@ -1,9 +1,16 @@
 // swift-tools-version: 6.0
 
+import Foundation
 import PackageDescription
 
+let packageDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .path
+let rustMacOSDebugLibraryPath = "\(packageDirectory)/../rust-core/target/debug"
+let rustIOSSimulatorDebugLibraryPath = "\(packageDirectory)/../rust-core/target/aarch64-apple-ios-sim/debug"
+
 let package = Package(
-    name: "LocalAgentIOS",
+    name: "LocalAgentToolkit",
     platforms: [
         .iOS(.v17),
         .macOS(.v14),
@@ -28,7 +35,9 @@ let package = Package(
             dependencies: ["CLocalAgentRuntime"],
             linkerSettings: [
                 .linkedLibrary("local_ios_agent_runtime"),
-                .unsafeFlags(["-L../rust-core/target/debug"]),
+                .linkedLibrary("c++"),
+                .unsafeFlags(["-L\(rustMacOSDebugLibraryPath)"], .when(platforms: [.macOS])),
+                .unsafeFlags(["-L\(rustIOSSimulatorDebugLibraryPath)"], .when(platforms: [.iOS])),
             ]
         ),
         .target(
