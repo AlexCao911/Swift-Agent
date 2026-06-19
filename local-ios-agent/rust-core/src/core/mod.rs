@@ -21,7 +21,7 @@ pub use event::{EventKind, RuntimeEvent};
 pub use ondevice_minicpm::{
     CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
     CAbiLocalInferenceBackend, CAbiTokenCallback, LocalAgentStatus, LocalInferenceBackend,
-    MockLocalInferenceBackend,
+    MockLocalInferenceBackend, OnDeviceMiniCPMProvider,
 };
 pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
 pub use provider::{

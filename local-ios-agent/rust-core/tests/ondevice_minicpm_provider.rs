@@ -1,10 +1,13 @@
 use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
+use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
     CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, LocalAgentStatus,
-    LocalInferenceBackend, MockLocalInferenceBackend,
+    LocalInferenceBackend, MockLocalInferenceBackend, ModelProvider, ModelProviderOutput,
+    OnDeviceMiniCPMProvider,
 };
 
 const MOCK_TOKEN_JSON: [&str; 3] = [
@@ -13,6 +16,194 @@ const MOCK_TOKEN_JSON: [&str; 3] = [
     r#"{"type":"completed","text":"On-device mock response"}"#,
 ];
 const FAKE_TOKEN_JSON: &[u8] = b"{\"type\":\"text_delta\",\"text\":\"On-device \"}\0";
+
+#[derive(Clone)]
+struct RecordingBackend {
+    state: Arc<RecordingBackendState>,
+    tokens: Vec<String>,
+    stream_error: Option<AgentError>,
+}
+
+#[derive(Default)]
+struct RecordingBackendState {
+    loaded_configs: Mutex<Vec<String>>,
+    prompts: Mutex<Vec<String>>,
+}
+
+impl RecordingBackend {
+    fn streaming<I, S>(tokens: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            state: Arc::new(RecordingBackendState::default()),
+            tokens: tokens.into_iter().map(Into::into).collect(),
+            stream_error: None,
+        }
+    }
+
+    fn failing(error: AgentError) -> Self {
+        Self {
+            state: Arc::new(RecordingBackendState::default()),
+            tokens: Vec::new(),
+            stream_error: Some(error),
+        }
+    }
+
+    fn loaded_configs(&self) -> Vec<String> {
+        self.state.loaded_configs.lock().unwrap().clone()
+    }
+
+    fn prompts(&self) -> Vec<String> {
+        self.state.prompts.lock().unwrap().clone()
+    }
+}
+
+impl LocalInferenceBackend for RecordingBackend {
+    fn load_model(&self, model_config_json: &str) -> Result<(), AgentError> {
+        self.state
+            .loaded_configs
+            .lock()
+            .unwrap()
+            .push(model_config_json.to_string());
+        Ok(())
+    }
+
+    fn stream_chat(
+        &self,
+        prompt_json: &str,
+        _cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        self.state
+            .prompts
+            .lock()
+            .unwrap()
+            .push(prompt_json.to_string());
+        if let Some(error) = &self.stream_error {
+            return Err(error.clone());
+        }
+        for token in &self.tokens {
+            on_token(token)?;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn on_device_provider_builds_backend_prompt_and_maps_token_outputs() {
+    let backend = RecordingBackend::streaming(MOCK_TOKEN_JSON);
+    let provider = OnDeviceMiniCPMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend.clone()),
+    );
+    let frame = PromptFrame {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: vec![r#"{"name":"debug.echo"}"#.into()],
+        messages: vec![
+            PromptMessage::User("hello".into()),
+            PromptMessage::Assistant("hi".into()),
+            PromptMessage::ToolResult("done".into()),
+        ],
+    };
+
+    let output = provider
+        .stream_chat(&frame, CancellationToken::default())
+        .unwrap();
+
+    assert_eq!(provider.id(), "ondevice_minicpm");
+    assert_eq!(
+        output,
+        vec![
+            ModelProviderOutput::TextDelta("On-device ".into()),
+            ModelProviderOutput::TextDelta("mock response".into()),
+            ModelProviderOutput::Completed("On-device mock response".into()),
+        ]
+    );
+    assert_eq!(
+        backend.loaded_configs(),
+        vec![r#"{"model_path":"mock.gguf"}"#.to_string()]
+    );
+    let prompt: serde_json::Value = serde_json::from_str(&backend.prompts()[0]).unwrap();
+    assert_eq!(prompt["model"], "minicpm");
+    assert_eq!(prompt["stream"], true);
+    assert_eq!(prompt["messages"][1]["content"], "hello");
+    assert!(
+        prompt["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Available tools")
+    );
+}
+
+#[test]
+fn on_device_provider_surfaces_backend_cancellation() {
+    let backend = RecordingBackend::failing(AgentError::Cancelled("backend stopped".into()));
+    let provider = OnDeviceMiniCPMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend),
+    );
+    let frame = PromptFrame {
+        system_prompt: String::new(),
+        runtime_policy: String::new(),
+        tool_schemas: Vec::new(),
+        messages: Vec::new(),
+    };
+
+    let error = provider
+        .stream_chat(&frame, CancellationToken::default())
+        .unwrap_err();
+
+    assert_eq!(error, AgentError::Cancelled("backend stopped".into()));
+}
+
+#[test]
+fn on_device_provider_surfaces_backend_errors() {
+    let backend = RecordingBackend::failing(AgentError::Provider("backend offline".into()));
+    let provider = OnDeviceMiniCPMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend),
+    );
+    let frame = PromptFrame {
+        system_prompt: String::new(),
+        runtime_policy: String::new(),
+        tool_schemas: Vec::new(),
+        messages: Vec::new(),
+    };
+
+    let error = provider
+        .stream_chat(&frame, CancellationToken::default())
+        .unwrap_err();
+
+    assert_eq!(error, AgentError::Provider("backend offline".into()));
+}
+
+#[test]
+fn on_device_provider_rejects_malformed_backend_token_json() {
+    let backend = RecordingBackend::streaming(["not json"]);
+    let provider = OnDeviceMiniCPMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend),
+    );
+    let frame = PromptFrame {
+        system_prompt: String::new(),
+        runtime_policy: String::new(),
+        tool_schemas: Vec::new(),
+        messages: Vec::new(),
+    };
+
+    let error = provider
+        .stream_chat(&frame, CancellationToken::default())
+        .unwrap_err();
+
+    assert!(error.to_string().contains("invalid on-device token"));
+}
 
 #[test]
 fn mock_local_backend_loads_and_streams_tokens() {

@@ -2,7 +2,12 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::sync::Mutex;
 
-use crate::core::{AgentError, CancellationToken};
+use serde_json::Value;
+
+use crate::context::PromptFrame;
+use crate::core::{
+    build_openai_chat_request, AgentError, CancellationToken, ModelProvider, ModelProviderOutput,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +76,13 @@ pub struct MockLocalInferenceBackend {
 pub struct CAbiLocalInferenceBackend {
     functions: CAbiFunctions,
     backend: Mutex<CAbiBackendHandle>,
+}
+
+pub struct OnDeviceMiniCPMProvider {
+    model: String,
+    model_config_json: String,
+    backend: Box<dyn LocalInferenceBackend>,
+    model_loaded: Mutex<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +221,64 @@ impl CAbiLocalInferenceBackend {
     }
 }
 
+impl OnDeviceMiniCPMProvider {
+    pub fn new(
+        model: impl Into<String>,
+        model_config_json: impl Into<String>,
+        backend: Box<dyn LocalInferenceBackend>,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            model_config_json: model_config_json.into(),
+            backend,
+            model_loaded: Mutex::new(false),
+        }
+    }
+
+    fn ensure_model_loaded(&self) -> Result<(), AgentError> {
+        let mut loaded = self.model_loaded.lock().unwrap();
+        if !*loaded {
+            self.backend.load_model(&self.model_config_json)?;
+            *loaded = true;
+        }
+        Ok(())
+    }
+}
+
+impl ModelProvider for OnDeviceMiniCPMProvider {
+    fn id(&self) -> &str {
+        "ondevice_minicpm"
+    }
+
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled(
+                "on-device MiniCPM cancelled".into(),
+            ));
+        }
+
+        self.ensure_model_loaded()?;
+
+        let mut prompt = build_openai_chat_request(&self.model, frame);
+        prompt["stream"] = Value::Bool(true);
+
+        let mut output = Vec::new();
+        self.backend.stream_chat(
+            &prompt.to_string(),
+            cancellation,
+            &mut |token_json| {
+                output.push(parse_backend_token(token_json)?);
+                Ok(())
+            },
+        )?;
+        Ok(output)
+    }
+}
+
 impl LocalInferenceBackend for CAbiLocalInferenceBackend {
     fn load_model(&self, model_config_json: &str) -> Result<(), AgentError> {
         let model_config = c_string(model_config_json, "model config")?;
@@ -274,6 +344,28 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         }
         status_to_result(status, "stream on-device chat")?;
         status_to_result(release_status, "release on-device stream")
+    }
+}
+
+fn parse_backend_token(token_json: &str) -> Result<ModelProviderOutput, AgentError> {
+    let value: Value = serde_json::from_str(token_json).map_err(|error| {
+        AgentError::Provider(format!("invalid on-device token JSON: {error}"))
+    })?;
+    let token_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::Provider("missing on-device token type".into()))?;
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentError::Provider("missing on-device token text".into()))?;
+
+    match token_type {
+        "text_delta" => Ok(ModelProviderOutput::TextDelta(text.to_string())),
+        "completed" => Ok(ModelProviderOutput::Completed(text.to_string())),
+        other => Err(AgentError::Provider(format!(
+            "unknown on-device token type: {other}"
+        ))),
     }
 }
 
