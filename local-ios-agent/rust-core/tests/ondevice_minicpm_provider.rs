@@ -271,6 +271,17 @@ fn c_abi_backend_streams_through_linked_mock_backend() {
     assert_eq!(tokens, MOCK_TOKEN_JSON);
 }
 
+#[cfg(not(feature = "link-mock-local-inference"))]
+#[test]
+fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
+    let error = match CAbiLocalInferenceBackend::new() {
+        Ok(_) => panic!("expected C ABI backend creation to fail when backend is not linked"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("on-device backend is not linked"));
+}
+
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_STREAM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_BACKEND_CALLS: AtomicUsize = AtomicUsize::new(0);

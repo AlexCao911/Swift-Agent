@@ -116,6 +116,7 @@ struct CallbackState<'a> {
     error: &'a mut Option<AgentError>,
 }
 
+#[cfg(feature = "link-mock-local-inference")]
 extern "C" {
     fn local_agent_backend_init(out_backend: *mut *mut CAbiLocalAgentBackend)
         -> LocalAgentStatus;
@@ -145,6 +146,7 @@ extern "C" {
 }
 
 impl CAbiFunctions {
+    #[cfg(feature = "link-mock-local-inference")]
     pub fn linked() -> Self {
         Self {
             init: local_agent_backend_init,
@@ -221,7 +223,8 @@ impl LocalInferenceBackend for MockLocalInferenceBackend {
 
 impl CAbiLocalInferenceBackend {
     pub fn new() -> Result<Self, AgentError> {
-        unsafe { Self::with_functions(CAbiFunctions::linked()) }
+        let functions = linked_c_abi_functions()?;
+        unsafe { Self::with_functions(functions) }
     }
 
     pub unsafe fn with_functions(functions: CAbiFunctions) -> Result<Self, AgentError> {
@@ -241,6 +244,18 @@ impl CAbiLocalInferenceBackend {
             backend: Mutex::new(CAbiBackendHandle(backend)),
         })
     }
+}
+
+#[cfg(feature = "link-mock-local-inference")]
+fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
+    Ok(CAbiFunctions::linked())
+}
+
+#[cfg(not(feature = "link-mock-local-inference"))]
+fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
+    Err(AgentError::Provider(
+        "on-device backend is not linked; enable link-mock-local-inference or provide C ABI functions".into(),
+    ))
 }
 
 impl OnDeviceMiniCPMProvider {
