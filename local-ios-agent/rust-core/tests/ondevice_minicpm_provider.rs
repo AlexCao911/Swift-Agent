@@ -248,6 +248,7 @@ fn mock_local_backend_stops_when_cancelled_by_token_callback() {
     assert!(matches!(error, AgentError::Cancelled(_)));
 }
 
+#[cfg(feature = "link-mock-local-inference")]
 #[test]
 fn c_abi_backend_streams_through_linked_mock_backend() {
     let backend = CAbiLocalInferenceBackend::new().unwrap();

@@ -9,6 +9,10 @@ name = "local_ios_agent_runtime"
 path = "src/lib.rs"
 crate-type = ["rlib", "staticlib"]
 
+[features]
+default = []
+link-mock-local-inference = []
+
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

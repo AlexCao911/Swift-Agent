@@ -3,6 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE");
+    if env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_none() {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let inference_dir = manifest_dir.parent().unwrap().join("inference");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
