@@ -4,7 +4,7 @@
 
 **Goal:** Build an in-process iOS Simulator real-model inference path that loads a GGUF model inside the app process and runs generation through a physically isolated, replaceable llama.cpp backend.
 
-**Architecture:** SwiftUI owns provider selection and presentation only. Swift application code depends on `AgentRuntimeServicing`, `RuntimeClient`, and `ProviderControllingRuntimeClient`; every LLM call flows through Rust AgentRuntime and `LocalLLMProvider`. Rust owns runtime state, provider selection, context construction, tool orchestration, cancellation, and maps `ModelProviderOutput` into runtime events. C++ owns model configuration parsing, backend lifecycle, token production, stream-local cancellation, and release; llama.cpp is one replaceable backend behind an internal `InferenceEngine` interface, not the architecture center.
+**Architecture:** SwiftUI owns provider selection and presentation only. Swift application code depends on `AgentRuntimeServicing`, `RuntimeClient`, `StreamingRuntimeClient`, and `ProviderControllingRuntimeClient`; every LLM call flows through Rust AgentRuntime and `LocalLLMProvider`. Rust owns runtime state, provider selection, context construction, tool orchestration, cancellation, and maps `ModelProviderOutput` into runtime events as provider callbacks arrive. C++ owns model configuration parsing, backend lifecycle, token production, stream-local cancellation, and release; llama.cpp is one replaceable backend behind an internal `InferenceEngine` interface, not the architecture center.
 
 **Tech Stack:** SwiftUI MVVM, LocalAgentBridge, Rust 2021, C ABI, C++17, llama.cpp XCFramework / static library, GGUF model artifacts outside git, cargo tests, clang++ tests, xcodebuild tests.
 
@@ -92,6 +92,10 @@ local-ios-agent/inference/tests/token_stream_contract.cpp
 local-ios-agent/inference/tests/c_api_backend_contract.cpp
 local-ios-agent/inference/tests/llama_cpp_backend_contract.cpp
 local-ios-agent/rust-core/tests/local_llm_provider.rs
+local-ios-agent/rust-core/tests/runtime_provider_streaming.rs
+local-ios-agent/rust-core/tests/ffi_streaming_events.rs
+local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientStreamingTests.swift
+local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceStreamingTests.swift
 local-ios-agent/scripts/build-llama-cpp-xcframework.sh
 local-ios-agent/scripts/build-local-inference-simulator.sh
 local-ios-agent/scripts/run-simulator-llamacpp-smoke.sh
@@ -105,6 +109,8 @@ local-ios-agent/inference/mock/local_agent_inference_mock.cpp
 local-ios-agent/rust-core/build.rs
 local-ios-agent/rust-core/Cargo.toml
 local-ios-agent/rust-core/src/core/mod.rs
+local-ios-agent/rust-core/src/core/provider.rs
+local-ios-agent/rust-core/src/core/runtime.rs
 local-ios-agent/rust-core/src/core/local_llm.rs
 local-ios-agent/rust-core/src/ffi_bridge.rs
 local-ios-agent/toolkit/Sources/LocalAgentBridge/RuntimeDTOs.swift
@@ -1276,6 +1282,7 @@ git commit -m "Refactor inference C ABI onto backend interface"
 ## Task 5: Add Rust Local LLM Provider Without Model-Specific Names
 
 **Files:**
+- Modify: `local-ios-agent/rust-core/src/core/provider.rs`
 - Create: `local-ios-agent/rust-core/src/core/local_llm.rs`
 - Delete: `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs`
 - Modify: `local-ios-agent/rust-core/src/core/mod.rs`
@@ -1310,7 +1317,13 @@ fn local_llm_provider_is_model_agnostic() {
         messages: vec![PromptMessage::User("hello".into())],
     };
 
-    let output = provider.stream_chat(&frame, CancellationToken::default()).unwrap();
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
+        .unwrap();
 
     assert_eq!(provider.id(), "local_llm");
     assert_eq!(output, vec![
@@ -1326,9 +1339,29 @@ fn local_llm_provider_is_model_agnostic() {
 cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test local_llm_provider
 ```
 
-Expected: FAIL because `local_llm` module and `LocalLLMProvider` are not exported.
+Expected: FAIL because `local_llm` module and `LocalLLMProvider` are not exported, and the `ModelProvider` trait still exposes batch output.
 
-- [ ] **Step 3: Add generic provider type**
+- [ ] **Step 3: Change provider trait to callback-first streaming**
+
+Modify `local-ios-agent/rust-core/src/core/provider.rs`:
+
+```rust
+pub trait ModelProvider: Send + Sync {
+    fn id(&self) -> &str;
+    fn stream_chat(
+        &self,
+        frame: &PromptFrame,
+        cancellation: CancellationToken,
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError>;
+}
+```
+
+Update `MockStreamingProvider` and every other existing `ModelProvider` implementation so each provider calls `on_output(...)` for each delta/tool/completed output in order and returns `Ok(())`. They must not build and return a `Vec<ModelProviderOutput>` except inside tests that are explicitly collecting callback outputs. Legacy provider implementations may stay in the crate for compatibility, but Plan 13 local simulator inference must use `local_llm`.
+
+Update existing runtime call sites to compile against the callback signature. If this task needs a short-lived compatibility helper for the existing batch `send_message` path, name it `collect_provider_outputs_for_legacy_send_message` and keep it private to `runtime.rs`; Task 6 must delete that helper and replace it with event streaming.
+
+- [ ] **Step 4: Add generic provider type**
 
 Create `local-ios-agent/rust-core/src/core/local_llm.rs`:
 
@@ -1383,26 +1416,25 @@ impl ModelProvider for LocalLLMProvider {
         &self,
         frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         self.ensure_model_loaded()?;
         let prompt = build_openai_chat_request(&self.model, frame);
-        let mut output = Vec::new();
         self.backend.stream_chat(
             &prompt.to_string(),
             cancellation,
             &mut |token_json| {
-                output.push(parse_backend_token(token_json)?);
-                Ok(())
+                on_output(parse_backend_token(token_json)?)
             },
         )?;
-        Ok(output)
+        Ok(())
     }
 }
 ```
 
 Move `LocalInferenceBackend`, `CAbiLocalInferenceBackend`, `MockLocalInferenceBackend`, `LocalAgentStatus`, and related C ABI wrapper types into this file or into focused sibling files under `core/local_llm/`. Do not keep a public `OnDeviceMiniCPMProvider` alias.
 
-- [ ] **Step 4: Export only model-neutral names**
+- [ ] **Step 5: Export only model-neutral names**
 
 Modify `local-ios-agent/rust-core/src/core/mod.rs` to export:
 
@@ -1416,7 +1448,7 @@ pub use local_llm::{
 };
 ```
 
-- [ ] **Step 5: Remove the model-specific module**
+- [ ] **Step 6: Remove the model-specific module**
 
 Remove `local-ios-agent/rust-core/src/core/ondevice_minicpm.rs` after the generic `local_llm` module compiles:
 
@@ -1427,7 +1459,7 @@ rg -n "OnDeviceMiniCPM|ondevice_minicpm" local-ios-agent/rust-core/src local-ios
 
 Expected: `rg` exits with code 1 and no matches.
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 7: Run tests**
 
 ```bash
 cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test local_llm_provider
@@ -1436,9 +1468,10 @@ cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test ffi_bridg
 
 Expected: both pass.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
+git add local-ios-agent/rust-core/src/core/provider.rs
 git add local-ios-agent/rust-core/src/core/local_llm.rs \
   local-ios-agent/rust-core/src/core/mod.rs \
   local-ios-agent/rust-core/tests/local_llm_provider.rs
@@ -1446,7 +1479,467 @@ git add -u local-ios-agent/rust-core/src/core
 git commit -m "Generalize on-device provider as local llm"
 ```
 
-## Task 6: Add Rust Bridge Configuration For local_llm Provider
+## Task 6: Add Rust Runtime, FFI, And Swift Streaming Event Path
+
+**Files:**
+- Modify: `local-ios-agent/rust-core/src/core/runtime.rs`
+- Modify: `local-ios-agent/rust-core/src/core/provider.rs`
+- Modify: `local-ios-agent/rust-core/src/ffi_bridge.rs`
+- Create: `local-ios-agent/rust-core/tests/runtime_provider_streaming.rs`
+- Create: `local-ios-agent/rust-core/tests/ffi_streaming_events.rs`
+- Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/RustRuntimeClient.swift`
+- Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/RuntimeDTOs.swift`
+- Create: `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientStreamingTests.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation/Chat/AgentViewModel.swift`
+- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceStreamingTests.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Presentation/Chat/AgentViewModelTests.swift`
+
+- [ ] **Step 1: Write failing runtime streaming test**
+
+Create `local-ios-agent/rust-core/tests/runtime_provider_streaming.rs`:
+
+```rust
+use local_ios_agent_runtime::context::{MockTokenizer, PromptFrame};
+use local_ios_agent_runtime::core::{
+    AgentError, AgentRuntime, AgentRuntimeConfig, CancellationToken, EventKind, ModelProvider,
+    ModelProviderOutput, RunState, SendMessageInput, SessionId,
+};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+struct ProbeProvider {
+    delta_was_observed_by_runtime: Arc<AtomicBool>,
+}
+
+impl ModelProvider for ProbeProvider {
+    fn id(&self) -> &str {
+        "probe"
+    }
+
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        _cancellation: CancellationToken,
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        on_output(ModelProviderOutput::TextDelta("hel".into()))?;
+        assert!(
+            self.delta_was_observed_by_runtime.load(Ordering::SeqCst),
+            "runtime must emit the text delta before provider stream_chat returns"
+        );
+        on_output(ModelProviderOutput::TextDelta("lo".into()))?;
+        on_output(ModelProviderOutput::Completed("hello".into()))?;
+        Ok(())
+    }
+}
+
+#[test]
+fn runtime_emits_provider_outputs_during_provider_callback() {
+    let observed_delta = Arc::new(AtomicBool::new(false));
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(ProbeProvider {
+            delta_was_observed_by_runtime: observed_delta.clone(),
+        }),
+        tool_router: None,
+    });
+    let session_id = runtime.create_session().unwrap();
+    let mut streamed_kinds = Vec::new();
+
+    let result = runtime
+        .send_message_streaming(
+            SendMessageInput {
+                session_id: SessionId(session_id.0.clone()),
+                parent_event_id: None,
+                text: "hello".into(),
+            },
+            &mut |event| {
+                streamed_kinds.push(event.kind.clone());
+                if event.kind == EventKind::AssistantTextDelta {
+                    observed_delta.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert_eq!(result.state, RunState::Completed);
+    assert!(streamed_kinds.contains(&EventKind::AssistantTextDelta));
+    assert!(streamed_kinds.contains(&EventKind::AssistantMessageCompleted));
+}
+```
+
+This test must fail before implementation because `send_message_streaming` does not exist and the runtime does not emit inside the provider callback.
+
+- [ ] **Step 2: Add runtime event sink API**
+
+Modify `local-ios-agent/rust-core/src/core/runtime.rs`:
+
+```rust
+pub type RuntimeEventSink<'a> =
+    &'a mut dyn FnMut(RuntimeEvent) -> Result<(), AgentError>;
+
+impl<S: EventStore> AgentRuntime<S> {
+    pub fn send_message_streaming(
+        &mut self,
+        input: SendMessageInput,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<AgentTurnResult, AgentError> {
+        self.send_message_with_event_sink(input, on_event)
+    }
+
+    pub fn submit_tool_result_streaming(
+        &mut self,
+        run_id: String,
+        result: ToolResult,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<AgentTurnResult, AgentError> {
+        self.submit_tool_result_with_event_sink(run_id, result, on_event)
+    }
+
+    pub fn send_message(
+        &mut self,
+        input: SendMessageInput,
+    ) -> Result<AgentTurnResult, AgentError> {
+        let mut ignored_events = Vec::new();
+        self.send_message_streaming(input, &mut |event| {
+            ignored_events.push(event);
+            Ok(())
+        })
+    }
+
+    pub fn submit_tool_result(
+        &mut self,
+        run_id: String,
+        result: ToolResult,
+    ) -> Result<AgentTurnResult, AgentError> {
+        let mut ignored_events = Vec::new();
+        self.submit_tool_result_streaming(run_id, result, &mut |event| {
+            ignored_events.push(event);
+            Ok(())
+        })
+    }
+}
+```
+
+The legacy batch methods may still return `AgentTurnResult.events` for existing tests and clients, but they must delegate to the streaming methods. They are not allowed to call `ModelProvider::stream_chat` directly.
+
+- [ ] **Step 3: Emit runtime events while provider is still streaming**
+
+In `send_message_with_event_sink` and `submit_tool_result_with_event_sink`, replace this shape:
+
+```rust
+let provider_result = self.config.provider.stream_chat(&frame, cancellation);
+let provider_events = provider_result?;
+for provider_event in provider_events {
+    // append runtime events
+}
+```
+
+with this shape:
+
+```rust
+let cancellation = self.start_provider_call(&run_id);
+let mut final_result: Option<AgentTurnResult> = None;
+let mut provider_error: Option<AgentError> = None;
+
+let provider_result = self.config.provider.stream_chat(
+    &frame,
+    cancellation,
+    &mut |provider_output| {
+        match self.append_provider_output_as_runtime_event(
+            &session_id,
+            &run_id,
+            &mut parent,
+            &mut batcher,
+            provider_output,
+            &mut emitted,
+            on_event,
+        ) {
+            Ok(Some(result)) => {
+                final_result = Some(result);
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => {
+                provider_error = Some(error.clone());
+                Err(error)
+            }
+        }
+    },
+);
+self.finish_provider_call(&run_id);
+```
+
+Add a private helper:
+
+```rust
+fn append_and_emit_event(
+    &mut self,
+    session_id: &SessionId,
+    event_id: &EntryId,
+    emitted: &mut Vec<RuntimeEvent>,
+    on_event: RuntimeEventSink<'_>,
+) -> Result<RuntimeEvent, AgentError> {
+    let event = self.store.get(session_id, event_id)?;
+    emitted.push(event.clone());
+    on_event(event.clone())?;
+    Ok(event)
+}
+```
+
+Rules:
+
+- User message and assistant-start events are emitted through `on_event` as soon as they are appended.
+- `TextDelta` provider outputs are batched only by `StreamBatcher`; once a batch chunk exists, the runtime appends `AssistantTextDelta` and calls `on_event` immediately.
+- `ToolCall` provider outputs flush pending text, append tool-request events, call `on_event` immediately, then return a `WaitingTool` or `Suspended` `AgentTurnResult`.
+- `Completed` provider outputs flush pending text, append completion, call `on_event` immediately, mark the run completed, and return a completed `AgentTurnResult`.
+- Provider errors append `RunFailed`, call `on_event` for that failed event, mark the run failed, and then return the provider error.
+- Delete any temporary `collect_provider_outputs_for_legacy_send_message` helper from Task 5.
+
+- [ ] **Step 4: Write failing FFI streaming test**
+
+Create `local-ios-agent/rust-core/tests/ffi_streaming_events.rs`:
+
+```rust
+use local_ios_agent_runtime::ffi_bridge::{
+    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_free,
+    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message_streaming,
+    local_agent_runtime_bridge_string_free,
+};
+use serde_json::Value;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_void};
+use std::sync::{Arc, Mutex};
+
+extern "C" fn collect_event(event_json: *const c_char, user_data: *mut c_void) -> i32 {
+    let events = unsafe { &*(user_data as *const Arc<Mutex<Vec<String>>>) };
+    let text = unsafe { CStr::from_ptr(event_json) }
+        .to_string_lossy()
+        .into_owned();
+    events.lock().unwrap().push(text);
+    0
+}
+
+#[test]
+fn c_bridge_streams_runtime_events_before_final_turn_result() {
+    let config = CString::new(
+        r#"{"system_prompt":"system","runtime_policy":"policy","provider_id":"mock","store":{"kind":"in_memory"}}"#,
+    )
+    .unwrap();
+    let runtime = unsafe { local_agent_runtime_bridge_new_with_config(config.as_ptr()) };
+    assert!(!runtime.is_null());
+    let session_json = unsafe { local_agent_runtime_bridge_create_session(runtime) };
+    let session_id = unsafe { CStr::from_ptr(session_json).to_string_lossy().into_owned() };
+    unsafe { local_agent_runtime_bridge_string_free(session_json) };
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let input = CString::new(format!(
+        r#"{{"session_id":{session_id},"parent_event_id":null,"text":"hello"}}"#
+    ))
+    .unwrap();
+
+    let result_json = unsafe {
+        local_agent_runtime_bridge_send_message_streaming(
+            runtime,
+            input.as_ptr(),
+            Some(collect_event),
+            &events as *const _ as *mut c_void,
+        )
+    };
+    assert!(!result_json.is_null());
+    let result: Value = serde_json::from_str(
+        &unsafe { CStr::from_ptr(result_json) }.to_string_lossy(),
+    )
+    .unwrap();
+    unsafe { local_agent_runtime_bridge_string_free(result_json) };
+    unsafe { local_agent_runtime_bridge_free(runtime) };
+
+    let streamed = events.lock().unwrap();
+    assert!(streamed.iter().any(|event| event.contains("assistant_text_delta")));
+    assert!(streamed.iter().any(|event| event.contains("assistant_message_completed")));
+    assert_eq!(result["state"], "completed");
+}
+```
+
+This test must fail before implementation because the C bridge only exposes the batch `send_message` function.
+
+- [ ] **Step 5: Add FFI callback entrypoints**
+
+Modify `local-ios-agent/rust-core/src/ffi_bridge.rs`:
+
+```rust
+pub type RuntimeEventCallback =
+    Option<extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> i32>;
+
+#[no_mangle]
+pub extern "C" fn local_agent_runtime_bridge_send_message_streaming(
+    handle: *mut RuntimeJsonBridge,
+    input_json: *const c_char,
+    callback: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    bridge_result_to_c_string(|| {
+        let bridge = unsafe { handle.as_mut() }
+            .ok_or_else(|| AgentError::Runtime("runtime bridge handle is null".into()))?;
+        bridge.send_message_streaming_json(input_json, callback, user_data)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn local_agent_runtime_bridge_submit_tool_result_streaming(
+    handle: *mut RuntimeJsonBridge,
+    run_id: *const c_char,
+    result_json: *const c_char,
+    callback: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    bridge_result_to_c_string(|| {
+        let bridge = unsafe { handle.as_mut() }
+            .ok_or_else(|| AgentError::Runtime("runtime bridge handle is null".into()))?;
+        bridge.submit_tool_result_streaming_json(run_id, result_json, callback, user_data)
+    })
+}
+```
+
+`RuntimeJsonBridge::send_message_json` and `submit_tool_result_json` must remain for legacy callers, but they must call the streaming runtime APIs with a no-op event callback. The C callback receives one serialized `RuntimeEventJson` at a time. If the callback returns non-zero, abort the provider run, append a `RunFailed` event, and return an FFI error JSON.
+
+- [ ] **Step 6: Add Swift bridge streaming API**
+
+Modify `RuntimeClient` boundaries in `RuntimeDTOs.swift` or the existing protocol file:
+
+```swift
+public struct AgentTurnStreamDTO: Sendable {
+    public let events: AsyncThrowingStream<RuntimeEventDTO, Error>
+    public let result: Task<AgentTurnResultDTO, Error>
+}
+
+public protocol StreamingRuntimeClient: RuntimeClient {
+    func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO
+
+    func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO
+}
+```
+
+Modify `RustRuntimeCFunctionTable` to include:
+
+```swift
+public typealias RuntimeEventCallback = @convention(c) (
+    UnsafePointer<CChar>?,
+    UnsafeMutableRawPointer?
+) -> Int32
+
+public var sendMessageStreaming: (
+    RuntimeHandle?,
+    UnsafePointer<CChar>?,
+    RuntimeEventCallback?,
+    UnsafeMutableRawPointer?
+) -> StringResult
+
+public var submitToolResultStreaming: (
+    RuntimeHandle?,
+    UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?,
+    RuntimeEventCallback?,
+    UnsafeMutableRawPointer?
+) -> StringResult
+```
+
+`RustRuntimeClient.sendMessageStream` must run the blocking FFI call inside `Task.detached`, yield each callback event into `AsyncThrowingStream`, finish the stream when the FFI call returns, and complete `result` with the decoded `AgentTurnResultDTO`. The callback must copy the C string before returning; it must not store the raw C pointer.
+
+Add `RustRuntimeClientStreamingTests.swift` with a fake function table that calls the provided callback with an `assistant_text_delta` JSON before returning the final `AgentTurnResultDTO`; assert that the async stream yields the delta before `result.value` completes.
+
+- [ ] **Step 7: Stream into AgentRuntimeService and ViewModel state**
+
+Modify `AgentRuntimeServicing`:
+
+```swift
+func sendMessage(
+    _ text: String,
+    state: AgentViewState,
+    onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+) async throws -> AgentViewState
+```
+
+Keep the existing two-argument overload only as a convenience wrapper for tests:
+
+```swift
+func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
+    try await sendMessage(text, state: state, onEvent: { _ in })
+}
+```
+
+When `runtimeClient` conforms to `StreamingRuntimeClient`, `AgentRuntimeService` must:
+
+1. Start `sendMessageStream`.
+2. Apply each streamed event to `nextState` immediately.
+3. Call `await onEvent(event)` immediately after applying it.
+4. Track streamed event IDs in `Set<String>`.
+5. Await the final `AgentTurnResultDTO`.
+6. Apply only final result events whose IDs were not already streamed.
+7. Continue tools with `submitToolResultStream` using the same event path.
+
+`AgentViewModel.send` must pass a callback that updates `state` on the main actor as streamed events arrive:
+
+```swift
+let finalState = try await service.sendMessage(text, state: state) { [weak self] event in
+    await MainActor.run {
+        guard let self else { return }
+        RuntimeEventReducer.apply(event, to: &self.state)
+    }
+}
+self.state = finalState
+```
+
+Add `AgentRuntimeServiceStreamingTests.swift` to prove a streamed `assistant_text_delta` appears in state before the scripted runtime client returns the final completion. Add a ViewModel test that asserts the published transcript changes once for the delta and again for completion.
+
+- [ ] **Step 8: Run streaming tests**
+
+```bash
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test runtime_provider_streaming
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test ffi_streaming_events
+swift test --package-path local-ios-agent/toolkit --filter RustRuntimeClientStreamingTests
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+  -only-testing:LocalAgentAppTests/AgentRuntimeServiceStreamingTests test
+```
+
+Expected: all pass. The runtime and Swift tests must fail if an implementation buffers the whole provider completion before emitting the first `assistant_text_delta`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add local-ios-agent/rust-core/src/core/runtime.rs \
+  local-ios-agent/rust-core/src/core/provider.rs \
+  local-ios-agent/rust-core/src/ffi_bridge.rs \
+  local-ios-agent/rust-core/tests/runtime_provider_streaming.rs \
+  local-ios-agent/rust-core/tests/ffi_streaming_events.rs \
+  local-ios-agent/toolkit/Sources/LocalAgentBridge/RustRuntimeClient.swift \
+  local-ios-agent/toolkit/Sources/LocalAgentBridge/RuntimeDTOs.swift \
+  local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientStreamingTests.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation/Chat/AgentViewModel.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceStreamingTests.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Presentation/Chat/AgentViewModelTests.swift
+git commit -m "Stream runtime events through bridge and app state"
+```
+
+## Task 7: Add Rust Bridge Configuration For local_llm Provider
 
 **Files:**
 - Modify: `local-ios-agent/rust-core/src/ffi_bridge.rs`
@@ -1583,7 +2076,7 @@ git add local-ios-agent/rust-core/src/ffi_bridge.rs \
 git commit -m "Add local llm provider bridge configuration"
 ```
 
-## Task 7: Add llama.cpp Backend Behind Engine Interface
+## Task 8: Add llama.cpp Backend Behind Engine Interface
 
 **Files:**
 - Create: `local-ios-agent/inference/backends/llama_cpp/llama_cpp_api.h`
@@ -2222,7 +2715,7 @@ git commit -m "Add llama cpp backend behind inference interface"
 ```
 
 
-## Task 8: Wire Simulator App To local_llm Provider
+## Task 9: Wire Simulator App To local_llm Provider
 
 **Files:**
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
@@ -2393,7 +2886,7 @@ git add local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstra
 git commit -m "Add local llm provider selection to app"
 ```
 
-## Task 9: Simulator llama.cpp Manual Smoke And Report
+## Task 10: Simulator llama.cpp Manual Smoke And Report
 
 **Files:**
 - Create: `local-ios-agent/scripts/build-local-inference-simulator.sh`
@@ -2535,6 +3028,19 @@ cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml \
   --test local_llm_provider
 ```
 
+Run streaming boundary tests:
+
+```bash
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test runtime_provider_streaming
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml --test ffi_streaming_events
+swift test --package-path local-ios-agent/toolkit --filter RustRuntimeClientStreamingTests
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+  -only-testing:LocalAgentAppTests/AgentRuntimeServiceStreamingTests test
+```
+
 Run real simulator llama.cpp smoke only when local model and llama.cpp artifacts are configured:
 
 ```bash
@@ -2559,18 +3065,33 @@ rg -n "NativeLlamaEngineAdapter|LlamaBridge|LLMEngineProtocol|objc_bridge" \
 
 Expected: both `rg` commands exit with code 1 and no matches.
 
+Run streaming API guard checks:
+
+```bash
+rg -n "Result<Vec<ModelProviderOutput>>|collect_provider_outputs_for_legacy_send_message|provider_events =|for provider_event in provider_events" \
+  local-ios-agent/rust-core/src/core \
+  local-ios-agent/rust-core/src/ffi_bridge.rs
+```
+
+Expected: `rg` exits with code 1 and no matches. Tests may collect callback events into `Vec` locally, but production provider and runtime code must not expose or depend on `Result<Vec<ModelProviderOutput>>`.
+
 ## Definition Of Done
 
 - Simulator App can boot with Mock when no model is configured.
 - Simulator App can register `local_llm` when `LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON` is configured.
 - Every app-level LLM call enters through `AgentRuntimeServicing` and `RustRuntimeClient`.
 - Local LLM execution runs through Rust `ModelProvider` and `LocalLLMProvider`; there is no Swift-to-C++ inference path.
+- `ModelProvider::stream_chat` is callback-first and does not return `Result<Vec<ModelProviderOutput>>`.
+- Rust `AgentRuntime` emits `RuntimeEvent` values through `send_message_streaming` and `submit_tool_result_streaming` as provider outputs arrive; legacy batch methods delegate to these streaming primitives.
+- Rust FFI exposes streaming callback entrypoints for message send and tool-result continuation.
+- Swift `RustRuntimeClient` exposes streaming as `AsyncThrowingStream<RuntimeEventDTO, Error>` plus final `AgentTurnResultDTO`.
+- `AgentRuntimeService` and `AgentViewModel` apply streamed `RuntimeEventDTO` values immediately and de-duplicate the final result events.
 - SwiftUI, ViewModels, reducers, runtime service, and tools do not import or mention `LlamaBridge`, `NativeLlamaEngineAdapter`, `LLMEngineProtocol`, llama.cpp headers, C ABI handles, or local C ABI function names.
 - Provider selection is app-visible, but model execution ownership stays inside Rust AgentRuntime.
 - llama.cpp is consumed through a produced XCFramework/static library, not by dragging upstream C++ source into the app target.
 - C++ backend is split into C ABI, model config, engine interface, token stream, mock backend, and llama.cpp backend.
 - C++ receives no session ID, run ID, tool call ID, Swift type, or Rust runtime type.
-- Token deltas reach Swift through C callback -> Rust `LocalInferenceBackend` -> Rust runtime events -> Swift DTOs without waiting for the full completion.
+- Token deltas reach Swift through C callback -> Rust `LocalInferenceBackend` -> Rust runtime event sink -> Rust FFI callback -> Swift DTO stream without waiting for the full completion.
 - Optional image inference requires `mmproj_path` and keeps `mtmd_tokenize` inside `llama_cpp_api.cpp`.
 - llama.cpp is replaceable by adding another `InferenceEngine`.
 - MiniCPM is treated as a model artifact compatibility choice, not as a hardcoded backend.
