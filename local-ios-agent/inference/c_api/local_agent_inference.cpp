@@ -1,6 +1,7 @@
 #include "local_agent_inference.h"
 
 #include "inference_engine.h"
+#include "llama_cpp_engine.h"
 #include "mock_inference_engine.h"
 #include "model_config.h"
 
@@ -24,6 +25,9 @@ namespace local_agent {
 std::unique_ptr<InferenceEngine> make_inference_engine(const ModelConfig &config) {
     if (config.backend == "mock") {
         return std::make_unique<MockInferenceEngine>();
+    }
+    if (config.backend == "llama_cpp") {
+        return std::make_unique<LlamaCppEngine>();
     }
     throw std::invalid_argument("unsupported backend in this build: " + config.backend);
 }

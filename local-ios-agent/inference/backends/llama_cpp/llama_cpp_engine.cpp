@@ -1,0 +1,65 @@
+#include "llama_cpp_engine.h"
+
+#include <stdexcept>
+
+namespace local_agent {
+
+LlamaCppEngine::LlamaCppEngine()
+    : session_(make_llama_cpp_session()) {}
+
+void LlamaCppEngine::load(const ModelConfig &config) {
+    if (config.backend != "llama_cpp") {
+        throw std::invalid_argument("LlamaCppEngine requires backend=llama_cpp");
+    }
+    config_ = config;
+    session_->load(config_);
+}
+
+std::unique_ptr<TokenStream> LlamaCppEngine::start_chat(const std::string &prompt_json) {
+    if (prompt_json.empty()) {
+        throw std::invalid_argument("prompt json must not be empty");
+    }
+    prompt_json_ = prompt_json;
+    image_ = ImageInput();
+    has_image_ = false;
+    return std::make_unique<TokenStream>();
+}
+
+std::unique_ptr<TokenStream> LlamaCppEngine::start_chat_with_image(
+    const std::string &prompt_json,
+    const ImageInput &image
+) {
+    if (prompt_json.empty()) {
+        throw std::invalid_argument("prompt json must not be empty");
+    }
+    if (image.rgb_data.empty() || image.width == 0 || image.height == 0) {
+        throw std::invalid_argument("image input must contain RGB bytes and dimensions");
+    }
+    image_ = image;
+    prompt_json_ = prompt_json;
+    has_image_ = true;
+    return std::make_unique<TokenStream>();
+}
+
+void LlamaCppEngine::read_stream(TokenStream &stream, const TokenStream::Emit &emit) {
+    std::string completed;
+    auto on_delta = [&](const std::string &delta) {
+        if (stream.is_cancelled()) {
+            return;
+        }
+        completed += delta;
+        stream.emit_text_delta(delta, emit);
+    };
+
+    if (has_image_) {
+        session_->stream_generate_with_image(prompt_json_, image_, config_, on_delta);
+    } else {
+        session_->stream_generate(prompt_json_, config_, on_delta);
+    }
+
+    if (!stream.is_cancelled()) {
+        stream.emit_completed(completed, emit);
+    }
+}
+
+} // namespace local_agent
