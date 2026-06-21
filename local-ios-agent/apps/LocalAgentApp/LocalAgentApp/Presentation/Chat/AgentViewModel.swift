@@ -31,7 +31,14 @@ final class AgentViewModel {
         state.draft = ""
         state.errorMessage = nil
         do {
-            state = try await service.sendMessage(text, state: state)
+            state = try await service.sendMessage(text, state: state) { [weak self] event in
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+                    RuntimeEventReducer.apply(event, to: &self.state)
+                }
+            }
         } catch {
             state.phase = .failed(message: error.localizedDescription)
             state.errorMessage = error.localizedDescription

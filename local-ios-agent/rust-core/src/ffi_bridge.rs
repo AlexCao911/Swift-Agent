@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,9 @@ use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, PermissionScope, PermissionState, RiskLevel,
 };
 use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult, ToolSchema};
+
+pub type RuntimeEventCallback =
+    Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
 
 pub enum RuntimeJsonBridge {
     InMemory(BridgeRuntime<InMemoryEventStore>),
@@ -126,6 +129,32 @@ impl RuntimeJsonBridge {
         to_json(&AgentTurnResultJson::from_result(&result))
     }
 
+    pub fn send_message_streaming_json(
+        &self,
+        input_json: &str,
+        mut on_event: impl FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<String, AgentError> {
+        let input: SendMessageJson = from_json(input_json)?;
+        let input = SendMessageInput {
+            session_id: SessionId(input.session_id),
+            parent_event_id: input.parent_event_id.map(EntryId),
+            text: input.text,
+        };
+        let mut emit_event = |event: RuntimeEvent| {
+            let event_json = to_json(&RuntimeEventJson::from_event(&event))?;
+            on_event(&event_json)
+        };
+        let result = match self {
+            Self::InMemory(runtime) => runtime
+                .lock()?
+                .send_message_streaming(input, &mut emit_event)?,
+            Self::Sqlite(runtime) => runtime
+                .lock()?
+                .send_message_streaming(input, &mut emit_event)?,
+        };
+        to_json(&AgentTurnResultJson::from_result(&result))
+    }
+
     pub fn pending_tool_requests_json(&self) -> Result<String, AgentError> {
         let requests: Vec<_> = match self {
             Self::InMemory(runtime) => {
@@ -173,6 +202,33 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime
                 .lock()?
                 .submit_tool_result(run_id.to_string(), result),
+        };
+        to_json(&AgentTurnResultJson::from_result(&turn?))
+    }
+
+    pub fn submit_tool_result_streaming_json(
+        &self,
+        run_id: &str,
+        result_json: &str,
+        mut on_event: impl FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<String, AgentError> {
+        let result: ToolResultJson = from_json(result_json)?;
+        let result = result.into_tool_result()?;
+        let mut emit_event = |event: RuntimeEvent| {
+            let event_json = to_json(&RuntimeEventJson::from_event(&event))?;
+            on_event(&event_json)
+        };
+        let turn = match self {
+            Self::InMemory(runtime) => runtime.lock()?.submit_tool_result_streaming(
+                run_id.to_string(),
+                result,
+                &mut emit_event,
+            ),
+            Self::Sqlite(runtime) => runtime.lock()?.submit_tool_result_streaming(
+                run_id.to_string(),
+                result,
+                &mut emit_event,
+            ),
         };
         to_json(&AgentTurnResultJson::from_result(&turn?))
     }
@@ -318,6 +374,21 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_send_message(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_send_message_streaming(
+    runtime: *mut RuntimeJsonBridge,
+    input_json: *const c_char,
+    on_event: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    c_result(|| {
+        let input_json = c_str_arg(input_json, "input_json")?;
+        bridge_ref(runtime)?.send_message_streaming_json(input_json, |event_json| {
+            dispatch_stream_event(on_event, user_data, event_json)
+        })
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_pending_tool_requests(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
@@ -341,6 +412,23 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result(
         let run_id = c_str_arg(run_id, "run_id")?;
         let result_json = c_str_arg(result_json, "result_json")?;
         bridge_ref(runtime)?.submit_tool_result_json(run_id, result_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result_streaming(
+    runtime: *mut RuntimeJsonBridge,
+    run_id: *const c_char,
+    result_json: *const c_char,
+    on_event: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    c_result(|| {
+        let run_id = c_str_arg(run_id, "run_id")?;
+        let result_json = c_str_arg(result_json, "result_json")?;
+        bridge_ref(runtime)?.submit_tool_result_streaming_json(run_id, result_json, |event_json| {
+            dispatch_stream_event(on_event, user_data, event_json)
+        })
     })
 }
 
@@ -676,6 +764,30 @@ fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {
         Err(error) => error_payload(&error),
     };
     into_c_string(json)
+}
+
+fn dispatch_stream_event(
+    callback: RuntimeEventCallback,
+    user_data: *mut c_void,
+    event_json: &str,
+) -> Result<(), AgentError> {
+    let Some(callback) = callback else {
+        return Ok(());
+    };
+    let event_json = CString::new(event_json).map_err(|error| {
+        AgentError::Ffi(format!(
+            "stream event contained interior nul byte at {}",
+            error.nul_position()
+        ))
+    })?;
+    let status = unsafe { callback(event_json.as_ptr(), user_data) };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(AgentError::Ffi(
+            "stream event callback returned non-zero".into(),
+        ))
+    }
 }
 
 fn into_c_string(value: String) -> *mut c_char {

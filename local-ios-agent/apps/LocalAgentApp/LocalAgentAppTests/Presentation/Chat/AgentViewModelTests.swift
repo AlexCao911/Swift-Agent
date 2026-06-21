@@ -1,3 +1,4 @@
+import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
 
@@ -40,6 +41,27 @@ struct AgentViewModelTests {
         #expect(viewModel.state.draft == "")
         #expect(viewModel.state.messages.map(\.text) == ["hello"])
     }
+
+    @Test("send applies streamed event before final state")
+    func sendAppliesStreamedEventBeforeFinalState() async {
+        let service = StreamingViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, draft: "hello", currentSessionId: "session_1")
+        )
+
+        let sendTask = Task {
+            await viewModel.send()
+        }
+        await service.waitForStreamedEvent()
+
+        #expect(viewModel.state.messages.map(\.text) == ["partial"])
+
+        await service.releaseFinalState()
+        await sendTask.value
+
+        #expect(viewModel.state.messages.map(\.text) == ["final"])
+    }
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {
@@ -59,9 +81,83 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
         preparedState
     }
 
-    func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState {
         sentTexts.append(text)
         return sentState
+    }
+
+    func cancel(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+}
+
+private actor StreamingViewModelServiceStub: AgentRuntimeServicing {
+    private var streamedEventContinuation: CheckedContinuation<Void, Never>?
+    private var finalStateContinuation: CheckedContinuation<Void, Never>?
+    private var didStreamEvent = false
+    private var canReturnFinalState = false
+
+    func prepare() async throws -> AgentViewState {
+        AgentViewState(phase: .ready, currentSessionId: "session_1")
+    }
+
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState {
+        await onEvent(RuntimeEventDTO(
+            id: "delta_1",
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: .assistantTextDelta,
+            payload: "partial",
+            blobRefs: []
+        ))
+        didStreamEvent = true
+        streamedEventContinuation?.resume()
+        streamedEventContinuation = nil
+
+        if !canReturnFinalState {
+            await withCheckedContinuation { continuation in
+                finalStateContinuation = continuation
+            }
+        }
+
+        return AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(
+                    id: "assistant_final",
+                    role: .assistant,
+                    text: "final",
+                    isStreaming: false
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+    }
+
+    func waitForStreamedEvent() async {
+        if didStreamEvent {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            streamedEventContinuation = continuation
+        }
+    }
+
+    func releaseFinalState() {
+        canReturnFinalState = true
+        finalStateContinuation?.resume()
+        finalStateContinuation = nil
     }
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {

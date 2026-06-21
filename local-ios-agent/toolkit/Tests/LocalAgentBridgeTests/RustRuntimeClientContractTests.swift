@@ -250,9 +250,11 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             registerToolSchema: registerToolSchema,
             setPermissionState: setPermissionState,
             sendMessage: sendMessage,
+            sendMessageStreaming: sendMessageStreaming,
             pendingToolRequests: pendingToolRequests,
             pendingApprovalRequests: pendingApprovalRequests,
             submitToolResult: submitToolResult,
+            submitToolResultStreaming: submitToolResultStreaming,
             submitApprovalResponse: submitApprovalResponse,
             cancel: cancel,
             latestPromptDebugSnapshot: latestPromptDebugSnapshot,
@@ -309,6 +311,15 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         return makeCString(Self.turnJson(state: "waiting_tool"))
     }
 
+    func sendMessageStreaming(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ inputJson: UnsafePointer<CChar>?,
+        _ callback: RustRuntimeCFunctionTable.RuntimeEventCallback?,
+        _ userData: UnsafeMutableRawPointer?
+    ) -> UnsafeMutablePointer<CChar>? {
+        sendMessage(runtime, inputJson)
+    }
+
     func pendingToolRequests(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
         makeCString("""
         [{
@@ -341,6 +352,16 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     ) -> UnsafeMutablePointer<CChar>? {
         submittedToolResultJson = String(cString: resultJson!)
         return makeCString(Self.turnJson(state: "completed"))
+    }
+
+    func submitToolResultStreaming(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ runId: UnsafePointer<CChar>?,
+        _ resultJson: UnsafePointer<CChar>?,
+        _ callback: RustRuntimeCFunctionTable.RuntimeEventCallback?,
+        _ userData: UnsafeMutableRawPointer?
+    ) -> UnsafeMutablePointer<CChar>? {
+        submitToolResult(runtime, runId, resultJson)
     }
 
     func submitApprovalResponse(

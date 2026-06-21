@@ -2,8 +2,18 @@ import LocalAgentBridge
 
 protocol AgentRuntimeServicing: Sendable {
     func prepare() async throws -> AgentViewState
-    func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState
     func cancel(state: AgentViewState) async throws -> AgentViewState
+}
+
+extension AgentRuntimeServicing {
+    func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
+        try await sendMessage(text, state: state, onEvent: { _ in })
+    }
 }
 
 enum AgentRuntimeServiceError: Error, Equatable, Sendable {
@@ -39,7 +49,11 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return AgentViewState(phase: .ready, currentSessionId: sessionId)
     }
 
-    func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState {
         guard activeRun == nil else {
             throw AgentRuntimeServiceError.duplicateRun
         }
@@ -57,6 +71,31 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             nextState.currentSessionId = sessionId
         }
 
+        if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
+            let stream = streamingClient.sendMessageStream(
+                sessionId: sessionId,
+                parentEventId: nil,
+                text: text
+            )
+            var streamedEventIds = Set<String>()
+            let initialTurn = try await consume(
+                stream,
+                state: &nextState,
+                streamedEventIds: &streamedEventIds,
+                onEvent: onEvent
+            )
+            activeRun = .running(initialTurn.runId)
+            nextState.phase = .running(runId: initialTurn.runId)
+            apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
+
+            return try await continueToolsIfNeeded(
+                from: initialTurn,
+                state: nextState,
+                streamedEventIds: streamedEventIds,
+                onEvent: onEvent
+            )
+        }
+
         let initialTurn = try await runtimeClient.sendMessage(
             sessionId: sessionId,
             parentEventId: nil,
@@ -66,7 +105,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         nextState.phase = .running(runId: initialTurn.runId)
         apply(initialTurn.events, to: &nextState)
 
-        return try await continueToolsIfNeeded(from: initialTurn, state: nextState)
+        return try await continueToolsIfNeeded(
+            from: initialTurn,
+            state: nextState,
+            streamedEventIds: [],
+            onEvent: onEvent
+        )
     }
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {
@@ -85,10 +129,13 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
     private func continueToolsIfNeeded(
         from turn: AgentTurnResultDTO,
-        state: AgentViewState
+        state: AgentViewState,
+        streamedEventIds: Set<String>,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
     ) async throws -> AgentViewState {
         var nextTurn = turn
         var nextState = state
+        var streamedEventIds = streamedEventIds
         var continuationIndex = 0
 
         while nextTurn.state == .waitingTool {
@@ -103,8 +150,22 @@ actor AgentRuntimeService: AgentRuntimeServicing {
                 return nextState
             }
 
-            nextTurn = try await runtimeClient.submitToolResult(runId: request.runId, result: result)
-            apply(nextTurn.events, to: &nextState)
+            if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
+                let stream = streamingClient.submitToolResultStream(
+                    runId: request.runId,
+                    result: result
+                )
+                nextTurn = try await consume(
+                    stream,
+                    state: &nextState,
+                    streamedEventIds: &streamedEventIds,
+                    onEvent: onEvent
+                )
+                apply(nextTurn.events, to: &nextState, skipping: streamedEventIds)
+            } else {
+                nextTurn = try await runtimeClient.submitToolResult(runId: request.runId, result: result)
+                apply(nextTurn.events, to: &nextState)
+            }
             continuationIndex += 1
         }
 
@@ -122,8 +183,36 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return nextState
     }
 
+    private func consume(
+        _ stream: AgentTurnStreamDTO,
+        state: inout AgentViewState,
+        streamedEventIds: inout Set<String>,
+        onEvent: @Sendable (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentTurnResultDTO {
+        for try await event in stream.events {
+            if let runId = event.runId {
+                activeRun = .running(runId)
+                state.phase = .running(runId: runId)
+            }
+            RuntimeEventReducer.apply(event, to: &state)
+            streamedEventIds.insert(event.id)
+            await onEvent(event)
+        }
+        return try await stream.result.value
+    }
+
     private func apply(_ events: [RuntimeEventDTO], to state: inout AgentViewState) {
         for event in events {
+            RuntimeEventReducer.apply(event, to: &state)
+        }
+    }
+
+    private func apply(
+        _ events: [RuntimeEventDTO],
+        to state: inout AgentViewState,
+        skipping streamedEventIds: Set<String>
+    ) {
+        for event in events where !streamedEventIds.contains(event.id) {
             RuntimeEventReducer.apply(event, to: &state)
         }
     }

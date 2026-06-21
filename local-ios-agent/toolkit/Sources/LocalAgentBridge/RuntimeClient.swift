@@ -21,6 +21,32 @@ public protocol RuntimeClient: Sendable {
     func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO?
 }
 
+public struct AgentTurnStreamDTO: Sendable {
+    public let events: AsyncThrowingStream<RuntimeEventDTO, Error>
+    public let result: Task<AgentTurnResultDTO, Error>
+
+    public init(
+        events: AsyncThrowingStream<RuntimeEventDTO, Error>,
+        result: Task<AgentTurnResultDTO, Error>
+    ) {
+        self.events = events
+        self.result = result
+    }
+}
+
+public protocol StreamingRuntimeClient: RuntimeClient {
+    func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO
+
+    func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO
+}
+
 public protocol ProviderControllingRuntimeClient: Sendable {
     func providerProfiles() async throws -> [ProviderProfileDTO]
     func activeProvider() async throws -> ProviderProfileDTO

@@ -130,6 +130,10 @@ public enum RustRuntimeStoreConfiguration: Codable, Equatable, Sendable {
 public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public typealias RuntimeHandle = UnsafeMutableRawPointer
     public typealias StringResult = UnsafeMutablePointer<CChar>?
+    public typealias RuntimeEventCallback = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafeMutableRawPointer?
+    ) -> CInt
 
     public var makeRuntime: () -> RuntimeHandle?
     public var freeRuntime: (RuntimeHandle?) -> Void
@@ -139,12 +143,25 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var sendMessage: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var sendMessageStreaming: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        RuntimeEventCallback?,
+        UnsafeMutableRawPointer?
+    ) -> StringResult
     public var pendingToolRequests: (RuntimeHandle?) -> StringResult
     public var pendingApprovalRequests: (RuntimeHandle?) -> StringResult
     public var submitToolResult: (
         RuntimeHandle?,
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
+    ) -> StringResult
+    public var submitToolResultStreaming: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        RuntimeEventCallback?,
+        UnsafeMutableRawPointer?
     ) -> StringResult
     public var submitApprovalResponse: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var cancel: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -162,12 +179,25 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         sendMessage: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        sendMessageStreaming: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            RuntimeEventCallback?,
+            UnsafeMutableRawPointer?
+        ) -> StringResult,
         pendingToolRequests: @escaping (RuntimeHandle?) -> StringResult,
         pendingApprovalRequests: @escaping (RuntimeHandle?) -> StringResult,
         submitToolResult: @escaping (
             RuntimeHandle?,
             UnsafePointer<CChar>?,
             UnsafePointer<CChar>?
+        ) -> StringResult,
+        submitToolResultStreaming: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?,
+            RuntimeEventCallback?,
+            UnsafeMutableRawPointer?
         ) -> StringResult,
         submitApprovalResponse: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         cancel: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
@@ -184,9 +214,11 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.registerToolSchema = registerToolSchema
         self.setPermissionState = setPermissionState
         self.sendMessage = sendMessage
+        self.sendMessageStreaming = sendMessageStreaming
         self.pendingToolRequests = pendingToolRequests
         self.pendingApprovalRequests = pendingApprovalRequests
         self.submitToolResult = submitToolResult
+        self.submitToolResultStreaming = submitToolResultStreaming
         self.submitApprovalResponse = submitApprovalResponse
         self.cancel = cancel
         self.latestPromptDebugSnapshot = latestPromptDebugSnapshot
@@ -233,6 +265,14 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             sendMessage: { runtime, inputJson in
                 local_agent_runtime_bridge_send_message(runtime.map { OpaquePointer($0) }, inputJson)
             },
+            sendMessageStreaming: { runtime, inputJson, callback, userData in
+                local_agent_runtime_bridge_send_message_streaming(
+                    runtime.map { OpaquePointer($0) },
+                    inputJson,
+                    callback,
+                    userData
+                )
+            },
             pendingToolRequests: { runtime in
                 local_agent_runtime_bridge_pending_tool_requests(runtime.map { OpaquePointer($0) })
             },
@@ -244,6 +284,15 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     runId,
                     resultJson
+                )
+            },
+            submitToolResultStreaming: { runtime, runId, resultJson, callback, userData in
+                local_agent_runtime_bridge_submit_tool_result_streaming(
+                    runtime.map { OpaquePointer($0) },
+                    runId,
+                    resultJson,
+                    callback,
+                    userData
                 )
             },
             submitApprovalResponse: { runtime, responseJson in
@@ -276,7 +325,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, @unchecked Sendable {
+public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllingRuntimeClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -338,6 +387,33 @@ public final class RustRuntimeClient: RuntimeClient, ProviderControllingRuntimeC
         }
     }
 
+    public func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        do {
+            let request = SendMessageRequest(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: text
+            )
+            let json = try encode(request)
+            return makeTurnStream { callback, userData in
+                json.withCString { pointer in
+                    self.functions.sendMessageStreaming(
+                        self.handle,
+                        pointer,
+                        callback,
+                        userData
+                    )
+                }
+            }
+        } catch {
+            return failedTurnStream(error)
+        }
+    }
+
     public func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
         try decode(
             functions.pendingToolRequests(handle),
@@ -364,6 +440,30 @@ public final class RustRuntimeClient: RuntimeClient, ProviderControllingRuntimeC
                     as: AgentTurnResultDTO.self
                 )
             }
+        }
+    }
+
+    public func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        do {
+            let json = try encode(result)
+            return makeTurnStream { callback, userData in
+                runId.withCString { runIdPointer in
+                    json.withCString { resultPointer in
+                        self.functions.submitToolResultStreaming(
+                            self.handle,
+                            runIdPointer,
+                            resultPointer,
+                            callback,
+                            userData
+                        )
+                    }
+                }
+            }
+        } catch {
+            return failedTurnStream(error)
         }
     }
 
@@ -416,6 +516,52 @@ public final class RustRuntimeClient: RuntimeClient, ProviderControllingRuntimeC
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    private func makeTurnStream(
+        call: @escaping @Sendable (
+            RustRuntimeCFunctionTable.RuntimeEventCallback?,
+            UnsafeMutableRawPointer?
+        ) -> RustRuntimeCFunctionTable.StringResult
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task.detached { [self] in
+            let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
+            let opaqueCallbackBox = Unmanaged.passRetained(callbackBox).toOpaque()
+            defer {
+                Unmanaged<RuntimeEventCallbackBox>
+                    .fromOpaque(opaqueCallbackBox)
+                    .release()
+            }
+
+            do {
+                let response = call(rustRuntimeEventCallback, opaqueCallbackBox)
+                let result = try decode(response, as: AgentTurnResultDTO.self)
+                continuation.finish()
+                return result
+            } catch {
+                continuation.finish(throwing: error)
+                throw error
+            }
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    private func failedTurnStream(_ error: Error) -> AgentTurnStreamDTO {
+        let bridgeError = RuntimeBridgeError(
+            kind: "swift",
+            message: error.localizedDescription
+        )
+        let events = AsyncThrowingStream<RuntimeEventDTO, Error> { continuation in
+            continuation.finish(throwing: bridgeError)
+        }
+        let result = Task<AgentTurnResultDTO, Error> {
+            throw bridgeError
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
     private func consume(_ response: RustRuntimeCFunctionTable.StringResult) throws -> Data {
         guard let response else {
             throw RuntimeBridgeError(
@@ -450,6 +596,50 @@ private struct SendMessageRequest: Encodable {
         case parentEventId = "parent_event_id"
         case text
     }
+}
+
+private final class RuntimeEventCallbackBox: @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func yield(eventJson: UnsafePointer<CChar>?) -> CInt {
+        guard let eventJson else {
+            continuation.finish(throwing: RuntimeBridgeError(
+                kind: "ffi",
+                message: "runtime bridge streamed a null event string"
+            ))
+            return 1
+        }
+
+        let eventText = String(cString: eventJson)
+        do {
+            let event = try JSONDecoder().decode(
+                RuntimeEventDTO.self,
+                from: Data(eventText.utf8)
+            )
+            continuation.yield(event)
+            return 0
+        } catch {
+            continuation.finish(throwing: error)
+            return 1
+        }
+    }
+}
+
+private func rustRuntimeEventCallback(
+    eventJson: UnsafePointer<CChar>?,
+    userData: UnsafeMutableRawPointer?
+) -> CInt {
+    guard let userData else {
+        return 1
+    }
+    let box = Unmanaged<RuntimeEventCallbackBox>
+        .fromOpaque(userData)
+        .takeUnretainedValue()
+    return box.yield(eventJson: eventJson)
 }
 
 private struct SetPermissionStateRequest: Encodable {

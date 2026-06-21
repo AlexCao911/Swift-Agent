@@ -43,6 +43,29 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text) == ["hello", "Mock response to: hello"])
     }
 
+    @Test("streamed delta is delivered before final turn result")
+    func streamedDeltaIsDeliveredBeforeFinalTurnResult() async throws {
+        let client = StreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let observation = StreamObservation()
+
+        let prepared = try await service.prepare()
+        async let finalState = service.sendMessage("hello", state: prepared) { event in
+            if event.kind == .assistantTextDelta {
+                await observation.observeDelta()
+            }
+        }
+
+        await observation.waitForDelta()
+        #expect(await client.didReleaseFinalResult == false)
+
+        await client.releaseFinalResult()
+        let state = try await finalState
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text) == ["hello", "hello world"])
+    }
+
     @Test("second send is rejected while first send is still in flight")
     func secondSendIsRejectedWhileFirstSendIsInFlight() async throws {
         let client = BlockingSendRuntimeClient()
@@ -252,6 +275,149 @@ struct AgentRuntimeServiceTests {
             sessionId: "session_1",
             parentId: nil,
             runId: runId,
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor StreamObservation {
+    private var didObserveDelta = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func observeDelta() {
+        didObserveDelta = true
+        for waiter in waiters {
+            waiter.resume()
+        }
+        waiters.removeAll()
+    }
+
+    func waitForDelta() async {
+        if didObserveDelta {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
+private actor StreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+    private var finalResultContinuation: CheckedContinuation<Void, Never>?
+    private var releasedFinalResult = false
+
+    var didReleaseFinalResult: Bool {
+        releasedFinalResult
+    }
+
+    func releaseFinalResult() {
+        releasedFinalResult = true
+        finalResultContinuation?.resume()
+        finalResultContinuation = nil
+    }
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task {
+            continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
+            continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: "run run_1"))
+            continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: "hello "))
+            await self.waitForFinalRelease()
+            continuation.yield(Self.event(id: "completed", kind: .assistantMessageCompleted, payload: "hello world"))
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    Self.event(id: "user_1", kind: .userMessage, payload: text),
+                    Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: "run run_1"),
+                    Self.event(id: "delta_1", kind: .assistantTextDelta, payload: "hello "),
+                    Self.event(id: "completed", kind: .assistantMessageCompleted, payload: "hello world"),
+                ],
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private func waitForFinalRelease() async {
+        if releasedFinalResult {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            finalResultContinuation = continuation
+        }
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
             sequence: 1,
             depth: 0,
             kind: kind,

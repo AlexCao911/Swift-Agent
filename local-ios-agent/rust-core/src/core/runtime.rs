@@ -28,6 +28,37 @@ struct RoutedToolCall {
     denied_result: Option<ToolResult>,
 }
 
+type RuntimeEventSink<'a> = &'a mut dyn FnMut(RuntimeEvent) -> Result<(), AgentError>;
+
+#[derive(Debug)]
+enum ProviderOutputAction {
+    Completed,
+    WaitingTool {
+        state: RunState,
+        pending_tool_call_id: String,
+    },
+    AutoSubmitDenied(ToolResult),
+}
+
+struct ProviderSlotEmpty;
+
+impl ModelProvider for ProviderSlotEmpty {
+    fn id(&self) -> &str {
+        "__provider_slot_empty__"
+    }
+
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        _cancellation: CancellationToken,
+        _on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        Err(AgentError::Provider(
+            "provider is temporarily unavailable during a streaming call".into(),
+        ))
+    }
+}
+
 pub struct AgentRuntimeConfig {
     pub system_prompt: String,
     pub runtime_policy: String,
@@ -340,6 +371,14 @@ impl<S: EventStore> AgentRuntime<S> {
         &mut self,
         input: SendMessageInput,
     ) -> Result<AgentTurnResult, AgentError> {
+        self.send_message_streaming(input, &mut |_| Ok(()))
+    }
+
+    pub fn send_message_streaming(
+        &mut self,
+        input: SendMessageInput,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<AgentTurnResult, AgentError> {
         let run_id = RunId(self.ids.next_id("run"));
         let run_id_string = run_id.0.clone();
         self.runs.insert(
@@ -361,6 +400,7 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::UserMessage,
             &input.text,
         )?;
+        Self::emit_events(&mut emitted, on_event)?;
         let user_id = self.append_event(
             &input.session_id,
             parent_id,
@@ -368,7 +408,7 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::UserMessage,
             input.text,
         )?;
-        emitted.push(self.store.get(&input.session_id, &user_id)?);
+        self.emit_event_by_id(&input.session_id, &user_id, &mut emitted, on_event)?;
         let branch = self.store.active_branch(&input.session_id, &user_id)?;
         let frame = self.context_controller().build_prompt_frame(branch)?;
 
@@ -379,22 +419,38 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::AssistantMessageStarted,
             format!("run {}", run_id_string),
         )?;
-        emitted.push(self.store.get(&input.session_id, &assistant_start)?);
+        self.emit_event_by_id(&input.session_id, &assistant_start, &mut emitted, on_event)?;
 
         let mut batcher = StreamBatcher::new(24);
+        let mut parent = assistant_start;
+        let mut provider_action = None;
         self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_id);
-        let provider_result = self.collect_provider_outputs_for_legacy_send_message(
-            &frame,
-            cancellation,
-        );
+        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
+        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
+            if provider_action.is_some() {
+                return Ok(());
+            }
+
+            provider_action = self.process_provider_output(
+                &input.session_id,
+                &run_id,
+                &mut parent,
+                &mut batcher,
+                provider_event,
+                &mut emitted,
+                on_event,
+            )?;
+            Ok(())
+        });
+        self.config.provider = provider;
         self.finish_provider_call(&run_id);
-        let provider_events = match provider_result {
-            Ok(events) => events,
+        match provider_result {
+            Ok(()) => {}
             Err(error) => {
                 let failed_id = self.append_event(
                     &input.session_id,
-                    Some(assistant_start.clone()),
+                    Some(parent),
                     Some(run_id.clone()),
                     EventKind::RunFailed,
                     error.to_string(),
@@ -402,127 +458,27 @@ impl<S: EventStore> AgentRuntime<S> {
                 if let Some(run) = self.runs.get_mut(&run_id) {
                     run.mark_failed()?;
                 }
-                emitted.push(self.store.get(&input.session_id, &failed_id)?);
+                self.emit_event_by_id(&input.session_id, &failed_id, &mut emitted, on_event)?;
                 return Err(error);
-            }
-        };
-        let mut parent = assistant_start;
-
-        for provider_event in provider_events {
-            match provider_event {
-                ModelProviderOutput::TextDelta(delta) => {
-                    if let Some(chunk) = batcher.push(&delta) {
-                        let delta_id = self.append_event(
-                            &input.session_id,
-                            Some(parent.clone()),
-                            Some(run_id.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&input.session_id, &delta_id)?);
-                    }
-                }
-                ModelProviderOutput::ToolCall(tool_call) => {
-                    if let Some(chunk) = batcher.flush() {
-                        let delta_id = self.append_event(
-                            &input.session_id,
-                            Some(parent.clone()),
-                            Some(run_id.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&input.session_id, &delta_id)?);
-                    }
-                    let routed_tool_call = self.append_tool_call_requested(
-                        &input.session_id,
-                        Some(parent.clone()),
-                        &run_id,
-                        tool_call,
-                    )?;
-                    if let Some(run) = self.runs.get_mut(&run_id) {
-                        if routed_tool_call.suspension_event_id.is_some() {
-                            run.mark_suspended()?;
-                        } else {
-                            run.mark_waiting_tool()?;
-                        }
-                    }
-                    emitted.push(
-                        self.store
-                            .get(&input.session_id, &routed_tool_call.event_id)?,
-                    );
-                    if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
-                        emitted.push(self.store.get(&input.session_id, suspension_event_id)?);
-                    }
-                    if let Some(result) = routed_tool_call.denied_result {
-                        let resumed = self.submit_tool_result(run_id_string.clone(), result)?;
-                        let state = resumed.state;
-                        let pending_tool_call_id = resumed.pending_tool_call_id;
-                        emitted.extend(resumed.events);
-                        return Ok(AgentTurnResult {
-                            run_id: run_id_string,
-                            state,
-                            events: emitted,
-                            pending_tool_call_id,
-                        });
-                    }
-                    return Ok(AgentTurnResult {
-                        run_id: run_id_string,
-                        state: if routed_tool_call.suspension_event_id.is_some() {
-                            RunState::Suspended
-                        } else {
-                            RunState::WaitingTool
-                        },
-                        events: emitted,
-                        pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
-                    });
-                }
-                ModelProviderOutput::Completed(completed) => {
-                    if let Some(chunk) = batcher.flush() {
-                        let delta_id = self.append_event(
-                            &input.session_id,
-                            Some(parent.clone()),
-                            Some(run_id.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&input.session_id, &delta_id)?);
-                    }
-                    let completed_id = self.append_event(
-                        &input.session_id,
-                        Some(parent.clone()),
-                        Some(run_id.clone()),
-                        EventKind::AssistantMessageCompleted,
-                        completed,
-                    )?;
-                    if let Some(run) = self.runs.get_mut(&run_id) {
-                        run.mark_completed()?;
-                    }
-                    emitted.push(self.store.get(&input.session_id, &completed_id)?);
-                    return Ok(AgentTurnResult {
-                        run_id: run_id_string,
-                        state: RunState::Completed,
-                        events: emitted,
-                        pending_tool_call_id: None,
-                    });
-                }
             }
         }
 
-        Ok(AgentTurnResult {
-            run_id: run_id_string,
-            state: RunState::Running,
-            events: emitted,
-            pending_tool_call_id: None,
-        })
+        self.result_from_provider_action(run_id_string, provider_action, emitted, on_event)
     }
 
     pub fn submit_tool_result(
         &mut self,
         run_id: String,
         result: ToolResult,
+    ) -> Result<AgentTurnResult, AgentError> {
+        self.submit_tool_result_streaming(run_id, result, &mut |_| Ok(()))
+    }
+
+    pub fn submit_tool_result_streaming(
+        &mut self,
+        run_id: String,
+        result: ToolResult,
+        on_event: RuntimeEventSink<'_>,
     ) -> Result<AgentTurnResult, AgentError> {
         let run_key = RunId(run_id.clone());
         let session_id = {
@@ -558,6 +514,7 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::ToolResultMessage,
             &tool_result_payload,
         )?;
+        Self::emit_events(&mut emitted, on_event)?;
 
         let tool_result_id = self.append_event(
             &session_id,
@@ -566,22 +523,39 @@ impl<S: EventStore> AgentRuntime<S> {
             EventKind::ToolResultMessage,
             tool_result_payload,
         )?;
-        emitted.push(self.store.get(&session_id, &tool_result_id)?);
+        self.emit_event_by_id(&session_id, &tool_result_id, &mut emitted, on_event)?;
         let branch = self.store.active_branch(&session_id, &tool_result_id)?;
         let frame = self.context_controller().build_prompt_frame(branch)?;
         self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_key);
-        let provider_result = self.collect_provider_outputs_for_legacy_send_message(
-            &frame,
-            cancellation,
-        );
+        let mut batcher = StreamBatcher::new(24);
+        let mut parent = tool_result_id;
+        let mut provider_action = None;
+        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
+        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
+            if provider_action.is_some() {
+                return Ok(());
+            }
+
+            provider_action = self.process_provider_output(
+                &session_id,
+                &run_key,
+                &mut parent,
+                &mut batcher,
+                provider_event,
+                &mut emitted,
+                on_event,
+            )?;
+            Ok(())
+        });
+        self.config.provider = provider;
         self.finish_provider_call(&run_key);
-        let provider_events = match provider_result {
-            Ok(events) => events,
+        match provider_result {
+            Ok(()) => {}
             Err(error) => {
                 let failed_id = self.append_event(
                     &session_id,
-                    Some(tool_result_id.clone()),
+                    Some(parent),
                     Some(run_key.clone()),
                     EventKind::RunFailed,
                     error.to_string(),
@@ -589,120 +563,12 @@ impl<S: EventStore> AgentRuntime<S> {
                 if let Some(run) = self.runs.get_mut(&run_key) {
                     run.mark_failed()?;
                 }
-                emitted.push(self.store.get(&session_id, &failed_id)?);
+                self.emit_event_by_id(&session_id, &failed_id, &mut emitted, on_event)?;
                 return Err(error);
-            }
-        };
-
-        let mut batcher = StreamBatcher::new(24);
-        let mut parent = tool_result_id;
-
-        for provider_event in provider_events {
-            match provider_event {
-                ModelProviderOutput::TextDelta(delta) => {
-                    if let Some(chunk) = batcher.push(&delta) {
-                        let delta_id = self.append_event(
-                            &session_id,
-                            Some(parent.clone()),
-                            Some(run_key.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&session_id, &delta_id)?);
-                    }
-                }
-                ModelProviderOutput::ToolCall(tool_call) => {
-                    if let Some(chunk) = batcher.flush() {
-                        let delta_id = self.append_event(
-                            &session_id,
-                            Some(parent.clone()),
-                            Some(run_key.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&session_id, &delta_id)?);
-                    }
-                    let routed_tool_call = self.append_tool_call_requested(
-                        &session_id,
-                        Some(parent.clone()),
-                        &run_key,
-                        tool_call,
-                    )?;
-                    if let Some(run) = self.runs.get_mut(&run_key) {
-                        if routed_tool_call.suspension_event_id.is_some() {
-                            run.mark_suspended()?;
-                        } else {
-                            run.mark_waiting_tool()?;
-                        }
-                    }
-                    emitted.push(self.store.get(&session_id, &routed_tool_call.event_id)?);
-                    if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
-                        emitted.push(self.store.get(&session_id, suspension_event_id)?);
-                    }
-                    if let Some(result) = routed_tool_call.denied_result {
-                        let resumed = self.submit_tool_result(run_id.clone(), result)?;
-                        let state = resumed.state;
-                        let pending_tool_call_id = resumed.pending_tool_call_id;
-                        emitted.extend(resumed.events);
-                        return Ok(AgentTurnResult {
-                            run_id,
-                            state,
-                            events: emitted,
-                            pending_tool_call_id,
-                        });
-                    }
-                    return Ok(AgentTurnResult {
-                        run_id,
-                        state: if routed_tool_call.suspension_event_id.is_some() {
-                            RunState::Suspended
-                        } else {
-                            RunState::WaitingTool
-                        },
-                        events: emitted,
-                        pending_tool_call_id: Some(routed_tool_call.pending_tool_call_id),
-                    });
-                }
-                ModelProviderOutput::Completed(completed) => {
-                    if let Some(chunk) = batcher.flush() {
-                        let delta_id = self.append_event(
-                            &session_id,
-                            Some(parent.clone()),
-                            Some(run_key.clone()),
-                            EventKind::AssistantTextDelta,
-                            chunk,
-                        )?;
-                        parent = delta_id.clone();
-                        emitted.push(self.store.get(&session_id, &delta_id)?);
-                    }
-                    let completed_id = self.append_event(
-                        &session_id,
-                        Some(parent.clone()),
-                        Some(run_key.clone()),
-                        EventKind::AssistantMessageCompleted,
-                        completed,
-                    )?;
-                    if let Some(run) = self.runs.get_mut(&run_key) {
-                        run.mark_completed()?;
-                    }
-                    emitted.push(self.store.get(&session_id, &completed_id)?);
-                    return Ok(AgentTurnResult {
-                        run_id,
-                        state: RunState::Completed,
-                        events: emitted,
-                        pending_tool_call_id: None,
-                    });
-                }
             }
         }
 
-        Ok(AgentTurnResult {
-            run_id,
-            state: RunState::Running,
-            events: emitted,
-            pending_tool_call_id: None,
-        })
+        self.result_from_provider_action(run_id, provider_action, emitted, on_event)
     }
 
     pub fn cancel(&mut self, run_id: String) -> Result<RuntimeEvent, AgentError> {
@@ -747,21 +613,168 @@ impl<S: EventStore> AgentRuntime<S> {
         self.provider_cancellations.remove(run_id);
     }
 
-    fn collect_provider_outputs_for_legacy_send_message(
+    fn emit_events(
+        emitted: &mut [RuntimeEvent],
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<(), AgentError> {
+        for event in emitted.iter().cloned() {
+            on_event(event)?;
+        }
+        Ok(())
+    }
+
+    fn emit_event_by_id(
         &self,
-        frame: &PromptFrame,
-        cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
-        let mut outputs = Vec::new();
-        self.config.provider.stream_chat(
-            frame,
-            cancellation,
-            &mut |output| {
-                outputs.push(output);
-                Ok(())
-            },
-        )?;
-        Ok(outputs)
+        session_id: &SessionId,
+        event_id: &EntryId,
+        emitted: &mut Vec<RuntimeEvent>,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<(), AgentError> {
+        let event = self.store.get(session_id, event_id)?;
+        on_event(event.clone())?;
+        emitted.push(event);
+        Ok(())
+    }
+
+    fn process_provider_output(
+        &mut self,
+        session_id: &SessionId,
+        run_id: &RunId,
+        parent: &mut EntryId,
+        batcher: &mut StreamBatcher,
+        provider_event: ModelProviderOutput,
+        emitted: &mut Vec<RuntimeEvent>,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<Option<ProviderOutputAction>, AgentError> {
+        match provider_event {
+            ModelProviderOutput::TextDelta(delta) => {
+                if let Some(chunk) = batcher.push(&delta) {
+                    let delta_id = self.append_event(
+                        session_id,
+                        Some(parent.clone()),
+                        Some(run_id.clone()),
+                        EventKind::AssistantTextDelta,
+                        chunk,
+                    )?;
+                    *parent = delta_id.clone();
+                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
+                }
+                Ok(None)
+            }
+            ModelProviderOutput::ToolCall(tool_call) => {
+                if let Some(chunk) = batcher.flush() {
+                    let delta_id = self.append_event(
+                        session_id,
+                        Some(parent.clone()),
+                        Some(run_id.clone()),
+                        EventKind::AssistantTextDelta,
+                        chunk,
+                    )?;
+                    *parent = delta_id.clone();
+                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
+                }
+                let routed_tool_call = self.append_tool_call_requested(
+                    session_id,
+                    Some(parent.clone()),
+                    run_id,
+                    tool_call,
+                )?;
+                let state = if routed_tool_call.suspension_event_id.is_some() {
+                    RunState::Suspended
+                } else {
+                    RunState::WaitingTool
+                };
+                if let Some(run) = self.runs.get_mut(run_id) {
+                    match state {
+                        RunState::Suspended => run.mark_suspended()?,
+                        RunState::WaitingTool => run.mark_waiting_tool()?,
+                        _ => {}
+                    }
+                }
+                self.emit_event_by_id(session_id, &routed_tool_call.event_id, emitted, on_event)?;
+                if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
+                    self.emit_event_by_id(session_id, suspension_event_id, emitted, on_event)?;
+                }
+                if let Some(result) = routed_tool_call.denied_result {
+                    return Ok(Some(ProviderOutputAction::AutoSubmitDenied(result)));
+                }
+
+                Ok(Some(ProviderOutputAction::WaitingTool {
+                    state,
+                    pending_tool_call_id: routed_tool_call.pending_tool_call_id,
+                }))
+            }
+            ModelProviderOutput::Completed(completed) => {
+                if let Some(chunk) = batcher.flush() {
+                    let delta_id = self.append_event(
+                        session_id,
+                        Some(parent.clone()),
+                        Some(run_id.clone()),
+                        EventKind::AssistantTextDelta,
+                        chunk,
+                    )?;
+                    *parent = delta_id.clone();
+                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
+                }
+                let completed_id = self.append_event(
+                    session_id,
+                    Some(parent.clone()),
+                    Some(run_id.clone()),
+                    EventKind::AssistantMessageCompleted,
+                    completed,
+                )?;
+                if let Some(run) = self.runs.get_mut(run_id) {
+                    run.mark_completed()?;
+                }
+                self.emit_event_by_id(session_id, &completed_id, emitted, on_event)?;
+                Ok(Some(ProviderOutputAction::Completed))
+            }
+        }
+    }
+
+    fn result_from_provider_action(
+        &mut self,
+        run_id: String,
+        action: Option<ProviderOutputAction>,
+        mut emitted: Vec<RuntimeEvent>,
+        on_event: RuntimeEventSink<'_>,
+    ) -> Result<AgentTurnResult, AgentError> {
+        match action {
+            Some(ProviderOutputAction::Completed) => Ok(AgentTurnResult {
+                run_id,
+                state: RunState::Completed,
+                events: emitted,
+                pending_tool_call_id: None,
+            }),
+            Some(ProviderOutputAction::WaitingTool {
+                state,
+                pending_tool_call_id,
+            }) => Ok(AgentTurnResult {
+                run_id,
+                state,
+                events: emitted,
+                pending_tool_call_id: Some(pending_tool_call_id),
+            }),
+            Some(ProviderOutputAction::AutoSubmitDenied(result)) => {
+                let resumed =
+                    self.submit_tool_result_streaming(run_id.clone(), result, on_event)?;
+                let state = resumed.state;
+                let pending_tool_call_id = resumed.pending_tool_call_id;
+                emitted.extend(resumed.events);
+                Ok(AgentTurnResult {
+                    run_id,
+                    state,
+                    events: emitted,
+                    pending_tool_call_id,
+                })
+            }
+            None => Ok(AgentTurnResult {
+                run_id,
+                state: RunState::Running,
+                events: emitted,
+                pending_tool_call_id: None,
+            }),
+        }
     }
 
     fn capture_prompt_debug_snapshot(&mut self, frame: &PromptFrame) {

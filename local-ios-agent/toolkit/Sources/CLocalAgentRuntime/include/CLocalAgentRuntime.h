@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 typedef struct LocalAgentRuntimeBridge LocalAgentRuntimeBridge;
+typedef int (*LocalAgentRuntimeEventCallback)(const char *event_json, void *user_data);
 
 LocalAgentRuntimeBridge *local_agent_runtime_bridge_new(void);
 LocalAgentRuntimeBridge *local_agent_runtime_bridge_new_with_config(const char *config_json);
@@ -26,12 +27,25 @@ char *local_agent_runtime_bridge_send_message(
     LocalAgentRuntimeBridge *runtime,
     const char *input_json
 );
+char *local_agent_runtime_bridge_send_message_streaming(
+    LocalAgentRuntimeBridge *runtime,
+    const char *input_json,
+    LocalAgentRuntimeEventCallback callback,
+    void *user_data
+);
 char *local_agent_runtime_bridge_pending_tool_requests(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_pending_approval_requests(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_submit_tool_result(
     LocalAgentRuntimeBridge *runtime,
     const char *run_id,
     const char *result_json
+);
+char *local_agent_runtime_bridge_submit_tool_result_streaming(
+    LocalAgentRuntimeBridge *runtime,
+    const char *run_id,
+    const char *result_json,
+    LocalAgentRuntimeEventCallback callback,
+    void *user_data
 );
 char *local_agent_runtime_bridge_submit_approval_response(
     LocalAgentRuntimeBridge *runtime,
