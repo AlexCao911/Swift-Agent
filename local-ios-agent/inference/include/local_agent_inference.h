@@ -1,6 +1,8 @@
 #ifndef LOCAL_AGENT_INFERENCE_H
 #define LOCAL_AGENT_INFERENCE_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -40,6 +42,15 @@ LocalAgentStatus local_agent_backend_stream_chat(
 LocalAgentStatus local_agent_backend_start_chat(
     LocalAgentBackend *backend,
     const char *prompt_json,
+    LocalAgentBackendStream **out_stream
+);
+
+LocalAgentStatus local_agent_backend_start_chat_with_image(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    const unsigned char *rgb_data,
+    uint32_t width,
+    uint32_t height,
     LocalAgentBackendStream **out_stream
 );
 

@@ -81,7 +81,7 @@ ModelConfig parse_model_config(const char *model_config_json) {
 
     const std::string json(model_config_json);
     ModelConfig config;
-    config.backend = require_json_string(json, "backend");
+    config.backend = optional_json_string(json, "backend", "mock");
     config.model_path = require_json_string(json, "model_path");
     config.model_id = optional_json_string(json, "model_id", config.model_path);
     config.chat_template = optional_json_string(json, "chat_template", "gguf");

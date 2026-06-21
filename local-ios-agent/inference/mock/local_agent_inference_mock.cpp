@@ -105,6 +105,30 @@ LocalAgentStatus local_agent_backend_start_chat(
     return LOCAL_AGENT_STATUS_OK;
 }
 
+LocalAgentStatus local_agent_backend_start_chat_with_image(
+    LocalAgentBackend *backend,
+    const char *prompt_json,
+    const unsigned char *rgb_data,
+    uint32_t width,
+    uint32_t height,
+    LocalAgentBackendStream **out_stream
+) {
+    if (out_stream != nullptr) {
+        *out_stream = nullptr;
+    }
+    if (
+        backend == nullptr ||
+        prompt_json == nullptr ||
+        rgb_data == nullptr ||
+        width == 0 ||
+        height == 0 ||
+        out_stream == nullptr
+    ) {
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+}
+
 LocalAgentStatus local_agent_backend_read_stream(
     LocalAgentBackendStream *stream,
     local_agent_token_callback callback,

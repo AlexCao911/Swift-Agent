@@ -12,8 +12,13 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let inference_dir = manifest_dir.parent().unwrap().join("inference");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let object_path = out_dir.join("local_agent_inference_mock.o");
     let library_path = out_dir.join("liblocal_agent_inference_mock.a");
+    let sources = [
+        "c_api/local_agent_inference.cpp",
+        "core/model_config.cpp",
+        "core/token_stream.cpp",
+        "backends/mock/mock_inference_engine.cpp",
+    ];
 
     println!(
         "cargo:rerun-if-changed={}",
@@ -21,30 +26,38 @@ fn main() {
             .join("include/local_agent_inference.h")
             .display()
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        inference_dir
-            .join("mock/local_agent_inference_mock.cpp")
-            .display()
-    );
+    for source in sources {
+        println!("cargo:rerun-if-changed={}", inference_dir.join(source).display());
+    }
 
     let cxx = cxx_invocation();
-    let mut compile = Command::new(&cxx.compiler);
-    compile.args(&cxx.args);
-    compile
-        .arg("-std=c++17")
-        .arg("-I")
-        .arg(inference_dir.join("include"))
-        .arg("-c")
-        .arg(inference_dir.join("mock/local_agent_inference_mock.cpp"))
-        .arg("-o")
-        .arg(&object_path);
-    run(&mut compile);
+    let mut object_paths = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let object_path = out_dir.join(format!("local_agent_inference_mock_{index}.o"));
+        let mut compile = Command::new(&cxx.compiler);
+        compile.args(&cxx.args);
+        compile
+            .arg("-std=c++17")
+            .arg("-I")
+            .arg(inference_dir.join("include"))
+            .arg("-I")
+            .arg(inference_dir.join("core"))
+            .arg("-I")
+            .arg(inference_dir.join("backends/mock"))
+            .arg("-c")
+            .arg(inference_dir.join(source))
+            .arg("-o")
+            .arg(&object_path);
+        run(&mut compile);
+        object_paths.push(object_path);
+    }
 
-    run(Command::new("ar")
-        .arg("crs")
-        .arg(&library_path)
-        .arg(&object_path));
+    let mut archive = Command::new("ar");
+    archive.arg("crs").arg(&library_path);
+    for object_path in &object_paths {
+        archive.arg(object_path);
+    }
+    run(&mut archive);
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=local_agent_inference_mock");
