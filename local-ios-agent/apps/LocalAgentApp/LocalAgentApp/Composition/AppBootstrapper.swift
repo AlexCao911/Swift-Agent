@@ -2,13 +2,22 @@ import Foundation
 import LocalAgentBridge
 
 enum AppBootstrapper {
-    static func makeContainer() throws -> AppContainer {
-        let providers = simulatorProviders()
+    static func makeContainer(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        store: RustRuntimeStoreConfiguration? = nil
+    ) throws -> AppContainer {
+        let providers = simulatorProviders(environment: environment)
+        let runtimeStore: RustRuntimeStoreConfiguration
+        if let store {
+            runtimeStore = store
+        } else {
+            runtimeStore = .sqlite(path: try sqliteURL().path)
+        }
         let client = try RustRuntimeClient(configuration: RustRuntimeConfiguration(
             systemPrompt: "You are Local Agent.",
             runtimePolicy: "Use registered tools when helpful. Ask before risky work.",
-            providerId: "mock",
-            store: .sqlite(path: sqliteURL().path),
+            providerId: runtimeProviderId(environment: environment, providers: providers),
+            store: runtimeStore,
             providers: providers
         ))
         let toolDriver = MinimalHostToolDriver()
@@ -30,7 +39,28 @@ enum AppBootstrapper {
         return directory.appendingPathComponent("agent.sqlite")
     }
 
-    private static func simulatorProviders(
+    static func runtimeProviderId(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        providers: [RustRuntimeProviderConfiguration]? = nil
+    ) -> String {
+        if let providerId = environment["LOCAL_AGENT_DEFAULT_PROVIDER_ID"], !providerId.isEmpty {
+            return providerId
+        }
+
+        let configuredProviders = providers ?? simulatorProviders(environment: environment)
+        if configuredProviders.contains(where: { provider in
+            if case .localLLM = provider {
+                return true
+            }
+            return false
+        }) {
+            return "local_llm"
+        }
+
+        return "mock"
+    }
+
+    static func simulatorProviders(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [RustRuntimeProviderConfiguration] {
         guard let modelConfigJson = environment["LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON"],
