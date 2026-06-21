@@ -9,6 +9,7 @@ namespace local_agent {
 class LlamaCppEngine final : public InferenceEngine {
 public:
     LlamaCppEngine();
+    explicit LlamaCppEngine(std::unique_ptr<LlamaCppSession> session);
 
     void load(const ModelConfig &config) override;
     std::unique_ptr<TokenStream> start_chat(const std::string &prompt_json) override;

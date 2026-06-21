@@ -3,10 +3,59 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
+class FakeLlamaSession final : public local_agent::LlamaCppSession {
+public:
+    void load(const local_agent::ModelConfig &) override {}
+
+    void stream_generate(
+        const std::string &,
+        const local_agent::ModelConfig &,
+        const local_agent::LlamaTokenEmit &emit
+    ) override {
+        if (!emit("first")) {
+            return;
+        }
+        emit("second");
+    }
+
+    void stream_generate_with_image(
+        const std::string &,
+        const local_agent::ImageInput &,
+        const local_agent::ModelConfig &,
+        const local_agent::LlamaTokenEmit &
+    ) override {
+        assert(false && "image path is not expected in this fake session");
+    }
+};
+
+void assert_engine_does_not_complete_after_emit_stop() {
+    local_agent::ModelConfig config;
+    config.backend = "llama_cpp";
+    config.model_path = "fake.gguf";
+    config.max_context_tokens = 128;
+    config.generation.max_new_tokens = 8;
+
+    local_agent::LlamaCppEngine engine(std::make_unique<FakeLlamaSession>());
+    engine.load(config);
+    auto stream = engine.start_chat(R"({"messages":[{"role":"user","content":"stop"}]})");
+
+    std::vector<std::string> tokens;
+    engine.read_stream(*stream, [&](const std::string &token_json) {
+        tokens.push_back(token_json);
+        return false;
+    });
+
+    assert(tokens.size() == 1);
+    assert(tokens[0].find("\"type\":\"text_delta\"") != std::string::npos);
+}
+
 int main() {
+    assert_engine_does_not_complete_after_emit_stop();
+
     const char *model_path = std::getenv("LOCAL_AGENT_SIMULATOR_GGUF");
     if (model_path == nullptr || std::string(model_path).empty()) {
         return 77;

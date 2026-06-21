@@ -1,11 +1,19 @@
 #include "llama_cpp_engine.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace local_agent {
 
 LlamaCppEngine::LlamaCppEngine()
     : session_(make_llama_cpp_session()) {}
+
+LlamaCppEngine::LlamaCppEngine(std::unique_ptr<LlamaCppSession> session)
+    : session_(std::move(session)) {
+    if (!session_) {
+        throw std::invalid_argument("LlamaCppEngine session must not be null");
+    }
+}
 
 void LlamaCppEngine::load(const ModelConfig &config) {
     if (config.backend != "llama_cpp") {
@@ -43,12 +51,17 @@ std::unique_ptr<TokenStream> LlamaCppEngine::start_chat_with_image(
 
 void LlamaCppEngine::read_stream(TokenStream &stream, const TokenStream::Emit &emit) {
     std::string completed;
+    bool stopped_by_emit = false;
     auto on_delta = [&](const std::string &delta) -> bool {
         if (stream.is_cancelled()) {
             return false;
         }
+        if (!stream.emit_text_delta(delta, emit)) {
+            stopped_by_emit = true;
+            return false;
+        }
         completed += delta;
-        return stream.emit_text_delta(delta, emit);
+        return true;
     };
 
     if (has_image_) {
@@ -57,7 +70,7 @@ void LlamaCppEngine::read_stream(TokenStream &stream, const TokenStream::Emit &e
         session_->stream_generate(prompt_json_, config_, on_delta);
     }
 
-    if (!stream.is_cancelled()) {
+    if (!stream.is_cancelled() && !stopped_by_emit) {
         stream.emit_completed(completed, emit);
     }
 }

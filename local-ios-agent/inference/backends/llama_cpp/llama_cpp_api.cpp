@@ -42,12 +42,24 @@ public:
     }
 };
 
-std::string render_prompt_for_llama_cpp(const std::string &prompt_json, const ModelConfig &config) {
+std::string render_prompt_for_llama_cpp(
+    const std::string &prompt_json,
+    const ModelConfig &config
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
+    ,
+    const llama_model *model
+#endif
+) {
     std::vector<LlamaPromptMessage> parsed_messages = parse_llama_prompt_messages(prompt_json);
 
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
     const char *chat_template = nullptr;
-    if (!config.chat_template.empty() && config.chat_template != "gguf") {
+    if (config.chat_template.empty() || config.chat_template == "gguf") {
+        chat_template = llama_model_chat_template(model, nullptr);
+        if (chat_template == nullptr) {
+            throw std::runtime_error("llama.cpp model does not expose a GGUF chat template");
+        }
+    } else {
         chat_template = config.chat_template.c_str();
     }
 
@@ -223,7 +235,9 @@ private:
             throw std::runtime_error("llama.cpp model has no vocabulary");
         }
 
-        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config);
+        llama_memory_clear(llama_get_memory(context_), true);
+
+        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_);
 
         int prompt_token_count = -llama_tokenize(
             vocab,
@@ -271,6 +285,7 @@ private:
         }
 
         llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(config.generation.top_p, 1));
         llama_sampler_chain_add(sampler, llama_sampler_init_temp(config.generation.temperature));
         llama_sampler_chain_add(
             sampler,
@@ -332,7 +347,9 @@ private:
             throw std::runtime_error("llama.cpp failed to create mtmd input chunks");
         }
 
-        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config);
+        llama_memory_clear(llama_get_memory(context_), true);
+
+        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_);
         const mtmd_bitmap *bitmaps[1] = {bitmap};
         int32_t tokenize_status = mtmd_tokenize(mtmd_, chunks, prompt.c_str(), bitmaps, 1);
         if (tokenize_status != 0) {
