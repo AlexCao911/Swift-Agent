@@ -50,6 +50,7 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
 
 public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
     case desktopMiniCPM(endpoint: String, model: String, maxContextTokens: Int)
+    case localLLM(model: String, modelConfigJson: String, maxContextTokens: Int)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +60,12 @@ public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
             self = .desktopMiniCPM(
                 endpoint: try container.decode(String.self, forKey: .endpoint),
                 model: try container.decode(String.self, forKey: .model),
+                maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
+            )
+        case "local_llm":
+            self = .localLLM(
+                model: try container.decode(String.self, forKey: .model),
+                modelConfigJson: try container.decode(String.self, forKey: .modelConfigJson),
                 maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
             )
         default:
@@ -78,6 +85,11 @@ public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
             try container.encode(endpoint, forKey: .endpoint)
             try container.encode(model, forKey: .model)
             try container.encode(maxContextTokens, forKey: .maxContextTokens)
+        case .localLLM(let model, let modelConfigJson, let maxContextTokens):
+            try container.encode("local_llm", forKey: .kind)
+            try container.encode(model, forKey: .model)
+            try container.encode(modelConfigJson, forKey: .modelConfigJson)
+            try container.encode(maxContextTokens, forKey: .maxContextTokens)
         }
     }
 
@@ -85,6 +97,7 @@ public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
         case kind
         case endpoint
         case model
+        case modelConfigJson = "model_config_json"
         case maxContextTokens = "max_context_tokens"
     }
 }

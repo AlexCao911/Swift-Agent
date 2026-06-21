@@ -7,6 +7,7 @@ pub enum ProviderKind {
     DesktopMiniCpm,
     OnDeviceMiniCpm,
     OpenAiCompatibleLocal,
+    LocalLlm,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

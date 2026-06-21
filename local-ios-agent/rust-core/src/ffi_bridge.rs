@@ -5,9 +5,11 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::context::{PromptFrame, TokenizerAdapter};
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
-    AgentTurnResult, DesktopMiniCPMSettings, EntryId, EventKind, ProviderCancellationRegistry,
+    AgentTurnResult, CAbiLocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
+    LocalLLMProvider, ProviderBundle, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
@@ -18,6 +20,60 @@ use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
+
+#[derive(Clone, Debug)]
+struct BridgeWhitespaceTokenizer {
+    provider_id: String,
+    max_context_tokens: usize,
+}
+
+impl BridgeWhitespaceTokenizer {
+    fn new(provider_id: impl Into<String>, max_context_tokens: usize) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            max_context_tokens,
+        }
+    }
+}
+
+impl TokenizerAdapter for BridgeWhitespaceTokenizer {
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    fn max_context_tokens(&self) -> usize {
+        self.max_context_tokens
+    }
+
+    fn safety_margin_tokens(&self) -> usize {
+        let scaled = self.max_context_tokens / 16;
+        scaled.max(32).min(512).min(self.max_context_tokens / 2)
+    }
+
+    fn count_text(&self, text: &str) -> usize {
+        text.split_whitespace().count()
+    }
+
+    fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
+        let mut count = self.count_text(&frame.system_prompt);
+        count += self.count_text(&frame.runtime_policy);
+        count += frame
+            .tool_schemas
+            .iter()
+            .map(|tool| self.count_text(tool))
+            .sum::<usize>();
+        count += frame
+            .messages
+            .iter()
+            .map(|message| self.count_text(message.content()))
+            .sum::<usize>();
+        count
+    }
+
+    fn boxed_clone(&self) -> Box<dyn TokenizerAdapter> {
+        Box::new(self.clone())
+    }
+}
 
 pub enum RuntimeJsonBridge {
     InMemory(BridgeRuntime<InMemoryEventStore>),
@@ -522,12 +578,13 @@ impl RuntimeBridgeConfigJson {
         &self,
         registry: &ProviderRegistry,
     ) -> Result<AgentRuntimeConfig, AgentError> {
-        let bundle = registry.build(&self.provider_id).map_err(|_| {
-            AgentError::Provider(format!(
+        if registry.profile(&self.provider_id).is_none() {
+            return Err(AgentError::Provider(format!(
                 "unknown provider_id for bridge runtime: {}",
                 self.provider_id
-            ))
-        })?;
+            )));
+        }
+        let bundle = registry.build(&self.provider_id)?;
         Ok(AgentRuntimeConfig {
             system_prompt: self.system_prompt.clone(),
             runtime_policy: self.runtime_policy.clone(),
@@ -548,6 +605,12 @@ enum RuntimeProviderConfigJson {
         model: String,
         max_context_tokens: usize,
     },
+    #[serde(rename = "local_llm")]
+    LocalLlm {
+        model: String,
+        model_config_json: String,
+        max_context_tokens: usize,
+    },
 }
 
 impl RuntimeProviderConfigJson {
@@ -565,6 +628,36 @@ impl RuntimeProviderConfigJson {
                     max_context_tokens: *max_context_tokens,
                 },
             ),
+            Self::LocalLlm {
+                model,
+                model_config_json,
+                max_context_tokens,
+            } => {
+                let model = model.clone();
+                let model_config_json = model_config_json.clone();
+                let max_context_tokens = *max_context_tokens;
+                registry.register_fallible_factory(
+                    ProviderProfile {
+                        id: "local_llm".into(),
+                        display_name: "Local LLM".into(),
+                        kind: ProviderKind::LocalLlm,
+                        max_context_tokens,
+                    },
+                    move || {
+                        Ok(ProviderBundle {
+                            provider: Box::new(LocalLLMProvider::new(
+                                model.clone(),
+                                model_config_json.clone(),
+                                Box::new(CAbiLocalInferenceBackend::new()?),
+                            )),
+                            tokenizer: Box::new(BridgeWhitespaceTokenizer::new(
+                                "local_llm",
+                                max_context_tokens,
+                            )),
+                        })
+                    },
+                )
+            }
         }
     }
 }

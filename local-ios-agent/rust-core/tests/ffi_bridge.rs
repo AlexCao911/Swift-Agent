@@ -319,6 +319,63 @@ fn bridge_config_can_create_runtime_with_desktop_minicpm_provider() {
 }
 
 #[test]
+fn bridge_config_surfaces_unlinked_local_llm_provider() {
+    let error = match RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "local_llm",
+          "providers": [
+            {
+              "kind": "local_llm",
+              "model": "local.gguf.simulator",
+              "model_config_json": "{\"backend\":\"mock\",\"model_path\":\"/tmp/mock.gguf\"}",
+              "max_context_tokens": 2048
+            }
+          ],
+          "store": {"kind": "in_memory"}
+        }"#,
+    ) {
+        Ok(_) => panic!("expected unlinked local_llm provider to fail"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains("on-device backend is not linked"),
+        "{error}"
+    );
+}
+
+#[cfg(feature = "link-mock-local-inference")]
+#[test]
+fn bridge_config_can_create_runtime_with_local_llm_provider_when_linked() {
+    let bridge = RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "local_llm",
+          "providers": [
+            {
+              "kind": "local_llm",
+              "model": "local.gguf.simulator",
+              "model_config_json": "{\"backend\":\"mock\",\"model_path\":\"/tmp/mock.gguf\"}",
+              "max_context_tokens": 2048
+            }
+          ],
+          "store": {"kind": "in_memory"}
+        }"#,
+    )
+    .unwrap();
+
+    let active = decode(&bridge.active_provider_json().unwrap());
+    assert_eq!(active["id"], "local_llm");
+    assert_eq!(active["kind"], "local_llm");
+    assert_eq!(active["max_context_tokens"], 2048);
+}
+
+#[test]
 fn bridge_cancel_signals_provider_while_send_message_is_blocked() {
     let probe = Arc::new(CancellationProbe::new());
     let bridge = Arc::new(RuntimeJsonBridge::new(AgentRuntime::new(

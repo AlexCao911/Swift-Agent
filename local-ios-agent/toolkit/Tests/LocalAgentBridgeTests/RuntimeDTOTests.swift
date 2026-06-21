@@ -121,6 +121,19 @@ struct RuntimeDTOTests {
             """.data(using: .utf8)!
         )
         #expect(onDevice.kind == .onDeviceMiniCpm)
+
+        let localLLM = try JSONDecoder().decode(
+            ProviderProfileDTO.self,
+            from: """
+            {
+              "id": "local_llm",
+              "display_name": "Local LLM",
+              "kind": "local_llm",
+              "max_context_tokens": 2048
+            }
+            """.data(using: .utf8)!
+        )
+        #expect(localLLM.kind == .localLLM)
     }
 
     @Test

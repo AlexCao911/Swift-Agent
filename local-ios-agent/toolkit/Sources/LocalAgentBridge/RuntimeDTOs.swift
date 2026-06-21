@@ -313,6 +313,7 @@ public enum ProviderKindDTO: String, Codable, Equatable, Sendable {
     case desktopMiniCpm = "desktop_mini_cpm"
     case onDeviceMiniCpm = "on_device_mini_cpm"
     case openAiCompatibleLocal = "open_ai_compatible_local"
+    case localLLM = "local_llm"
 }
 
 public struct ProviderProfileDTO: Codable, Equatable, Sendable {

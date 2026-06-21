@@ -12,7 +12,7 @@ pub struct ProviderBundle {
 
 struct ProviderEntry {
     profile: ProviderProfile,
-    factory: Box<dyn Fn() -> ProviderBundle + Send + Sync>,
+    factory: Box<dyn Fn() -> Result<ProviderBundle, AgentError> + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -49,6 +49,14 @@ impl ProviderRegistry {
         profile: ProviderProfile,
         factory: impl Fn() -> ProviderBundle + Send + Sync + 'static,
     ) -> Result<(), AgentError> {
+        self.register_fallible_factory(profile, move || Ok(factory()))
+    }
+
+    pub fn register_fallible_factory(
+        &mut self,
+        profile: ProviderProfile,
+        factory: impl Fn() -> Result<ProviderBundle, AgentError> + Send + Sync + 'static,
+    ) -> Result<(), AgentError> {
         if self.entries.contains_key(&profile.id) {
             return Err(AgentError::Provider(format!(
                 "duplicate provider profile: {}",
@@ -84,7 +92,7 @@ impl ProviderRegistry {
             .entries
             .get(provider_id)
             .ok_or_else(|| AgentError::Provider(format!("unknown provider: {provider_id}")))?;
-        let bundle = (entry.factory)();
+        let bundle = (entry.factory)()?;
         validate_bundle(&entry.profile, &bundle)?;
         Ok(bundle)
     }

@@ -98,6 +98,34 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeConfigurationEncodesLocalLLMProviderConfiguration() throws {
+        let configuration = RustRuntimeConfiguration(
+            systemPrompt: "configured system",
+            runtimePolicy: "configured policy",
+            providerId: "local_llm",
+            store: .inMemory,
+            providers: [
+                .localLLM(
+                    model: "local.gguf.simulator",
+                    modelConfigJson: #"{"backend":"mock","model_path":"/tmp/mock.gguf"}"#,
+                    maxContextTokens: 2048
+                ),
+            ]
+        )
+
+        let data = try JSONEncoder().encode(configuration)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let providers = try #require(object["providers"] as? [[String: Any]])
+        let local = try #require(providers.first)
+
+        #expect(object["provider_id"] as? String == "local_llm")
+        #expect(local["kind"] as? String == "local_llm")
+        #expect(local["model"] as? String == "local.gguf.simulator")
+        #expect(local["model_config_json"] as? String == #"{"backend":"mock","model_path":"/tmp/mock.gguf"}"#)
+        #expect(local["max_context_tokens"] as? Int == 2048)
+    }
+
+    @Test
     func rustRuntimeClientDecodesResponsesEncodesRequestsAndFreesStrings() async throws {
         let probe = RuntimeCFunctionProbe()
         var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
