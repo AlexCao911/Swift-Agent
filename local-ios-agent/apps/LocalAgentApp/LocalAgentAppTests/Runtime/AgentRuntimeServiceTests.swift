@@ -380,7 +380,7 @@ private actor StreamingRuntimeClientProbe: StreamingRuntimeClient {
             of: RuntimeEventDTO.self,
             throwing: Error.self
         )
-        let result = Task {
+        let result = Task<AgentTurnResultDTO, any Error> {
             continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
             continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: "run run_1"))
             continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: "hello "))
