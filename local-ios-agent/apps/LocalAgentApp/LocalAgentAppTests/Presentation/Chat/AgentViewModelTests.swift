@@ -62,10 +62,24 @@ struct AgentViewModelTests {
 
         #expect(viewModel.state.messages.map(\.text) == ["final"])
     }
+
+    @Test("select provider delegates to service")
+    func selectProviderDelegatesToService() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.selectProvider("local_llm")
+
+        #expect(await service.selectedProviderIds == ["local_llm"])
+    }
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {
     var sentTexts: [String] = []
+    var selectedProviderIds: [String] = []
     private let preparedState: AgentViewState
     private let sentState: AgentViewState
 
@@ -92,6 +106,11 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {
         state
+    }
+
+    func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
+        selectedProviderIds.append(providerId)
+        return state
     }
 }
 

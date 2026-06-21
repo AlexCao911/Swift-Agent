@@ -7,12 +7,17 @@ protocol AgentRuntimeServicing: Sendable {
         state: AgentViewState,
         onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
     ) async throws -> AgentViewState
+    func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState
     func cancel(state: AgentViewState) async throws -> AgentViewState
 }
 
 extension AgentRuntimeServicing {
     func sendMessage(_ text: String, state: AgentViewState) async throws -> AgentViewState {
         try await sendMessage(text, state: state, onEvent: { _ in })
+    }
+
+    func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
     }
 }
 
@@ -40,13 +45,17 @@ actor AgentRuntimeService: AgentRuntimeServicing {
     func prepare() async throws -> AgentViewState {
         if hasPrepared {
             let ids = try await runtimeClient.sessionIds()
-            return AgentViewState(phase: .ready, currentSessionId: ids.last)
+            var state = AgentViewState(phase: .ready, currentSessionId: ids.last)
+            try await loadProviderState(into: &state)
+            return state
         }
 
         try await runtimeClient.registerToolSchema(toolDriver.schema)
         let sessionId = try await runtimeClient.createSession()
         hasPrepared = true
-        return AgentViewState(phase: .ready, currentSessionId: sessionId)
+        var state = AgentViewState(phase: .ready, currentSessionId: sessionId)
+        try await loadProviderState(into: &state)
+        return state
     }
 
     func sendMessage(
@@ -124,6 +133,32 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         let event = try await runtimeClient.cancel(runId: activeRunId)
         var nextState = state
         RuntimeEventReducer.apply(event, to: &nextState)
+        return nextState
+    }
+
+    func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let providerClient = runtimeClient as? any ProviderControllingRuntimeClient else {
+            return state
+        }
+
+        var nextState = state
+        let sessionId: String
+        if let currentSessionId = nextState.currentSessionId {
+            sessionId = currentSessionId
+        } else {
+            sessionId = try await runtimeClient.createSession()
+            nextState.currentSessionId = sessionId
+        }
+
+        let event = try await providerClient.setProvider(
+            sessionId: sessionId,
+            providerId: providerId
+        )
+        RuntimeEventReducer.apply(event, to: &nextState)
+        try await loadProviderState(into: &nextState)
         return nextState
     }
 
@@ -215,5 +250,14 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         for event in events where !streamedEventIds.contains(event.id) {
             RuntimeEventReducer.apply(event, to: &state)
         }
+    }
+
+    private func loadProviderState(into state: inout AgentViewState) async throws {
+        guard let providerClient = runtimeClient as? any ProviderControllingRuntimeClient else {
+            return
+        }
+        state.provider.profiles = try await providerClient.providerProfiles()
+        state.provider.active = try await providerClient.activeProvider()
+        state.provider.errorMessage = nil
     }
 }

@@ -49,6 +49,10 @@ struct ChatView: View {
                         }
                     }
                 }
+
+                ToolbarItem(placement: .topBarLeading) {
+                    providerMenu
+                }
             }
         }
         .task {
@@ -162,6 +166,26 @@ struct ChatView: View {
     
     private var isSendDisabled: Bool {
         viewModel.state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.state.phase.isRunning
+    }
+
+    private var providerMenu: some View {
+        Menu {
+            ForEach(viewModel.state.provider.profiles, id: \.id) { profile in
+                Button {
+                    Task { await viewModel.selectProvider(profile.id) }
+                } label: {
+                    Label(
+                        profile.displayName,
+                        systemImage: profile.id == viewModel.state.provider.active?.id ? "checkmark" : "cpu"
+                    )
+                }
+                .disabled(viewModel.state.phase.isRunning)
+            }
+        } label: {
+            Image(systemName: "cpu")
+        }
+        .accessibilityLabel("Provider")
+        .disabled(viewModel.state.provider.profiles.isEmpty)
     }
 
     private var phaseText: String {

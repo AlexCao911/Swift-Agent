@@ -17,6 +17,40 @@ struct AgentRuntimeServiceTests {
         #expect(schemas.map(\.name) == ["debug.echo"])
     }
 
+    @Test("prepare loads provider profiles and active provider")
+    func prepareLoadsProviderProfilesAndActiveProvider() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setProviderProfilesForTest([
+            ProviderProfileDTO(id: "mock", displayName: "Mock", kind: .mock, maxContextTokens: 4096),
+            ProviderProfileDTO(id: "local_llm", displayName: "Local LLM", kind: .localLLM, maxContextTokens: 2048),
+        ])
+        await client.setActiveProviderForTest(
+            ProviderProfileDTO(id: "mock", displayName: "Mock", kind: .mock, maxContextTokens: 4096)
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.prepare()
+
+        #expect(state.provider.profiles.map(\.id) == ["mock", "local_llm"])
+        #expect(state.provider.active?.id == "mock")
+    }
+
+    @Test("select provider updates active provider")
+    func selectProviderUpdatesActiveProvider() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setProviderProfilesForTest([
+            ProviderProfileDTO(id: "mock", displayName: "Mock", kind: .mock, maxContextTokens: 4096),
+            ProviderProfileDTO(id: "local_llm", displayName: "Local LLM", kind: .localLLM, maxContextTokens: 2048),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let prepared = try await service.prepare()
+
+        let state = try await service.selectProvider("local_llm", state: prepared)
+
+        #expect(await client.selectedProviders.map(\.providerId) == ["local_llm"])
+        #expect(state.provider.active?.id == "local_llm")
+    }
+
     @Test("send applies completed mock chat events")
     func sendAppliesCompletedMockChatEvents() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
@@ -506,7 +540,7 @@ private actor BlockingSendRuntimeClient: RuntimeClient {
     }
 }
 
-private actor ScriptedRuntimeClient: RuntimeClient {
+private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient {
     struct SentMessage: Equatable, Sendable {
         var sessionId: String
         var parentEventId: String?
@@ -518,14 +552,22 @@ private actor ScriptedRuntimeClient: RuntimeClient {
         var result: ToolResultDTO
     }
 
+    struct SelectedProvider: Equatable, Sendable {
+        var sessionId: String
+        var providerId: String
+    }
+
     private var sessionCount = 0
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
     private var pendingRequests: [ToolExecutionRequestDTO]
+    private var providerProfilesForTest: [ProviderProfileDTO]
+    private var activeProviderForTest: ProviderProfileDTO
 
     private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     private(set) var sentMessages: [SentMessage] = []
     private(set) var submittedToolResults: [SubmittedToolResult] = []
+    private(set) var selectedProviders: [SelectedProvider] = []
 
     init(
         sendTurns: [AgentTurnResultDTO] = [],
@@ -535,6 +577,26 @@ private actor ScriptedRuntimeClient: RuntimeClient {
         self.sendTurns = sendTurns
         self.submitTurns = submitTurns
         self.pendingRequests = pendingToolRequests
+        self.providerProfilesForTest = [
+            ProviderProfileDTO(
+                id: "mock",
+                displayName: "Mock",
+                kind: .mock,
+                maxContextTokens: 100
+            ),
+        ]
+        self.activeProviderForTest = providerProfilesForTest[0]
+    }
+
+    func setProviderProfilesForTest(_ profiles: [ProviderProfileDTO]) {
+        providerProfilesForTest = profiles
+        if activeProviderForTest.id.isEmpty || !profiles.contains(where: { $0.id == activeProviderForTest.id }) {
+            activeProviderForTest = profiles[0]
+        }
+    }
+
+    func setActiveProviderForTest(_ profile: ProviderProfileDTO) {
+        activeProviderForTest = profile
     }
 
     func createSession() async throws -> String {
@@ -594,5 +656,31 @@ private actor ScriptedRuntimeClient: RuntimeClient {
 
     func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
         nil
+    }
+
+    func providerProfiles() async throws -> [ProviderProfileDTO] {
+        providerProfilesForTest
+    }
+
+    func activeProvider() async throws -> ProviderProfileDTO {
+        activeProviderForTest
+    }
+
+    func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO {
+        selectedProviders.append(SelectedProvider(sessionId: sessionId, providerId: providerId))
+        if let profile = providerProfilesForTest.first(where: { $0.id == providerId }) {
+            activeProviderForTest = profile
+        }
+        return RuntimeEventDTO(
+            id: "provider_changed",
+            sessionId: sessionId,
+            parentId: nil,
+            runId: nil,
+            sequence: 1,
+            depth: 0,
+            kind: .providerChanged,
+            payload: #"{"provider_id":"\#(providerId)"}"#,
+            blobRefs: []
+        )
     }
 }

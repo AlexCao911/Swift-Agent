@@ -53,4 +53,12 @@ final class AgentViewModel {
             state.errorMessage = error.localizedDescription
         }
     }
+
+    func selectProvider(_ providerId: String) async {
+        do {
+            state = try await service.selectProvider(providerId, state: state)
+        } catch {
+            state.provider.errorMessage = error.localizedDescription
+        }
+    }
 }
