@@ -4,9 +4,9 @@
 
 **Goal:** Build an in-process iOS Simulator real-model inference path that loads a GGUF model inside the app process and runs generation through a physically isolated, replaceable llama.cpp backend.
 
-**Architecture:** SwiftUI owns provider selection and presentation only. Swift application code depends on `AgentRuntimeServicing` and `LLMEngineProtocol`, never on C++, llama.cpp headers, or model memory ownership. Rust owns runtime state, provider selection, context construction, tool orchestration, cancellation, and maps `ModelProviderOutput` into runtime events. C++ owns model configuration parsing, backend lifecycle, token production, stream-local cancellation, and release; llama.cpp is one replaceable backend behind an internal `InferenceEngine` interface, not the architecture center.
+**Architecture:** SwiftUI owns provider selection and presentation only. Swift application code depends on `AgentRuntimeServicing`, `RuntimeClient`, and `ProviderControllingRuntimeClient`; every LLM call flows through Rust AgentRuntime and `LocalLLMProvider`. Rust owns runtime state, provider selection, context construction, tool orchestration, cancellation, and maps `ModelProviderOutput` into runtime events. C++ owns model configuration parsing, backend lifecycle, token production, stream-local cancellation, and release; llama.cpp is one replaceable backend behind an internal `InferenceEngine` interface, not the architecture center.
 
-**Tech Stack:** SwiftUI MVVM, LocalAgentBridge, Objective-C++ anti-corruption bridge, Rust 2021, C ABI, C++17, llama.cpp XCFramework / static library, GGUF model artifacts outside git, cargo tests, clang++ tests, xcodebuild tests.
+**Tech Stack:** SwiftUI MVVM, LocalAgentBridge, Rust 2021, C ABI, C++17, llama.cpp XCFramework / static library, GGUF model artifacts outside git, cargo tests, clang++ tests, xcodebuild tests.
 
 ---
 
@@ -28,25 +28,16 @@ Xcode iOS Simulator App
   -> local GGUF model file
 ```
 
-Swift-native smoke adapters use a side path:
-
-```text
-LLMEngineProtocol
-  -> NativeLlamaEngineAdapter
-  -> LlamaBridge.h/.mm
-  -> local_agent_inference.h C ABI
-  -> C++ backend facade
-```
-
 This verifies app-process model loading, prompt conversion, token streaming, cancellation, release, and UI recovery. It still does not prove iPhone thermal, battery, Neural Engine, or final Metal performance. Those remain true-device acceptance criteria.
 
 ## Non-Goals
 
 - Do not route Plan 13 inference through an external model service.
+- Do not add a Swift-native inference adapter that bypasses Rust AgentRuntime.
 - Do not make C++ know about sessions, runs, tools, memory, approval policy, SwiftUI, or Rust runtime internals.
 - Do not hardcode MiniCPM into C++ or Rust provider names.
 - Do not make llama.cpp the only possible inference engine.
-- Do not drag llama.cpp source files or C++ headers into SwiftUI, ViewModel, or app domain files.
+- Do not drag llama.cpp source files, C ABI handles, or C++ headers into SwiftUI, ViewModel, app state, tools, or app domain files.
 - Do not commit model weights into git.
 - Do not add model download automation to the app.
 - Do not implement native iOS tools in this plan.
@@ -70,9 +61,9 @@ Kiro ideas retained here:
 
 Kiro ideas corrected here:
 
-- Provider and engine names are model-neutral: `local_llm`, `LocalLLMProvider`, `LocalInferenceBackend`, `LLMEngineProtocol`.
+- Provider and engine names are model-neutral: `local_llm`, `LocalLLMProvider`, `LocalInferenceBackend`.
 - llama.cpp is linked as an external binary artifact, not vendored into the app target as source.
-- Swift may use an Objective-C++ anti-corruption bridge only through a protocol adapter; SwiftUI and ViewModels never import the bridge.
+- Swift does not own any local model adapter in Plan 13. The only app-level LLM entrypoint is `AgentRuntimeServicing`, backed by Rust AgentRuntime.
 
 ## File Structure
 
@@ -81,7 +72,7 @@ Create:
 ```text
 local-ios-agent/docs/model-providers/simulator-llamacpp-contract.md
 local-ios-agent/docs/model-providers/cpp-inference-backend-architecture.md
-local-ios-agent/docs/model-providers/swift-llm-clean-architecture.md
+local-ios-agent/docs/model-providers/swift-agent-core-boundary.md
 local-ios-agent/docs/model-evaluation/simulator-llamacpp-report.md
 local-ios-agent/inference/core/model_config.h
 local-ios-agent/inference/core/model_config.cpp
@@ -96,18 +87,11 @@ local-ios-agent/inference/backends/llama_cpp/llama_cpp_engine.h
 local-ios-agent/inference/backends/llama_cpp/llama_cpp_engine.cpp
 local-ios-agent/inference/backends/llama_cpp/llama_cpp_api.h
 local-ios-agent/inference/backends/llama_cpp/llama_cpp_api.cpp
-local-ios-agent/inference/objc_bridge/LlamaBridge.h
-local-ios-agent/inference/objc_bridge/LlamaBridge.mm
 local-ios-agent/inference/tests/model_config_contract.cpp
 local-ios-agent/inference/tests/token_stream_contract.cpp
 local-ios-agent/inference/tests/c_api_backend_contract.cpp
 local-ios-agent/inference/tests/llama_cpp_backend_contract.cpp
-local-ios-agent/inference/tests/objc_bridge_header_contract.m
 local-ios-agent/rust-core/tests/local_llm_provider.rs
-local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/LLMEngineProtocol.swift
-local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/StructuredOutput.swift
-local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Infrastructure/NativeInference/NativeLlamaEngineAdapter.swift
-local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Domain/LLMEngineProtocolTests.swift
 local-ios-agent/scripts/build-llama-cpp-xcframework.sh
 local-ios-agent/scripts/build-local-inference-simulator.sh
 local-ios-agent/scripts/run-simulator-llamacpp-smoke.sh
@@ -186,9 +170,11 @@ The dependency direction is fixed:
 ```text
 SwiftUI View
   -> AgentViewModel
-  -> AgentRuntimeServicing / LLMEngineProtocol
-  -> RustRuntimeClient or NativeLlamaEngineAdapter
-  -> Rust FFI or Objective-C++ bridge
+  -> AgentRuntimeServicing
+  -> RustRuntimeClient
+  -> Rust FFI
+  -> Rust AgentRuntime
+  -> LocalLLMProvider
   -> C ABI
   -> C++ InferenceEngine
   -> llama.cpp XCFramework
@@ -196,20 +182,19 @@ SwiftUI View
 
 Rules:
 
-- SwiftUI and ViewModels import only Swift domain protocols and DTOs.
-- `LlamaBridge.h` exposes only Objective-C and Foundation/UIKit types: `NSString`, `NSError`, `UIImage`, blocks, and `BOOL`.
-- `LlamaBridge.h` must not include `<vector>`, `<string>`, `<memory>`, `llama.h`, `mtmd.h`, or any project C++ header.
-- `LlamaBridge.mm` may include C++ and C ABI headers privately.
+- SwiftUI and ViewModels import only app state, view models, service protocols, and LocalAgentBridge DTOs.
+- SwiftUI, ViewModels, reducers, tool drivers, and app domain files must not import or mention C ABI handles, C++ backend names, llama.cpp headers, `llama`, `mtmd`, or native backend adapter types.
+- Swift does not contain a direct LLM engine protocol in Plan 13. `AgentRuntimeServicing` is the app boundary; Rust AgentRuntime is the LLM boundary.
 - The app target links a produced `llama.xcframework` or static library. The app target does not compile llama.cpp upstream source files directly.
-- Token deltas move upward by callback/closure and `AsyncThrowingStream`; no layer waits for the entire generation before emitting UI-visible deltas.
-- Replacing llama.cpp with MLX, Core ML, MLC, ExecuTorch, or another backend requires a new adapter and/or `InferenceEngine`, not ViewModel, reducer, tool driver, or Rust runtime state-machine changes.
+- Token deltas move upward through C callback -> Rust `LocalInferenceBackend` -> Rust runtime events -> Swift DTOs; no layer waits for the entire generation before emitting UI-visible deltas.
+- Replacing llama.cpp with MLX, Core ML, MLC, ExecuTorch, or another backend requires a new C++ `InferenceEngine` and backend factory branch, not ViewModel, reducer, tool driver, Swift service, or Rust runtime state-machine changes.
 
 ## Task 1: Write In-Process Inference Contracts And Remove Stale Plan
 
 **Files:**
 - Create: `local-ios-agent/docs/model-providers/simulator-llamacpp-contract.md`
 - Create: `local-ios-agent/docs/model-providers/cpp-inference-backend-architecture.md`
-- Create: `local-ios-agent/docs/model-providers/swift-llm-clean-architecture.md`
+- Create: `local-ios-agent/docs/model-providers/swift-agent-core-boundary.md`
 - Create: `local-ios-agent/docs/model-evaluation/simulator-llamacpp-report.md`
 
 - [ ] **Step 1: Write the simulator contract document**
@@ -307,46 +292,51 @@ C++ code must not include Rust headers, Swift headers, session IDs, run IDs, too
 Replacing llama.cpp with Core ML, MLC, ExecuTorch, or another engine must only require a new `InferenceEngine` implementation and a new backend factory branch. C ABI, Rust runtime, and SwiftUI must remain unchanged.
 ```
 
-- [ ] **Step 3: Write Swift clean architecture document**
+- [ ] **Step 3: Write Swift agent-core boundary document**
 
-Create `local-ios-agent/docs/model-providers/swift-llm-clean-architecture.md`:
+Create `local-ios-agent/docs/model-providers/swift-agent-core-boundary.md`:
 
 ```markdown
-# Swift LLM Clean Architecture
+# Swift Agent Core Boundary
 
-Swift code must treat local inference as a business capability, not as a C++ library.
+Swift code must treat local inference as an AgentRuntime capability, not as a native engine library.
 
-## Public Swift Boundary
+## Single Entry Point
 
-```swift
-protocol StructuredOutput: Decodable, Sendable {}
+All LLM calls in the app must enter through:
 
-enum LLMTokenEvent: Equatable, Sendable {
-    case textDelta(String)
-    case completed(String)
-}
-
-protocol LLMEngineProtocol: Sendable {
-    func stream(prompt: String, image: UIImage?) -> AsyncThrowingStream<LLMTokenEvent, Error>
-    func predict<T: StructuredOutput>(prompt: String, image: UIImage?, as type: T.Type) async throws -> T
-}
+```text
+AgentViewModel
+  -> AgentRuntimeServicing
+  -> RustRuntimeClient
+  -> Rust AgentRuntime
+  -> LocalLLMProvider
 ```
 
-## Adapter Rule
+## Forbidden App Dependencies
 
-`NativeLlamaEngineAdapter` may depend on `LlamaBridge`. `AgentViewModel`, `ChatView`, reducers, tool drivers, and runtime state must not import `LlamaBridge`.
+The app target's Presentation, State, Runtime service, and Tools layers must not import or mention:
 
-## Objective-C++ Header Rule
+- `LocalAgentBackend`
+- `LlamaBridge`
+- `NativeLlamaEngineAdapter`
+- `LLMEngineProtocol`
+- `llama`
+- `mtmd`
+- C++ headers
+- C ABI headers
 
-`LlamaBridge.h` is a Swift import surface. It may expose `NSString`, `NSError`, `UIImage`, blocks, and Objective-C classes only. It must not expose C++ standard library types, llama.cpp headers, project C++ headers, raw model pointers, or manual memory ownership rules.
+## Provider Rule
+
+Provider selection is app-visible, but inference execution is not. Selecting `local_llm` only changes Rust provider registry state; it must not create a Swift-native model object.
 
 ## Physical Link Rule
 
-The app links a prebuilt `llama.xcframework` or static library. Upstream llama.cpp source files stay outside the Xcode app target. Backend updates happen by rebuilding the library artifact and rerunning native bridge tests.
+The app may link the Rust/C ABI native inference artifact required by `RustRuntimeClient`. Upstream llama.cpp source files stay outside the Xcode app target.
 
 ## Streaming Rule
 
-Native token callbacks must be bridged into `AsyncThrowingStream` immediately. Collecting a full completion before updating Swift state violates this contract.
+Native token callbacks must be converted to Rust runtime events and then to Swift DTOs immediately. Collecting a full completion before updating Swift state violates this contract.
 ```
 
 - [ ] **Step 4: Commit**
@@ -356,7 +346,7 @@ Run:
 ```bash
 git add local-ios-agent/docs/model-providers/simulator-llamacpp-contract.md \
   local-ios-agent/docs/model-providers/cpp-inference-backend-architecture.md \
-  local-ios-agent/docs/model-providers/swift-llm-clean-architecture.md \
+  local-ios-agent/docs/model-providers/swift-agent-core-boundary.md \
   local-ios-agent/docs/model-evaluation/simulator-llamacpp-report.md \
   local-ios-agent/docs/superpowers/plans/2026-06-20-plan-13-simulator-llamacpp-inprocess.md
 git commit -m "docs: define simulator llama cpp inference architecture"
@@ -2231,505 +2221,8 @@ git add local-ios-agent/inference/backends/llama_cpp \
 git commit -m "Add llama cpp backend behind inference interface"
 ```
 
-## Task 8: Add Swift LLM Protocol And Objective-C++ Anti-Corruption Bridge
 
-**Files:**
-- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/StructuredOutput.swift`
-- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/LLMEngineProtocol.swift`
-- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Infrastructure/NativeInference/NativeLlamaEngineAdapter.swift`
-- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Domain/LLMEngineProtocolTests.swift`
-- Create: `local-ios-agent/inference/objc_bridge/LlamaBridge.h`
-- Create: `local-ios-agent/inference/objc_bridge/LlamaBridge.mm`
-- Test: `local-ios-agent/inference/tests/objc_bridge_header_contract.m`
-- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj`
-
-- [ ] **Step 1: Write failing Swift protocol test**
-
-Create `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Domain/LLMEngineProtocolTests.swift`:
-
-```swift
-import Testing
-import UIKit
-@testable import LocalAgentApp
-
-private struct EchoOutput: StructuredOutput, Equatable {
-    let value: String
-}
-
-private struct ScriptedLLMEngine: LLMEngineProtocol {
-    func stream(prompt: String, image: UIImage?) -> AsyncThrowingStream<LLMTokenEvent, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.yield(.textDelta(#"{"value":"#))
-            continuation.yield(.textDelta(prompt))
-            continuation.yield(.textDelta(#""}"#))
-            continuation.yield(.completed(#"{"value":"\#(prompt)"}"#))
-            continuation.finish()
-        }
-    }
-}
-
-@Test("LLMEngineProtocol predicts structured output without backend types")
-func llmEngineProtocolPredictsStructuredOutput() async throws {
-    let engine = ScriptedLLMEngine()
-
-    let output = try await engine.predict(prompt: "hello", image: nil, as: EchoOutput.self)
-
-    #expect(output == EchoOutput(value: "hello"))
-}
-```
-
-- [ ] **Step 2: Run Swift test to verify it fails**
-
-```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
-  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
-  -scheme LocalAgentApp \
-  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-  -only-testing:LocalAgentAppTests/LLMEngineProtocolTests test
-```
-
-Expected: FAIL because `StructuredOutput`, `LLMTokenEvent`, and `LLMEngineProtocol` do not exist.
-
-- [ ] **Step 3: Add Swift domain protocol**
-
-Create `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/StructuredOutput.swift`:
-
-```swift
-import Foundation
-
-protocol StructuredOutput: Decodable, Sendable {}
-```
-
-Create `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain/LLMEngineProtocol.swift`:
-
-```swift
-import Foundation
-import UIKit
-
-enum LLMTokenEvent: Equatable, Sendable {
-    case textDelta(String)
-    case completed(String)
-}
-
-protocol LLMEngineProtocol: Sendable {
-    func stream(prompt: String, image: UIImage?) -> AsyncThrowingStream<LLMTokenEvent, Error>
-    func predict<T: StructuredOutput>(prompt: String, image: UIImage?, as type: T.Type) async throws -> T
-}
-
-extension LLMEngineProtocol {
-    func predict<T: StructuredOutput>(prompt: String, image: UIImage?, as type: T.Type) async throws -> T {
-        var completedText: String?
-        var accumulated = ""
-
-        for try await event in stream(prompt: prompt, image: image) {
-            switch event {
-            case .textDelta(let text):
-                accumulated += text
-            case .completed(let text):
-                completedText = text
-            }
-        }
-
-        let jsonText = completedText ?? accumulated
-        let data = Data(jsonText.utf8)
-        return try JSONDecoder().decode(T.self, from: data)
-    }
-}
-```
-
-Do not import `LlamaBridge`, C ABI headers, or C++ headers in either domain file.
-
-- [ ] **Step 4: Write Objective-C header cleanliness test**
-
-Create `local-ios-agent/inference/tests/objc_bridge_header_contract.m`:
-
-```objective-c
-#import "LlamaBridge.h"
-
-int main(void) {
-    LALlamaBridge *bridge = nil;
-    (void)bridge;
-    return 0;
-}
-```
-
-- [ ] **Step 5: Run header test to verify it fails**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent
-SDKROOT="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-clang -fobjc-arc -x objective-c \
-  -isysroot "$SDKROOT" \
-  -I inference/objc_bridge \
-  -c inference/tests/objc_bridge_header_contract.m \
-  -o /tmp/objc_bridge_header_contract.o
-```
-
-Expected: FAIL because `LlamaBridge.h` does not exist.
-
-- [ ] **Step 6: Add Swift-safe Objective-C bridge header**
-
-Create `local-ios-agent/inference/objc_bridge/LlamaBridge.h`:
-
-```objective-c
-#import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
-
-NS_ASSUME_NONNULL_BEGIN
-
-typedef void (^LALlamaTokenHandler)(NSString *tokenJSON);
-typedef void (^LALlamaCompletionHandler)(NSError *_Nullable error);
-
-NS_SWIFT_NAME(LlamaBridge)
-@interface LALlamaBridge : NSObject
-
-- (instancetype)init NS_UNAVAILABLE;
-- (instancetype)initWithModelConfigJSON:(NSString *)modelConfigJSON
-                                  error:(NSError **)error NS_DESIGNATED_INITIALIZER;
-
-- (void)predictWithPromptJSON:(NSString *)promptJSON
-                        image:(nullable UIImage *)image
-                      onToken:(LALlamaTokenHandler)onToken
-                   completion:(LALlamaCompletionHandler)completion;
-
-- (void)cancel;
-
-@end
-
-NS_ASSUME_NONNULL_END
-```
-
-Header contract:
-
-- No `#include <vector>`.
-- No `#include <string>`.
-- No `#include <memory>`.
-- No `#include "llama.h"`.
-- No `#include "mtmd.h"`.
-- No project C++ headers.
-- No raw backend pointer types in public method signatures.
-
-- [ ] **Step 7: Add Objective-C++ bridge implementation**
-
-Create `local-ios-agent/inference/objc_bridge/LlamaBridge.mm`:
-
-```objective-c++
-#import "LlamaBridge.h"
-
-#include "local_agent_inference.h"
-
-#import <CoreGraphics/CoreGraphics.h>
-
-static NSString *const LALlamaBridgeErrorDomain = @"LocalAgent.LlamaBridge";
-
-typedef NS_ENUM(NSInteger, LALlamaBridgeErrorCode) {
-    LALlamaBridgeErrorInvalidArgument = 1,
-    LALlamaBridgeErrorBackendFailure = 2,
-    LALlamaBridgeErrorUnsupportedImage = 3,
-};
-
-@interface LAStreamContext : NSObject
-@property(nonatomic, copy) LALlamaTokenHandler onToken;
-@end
-
-@implementation LAStreamContext
-@end
-
-@interface LALlamaBridge ()
-@property(nonatomic, assign) LocalAgentBackend *backend;
-@property(nonatomic, assign) LocalAgentBackendStream *activeStream;
-@end
-
-static NSError *LAError(NSInteger code, NSString *message) {
-    return [NSError errorWithDomain:LALlamaBridgeErrorDomain
-                               code:code
-                           userInfo:@{NSLocalizedDescriptionKey: message}];
-}
-
-static NSError *LAErrorFromStatus(LocalAgentStatus status, NSString *operation) {
-    if (status == LOCAL_AGENT_STATUS_OK) {
-        return nil;
-    }
-    if (status == LOCAL_AGENT_STATUS_INVALID_ARGUMENT) {
-        return LAError(LALlamaBridgeErrorInvalidArgument, [operation stringByAppendingString:@" rejected invalid input"]);
-    }
-    if (status == LOCAL_AGENT_STATUS_CANCELLED) {
-        return LAError(NSUserCancelledError, [operation stringByAppendingString:@" cancelled"]);
-    }
-    return LAError(LALlamaBridgeErrorBackendFailure, [operation stringByAppendingString:@" failed"]);
-}
-
-static NSData *LARGBDataFromImage(UIImage *image, NSUInteger *widthOut, NSUInteger *heightOut, NSError **error) {
-    CGImageRef cgImage = image.CGImage;
-    if (cgImage == nil) {
-        if (error != nil) {
-            *error = LAError(LALlamaBridgeErrorInvalidArgument, @"image does not contain CGImage data");
-        }
-        return nil;
-    }
-
-    const size_t width = CGImageGetWidth(cgImage);
-    const size_t height = CGImageGetHeight(cgImage);
-    NSMutableData *rgbaData = [NSMutableData dataWithLength:width * height * 4];
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreate(
-        rgbaData.mutableBytes,
-        width,
-        height,
-        8,
-        width * 4,
-        colorSpace,
-        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
-    );
-    CGColorSpaceRelease(colorSpace);
-
-    if (context == nil) {
-        if (error != nil) {
-            *error = LAError(LALlamaBridgeErrorBackendFailure, @"failed to create image conversion context");
-        }
-        return nil;
-    }
-
-    CGContextDrawImage(context, CGRectMake(0, 0, width, height), cgImage);
-    CGContextRelease(context);
-
-    NSMutableData *rgbData = [NSMutableData dataWithLength:width * height * 3];
-    const unsigned char *rgba = static_cast<const unsigned char *>(rgbaData.bytes);
-    unsigned char *rgb = static_cast<unsigned char *>(rgbData.mutableBytes);
-    for (size_t pixel = 0; pixel < width * height; pixel += 1) {
-        rgb[pixel * 3 + 0] = rgba[pixel * 4 + 0];
-        rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1];
-        rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2];
-    }
-
-    *widthOut = width;
-    *heightOut = height;
-    return rgbData;
-}
-
-static void LATokenCallback(const char *token_json, void *user_data) {
-    if (token_json == nullptr || user_data == nullptr) {
-        return;
-    }
-    LAStreamContext *context = (__bridge LAStreamContext *)user_data;
-    NSString *token = [NSString stringWithUTF8String:token_json];
-    if (token != nil) {
-        context.onToken(token);
-    }
-}
-
-@implementation LALlamaBridge
-
-- (instancetype)initWithModelConfigJSON:(NSString *)modelConfigJSON error:(NSError **)error {
-    self = [super init];
-    if (self == nil) {
-        return nil;
-    }
-
-    LocalAgentBackend *backend = nullptr;
-    LocalAgentStatus initStatus = local_agent_backend_init(&backend);
-    NSError *initError = LAErrorFromStatus(initStatus, @"initialize native inference backend");
-    if (initError != nil) {
-        if (error != nil) {
-            *error = initError;
-        }
-        return nil;
-    }
-
-    LocalAgentStatus loadStatus = local_agent_backend_load_model(backend, modelConfigJSON.UTF8String);
-    NSError *loadError = LAErrorFromStatus(loadStatus, @"load native inference model");
-    if (loadError != nil) {
-        local_agent_backend_release(backend);
-        if (error != nil) {
-            *error = loadError;
-        }
-        return nil;
-    }
-
-    _backend = backend;
-    return self;
-}
-
-- (void)predictWithPromptJSON:(NSString *)promptJSON
-                        image:(UIImage *)image
-                      onToken:(LALlamaTokenHandler)onToken
-                   completion:(LALlamaCompletionHandler)completion {
-    if (self.backend == nullptr) {
-        completion(LAError(LALlamaBridgeErrorBackendFailure, @"native inference backend is not initialized"));
-        return;
-    }
-    if (promptJSON.length == 0) {
-        completion(LAError(LALlamaBridgeErrorInvalidArgument, @"prompt JSON must not be empty"));
-        return;
-    }
-    NSUInteger imageWidth = 0;
-    NSUInteger imageHeight = 0;
-    NSData *rgbData = nil;
-    if (image != nil) {
-        NSError *imageError = nil;
-        rgbData = LARGBDataFromImage(image, &imageWidth, &imageHeight, &imageError);
-        if (rgbData == nil) {
-            completion(imageError);
-            return;
-        }
-    }
-
-    LAStreamContext *context = [LAStreamContext new];
-    context.onToken = onToken;
-
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        LocalAgentBackendStream *stream = nullptr;
-        LocalAgentStatus startStatus = LOCAL_AGENT_STATUS_ERROR;
-        if (rgbData != nil) {
-            startStatus = local_agent_backend_start_chat_with_image(
-                self.backend,
-                promptJSON.UTF8String,
-                static_cast<const unsigned char *>(rgbData.bytes),
-                static_cast<uint32_t>(imageWidth),
-                static_cast<uint32_t>(imageHeight),
-                &stream
-            );
-        } else {
-            startStatus = local_agent_backend_start_chat(self.backend, promptJSON.UTF8String, &stream);
-        }
-        NSError *startError = LAErrorFromStatus(startStatus, @"start native inference stream");
-        if (startError != nil) {
-            completion(startError);
-            return;
-        }
-
-        self.activeStream = stream;
-        LocalAgentStatus readStatus = local_agent_backend_read_stream(stream, LATokenCallback, (__bridge void *)context);
-        LocalAgentStatus releaseStatus = local_agent_backend_release_stream(stream);
-        self.activeStream = nullptr;
-
-        NSError *readError = LAErrorFromStatus(readStatus, @"read native inference stream");
-        if (readError != nil) {
-            completion(readError);
-            return;
-        }
-
-        completion(LAErrorFromStatus(releaseStatus, @"release native inference stream"));
-    });
-}
-
-- (void)cancel {
-    LocalAgentBackendStream *stream = self.activeStream;
-    if (stream != nullptr) {
-        local_agent_backend_cancel(stream);
-    }
-}
-
-- (void)dealloc {
-    if (_activeStream != nullptr) {
-        local_agent_backend_cancel(_activeStream);
-        local_agent_backend_release_stream(_activeStream);
-        _activeStream = nullptr;
-    }
-    if (_backend != nullptr) {
-        local_agent_backend_release(_backend);
-        _backend = nullptr;
-    }
-}
-
-@end
-```
-
-The implementation may use Objective-C++, C ABI, CoreGraphics, and private C++ helpers. Its public header stays Swift-safe.
-
-- [ ] **Step 8: Add native Swift adapter**
-
-Create `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Infrastructure/NativeInference/NativeLlamaEngineAdapter.swift`:
-
-```swift
-import Foundation
-import UIKit
-
-final class NativeLlamaEngineAdapter: LLMEngineProtocol, @unchecked Sendable {
-    private let bridge: LlamaBridge
-
-    init(modelConfigJSON: String) throws {
-        var error: NSError?
-        guard let bridge = LlamaBridge(modelConfigJSON: modelConfigJSON, error: &error) else {
-            throw error ?? NSError(domain: "LocalAgent.NativeLlamaEngineAdapter", code: 1)
-        }
-        self.bridge = bridge
-    }
-
-    func stream(prompt: String, image: UIImage?) -> AsyncThrowingStream<LLMTokenEvent, Error> {
-        AsyncThrowingStream { continuation in
-            let promptJSON = #"{"messages":[{"role":"user","content":"\#(prompt)"}]}"#
-            bridge.predict(
-                withPromptJSON: promptJSON,
-                image: image,
-                onToken: { tokenJSON in
-                    if tokenJSON.contains(#""type":"completed""#) {
-                        continuation.yield(.completed(tokenJSON))
-                    } else {
-                        continuation.yield(.textDelta(tokenJSON))
-                    }
-                },
-                completion: { error in
-                    if let error {
-                        continuation.finish(throwing: error)
-                    } else {
-                        continuation.finish()
-                    }
-                }
-            )
-        }
-    }
-}
-```
-
-`NativeLlamaEngineAdapter` is an infrastructure adapter. `AgentViewModel`, `ChatView`, reducers, and tool drivers must not import it directly; composition owns injection.
-
-- [ ] **Step 9: Verify no Swift UI layer imports the bridge**
-
-Run:
-
-```bash
-rg -n "LlamaBridge|NativeLlamaEngineAdapter|llama|LocalAgentBackend" \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Tools
-```
-
-Expected: no matches.
-
-- [ ] **Step 10: Run tests**
-
-```bash
-cd /Users/alexandercou/Projects/Alex-agent/local-ios-agent
-SDKROOT="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-clang -fobjc-arc -x objective-c \
-  -isysroot "$SDKROOT" \
-  -I inference/objc_bridge \
-  -c inference/tests/objc_bridge_header_contract.m \
-  -o /tmp/objc_bridge_header_contract.o
-
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -quiet \
-  -project apps/LocalAgentApp/LocalAgentApp.xcodeproj \
-  -scheme LocalAgentApp \
-  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-  -only-testing:LocalAgentAppTests/LLMEngineProtocolTests test
-```
-
-Expected: both pass.
-
-- [ ] **Step 11: Commit**
-
-```bash
-git add local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Domain \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Infrastructure/NativeInference \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Domain \
-  local-ios-agent/inference/objc_bridge \
-  local-ios-agent/inference/tests/objc_bridge_header_contract.m \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj
-git commit -m "Add Swift local llm engine boundary"
-```
-
-## Task 9: Wire Simulator App To local_llm Provider
+## Task 8: Wire Simulator App To local_llm Provider
 
 **Files:**
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
@@ -2900,7 +2393,7 @@ git add local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstra
 git commit -m "Add local llm provider selection to app"
 ```
 
-## Task 10: Simulator llama.cpp Manual Smoke And Report
+## Task 9: Simulator llama.cpp Manual Smoke And Report
 
 **Files:**
 - Create: `local-ios-agent/scripts/build-local-inference-simulator.sh`
@@ -3053,13 +2546,15 @@ local-ios-agent/scripts/run-simulator-llamacpp-smoke.sh
 Run clean-architecture guard checks:
 
 ```bash
-rg -n "LlamaBridge|NativeLlamaEngineAdapter|llama|LocalAgentBackend" \
+rg -n "LlamaBridge|NativeLlamaEngineAdapter|LLMEngineProtocol|LocalAgentBackend|local_agent_backend_|#include.*llama|#include.*mtmd" \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Tools
 
-rg -n "#include <vector>|#include <string>|#include <memory>|llama.h|mtmd.h|LocalAgentBackend" \
-  local-ios-agent/inference/objc_bridge/LlamaBridge.h
+rg -n "NativeLlamaEngineAdapter|LlamaBridge|LLMEngineProtocol|objc_bridge" \
+  local-ios-agent/apps/LocalAgentApp \
+  local-ios-agent/toolkit/Sources/LocalAgentBridge
 ```
 
 Expected: both `rg` commands exit with code 1 and no matches.
@@ -3068,15 +2563,14 @@ Expected: both `rg` commands exit with code 1 and no matches.
 
 - Simulator App can boot with Mock when no model is configured.
 - Simulator App can register `local_llm` when `LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON` is configured.
-- Local LLM provider runs through Rust `ModelProvider`, not direct Swift-to-C++ calls.
-- SwiftUI, ViewModels, reducers, and tools do not import `LlamaBridge`, llama.cpp, C ABI handles, or native backend adapter types.
-- `LLMEngineProtocol` is the Swift business boundary for local model capabilities.
-- `LlamaBridge.h` exposes only Objective-C/Foundation/UIKit types and blocks.
-- `LlamaBridge.mm` is the only Swift-facing file allowed to translate `UIImage` into RGB bytes.
+- Every app-level LLM call enters through `AgentRuntimeServicing` and `RustRuntimeClient`.
+- Local LLM execution runs through Rust `ModelProvider` and `LocalLLMProvider`; there is no Swift-to-C++ inference path.
+- SwiftUI, ViewModels, reducers, runtime service, and tools do not import or mention `LlamaBridge`, `NativeLlamaEngineAdapter`, `LLMEngineProtocol`, llama.cpp headers, C ABI handles, or local C ABI function names.
+- Provider selection is app-visible, but model execution ownership stays inside Rust AgentRuntime.
 - llama.cpp is consumed through a produced XCFramework/static library, not by dragging upstream C++ source into the app target.
 - C++ backend is split into C ABI, model config, engine interface, token stream, mock backend, and llama.cpp backend.
 - C++ receives no session ID, run ID, tool call ID, Swift type, or Rust runtime type.
-- Token deltas reach Swift through callback/closure/`AsyncThrowingStream` without waiting for the full completion.
+- Token deltas reach Swift through C callback -> Rust `LocalInferenceBackend` -> Rust runtime events -> Swift DTOs without waiting for the full completion.
 - Optional image inference requires `mmproj_path` and keeps `mtmd_tokenize` inside `llama_cpp_api.cpp`.
 - llama.cpp is replaceable by adding another `InferenceEngine`.
 - MiniCPM is treated as a model artifact compatibility choice, not as a hardcoded backend.
