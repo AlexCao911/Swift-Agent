@@ -38,9 +38,11 @@ enum RuntimeEventReducer {
         }
         state.messages.append(AgentMessageViewState(
             id: event.id,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
             role: .user,
-            text: event.payload,
-            isStreaming: false
+            parts: [.text(TextPartViewState(id: "\(event.id)_text_0", text: event.payload))],
+            streaming: .idle
         ))
     }
 
@@ -52,9 +54,11 @@ enum RuntimeEventReducer {
 
         state.messages.append(AgentMessageViewState(
             id: messageId,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
             role: .assistant,
-            text: "",
-            isStreaming: true
+            parts: [],
+            streaming: .streaming
         ))
     }
 
@@ -62,14 +66,16 @@ enum RuntimeEventReducer {
         let text = payloadString("text", from: event.payload) ?? event.payload
         let messageId = assistantMessageId(for: event, in: state)
         if let index = state.messages.firstIndex(where: { $0.id == messageId }) {
+            state.messages[index].streaming = .streaming
             state.messages[index].text += text
-            state.messages[index].isStreaming = true
         } else {
             state.messages.append(AgentMessageViewState(
                 id: messageId,
+                sessionId: event.sessionId,
+                parentId: event.parentId,
                 role: .assistant,
-                text: text,
-                isStreaming: true
+                parts: parsedAssistantParts(from: text, isFinal: false),
+                streaming: .streaming
             ))
         }
     }
@@ -84,9 +90,11 @@ enum RuntimeEventReducer {
         } else {
             state.messages.append(AgentMessageViewState(
                 id: messageId,
+                sessionId: event.sessionId,
+                parentId: event.parentId,
                 role: .assistant,
-                text: completedText,
-                isStreaming: false
+                parts: parsedAssistantParts(from: completedText, isFinal: true),
+                streaming: .idle
             ))
         }
     }
@@ -99,10 +107,18 @@ enum RuntimeEventReducer {
         let displayText = payloadString("display_text", from: event.payload) ?? event.payload
         state.messages.append(AgentMessageViewState(
             id: event.id,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
             role: .tool,
-            text: displayText,
-            isStreaming: false
+            parts: [.tool(ToolPartViewState(id: event.id, displayText: displayText))],
+            streaming: .idle
         ))
+    }
+
+    private static func parsedAssistantParts(from text: String, isFinal: Bool) -> [MessagePartViewState] {
+        var parser = ReasoningTagParser()
+        parser.append(text)
+        return isFinal ? parser.finish() : parser.snapshot(isFinal: false)
     }
 
     private static func assistantMessageId(for event: RuntimeEventDTO, in state: AgentViewState) -> String {

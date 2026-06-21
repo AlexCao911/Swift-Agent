@@ -27,6 +27,94 @@ struct RuntimeEventReducerTests {
         #expect(state.messages[0].isStreaming)
     }
 
+    @Test("assistant reasoning tags are projected as reasoning parts")
+    func assistantReasoningProjectsAsParts() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"<think>hidden"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_2", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"</think>visible"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"<think>hidden</think>visible"}"#),
+            to: &state
+        )
+
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].parts == [
+            .reasoning(ReasoningPartViewState(id: "reasoning_0", text: "hidden", isCollapsed: true, isStreaming: false)),
+            .text(TextPartViewState(id: "text_1", text: "visible")),
+        ])
+        #expect(state.messages[0].text == "hiddenvisible")
+        #expect(!state.messages[0].isStreaming)
+    }
+
+    @Test("runtime messages preserve metadata and structured parts")
+    func runtimeMessagesPreserveMetadataAndStructuredParts() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(id: "user_1", kind: .userMessage, payload: "hello", parentId: "parent_user"),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "assistant_started",
+                kind: .assistantMessageStarted,
+                payload: #"{"message_id":"assistant_1"}"#,
+                parentId: "parent_assistant"
+            ),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"hi"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "completed",
+                kind: .assistantMessageCompleted,
+                payload: #"{"message_id":"assistant_1","text":"hi"}"#,
+                parentId: "ignored_parent"
+            ),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "tool_result",
+                kind: .toolResultMessage,
+                payload: #"{"display_text":"Echo: hello"}"#,
+                parentId: "parent_tool"
+            ),
+            to: &state
+        )
+
+        #expect(state.messages.count == 3)
+        #expect(state.messages[0].sessionId == "session_1")
+        #expect(state.messages[0].parentId == "parent_user")
+        #expect(state.messages[0].parts == [
+            .text(TextPartViewState(id: "user_1_text_0", text: "hello")),
+        ])
+        #expect(state.messages[1].sessionId == "session_1")
+        #expect(state.messages[1].parentId == "parent_assistant")
+        #expect(state.messages[1].parts == [
+            .text(TextPartViewState(id: "text_0", text: "hi")),
+        ])
+        #expect(state.messages[2].sessionId == "session_1")
+        #expect(state.messages[2].parentId == "parent_tool")
+        #expect(state.messages[2].parts == [
+            .tool(ToolPartViewState(id: "tool_result", displayText: "Echo: hello")),
+        ])
+    }
+
     @Test("rust plain-text events project user and assistant messages")
     func rustPlainTextEventsProjectConversation() {
         var state = AgentViewState(phase: .running(runId: "run_1"))
@@ -40,15 +128,11 @@ struct RuntimeEventReducerTests {
             to: &state
         )
 
-        #expect(state.messages == [
-            AgentMessageViewState(id: "user_1", role: .user, text: "hello", isStreaming: false),
-            AgentMessageViewState(
-                id: "assistant_started",
-                role: .assistant,
-                text: "Mock response to: hello",
-                isStreaming: false
-            ),
-        ])
+        #expect(state.messages.map(\.id) == ["user_1", "assistant_started"])
+        #expect(state.messages.map(\.role) == [.user, .assistant])
+        #expect(state.messages.map(\.text) == ["hello", "Mock response to: hello"])
+        #expect(!state.messages[0].isStreaming)
+        #expect(!state.messages[1].isStreaming)
     }
 
     @Test("tool result and terminal events update visible state")
@@ -65,9 +149,11 @@ struct RuntimeEventReducerTests {
         )
         RuntimeEventReducer.apply(event(id: "cancelled", kind: .runCancelled, payload: "cancelled"), to: &state)
 
-        #expect(state.messages == [
-            AgentMessageViewState(id: "tool_result", role: .tool, text: "Echo: hello", isStreaming: false),
-        ])
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].id == "tool_result")
+        #expect(state.messages[0].role == .tool)
+        #expect(state.messages[0].text == "Echo: hello")
+        #expect(!state.messages[0].isStreaming)
         #expect(state.phase == .ready)
     }
 
@@ -75,12 +161,13 @@ struct RuntimeEventReducerTests {
         id: String,
         kind: RuntimeEventKindDTO,
         payload: String,
+        parentId: String? = nil,
         runId: String? = "run_1"
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
             sessionId: "session_1",
-            parentId: nil,
+            parentId: parentId,
             runId: runId,
             sequence: 1,
             depth: 0,
