@@ -23,8 +23,62 @@ enum AgentMessageRole: Equatable, Sendable {
 struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     let id: String
     let role: AgentMessageRole
-    var text: String
-    var isStreaming: Bool
+    var sessionId: String?
+    var parentId: String?
+    var parts: [MessagePartViewState]
+    var attachments: [AttachmentViewState]
+    var streaming: MessageStreamingState
+    private var rawText: String
+
+    init(id: String, role: AgentMessageRole, text: String, isStreaming: Bool) {
+        self.id = id
+        self.role = role
+        sessionId = nil
+        parentId = nil
+        attachments = []
+        streaming = isStreaming ? .streaming : .idle
+        rawText = text
+        parts = Self.parts(for: role, text: text, isStreaming: isStreaming)
+    }
+
+    var text: String {
+        get {
+            parts.map(\.plainText).joined()
+        }
+        set {
+            rawText = newValue
+            parts = Self.parts(for: role, text: rawText, isStreaming: isStreaming)
+        }
+    }
+
+    var isStreaming: Bool {
+        get {
+            streaming.isStreaming
+        }
+        set {
+            streaming = newValue ? .streaming : .idle
+            parts = Self.parts(for: role, text: rawText, isStreaming: newValue)
+        }
+    }
+
+    private static func parts(for role: AgentMessageRole, text: String, isStreaming: Bool) -> [MessagePartViewState] {
+        switch role {
+        case .assistant:
+            var parser = ReasoningTagParser()
+            parser.append(text)
+            return parser.snapshot(isFinal: !isStreaming)
+        case .tool:
+            guard !text.isEmpty else {
+                return []
+            }
+            return [.tool(ToolPartViewState(id: "tool_0", displayText: text))]
+        case .user:
+            guard !text.isEmpty else {
+                return []
+            }
+            return [.text(TextPartViewState(id: "text_0", text: text))]
+        }
+    }
 }
 
 struct ProviderSelectionViewState: Equatable, Sendable {
