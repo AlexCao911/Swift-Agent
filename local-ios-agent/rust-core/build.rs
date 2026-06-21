@@ -29,6 +29,7 @@ fn main() {
         "backends/mock/mock_inference_engine.cpp",
         "backends/llama_cpp/llama_cpp_api.cpp",
         "backends/llama_cpp/llama_cpp_engine.cpp",
+        "backends/llama_cpp/llama_cpp_prompt.cpp",
     ];
     let link_llama_cpp = env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_LOCAL_INFERENCE").is_some();
     let link_llama_cpp_mtmd =

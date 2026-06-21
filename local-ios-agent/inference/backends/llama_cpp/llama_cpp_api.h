@@ -11,7 +11,7 @@ namespace local_agent {
 
 struct ImageInput;
 
-using LlamaTokenEmit = std::function<void(const std::string &)>;
+using LlamaTokenEmit = std::function<bool(const std::string &)>;
 
 class LlamaCppSession {
 public:

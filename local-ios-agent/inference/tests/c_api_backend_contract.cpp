@@ -8,9 +8,20 @@ struct CallbackState {
     std::vector<std::string> tokens;
 };
 
-static void collect_token(const char *token_json, void *user_data) {
+struct StopAfterFirstToken {
+    std::vector<std::string> tokens;
+};
+
+static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
     auto *state = static_cast<CallbackState *>(user_data);
     state->tokens.emplace_back(token_json);
+    return LOCAL_AGENT_STATUS_OK;
+}
+
+static LocalAgentStatus stop_after_first_token(const char *token_json, void *user_data) {
+    auto *state = static_cast<StopAfterFirstToken *>(user_data);
+    state->tokens.emplace_back(token_json);
+    return LOCAL_AGENT_STATUS_CANCELLED;
 }
 
 int main() {
@@ -41,6 +52,22 @@ int main() {
     assert(state.tokens[0] == R"({"type":"text_delta","text":"On-device "})");
     assert(state.tokens[2] == R"({"type":"completed","text":"On-device mock response"})");
     assert(local_agent_backend_release_stream(stream) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentBackendStream *callback_cancelled = nullptr;
+    assert(local_agent_backend_start_chat(
+        backend,
+        R"({"messages":[{"role":"user","content":"stop"}]})",
+        &callback_cancelled
+    ) == LOCAL_AGENT_STATUS_OK);
+    StopAfterFirstToken stopped;
+    assert(
+        local_agent_backend_read_stream(callback_cancelled, stop_after_first_token, &stopped) ==
+        LOCAL_AGENT_STATUS_CANCELLED
+    );
+    assert(stopped.tokens == (std::vector<std::string>{
+        R"({"type":"text_delta","text":"On-device "})",
+    }));
+    assert(local_agent_backend_release_stream(callback_cancelled) == LOCAL_AGENT_STATUS_OK);
 
     LocalAgentBackendStream *image_stream = nullptr;
     assert(local_agent_backend_start_chat_with_image(

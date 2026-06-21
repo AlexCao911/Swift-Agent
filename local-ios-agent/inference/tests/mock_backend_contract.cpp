@@ -13,19 +13,21 @@ struct CancelAfterFirstToken {
     LocalAgentBackendStream **stream;
 };
 
-static void collect_token(const char *token_json, void *user_data) {
+static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
     auto *collected = static_cast<CollectedTokens *>(user_data);
     collected->tokens.emplace_back(token_json);
+    return LOCAL_AGENT_STATUS_OK;
 }
 
-static void cancel_after_first_token(const char *token_json, void *user_data) {
+static LocalAgentStatus cancel_after_first_token(const char *token_json, void *user_data) {
     auto *state = static_cast<CancelAfterFirstToken *>(user_data);
     state->tokens.emplace_back(token_json);
     if (state->tokens.size() == 1) {
         assert(state->stream != nullptr);
         assert(*state->stream != nullptr);
-        assert(local_agent_backend_cancel(*state->stream) == LOCAL_AGENT_STATUS_CANCELLED);
+        return LOCAL_AGENT_STATUS_CANCELLED;
     }
+    return LOCAL_AGENT_STATUS_OK;
 }
 
 int main() {

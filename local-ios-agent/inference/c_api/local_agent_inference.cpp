@@ -181,10 +181,19 @@ LocalAgentStatus local_agent_backend_read_stream(
         return LOCAL_AGENT_STATUS_CANCELLED;
     }
     try {
-        auto emit = [&](const std::string &json) {
-            callback(json.c_str(), user_data);
+        LocalAgentStatus callback_status = LOCAL_AGENT_STATUS_OK;
+        auto emit = [&](const std::string &json) -> bool {
+            callback_status = callback(json.c_str(), user_data);
+            if (callback_status != LOCAL_AGENT_STATUS_OK) {
+                stream->stream->cancel();
+                return false;
+            }
+            return !stream->stream->is_cancelled();
         };
         stream->engine->read_stream(*stream->stream, emit);
+        if (callback_status != LOCAL_AGENT_STATUS_OK) {
+            return callback_status;
+        }
         return stream->stream->is_cancelled()
             ? LOCAL_AGENT_STATUS_CANCELLED
             : LOCAL_AGENT_STATUS_OK;

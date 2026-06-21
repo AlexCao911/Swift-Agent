@@ -17,7 +17,7 @@ typedef enum LocalAgentStatus {
 typedef struct LocalAgentBackend LocalAgentBackend;
 typedef struct LocalAgentBackendStream LocalAgentBackendStream;
 
-typedef void (*local_agent_token_callback)(
+typedef LocalAgentStatus (*local_agent_token_callback)(
     const char *token_json,
     void *user_data
 );

@@ -22,8 +22,12 @@ std::unique_ptr<TokenStream> MockInferenceEngine::start_chat(const std::string &
 }
 
 void MockInferenceEngine::read_stream(TokenStream &stream, const TokenStream::Emit &emit) {
-    stream.emit_text_delta("On-device ", emit);
-    stream.emit_text_delta("mock response", emit);
+    if (!stream.emit_text_delta("On-device ", emit)) {
+        return;
+    }
+    if (!stream.emit_text_delta("mock response", emit)) {
+        return;
+    }
     stream.emit_completed("On-device mock response", emit);
 }
 

@@ -317,7 +317,10 @@ unsafe extern "C" fn fake_read_stream(
     callback: CAbiTokenCallback,
     user_data: *mut c_void,
 ) -> LocalAgentStatus {
-    callback(FAKE_TOKEN_JSON.as_ptr() as *const c_char, user_data);
+    let callback_status = callback(FAKE_TOKEN_JSON.as_ptr() as *const c_char, user_data);
+    if callback_status != LocalAgentStatus::Ok {
+        return callback_status;
+    }
     if CANCEL_CALLS.load(Ordering::SeqCst) == 0 {
         return LocalAgentStatus::Ok;
     }

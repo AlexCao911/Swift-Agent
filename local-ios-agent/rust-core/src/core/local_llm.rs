@@ -31,7 +31,8 @@ pub struct CAbiLocalAgentBackendStream {
     _private: [u8; 0],
 }
 
-pub type CAbiTokenCallback = unsafe extern "C" fn(*const c_char, *mut c_void);
+pub type CAbiTokenCallback =
+    unsafe extern "C" fn(*const c_char, *mut c_void) -> LocalAgentStatus;
 
 pub type CAbiInitFn = unsafe extern "C" fn(*mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 pub type CAbiLoadModelFn =
@@ -433,14 +434,17 @@ impl Drop for CAbiLocalInferenceBackend {
     }
 }
 
-unsafe extern "C" fn collect_c_token(token_json: *const c_char, user_data: *mut c_void) {
+unsafe extern "C" fn collect_c_token(
+    token_json: *const c_char,
+    user_data: *mut c_void,
+) -> LocalAgentStatus {
     let state = &mut *(user_data as *mut CallbackState<'_>);
     if token_json.is_null() {
         *state.error = Some(AgentError::Provider(
             "on-device backend emitted null token".into(),
         ));
         cancel_stream(state);
-        return;
+        return LocalAgentStatus::Error;
     }
 
     let token = match CStr::from_ptr(token_json).to_str() {
@@ -450,19 +454,26 @@ unsafe extern "C" fn collect_c_token(token_json: *const c_char, user_data: *mut 
                 "on-device backend emitted invalid UTF-8 token: {error}"
             )));
             cancel_stream(state);
-            return;
+            return LocalAgentStatus::Error;
         }
     };
 
     if let Err(error) = (state.on_token)(token) {
+        let status = match &error {
+            AgentError::Cancelled(_) => LocalAgentStatus::Cancelled,
+            _ => LocalAgentStatus::Error,
+        };
         *state.error = Some(error);
         cancel_stream(state);
-        return;
+        return status;
     }
 
     if state.cancellation.is_cancelled() {
         cancel_stream(state);
+        return LocalAgentStatus::Cancelled;
     }
+
+    LocalAgentStatus::Ok
 }
 
 unsafe fn cancel_stream(state: &mut CallbackState<'_>) {

@@ -32,6 +32,7 @@ int main() {
     std::vector<std::string> tokens;
     engine.read_stream(*stream, [&](const std::string &token_json) {
         tokens.push_back(token_json);
+        return true;
     });
 
     assert(!tokens.empty());
@@ -50,6 +51,7 @@ int main() {
         std::vector<std::string> image_tokens;
         engine.read_stream(*image_stream, [&](const std::string &token_json) {
             image_tokens.push_back(token_json);
+            return true;
         });
         assert(!image_tokens.empty());
     }

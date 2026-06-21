@@ -1,8 +1,9 @@
 #include "local_agent_inference.h"
 
-static void collect_token(const char *token_json, void *user_data) {
+static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
     (void)token_json;
     (void)user_data;
+    return LOCAL_AGENT_STATUS_OK;
 }
 
 int main(void) {

@@ -1,6 +1,7 @@
 #include "llama_cpp_api.h"
 
 #include "inference_engine.h"
+#include "llama_cpp_prompt.h"
 
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
 #include "llama.h"
@@ -40,6 +41,75 @@ public:
         throw std::runtime_error("llama.cpp multimodal backend is not linked in this build");
     }
 };
+
+std::string render_prompt_for_llama_cpp(const std::string &prompt_json, const ModelConfig &config) {
+    std::vector<LlamaPromptMessage> parsed_messages = parse_llama_prompt_messages(prompt_json);
+
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
+    const char *chat_template = nullptr;
+    if (!config.chat_template.empty() && config.chat_template != "gguf") {
+        chat_template = config.chat_template.c_str();
+    }
+
+    std::vector<llama_chat_message> messages;
+    messages.reserve(parsed_messages.size());
+    for (const auto &message : parsed_messages) {
+        messages.push_back(llama_chat_message{
+            message.role.c_str(),
+            message.content.c_str(),
+        });
+    }
+
+    int32_t required = llama_chat_apply_template(
+        chat_template,
+        messages.data(),
+        messages.size(),
+        true,
+        nullptr,
+        0
+    );
+    if (required == 0) {
+        throw std::runtime_error("llama.cpp chat template produced an empty prompt");
+    }
+    if (required < 0) {
+        required = -required;
+    }
+
+    std::vector<char> buffer(static_cast<size_t>(required) + 1);
+    int32_t written = llama_chat_apply_template(
+        chat_template,
+        messages.data(),
+        messages.size(),
+        true,
+        buffer.data(),
+        static_cast<int32_t>(buffer.size())
+    );
+    if (written < 0) {
+        written = -written;
+        buffer.assign(static_cast<size_t>(written) + 1, '\0');
+        written = llama_chat_apply_template(
+            chat_template,
+            messages.data(),
+            messages.size(),
+            true,
+            buffer.data(),
+            static_cast<int32_t>(buffer.size())
+        );
+    }
+    if (written <= 0) {
+        throw std::runtime_error("llama.cpp failed to apply chat template");
+    }
+
+    return std::string(buffer.data(), static_cast<size_t>(written));
+#else
+    if (!config.chat_template.empty() && config.chat_template != "gguf") {
+        throw std::invalid_argument(
+            "llama.cpp chat_template requires linked llama.cpp for custom templates"
+        );
+    }
+    return render_fallback_chat_prompt(parsed_messages);
+#endif
+}
 
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
 class LinkedLlamaCppSession final : public LlamaCppSession {
@@ -153,10 +223,12 @@ private:
             throw std::runtime_error("llama.cpp model has no vocabulary");
         }
 
+        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config);
+
         int prompt_token_count = -llama_tokenize(
             vocab,
-            prompt_json.c_str(),
-            static_cast<int32_t>(prompt_json.size()),
+            prompt.c_str(),
+            static_cast<int32_t>(prompt.size()),
             nullptr,
             0,
             true,
@@ -169,8 +241,8 @@ private:
         std::vector<llama_token> prompt_tokens(static_cast<size_t>(prompt_token_count));
         int actual_prompt_tokens = llama_tokenize(
             vocab,
-            prompt_json.c_str(),
-            static_cast<int32_t>(prompt_json.size()),
+            prompt.c_str(),
+            static_cast<int32_t>(prompt.size()),
             prompt_tokens.data(),
             static_cast<int32_t>(prompt_tokens.size()),
             true,
@@ -214,7 +286,9 @@ private:
             char piece[512];
             int piece_size = llama_token_to_piece(vocab, token, piece, sizeof(piece), 0, true);
             if (piece_size > 0) {
-                emit(std::string(piece, static_cast<size_t>(piece_size)));
+                if (!emit(std::string(piece, static_cast<size_t>(piece_size)))) {
+                    break;
+                }
             }
 
             llama_batch next_batch = llama_batch_get_one(&token, 1);
@@ -231,7 +305,7 @@ private:
     void run_mtmd_prefill(
         const std::string &prompt_json,
         const ImageInput &image,
-        const ModelConfig &
+        const ModelConfig &config
     ) {
         if (mtmd_ == nullptr) {
             throw std::runtime_error("llama.cpp mtmd context is not loaded");
@@ -258,8 +332,9 @@ private:
             throw std::runtime_error("llama.cpp failed to create mtmd input chunks");
         }
 
+        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config);
         const mtmd_bitmap *bitmaps[1] = {bitmap};
-        int32_t tokenize_status = mtmd_tokenize(mtmd_, chunks, prompt_json.c_str(), bitmaps, 1);
+        int32_t tokenize_status = mtmd_tokenize(mtmd_, chunks, prompt.c_str(), bitmaps, 1);
         if (tokenize_status != 0) {
             mtmd_input_chunks_free(chunks);
             mtmd_bitmap_free(bitmap);

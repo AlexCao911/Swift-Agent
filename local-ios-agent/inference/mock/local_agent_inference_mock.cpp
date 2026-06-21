@@ -21,7 +21,11 @@ LocalAgentStatus emit_token(
         return LOCAL_AGENT_STATUS_CANCELLED;
     }
 
-    callback(token_json, user_data);
+    LocalAgentStatus callback_status = callback(token_json, user_data);
+    if (callback_status != LOCAL_AGENT_STATUS_OK) {
+        stream->cancelled = true;
+        return callback_status;
+    }
 
     if (stream->cancelled) {
         return LOCAL_AGENT_STATUS_CANCELLED;

@@ -43,12 +43,12 @@ std::unique_ptr<TokenStream> LlamaCppEngine::start_chat_with_image(
 
 void LlamaCppEngine::read_stream(TokenStream &stream, const TokenStream::Emit &emit) {
     std::string completed;
-    auto on_delta = [&](const std::string &delta) {
+    auto on_delta = [&](const std::string &delta) -> bool {
         if (stream.is_cancelled()) {
-            return;
+            return false;
         }
         completed += delta;
-        stream.emit_text_delta(delta, emit);
+        return stream.emit_text_delta(delta, emit);
     };
 
     if (has_image_) {
