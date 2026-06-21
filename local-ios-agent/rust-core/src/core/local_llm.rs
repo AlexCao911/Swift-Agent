@@ -33,8 +33,7 @@ pub struct CAbiLocalAgentBackendStream {
 
 pub type CAbiTokenCallback = unsafe extern "C" fn(*const c_char, *mut c_void);
 
-pub type CAbiInitFn =
-    unsafe extern "C" fn(*mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
+pub type CAbiInitFn = unsafe extern "C" fn(*mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 pub type CAbiLoadModelFn =
     unsafe extern "C" fn(*mut CAbiLocalAgentBackend, *const c_char) -> LocalAgentStatus;
 pub type CAbiStartChatFn = unsafe extern "C" fn(
@@ -47,8 +46,7 @@ pub type CAbiReadStreamFn = unsafe extern "C" fn(
     CAbiTokenCallback,
     *mut c_void,
 ) -> LocalAgentStatus;
-pub type CAbiCancelFn =
-    unsafe extern "C" fn(*mut CAbiLocalAgentBackendStream) -> LocalAgentStatus;
+pub type CAbiCancelFn = unsafe extern "C" fn(*mut CAbiLocalAgentBackendStream) -> LocalAgentStatus;
 pub type CAbiReleaseStreamFn =
     unsafe extern "C" fn(*mut CAbiLocalAgentBackendStream) -> LocalAgentStatus;
 pub type CAbiReleaseBackendFn =
@@ -118,8 +116,7 @@ struct CallbackState<'a> {
 
 #[cfg(feature = "link-mock-local-inference")]
 extern "C" {
-    fn local_agent_backend_init(out_backend: *mut *mut CAbiLocalAgentBackend)
-        -> LocalAgentStatus;
+    fn local_agent_backend_init(out_backend: *mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
     fn local_agent_backend_load_model(
         backend: *mut CAbiLocalAgentBackend,
         model_config_json: *const c_char,
@@ -134,15 +131,11 @@ extern "C" {
         callback: CAbiTokenCallback,
         user_data: *mut c_void,
     ) -> LocalAgentStatus;
-    fn local_agent_backend_cancel(
-        stream: *mut CAbiLocalAgentBackendStream,
-    ) -> LocalAgentStatus;
+    fn local_agent_backend_cancel(stream: *mut CAbiLocalAgentBackendStream) -> LocalAgentStatus;
     fn local_agent_backend_release_stream(
         stream: *mut CAbiLocalAgentBackendStream,
     ) -> LocalAgentStatus;
-    fn local_agent_backend_release(
-        backend: *mut CAbiLocalAgentBackend,
-    ) -> LocalAgentStatus;
+    fn local_agent_backend_release(backend: *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 }
 
 impl CAbiFunctions {
@@ -197,24 +190,18 @@ impl LocalInferenceBackend for MockLocalInferenceBackend {
             ));
         }
         if !*self.loaded.lock().unwrap() {
-            return Err(AgentError::Provider(
-                "on-device model is not loaded".into(),
-            ));
+            return Err(AgentError::Provider("on-device model is not loaded".into()));
         }
 
         for token in &self.tokens {
             if cancellation.is_cancelled() {
-                return Err(AgentError::Cancelled(
-                    "on-device backend cancelled".into(),
-                ));
+                return Err(AgentError::Cancelled("on-device backend cancelled".into()));
             }
 
             on_token(token)?;
 
             if cancellation.is_cancelled() {
-                return Err(AgentError::Cancelled(
-                    "on-device backend cancelled".into(),
-                ));
+                return Err(AgentError::Cancelled("on-device backend cancelled".into()));
             }
         }
         Ok(())
@@ -294,9 +281,7 @@ impl ModelProvider for LocalLLMProvider {
         on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
     ) -> Result<(), AgentError> {
         if cancellation.is_cancelled() {
-            return Err(AgentError::Cancelled(
-                "local LLM cancelled".into(),
-            ));
+            return Err(AgentError::Cancelled("local LLM cancelled".into()));
         }
 
         self.ensure_model_loaded()?;
@@ -304,13 +289,10 @@ impl ModelProvider for LocalLLMProvider {
         let mut prompt = build_openai_chat_request(&self.model, frame);
         prompt["stream"] = Value::Bool(true);
 
-        self.backend.stream_chat(
-            &prompt.to_string(),
-            cancellation,
-            &mut |token_json| {
+        self.backend
+            .stream_chat(&prompt.to_string(), cancellation, &mut |token_json| {
                 on_output(parse_backend_token(token_json)?)
-            },
-        )?;
+            })?;
         Ok(())
     }
 }
@@ -336,9 +318,7 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
     ) -> Result<(), AgentError> {
         if cancellation.is_cancelled() {
-            return Err(AgentError::Cancelled(
-                "on-device backend cancelled".into(),
-            ));
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
         }
 
         let prompt = c_string(prompt_json, "prompt")?;
@@ -353,9 +333,8 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         };
 
         let mut stream = ptr::null_mut();
-        let start_status = unsafe {
-            (self.functions.start_chat)(backend_ptr, prompt.as_ptr(), &mut stream)
-        };
+        let start_status =
+            unsafe { (self.functions.start_chat)(backend_ptr, prompt.as_ptr(), &mut stream) };
         status_to_result(start_status, "start on-device stream")?;
         if stream.is_null() {
             return Err(AgentError::Provider(
@@ -413,9 +392,7 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
             || read_status == LocalAgentStatus::Cancelled
         {
             status_to_result(release_status, "release on-device stream")?;
-            return Err(AgentError::Cancelled(
-                "on-device backend cancelled".into(),
-            ));
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
         }
         status_to_result(read_status, "read on-device stream")?;
         status_to_result(release_status, "release on-device stream")
@@ -423,9 +400,8 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
 }
 
 fn parse_backend_token(token_json: &str) -> Result<ModelProviderOutput, AgentError> {
-    let value: Value = serde_json::from_str(token_json).map_err(|error| {
-        AgentError::Provider(format!("invalid on-device token JSON: {error}"))
-    })?;
+    let value: Value = serde_json::from_str(token_json)
+        .map_err(|error| AgentError::Provider(format!("invalid on-device token JSON: {error}")))?;
     let token_type = value
         .get("type")
         .and_then(Value::as_str)
@@ -533,9 +509,7 @@ fn status_to_result(status: LocalAgentStatus, action: &str) -> Result<(), AgentE
 fn status_to_error(status: LocalAgentStatus, action: &str) -> AgentError {
     match status {
         LocalAgentStatus::Ok => AgentError::Provider(format!("{action} unexpectedly failed")),
-        LocalAgentStatus::Cancelled => {
-            AgentError::Cancelled("on-device backend cancelled".into())
-        }
+        LocalAgentStatus::Cancelled => AgentError::Cancelled("on-device backend cancelled".into()),
         LocalAgentStatus::InvalidArgument => {
             AgentError::Provider(format!("{action} rejected invalid argument"))
         }

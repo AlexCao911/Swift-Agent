@@ -8,8 +8,8 @@ use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
     CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, LocalAgentStatus,
-    LocalInferenceBackend, MockLocalInferenceBackend, ModelProvider, ModelProviderOutput,
-    LocalLLMProvider,
+    LocalInferenceBackend, LocalLLMProvider, MockLocalInferenceBackend, ModelProvider,
+    ModelProviderOutput,
 };
 
 const MOCK_TOKEN_JSON: [&str; 3] = [
@@ -137,12 +137,10 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
     assert_eq!(prompt["model"], "minicpm");
     assert_eq!(prompt["stream"], true);
     assert_eq!(prompt["messages"][1]["content"], "hello");
-    assert!(
-        prompt["messages"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Available tools")
-    );
+    assert!(prompt["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Available tools"));
 }
 
 #[test]
@@ -283,7 +281,9 @@ fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("on-device backend is not linked"));
+    assert!(error
+        .to_string()
+        .contains("on-device backend is not linked"));
 }
 
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -338,9 +338,7 @@ unsafe extern "C" fn fake_blocking_read_stream(
     LocalAgentStatus::Error
 }
 
-unsafe extern "C" fn fake_cancel(
-    _stream: *mut CAbiLocalAgentBackendStream,
-) -> LocalAgentStatus {
+unsafe extern "C" fn fake_cancel(_stream: *mut CAbiLocalAgentBackendStream) -> LocalAgentStatus {
     CANCEL_CALLS.fetch_add(1, Ordering::SeqCst);
     LocalAgentStatus::Cancelled
 }

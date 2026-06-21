@@ -27,7 +27,10 @@ fn main() {
             .display()
     );
     for source in sources {
-        println!("cargo:rerun-if-changed={}", inference_dir.join(source).display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            inference_dir.join(source).display()
+        );
     }
 
     let cxx = cxx_invocation();
