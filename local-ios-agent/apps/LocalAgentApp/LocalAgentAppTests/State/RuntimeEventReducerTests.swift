@@ -115,6 +115,27 @@ struct RuntimeEventReducerTests {
         ])
     }
 
+    @Test("assistant delta fallback preserves split reasoning source")
+    func assistantDeltaFallbackPreservesSplitReasoningSource() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"<think>hidden"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_2", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"</think>visible"}"#),
+            to: &state
+        )
+
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].parts == [
+            .reasoning(ReasoningPartViewState(id: "reasoning_0", text: "hidden", isCollapsed: true, isStreaming: false)),
+            .text(TextPartViewState(id: "text_1", text: "visible")),
+        ])
+        #expect(state.messages[0].isStreaming)
+    }
+
     @Test("rust plain-text events project user and assistant messages")
     func rustPlainTextEventsProjectConversation() {
         var state = AgentViewState(phase: .running(runId: "run_1"))

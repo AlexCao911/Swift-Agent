@@ -69,14 +69,16 @@ enum RuntimeEventReducer {
             state.messages[index].streaming = .streaming
             state.messages[index].text += text
         } else {
-            state.messages.append(AgentMessageViewState(
+            var message = AgentMessageViewState(
                 id: messageId,
                 sessionId: event.sessionId,
                 parentId: event.parentId,
                 role: .assistant,
-                parts: parsedAssistantParts(from: text, isFinal: false),
+                parts: [],
                 streaming: .streaming
-            ))
+            )
+            message.text += text
+            state.messages.append(message)
         }
     }
 
