@@ -65,7 +65,8 @@ pub trait ModelProvider: Send + Sync {
         &self,
         frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError>;
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,7 +87,8 @@ impl ModelProvider for MockStreamingProvider {
         &self,
         frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled("mock provider cancelled".into()));
         }
@@ -101,11 +103,12 @@ impl ModelProvider for MockStreamingProvider {
             })
         {
             let response = format!("Mock response after tool: {tool_result}");
-            return Ok(vec![
-                ModelProviderOutput::TextDelta("Mock response ".to_string()),
-                ModelProviderOutput::TextDelta(format!("after tool: {tool_result}")),
-                ModelProviderOutput::Completed(response),
-            ]);
+            on_output(ModelProviderOutput::TextDelta("Mock response ".to_string()))?;
+            on_output(ModelProviderOutput::TextDelta(format!(
+                "after tool: {tool_result}"
+            )))?;
+            on_output(ModelProviderOutput::Completed(response))?;
+            return Ok(());
         }
 
         let last_user = frame
@@ -119,18 +122,20 @@ impl ModelProvider for MockStreamingProvider {
             .unwrap_or("");
 
         if last_user == "use tool debug.echo" {
-            return Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+            on_output(ModelProviderOutput::ToolCall(ToolCall {
                 id: "call_mock_1".to_string(),
                 name: "debug.echo".to_string(),
                 arguments_json: r#"{"text":"hello"}"#.to_string(),
-            })]);
+            }))?;
+            return Ok(());
         }
 
         let response = format!("Mock response to: {last_user}");
-        Ok(vec![
-            ModelProviderOutput::TextDelta("Mock ".to_string()),
-            ModelProviderOutput::TextDelta(format!("response to: {last_user}")),
-            ModelProviderOutput::Completed(response),
-        ])
+        on_output(ModelProviderOutput::TextDelta("Mock ".to_string()))?;
+        on_output(ModelProviderOutput::TextDelta(format!(
+            "response to: {last_user}"
+        )))?;
+        on_output(ModelProviderOutput::Completed(response))?;
+        Ok(())
     }
 }

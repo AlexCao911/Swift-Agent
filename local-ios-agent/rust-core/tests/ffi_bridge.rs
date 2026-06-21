@@ -78,17 +78,19 @@ impl ModelProvider for BlockingUntilCancelledProvider {
         &self,
         _frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         self.probe.mark_started();
         while !cancellation.is_cancelled() {
             thread::sleep(Duration::from_millis(5));
         }
         self.probe.mark_observed_cancelled();
-        Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+        on_output(ModelProviderOutput::ToolCall(ToolCall {
             id: "call_cancelled".into(),
             name: "debug.echo".into(),
             arguments_json: r#"{"text":"cancelled"}"#.into(),
-        })])
+        }))?;
+        Ok(())
     }
 }
 

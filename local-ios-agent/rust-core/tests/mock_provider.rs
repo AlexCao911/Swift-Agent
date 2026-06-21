@@ -18,8 +18,12 @@ fn mock_provider_streams_response_to_last_user_message() {
         ],
     };
 
-    let output = provider
-        .stream_chat(&frame, CancellationToken::default())
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
         .unwrap();
 
     assert_eq!(
@@ -42,11 +46,16 @@ fn mock_provider_can_emit_tool_call() {
         messages: vec![PromptMessage::User("use tool debug.echo".into())],
     };
 
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
+        .unwrap();
+
     assert!(matches!(
-        provider
-            .stream_chat(&frame, CancellationToken::default())
-            .unwrap()
-            .first(),
+        output.first(),
         Some(ModelProviderOutput::ToolCall(ToolCall { name, .. })) if name == "debug.echo"
     ));
 }

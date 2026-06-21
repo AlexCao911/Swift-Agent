@@ -384,7 +384,10 @@ impl<S: EventStore> AgentRuntime<S> {
         let mut batcher = StreamBatcher::new(24);
         self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_id);
-        let provider_result = self.config.provider.stream_chat(&frame, cancellation);
+        let provider_result = self.collect_provider_outputs_for_legacy_send_message(
+            &frame,
+            cancellation,
+        );
         self.finish_provider_call(&run_id);
         let provider_events = match provider_result {
             Ok(events) => events,
@@ -568,7 +571,10 @@ impl<S: EventStore> AgentRuntime<S> {
         let frame = self.context_controller().build_prompt_frame(branch)?;
         self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_key);
-        let provider_result = self.config.provider.stream_chat(&frame, cancellation);
+        let provider_result = self.collect_provider_outputs_for_legacy_send_message(
+            &frame,
+            cancellation,
+        );
         self.finish_provider_call(&run_key);
         let provider_events = match provider_result {
             Ok(events) => events,
@@ -739,6 +745,23 @@ impl<S: EventStore> AgentRuntime<S> {
 
     fn finish_provider_call(&mut self, run_id: &RunId) {
         self.provider_cancellations.remove(run_id);
+    }
+
+    fn collect_provider_outputs_for_legacy_send_message(
+        &self,
+        frame: &PromptFrame,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        let mut outputs = Vec::new();
+        self.config.provider.stream_chat(
+            frame,
+            cancellation,
+            &mut |output| {
+                outputs.push(output);
+                Ok(())
+            },
+        )?;
+        Ok(outputs)
     }
 
     fn capture_prompt_debug_snapshot(&mut self, frame: &PromptFrame) {

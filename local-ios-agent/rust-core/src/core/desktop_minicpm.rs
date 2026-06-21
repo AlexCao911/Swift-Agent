@@ -214,7 +214,8 @@ impl ModelProvider for DesktopMiniCPMProvider {
         &self,
         frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled("desktop MiniCPM cancelled".into()));
         }
@@ -228,7 +229,10 @@ impl ModelProvider for DesktopMiniCPMProvider {
             return Err(AgentError::Cancelled("desktop MiniCPM cancelled".into()));
         }
 
-        parse_openai_chat_response(&response)
+        for output in parse_openai_chat_response(&response)? {
+            on_output(output)?;
+        }
+        Ok(())
     }
 }
 

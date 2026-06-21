@@ -9,7 +9,7 @@ use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
     CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, LocalAgentStatus,
     LocalInferenceBackend, MockLocalInferenceBackend, ModelProvider, ModelProviderOutput,
-    OnDeviceMiniCPMProvider,
+    LocalLLMProvider,
 };
 
 const MOCK_TOKEN_JSON: [&str; 3] = [
@@ -94,9 +94,9 @@ impl LocalInferenceBackend for RecordingBackend {
 }
 
 #[test]
-fn on_device_provider_builds_backend_prompt_and_maps_token_outputs() {
+fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
     let backend = RecordingBackend::streaming(MOCK_TOKEN_JSON);
-    let provider = OnDeviceMiniCPMProvider::new(
+    let provider = LocalLLMProvider::new(
         "minicpm",
         r#"{"model_path":"mock.gguf"}"#,
         Box::new(backend.clone()),
@@ -112,11 +112,15 @@ fn on_device_provider_builds_backend_prompt_and_maps_token_outputs() {
         ],
     };
 
-    let output = provider
-        .stream_chat(&frame, CancellationToken::default())
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
         .unwrap();
 
-    assert_eq!(provider.id(), "ondevice_minicpm");
+    assert_eq!(provider.id(), "local_llm");
     assert_eq!(
         output,
         vec![
@@ -142,9 +146,9 @@ fn on_device_provider_builds_backend_prompt_and_maps_token_outputs() {
 }
 
 #[test]
-fn on_device_provider_surfaces_backend_cancellation() {
+fn local_llm_provider_surfaces_backend_cancellation() {
     let backend = RecordingBackend::failing(AgentError::Cancelled("backend stopped".into()));
-    let provider = OnDeviceMiniCPMProvider::new(
+    let provider = LocalLLMProvider::new(
         "minicpm",
         r#"{"model_path":"mock.gguf"}"#,
         Box::new(backend),
@@ -157,16 +161,16 @@ fn on_device_provider_surfaces_backend_cancellation() {
     };
 
     let error = provider
-        .stream_chat(&frame, CancellationToken::default())
+        .stream_chat(&frame, CancellationToken::default(), &mut |_| Ok(()))
         .unwrap_err();
 
     assert_eq!(error, AgentError::Cancelled("backend stopped".into()));
 }
 
 #[test]
-fn on_device_provider_surfaces_backend_errors() {
+fn local_llm_provider_surfaces_backend_errors() {
     let backend = RecordingBackend::failing(AgentError::Provider("backend offline".into()));
-    let provider = OnDeviceMiniCPMProvider::new(
+    let provider = LocalLLMProvider::new(
         "minicpm",
         r#"{"model_path":"mock.gguf"}"#,
         Box::new(backend),
@@ -179,16 +183,16 @@ fn on_device_provider_surfaces_backend_errors() {
     };
 
     let error = provider
-        .stream_chat(&frame, CancellationToken::default())
+        .stream_chat(&frame, CancellationToken::default(), &mut |_| Ok(()))
         .unwrap_err();
 
     assert_eq!(error, AgentError::Provider("backend offline".into()));
 }
 
 #[test]
-fn on_device_provider_rejects_malformed_backend_token_json() {
+fn local_llm_provider_rejects_malformed_backend_token_json() {
     let backend = RecordingBackend::streaming(["not json"]);
-    let provider = OnDeviceMiniCPMProvider::new(
+    let provider = LocalLLMProvider::new(
         "minicpm",
         r#"{"model_path":"mock.gguf"}"#,
         Box::new(backend),
@@ -201,7 +205,7 @@ fn on_device_provider_rejects_malformed_backend_token_json() {
     };
 
     let error = provider
-        .stream_chat(&frame, CancellationToken::default())
+        .stream_chat(&frame, CancellationToken::default(), &mut |_| Ok(()))
         .unwrap_err();
 
     assert!(error.to_string().contains("invalid on-device token"));

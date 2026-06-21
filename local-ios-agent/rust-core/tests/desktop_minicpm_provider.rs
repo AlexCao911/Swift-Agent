@@ -41,8 +41,12 @@ fn desktop_minicpm_provider_builds_request_and_parses_text_response() {
         messages: vec![PromptMessage::User("hello".into())],
     };
 
-    let output = provider
-        .stream_chat(&frame, CancellationToken::default())
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
         .unwrap();
 
     assert_eq!(provider.id(), "desktop_minicpm");
@@ -74,7 +78,9 @@ fn desktop_minicpm_provider_checks_cancellation_before_transport() {
         messages: Vec::new(),
     };
 
-    let error = provider.stream_chat(&frame, token).unwrap_err();
+    let error = provider
+        .stream_chat(&frame, token, &mut |_| Ok(()))
+        .unwrap_err();
 
     assert!(error.to_string().contains("desktop MiniCPM cancelled"));
 }

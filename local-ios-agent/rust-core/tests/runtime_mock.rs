@@ -29,9 +29,11 @@ impl ModelProvider for CaptureFramesProvider {
         &self,
         frame: &PromptFrame,
         _cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         self.frames.lock().unwrap().push(frame.clone());
-        Ok(vec![ModelProviderOutput::Completed("captured".into())])
+        on_output(ModelProviderOutput::Completed("captured".into()))?;
+        Ok(())
     }
 }
 
@@ -55,12 +57,14 @@ impl ModelProvider for CaptureCancellationProvider {
         &self,
         _frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         self.observed_states
             .lock()
             .unwrap()
             .push(cancellation.is_cancelled());
-        Ok(vec![ModelProviderOutput::Completed("captured".into())])
+        on_output(ModelProviderOutput::Completed("captured".into()))?;
+        Ok(())
     }
 }
 

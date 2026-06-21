@@ -46,18 +46,21 @@ impl ModelProvider for CaptureToolResultFrameProvider {
         &self,
         frame: &PromptFrame,
         _cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
         if call_index == 0 {
-            return Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+            on_output(ModelProviderOutput::ToolCall(ToolCall {
                 id: "call_1".into(),
                 name: "debug.echo".into(),
                 arguments_json: "{}".into(),
-            })]);
+            }))?;
+            return Ok(());
         }
 
         self.captured_frames.lock().unwrap().push(frame.clone());
-        Ok(vec![ModelProviderOutput::Completed("done".into())])
+        on_output(ModelProviderOutput::Completed("done".into()))?;
+        Ok(())
     }
 }
 
@@ -76,8 +79,10 @@ impl ModelProvider for InvalidToolProvider {
         &self,
         _frame: &PromptFrame,
         _cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
-        Ok(vec![ModelProviderOutput::ToolCall(self.call.clone())])
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        on_output(ModelProviderOutput::ToolCall(self.call.clone()))?;
+        Ok(())
     }
 }
 
@@ -98,15 +103,17 @@ impl ModelProvider for FollowUpToolProvider {
         &self,
         _frame: &PromptFrame,
         _cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
         let id = if call_index == 0 { "call_1" } else { "call_2" };
 
-        Ok(vec![ModelProviderOutput::ToolCall(ToolCall {
+        on_output(ModelProviderOutput::ToolCall(ToolCall {
             id: id.into(),
             name: "debug.echo".into(),
             arguments_json: format!(r#"{{"text":"{id}"}}"#),
-        })])
+        }))?;
+        Ok(())
     }
 }
 

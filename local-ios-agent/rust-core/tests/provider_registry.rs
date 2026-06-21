@@ -89,8 +89,10 @@ impl ModelProvider for StaticProvider {
         &self,
         _frame: &PromptFrame,
         _cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
-        Ok(vec![ModelProviderOutput::Completed("ok".into())])
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        on_output(ModelProviderOutput::Completed("ok".into()))?;
+        Ok(())
     }
 }
 

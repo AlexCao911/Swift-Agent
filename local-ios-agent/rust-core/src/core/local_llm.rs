@@ -85,7 +85,7 @@ pub struct CAbiLocalInferenceBackend {
     backend: Mutex<CAbiBackendHandle>,
 }
 
-pub struct OnDeviceMiniCPMProvider {
+pub struct LocalLLMProvider {
     model: String,
     model_config_json: String,
     backend: Box<dyn LocalInferenceBackend>,
@@ -258,7 +258,7 @@ fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
     ))
 }
 
-impl OnDeviceMiniCPMProvider {
+impl LocalLLMProvider {
     pub fn new(
         model: impl Into<String>,
         model_config_json: impl Into<String>,
@@ -282,19 +282,20 @@ impl OnDeviceMiniCPMProvider {
     }
 }
 
-impl ModelProvider for OnDeviceMiniCPMProvider {
+impl ModelProvider for LocalLLMProvider {
     fn id(&self) -> &str {
-        "ondevice_minicpm"
+        "local_llm"
     }
 
     fn stream_chat(
         &self,
         frame: &PromptFrame,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelProviderOutput>, AgentError> {
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         if cancellation.is_cancelled() {
             return Err(AgentError::Cancelled(
-                "on-device MiniCPM cancelled".into(),
+                "local LLM cancelled".into(),
             ));
         }
 
@@ -303,16 +304,14 @@ impl ModelProvider for OnDeviceMiniCPMProvider {
         let mut prompt = build_openai_chat_request(&self.model, frame);
         prompt["stream"] = Value::Bool(true);
 
-        let mut output = Vec::new();
         self.backend.stream_chat(
             &prompt.to_string(),
             cancellation,
             &mut |token_json| {
-                output.push(parse_backend_token(token_json)?);
-                Ok(())
+                on_output(parse_backend_token(token_json)?)
             },
         )?;
-        Ok(output)
+        Ok(())
     }
 }
 
