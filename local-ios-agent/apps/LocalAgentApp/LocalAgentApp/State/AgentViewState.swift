@@ -28,17 +28,32 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     var parts: [MessagePartViewState]
     var attachments: [AttachmentViewState]
     var streaming: MessageStreamingState
-    private var rawText: String
+
+    init(
+        id: String,
+        sessionId: String? = nil,
+        parentId: String? = nil,
+        role: AgentMessageRole,
+        parts: [MessagePartViewState],
+        attachments: [AttachmentViewState] = [],
+        streaming: MessageStreamingState = .idle
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.parentId = parentId
+        self.role = role
+        self.parts = parts
+        self.attachments = attachments
+        self.streaming = streaming
+    }
 
     init(id: String, role: AgentMessageRole, text: String, isStreaming: Bool) {
-        self.id = id
-        self.role = role
-        sessionId = nil
-        parentId = nil
-        attachments = []
-        streaming = isStreaming ? .streaming : .idle
-        rawText = text
-        parts = Self.parts(for: role, text: text, isStreaming: isStreaming)
+        self.init(
+            id: id,
+            role: role,
+            parts: Self.parts(for: role, text: text, isStreaming: isStreaming),
+            streaming: isStreaming ? .streaming : .idle
+        )
     }
 
     var text: String {
@@ -46,8 +61,7 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
             parts.map(\.plainText).joined()
         }
         set {
-            rawText = newValue
-            parts = Self.parts(for: role, text: rawText, isStreaming: isStreaming)
+            parts = Self.parts(for: role, text: newValue, isStreaming: isStreaming)
         }
     }
 
@@ -57,7 +71,6 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         }
         set {
             streaming = newValue ? .streaming : .idle
-            parts = Self.parts(for: role, text: rawText, isStreaming: newValue)
         }
     }
 
