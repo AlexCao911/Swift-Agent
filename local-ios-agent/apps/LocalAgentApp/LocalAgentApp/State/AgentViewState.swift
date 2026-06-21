@@ -25,9 +25,17 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     let role: AgentMessageRole
     var sessionId: String?
     var parentId: String?
-    var parts: [MessagePartViewState]
+    var parts: [MessagePartViewState] {
+        didSet {
+            if !isUpdatingPartsFromSource {
+                sourceText = parts.map(\.plainText).joined()
+            }
+        }
+    }
     var attachments: [AttachmentViewState]
     var streaming: MessageStreamingState
+    private var sourceText: String
+    private var isUpdatingPartsFromSource: Bool
 
     init(
         id: String,
@@ -45,15 +53,20 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         self.parts = parts
         self.attachments = attachments
         self.streaming = streaming
+        sourceText = parts.map(\.plainText).joined()
+        isUpdatingPartsFromSource = false
     }
 
     init(id: String, role: AgentMessageRole, text: String, isStreaming: Bool) {
-        self.init(
-            id: id,
-            role: role,
-            parts: Self.parts(for: role, text: text, isStreaming: isStreaming),
-            streaming: isStreaming ? .streaming : .idle
-        )
+        self.id = id
+        self.role = role
+        sessionId = nil
+        parentId = nil
+        attachments = []
+        streaming = isStreaming ? .streaming : .idle
+        sourceText = text
+        isUpdatingPartsFromSource = false
+        parts = Self.parts(for: role, text: text, isStreaming: isStreaming)
     }
 
     var text: String {
@@ -61,7 +74,14 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
             parts.map(\.plainText).joined()
         }
         set {
-            parts = Self.parts(for: role, text: newValue, isStreaming: isStreaming)
+            sourceText = newValue
+            updatePartsFromSource()
+        }
+        _modify {
+            defer {
+                updatePartsFromSource()
+            }
+            yield &sourceText
         }
     }
 
@@ -71,7 +91,14 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         }
         set {
             streaming = newValue ? .streaming : .idle
+            updatePartsFromSource()
         }
+    }
+
+    private mutating func updatePartsFromSource() {
+        isUpdatingPartsFromSource = true
+        parts = Self.parts(for: role, text: sourceText, isStreaming: isStreaming)
+        isUpdatingPartsFromSource = false
     }
 
     private static func parts(for role: AgentMessageRole, text: String, isStreaming: Bool) -> [MessagePartViewState] {
