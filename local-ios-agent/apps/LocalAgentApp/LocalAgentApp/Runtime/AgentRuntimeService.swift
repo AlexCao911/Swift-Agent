@@ -26,6 +26,12 @@ enum AgentRuntimeServiceError: Error, Equatable, Sendable {
     case missingPendingToolRequest(String)
 }
 
+private enum StreamBufferInput: Sendable {
+    case event(RuntimeEventDTO)
+    case flushTick
+    case finished
+}
+
 actor AgentRuntimeService: AgentRuntimeServicing {
     private enum ActiveRun: Sendable, Equatable {
         case starting
@@ -34,12 +40,18 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
     private let runtimeClient: any RuntimeClient
     private let toolDriver: MinimalHostToolDriver
+    private let streamFlushNanoseconds: UInt64
     private var activeRun: ActiveRun?
     private var hasPrepared = false
 
-    init(runtimeClient: any RuntimeClient, toolDriver: MinimalHostToolDriver) {
+    init(
+        runtimeClient: any RuntimeClient,
+        toolDriver: MinimalHostToolDriver,
+        streamFlushNanoseconds: UInt64 = 50_000_000
+    ) {
         self.runtimeClient = runtimeClient
         self.toolDriver = toolDriver
+        self.streamFlushNanoseconds = streamFlushNanoseconds
     }
 
     func prepare() async throws -> AgentViewState {
@@ -205,13 +217,20 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         switch nextTurn.state {
-        case .completed, .cancelled:
+        case .completed:
+            nextState.lastTerminalReason = .completed
+            nextState.finishStreamingMessages(as: .idle)
+            nextState.phase = .ready
+        case .cancelled:
+            nextState.lastTerminalReason = .cancelled
+            nextState.finishStreamingMessages(as: .cancelled)
             nextState.phase = .ready
         case .failed:
-            if nextState.errorMessage == nil {
-                nextState.errorMessage = "Run failed."
-            }
-            nextState.phase = .failed(message: nextState.errorMessage ?? "Run failed.")
+            let message = nextState.errorMessage ?? "Run failed."
+            nextState.errorMessage = message
+            nextState.lastTerminalReason = .failed(message)
+            nextState.finishStreamingMessages(as: .failed(message))
+            nextState.phase = .failed(message: message)
         case .running, .waitingTool, .suspended:
             nextState.phase = .running(runId: nextTurn.runId)
         }
@@ -224,16 +243,127 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         streamedEventIds: inout Set<String>,
         onEvent: @Sendable (RuntimeEventDTO) async -> Void
     ) async throws -> AgentTurnResultDTO {
-        for try await event in stream.events {
-            if let runId = event.runId {
-                activeRun = .running(runId)
-                state.phase = .running(runId: runId)
+        var buffer = RuntimeStreamBuffer()
+        let (inputs, continuation) = AsyncThrowingStream.makeStream(
+            of: StreamBufferInput.self,
+            throwing: Error.self
+        )
+        let events = stream.events
+        let producer = Task {
+            do {
+                for try await event in events {
+                    continuation.yield(.event(event))
+                }
+                continuation.yield(.finished)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
             }
-            RuntimeEventReducer.apply(event, to: &state)
-            streamedEventIds.insert(event.id)
-            await onEvent(event)
         }
+        var flushTask: Task<Void, Never>?
+
+        func updateScheduledFlush() {
+            guard buffer.hasPendingEvents else {
+                flushTask?.cancel()
+                flushTask = nil
+                return
+            }
+
+            flushTask?.cancel()
+            let delay = streamFlushNanoseconds
+            flushTask = Task {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled else {
+                    return
+                }
+                continuation.yield(.flushTick)
+            }
+        }
+
+        defer {
+            producer.cancel()
+            flushTask?.cancel()
+        }
+
+        do {
+            inputLoop: for try await input in inputs {
+                switch input {
+                case .event(let event):
+                    streamedEventIds.insert(event.id)
+                    let events = buffer.append(event)
+                    for bufferedEvent in events {
+                        applyStreamedEvent(
+                            bufferedEvent,
+                            to: &state,
+                            streamedEventIds: &streamedEventIds
+                        )
+                        await onEvent(bufferedEvent)
+                    }
+                    updateScheduledFlush()
+                case .flushTick:
+                    await flushStreamBuffer(
+                        &buffer,
+                        to: &state,
+                        streamedEventIds: &streamedEventIds,
+                        onEvent: onEvent
+                    )
+                    updateScheduledFlush()
+                case .finished:
+                    await flushStreamBuffer(
+                        &buffer,
+                        to: &state,
+                        streamedEventIds: &streamedEventIds,
+                        onEvent: onEvent
+                    )
+                    break inputLoop
+                }
+            }
+        } catch {
+            await flushStreamBuffer(
+                &buffer,
+                to: &state,
+                streamedEventIds: &streamedEventIds,
+                onEvent: onEvent
+            )
+            throw error
+        }
+
+        await flushStreamBuffer(
+            &buffer,
+            to: &state,
+            streamedEventIds: &streamedEventIds,
+            onEvent: onEvent
+        )
         return try await stream.result.value
+    }
+
+    private func flushStreamBuffer(
+        _ buffer: inout RuntimeStreamBuffer,
+        to state: inout AgentViewState,
+        streamedEventIds: inout Set<String>,
+        onEvent: @Sendable (RuntimeEventDTO) async -> Void
+    ) async {
+        for bufferedEvent in buffer.flush() {
+            applyStreamedEvent(
+                bufferedEvent,
+                to: &state,
+                streamedEventIds: &streamedEventIds
+            )
+            await onEvent(bufferedEvent)
+        }
+    }
+
+    private func applyStreamedEvent(
+        _ event: RuntimeEventDTO,
+        to state: inout AgentViewState,
+        streamedEventIds: inout Set<String>
+    ) {
+        if let runId = event.runId {
+            activeRun = .running(runId)
+            state.phase = .running(runId: runId)
+        }
+        RuntimeEventReducer.apply(event, to: &state)
+        streamedEventIds.insert(event.id)
     }
 
     private func apply(_ events: [RuntimeEventDTO], to state: inout AgentViewState) {

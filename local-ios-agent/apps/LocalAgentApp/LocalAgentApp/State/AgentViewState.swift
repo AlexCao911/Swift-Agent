@@ -14,6 +14,13 @@ enum AppRuntimePhase: Equatable, Sendable {
     }
 }
 
+enum RunTerminalReason: Equatable, Sendable {
+    case completed
+    case cancelled
+    case failed(String)
+    case reachedLimit
+}
+
 enum AgentMessageRole: Equatable, Sendable {
     case user
     case assistant
@@ -144,6 +151,7 @@ struct AgentViewState: Equatable, Sendable {
     var currentSessionId: String?
     var errorMessage: String?
     var provider: ProviderSelectionViewState
+    var lastTerminalReason: RunTerminalReason?
 
     init(
         phase: AppRuntimePhase = .booting,
@@ -151,7 +159,8 @@ struct AgentViewState: Equatable, Sendable {
         draft: String = "",
         currentSessionId: String? = nil,
         errorMessage: String? = nil,
-        provider: ProviderSelectionViewState = ProviderSelectionViewState()
+        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
+        lastTerminalReason: RunTerminalReason? = nil
     ) {
         self.phase = phase
         self.messages = messages
@@ -159,5 +168,13 @@ struct AgentViewState: Equatable, Sendable {
         self.currentSessionId = currentSessionId
         self.errorMessage = errorMessage
         self.provider = provider
+        self.lastTerminalReason = lastTerminalReason
+    }
+
+    mutating func finishStreamingMessages(as terminalState: MessageStreamingState) {
+        for index in messages.indices where messages[index].isStreaming {
+            messages[index].isStreaming = false
+            messages[index].streaming = terminalState
+        }
     }
 }

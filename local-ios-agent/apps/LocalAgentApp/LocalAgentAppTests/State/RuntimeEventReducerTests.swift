@@ -178,6 +178,50 @@ struct RuntimeEventReducerTests {
         #expect(state.phase == .ready)
     }
 
+    @Test("run cancellation preserves partial assistant output")
+    func runCancellationPreservesPartialAssistantOutput() {
+        var state = AgentViewState(phase: .running(runId: "run_1"))
+
+        RuntimeEventReducer.apply(
+            event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"<think>partial"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(event(id: "cancelled", kind: .runCancelled, payload: "cancelled"), to: &state)
+
+        #expect(state.phase == .ready)
+        #expect(state.lastTerminalReason == .cancelled)
+        #expect(state.messages[0].streaming == .cancelled)
+        #expect(state.messages[0].text == "partial")
+        #expect(state.messages[0].parts == [
+            .reasoning(ReasoningPartViewState(id: "reasoning_0", text: "partial", isCollapsed: true, isStreaming: false)),
+        ])
+    }
+
+    @Test("run failure preserves partial assistant output")
+    func runFailurePreservesPartialAssistantOutput() {
+        var state = AgentViewState(phase: .running(runId: "run_1"))
+
+        RuntimeEventReducer.apply(
+            event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"partial"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(event(id: "failed", kind: .runFailed, payload: #"{"message":"model stopped"}"#), to: &state)
+
+        #expect(state.phase == .failed(message: "model stopped"))
+        #expect(state.errorMessage == "model stopped")
+        #expect(state.lastTerminalReason == .failed("model stopped"))
+        #expect(state.messages[0].streaming == .failed("model stopped"))
+        #expect(state.messages[0].text == "partial")
+    }
+
     private func event(
         id: String,
         kind: RuntimeEventKindDTO,

@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
@@ -61,6 +62,23 @@ struct AgentViewModelTests {
         await sendTask.value
 
         #expect(viewModel.state.messages.map(\.text) == ["final"])
+    }
+
+    @Test("send failure marks streamed partial output failed")
+    func sendFailureMarksStreamedPartialOutputFailed() async {
+        let service = FailingStreamingViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, draft: "hello", currentSessionId: "session_1")
+        )
+
+        await viewModel.send()
+
+        #expect(viewModel.state.phase == .failed(message: "stream stopped"))
+        #expect(viewModel.state.errorMessage == "stream stopped")
+        #expect(viewModel.state.lastTerminalReason == .failed("stream stopped"))
+        #expect(viewModel.state.messages.map(\.text) == ["partial"])
+        #expect(viewModel.state.messages[0].streaming == .failed("stream stopped"))
     }
 
     @Test("select provider delegates to service")
@@ -181,5 +199,42 @@ private actor StreamingViewModelServiceStub: AgentRuntimeServicing {
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {
         state
+    }
+}
+
+private actor FailingStreamingViewModelServiceStub: AgentRuntimeServicing {
+    func prepare() async throws -> AgentViewState {
+        AgentViewState(phase: .ready, currentSessionId: "session_1")
+    }
+
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState {
+        await onEvent(RuntimeEventDTO(
+            id: "delta_1",
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: .assistantTextDelta,
+            payload: "partial",
+            blobRefs: []
+        ))
+        throw StreamingViewModelServiceError.streamStopped
+    }
+
+    func cancel(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+}
+
+private enum StreamingViewModelServiceError: LocalizedError {
+    case streamStopped
+
+    var errorDescription: String? {
+        "stream stopped"
     }
 }

@@ -21,12 +21,14 @@ enum RuntimeEventReducer {
         case .runCancelled:
             state.phase = .ready
             state.errorMessage = nil
-            stopStreamingMessages(in: &state)
+            state.lastTerminalReason = .cancelled
+            state.finishStreamingMessages(as: .cancelled)
         case .runFailed:
             let message = payloadString("message", from: event.payload) ?? event.payload
             state.phase = .failed(message: message)
             state.errorMessage = message
-            stopStreamingMessages(in: &state)
+            state.lastTerminalReason = .failed(message)
+            state.finishStreamingMessages(as: .failed(message))
         default:
             break
         }
@@ -134,12 +136,6 @@ enum RuntimeEventReducer {
             return event.id
         }
         return state.messages.last(where: { $0.role == .assistant })?.id ?? event.id
-    }
-
-    private static func stopStreamingMessages(in state: inout AgentViewState) {
-        for index in state.messages.indices where state.messages[index].isStreaming {
-            state.messages[index].isStreaming = false
-        }
     }
 
     private static func payloadString(_ key: String, from payload: String) -> String? {

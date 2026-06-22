@@ -17,8 +17,7 @@ final class AgentViewModel {
         do {
             state = try await service.prepare()
         } catch {
-            state.phase = .failed(message: error.localizedDescription)
-            state.errorMessage = error.localizedDescription
+            markRunFailed(error.localizedDescription)
         }
     }
 
@@ -40,8 +39,7 @@ final class AgentViewModel {
                 }
             }
         } catch {
-            state.phase = .failed(message: error.localizedDescription)
-            state.errorMessage = error.localizedDescription
+            markRunFailed(error.localizedDescription)
         }
     }
 
@@ -49,8 +47,7 @@ final class AgentViewModel {
         do {
             state = try await service.cancel(state: state)
         } catch {
-            state.phase = .failed(message: error.localizedDescription)
-            state.errorMessage = error.localizedDescription
+            markRunFailed(error.localizedDescription)
         }
     }
 
@@ -60,5 +57,12 @@ final class AgentViewModel {
         } catch {
             state.provider.errorMessage = error.localizedDescription
         }
+    }
+
+    private func markRunFailed(_ message: String) {
+        state.finishStreamingMessages(as: .failed(message))
+        state.lastTerminalReason = .failed(message)
+        state.phase = .failed(message: message)
+        state.errorMessage = message
     }
 }

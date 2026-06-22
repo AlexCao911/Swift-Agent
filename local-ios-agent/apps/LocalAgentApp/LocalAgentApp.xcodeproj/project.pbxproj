@@ -28,6 +28,8 @@
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
+		0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */; };
+		0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010E /* RuntimeStreamBuffer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,12 +58,14 @@
 		0A000001000000000000010B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		0A000001000000000000010C /* MessageContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContent.swift; sourceTree = "<group>"; };
 		0A000001000000000000010D /* ReasoningTagParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParser.swift; sourceTree = "<group>"; };
+		0A000001000000000000010E /* RuntimeStreamBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBuffer.swift; sourceTree = "<group>"; };
 		0A0000010000000000000111 /* RuntimeEventReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEventReducerTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimalHostToolDriverTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeServiceTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000114 /* AgentViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModelTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustRuntimeAppIntegrationTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -141,6 +145,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
+				0A000001000000000000010E /* RuntimeStreamBuffer.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -194,6 +199,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
+				0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -369,6 +375,7 @@
 				0A0000010000000000000009 /* ChatView.swift in Sources */,
 				0A0000010000000000000014 /* MessageContent.swift in Sources */,
 				0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */,
+				0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,6 +389,7 @@
 				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
+				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

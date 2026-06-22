@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
@@ -98,6 +99,106 @@ struct AgentRuntimeServiceTests {
 
         #expect(state.phase == .ready)
         #expect(state.messages.map(\.text) == ["hello", "hello world"])
+    }
+
+    @Test("buffered structured delta is delivered before another stream event arrives")
+    func bufferedStructuredDeltaIsDeliveredBeforeAnotherStreamEventArrives() async throws {
+        let client = BufferedStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let observation = StreamObservation()
+
+        let prepared = try await service.prepare()
+        async let finalState = service.sendMessage("hello", state: prepared) { event in
+            if event.kind == .assistantTextDelta {
+                await observation.observeDelta()
+            }
+        }
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(await observation.didObserveDeltaValue)
+        #expect(await client.didReleaseFinalResult == false)
+
+        await client.releaseFinalResult()
+        let state = try await finalState
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text) == ["hello", "hello world"])
+    }
+
+    @Test("structured stream deltas are coalesced before final turn replay")
+    func structuredStreamDeltasAreCoalescedBeforeFinalTurnReplay() async throws {
+        let client = CoalescingStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let recorder = StreamEventRecorder()
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared) { event in
+            await recorder.record(event)
+        }
+
+        let observedEvents = await recorder.events
+        let observedDeltas = observedEvents.filter { $0.kind == .assistantTextDelta }
+        let payload = try #require(observedDeltas.first?.payload)
+        let payloadObject = try #require(jsonObject(from: payload))
+
+        #expect(observedDeltas.count == 1)
+        #expect(payloadObject["message_id"] == "assistant_1")
+        #expect(payloadObject["text"] == "Hello")
+        #expect(state.messages.count == 2)
+        #expect(state.messages.map(\.text) == ["hello", "Hello!"])
+        #expect(state.lastTerminalReason == .completed)
+    }
+
+    @Test("failed stream result marks partial output failed without terminal event")
+    func failedStreamResultMarksPartialOutputFailedWithoutTerminalEvent() async throws {
+        let client = TerminalResultStreamingRuntimeClientProbe(resultState: .failed)
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared)
+
+        #expect(state.phase == .failed(message: "Run failed."))
+        #expect(state.errorMessage == "Run failed.")
+        #expect(state.lastTerminalReason == .failed("Run failed."))
+        #expect(state.messages.map(\.text) == ["hello", "partial"])
+        #expect(state.messages[1].streaming == .failed("Run failed."))
+    }
+
+    @Test("cancelled stream result marks partial output cancelled without terminal event")
+    func cancelledStreamResultMarksPartialOutputCancelledWithoutTerminalEvent() async throws {
+        let client = TerminalResultStreamingRuntimeClientProbe(resultState: .cancelled)
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared)
+
+        #expect(state.phase == .ready)
+        #expect(state.lastTerminalReason == .cancelled)
+        #expect(state.messages.map(\.text) == ["hello", "partial"])
+        #expect(state.messages[1].streaming == .cancelled)
+    }
+
+    @Test("stream event failure flushes buffered partial output before throwing")
+    func streamEventFailureFlushesBufferedPartialOutputBeforeThrowing() async throws {
+        let client = ThrowingStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let recorder = StreamEventRecorder()
+
+        let prepared = try await service.prepare()
+        do {
+            _ = try await service.sendMessage("hello", state: prepared) { event in
+                await recorder.record(event)
+            }
+            Issue.record("Expected stream failure")
+        } catch is RuntimeStreamProbeError {
+        }
+
+        let observedEvents = await recorder.events
+        let observedDeltas = observedEvents.filter { $0.kind == .assistantTextDelta }
+        let payload = try #require(observedDeltas.first?.payload)
+        let payloadObject = try #require(jsonObject(from: payload))
+        #expect(observedDeltas.count == 1)
+        #expect(payloadObject["text"] == "partial")
     }
 
     @Test("second send is rejected while first send is still in flight")
@@ -316,11 +417,24 @@ struct AgentRuntimeServiceTests {
             blobRefs: []
         )
     }
+
+    private func jsonObject(from payload: String) -> [String: String]? {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else {
+            return nil
+        }
+        return object
+    }
 }
 
 private actor StreamObservation {
     private var didObserveDelta = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var didObserveDeltaValue: Bool {
+        didObserveDelta
+    }
 
     func observeDelta() {
         didObserveDelta = true
@@ -337,6 +451,14 @@ private actor StreamObservation {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+}
+
+private actor StreamEventRecorder {
+    private(set) var events: [RuntimeEventDTO] = []
+
+    func record(_ event: RuntimeEventDTO) {
+        events.append(event)
     }
 }
 
@@ -440,6 +562,423 @@ private actor StreamingRuntimeClientProbe: StreamingRuntimeClient {
         await withCheckedContinuation { continuation in
             finalResultContinuation = continuation
         }
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor BufferedStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+    private var finalResultContinuation: CheckedContinuation<Void, Never>?
+    private var releasedFinalResult = false
+
+    var didReleaseFinalResult: Bool {
+        releasedFinalResult
+    }
+
+    func releaseFinalResult() {
+        releasedFinalResult = true
+        finalResultContinuation?.resume()
+        finalResultContinuation = nil
+    }
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task<AgentTurnResultDTO, any Error> {
+            continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
+            continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#))
+            continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"hello "}"#))
+            await self.waitForFinalRelease()
+            continuation.yield(Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"hello world"}"#))
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    Self.event(id: "user_1", kind: .userMessage, payload: text),
+                    Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+                    Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"hello "}"#),
+                    Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"hello world"}"#),
+                ],
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private func waitForFinalRelease() async {
+        if releasedFinalResult {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            finalResultContinuation = continuation
+        }
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor CoalescingStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let streamedEvents = [
+            Self.event(id: "user_1", kind: .userMessage, payload: text),
+            Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"Hel"}"#),
+            Self.event(id: "delta_2", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"lo"}"#),
+            Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"Hello!"}"#),
+        ]
+        let result = Task<AgentTurnResultDTO, any Error> {
+            for event in streamedEvents {
+                continuation.yield(event)
+            }
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: streamedEvents,
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor TerminalResultStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private let resultState: RunStateDTO
+    private var sessionCount = 0
+
+    init(resultState: RunStateDTO) {
+        self.resultState = resultState
+    }
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let streamedEvents = [
+            Self.event(id: "user_1", kind: .userMessage, payload: text),
+            Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"partial"}"#),
+        ]
+        let state = resultState
+        let result = Task<AgentTurnResultDTO, any Error> {
+            for event in streamedEvents {
+                continuation.yield(event)
+            }
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: state,
+                events: streamedEvents,
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private enum RuntimeStreamProbeError: Error {
+    case streamStopped
+}
+
+private actor ThrowingStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task<AgentTurnResultDTO, any Error> {
+            continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
+            continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#))
+            continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"partial"}"#))
+            continuation.finish(throwing: RuntimeStreamProbeError.streamStopped)
+            throw RuntimeStreamProbeError.streamStopped
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
     }
 
     private static func event(
