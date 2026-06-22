@@ -2,3 +2,19 @@ rust-core/target/
 toolkit/.build/
 .derivedData/
 .xcode-home/
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# macOS
+.DS_Store
+
+.kiro/
