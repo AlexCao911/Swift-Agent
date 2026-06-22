@@ -1,6 +1,6 @@
 # Simulator llama.cpp Model Contract
 
-Plan 13 loads a GGUF model inside the iOS Simulator app process through the local inference C ABI.
+The simulator local inference path loads a GGUF model inside the iOS Simulator app process through the local inference C ABI.
 
 ## Required Local Environment
 
@@ -21,7 +21,7 @@ export LOCAL_AGENT_SIMULATOR_GGUF=/absolute/path/to/model.gguf
   "generation": {
     "temperature": 0.2,
     "top_p": 0.9,
-    "max_new_tokens": 128,
+    "max_new_tokens": 512,
     "seed": 42
   },
   "llama_cpp": {
@@ -31,6 +31,29 @@ export LOCAL_AGENT_SIMULATOR_GGUF=/absolute/path/to/model.gguf
   }
 }
 ```
+
+For interactive chat, set `generation.max_new_tokens` between 512 and 1024 so
+the UI can exercise long streaming behavior. Smoke tests may use 128 to keep
+test runtime short.
+
+## Xcode Run Configuration
+
+Command-line scripts export the simulator model configuration before invoking
+`xcodebuild`, but Xcode's GUI Run action does not inherit shell environment
+variables. For GUI runs, add this environment variable in the LocalAgentApp
+scheme under `Run > Arguments > Environment Variables`:
+
+```text
+LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON
+```
+
+The value should be the model configuration JSON, including an absolute
+`model_path` to the GGUF file.
+
+GUI runs also require the llama.cpp framework to be linked and available to the
+app target. If the backend is built as an XCFramework, add the generated
+`llama.xcframework` to the LocalAgentApp target's frameworks and ensure the
+simulator slice is available for the selected destination.
 
 ## Model Acceptance Gate
 
