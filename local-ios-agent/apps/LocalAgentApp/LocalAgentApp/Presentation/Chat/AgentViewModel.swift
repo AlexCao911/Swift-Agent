@@ -100,7 +100,8 @@ final class AgentViewModel {
     }
 
     func forkFromMessage(_ messageId: String) async {
-        state.draft.targetParentEventId = messageId
+        let message = state.messages.first { $0.id == messageId }
+        state.draft.targetParentEventId = message?.branchLeafId ?? messageId
     }
 
     func regenerate(from messageId: String) async {

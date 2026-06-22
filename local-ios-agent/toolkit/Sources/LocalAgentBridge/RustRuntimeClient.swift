@@ -362,7 +362,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient, @unchecked Sendable {
+public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -438,10 +438,25 @@ public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllin
         parentEventId: String?,
         text: String
     ) async throws -> AgentTurnResultDTO {
+        try await sendMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    public func sendMessage(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) async throws -> AgentTurnResultDTO {
         let request = SendMessageRequest(
             sessionId: sessionId,
             parentEventId: parentEventId,
-            text: text
+            text: text,
+            blobRefs: blobRefs
         )
         let json = try encode(request)
         return try json.withCString { pointer in
@@ -454,11 +469,26 @@ public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllin
         parentEventId: String?,
         text: String
     ) -> AgentTurnStreamDTO {
+        sendMessageStream(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    public func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) -> AgentTurnStreamDTO {
         do {
             let request = SendMessageRequest(
                 sessionId: sessionId,
                 parentEventId: parentEventId,
-                text: text
+                text: text,
+                blobRefs: blobRefs
             )
             let json = try encode(request)
             return makeTurnStream { callback, userData in
@@ -652,11 +682,13 @@ private struct SendMessageRequest: Encodable {
     var sessionId: String
     var parentEventId: String?
     var text: String
+    var blobRefs: [String] = []
 
     private enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case parentEventId = "parent_event_id"
         case text
+        case blobRefs = "blob_refs"
     }
 }
 

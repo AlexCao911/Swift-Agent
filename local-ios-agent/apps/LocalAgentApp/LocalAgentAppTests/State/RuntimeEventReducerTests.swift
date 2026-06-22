@@ -105,13 +105,75 @@ struct RuntimeEventReducerTests {
         ])
         #expect(state.messages[1].sessionId == "session_1")
         #expect(state.messages[1].parentId == "parent_assistant")
+        #expect(state.messages[1].branchLeafId == "completed")
         #expect(state.messages[1].parts == [
             .text(TextPartViewState(id: "text_0", text: "hi")),
         ])
         #expect(state.messages[2].sessionId == "session_1")
         #expect(state.messages[2].parentId == "parent_tool")
+        #expect(state.messages[2].branchLeafId == "tool_result")
         #expect(state.messages[2].parts == [
             .tool(ToolPartViewState(id: "tool_result", displayText: "Echo: hello")),
+        ])
+    }
+
+    @Test("assistant completed event becomes branch leaf id")
+    func assistantCompletedEventBecomesBranchLeafId() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(id: "completed_leaf", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"done"}"#),
+            to: &state
+        )
+
+        #expect(state.messages.map(\.id) == ["assistant_1"])
+        #expect(state.messages[0].branchLeafId == "completed_leaf")
+    }
+
+    @Test("user blob refs restore visible text and attachments")
+    func userBlobRefsRestoreVisibleTextAndAttachments() {
+        var state = AgentViewState()
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(
+            text: "hello",
+            attachments: [
+                AttachmentDraftViewState(
+                    id: "link_1",
+                    kind: .link,
+                    displayName: "example.com",
+                    localPath: nil,
+                    urlString: "https://example.com",
+                    mimeType: nil,
+                    byteCount: nil
+                ),
+            ]
+        )
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "user_1",
+                kind: .userMessage,
+                payload: "hello\nLink: https://example.com",
+                blobRefs: blobRefs
+            ),
+            to: &state
+        )
+
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].text == "hello")
+        #expect(state.messages[0].attachments == [
+            AttachmentViewState(
+                id: "link_1",
+                kind: .link,
+                displayName: "example.com",
+                localPath: nil,
+                urlString: "https://example.com",
+                mimeType: nil,
+                byteCount: nil
+            ),
         ])
     }
 
@@ -227,7 +289,8 @@ struct RuntimeEventReducerTests {
         kind: RuntimeEventKindDTO,
         payload: String,
         parentId: String? = nil,
-        runId: String? = "run_1"
+        runId: String? = "run_1",
+        blobRefs: [String] = []
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
@@ -238,7 +301,7 @@ struct RuntimeEventReducerTests {
             depth: 0,
             kind: kind,
             payload: payload,
-            blobRefs: []
+            blobRefs: blobRefs
         )
     }
 }

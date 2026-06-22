@@ -133,6 +133,48 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text) == ["hi", "there"])
     }
 
+    @Test("select conversation restores attachment blob refs")
+    func selectConversationRestoresAttachmentBlobRefs() async throws {
+        let client = ScriptedRuntimeClient()
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(
+            text: "hi",
+            attachments: [
+                AttachmentDraftViewState(
+                    id: "link_1",
+                    kind: .link,
+                    displayName: "example.com",
+                    localPath: nil,
+                    urlString: "https://example.com",
+                    mimeType: nil,
+                    byteCount: nil
+                ),
+            ]
+        )
+        await client.setActiveBranchForTest(
+            sessionId: "session_2",
+            leafId: nil,
+            events: [
+                event(
+                    id: "user_2",
+                    sessionId: "session_2",
+                    kind: .userMessage,
+                    payload: "hi\nLink: https://example.com",
+                    runId: "run_2",
+                    blobRefs: blobRefs
+                ),
+            ]
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.selectConversation(
+            sessionId: "session_2",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        #expect(state.messages.map(\.text) == ["hi"])
+        #expect(state.messages[0].attachments.map(\.urlString) == ["https://example.com"])
+    }
+
     @Test("send applies completed mock chat events")
     func sendAppliesCompletedMockChatEvents() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
@@ -212,7 +254,10 @@ struct AgentRuntimeServiceTests {
         ]
         state = try await service.sendMessage("hello", state: state)
 
-        #expect(await client.sentMessages.map(\.text) == ["hello\nLink: https://example.com"])
+        let sentMessages = await client.sentMessages
+        #expect(sentMessages.map(\.text) == ["hello\nLink: https://example.com"])
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).text == "hello")
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).attachments.map(\.urlString) == ["https://example.com"])
         #expect(state.messages[0].text == "hello")
         #expect(state.messages[0].attachments.count == 1)
         #expect(state.messages[0].attachments[0].kind == .link)
@@ -255,9 +300,12 @@ struct AgentRuntimeServiceTests {
         ]
         state = try await service.sendMessage("look", state: state)
 
-        #expect(await client.sentMessages.map(\.text) == [
+        let sentMessages = await client.sentMessages
+        #expect(sentMessages.map(\.text) == [
             "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3",
         ])
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).text == "look")
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).attachments.map(\.localPath) == ["/tmp/photo.png"])
         #expect(state.messages[0].text == "look")
         #expect(state.messages[0].attachments.count == 1)
         #expect(state.messages[0].attachments[0].kind == .image)
@@ -317,7 +365,12 @@ struct AgentRuntimeServiceTests {
         let state = AgentViewState(
             phase: .ready,
             messages: [
-                AgentMessageViewState(id: "assistant_1", role: .assistant, text: "partial", isStreaming: false),
+                AgentMessageViewState(
+                    id: "assistant_ui_message",
+                    branchLeafId: "assistant_completed_leaf",
+                    role: .assistant,
+                    parts: [.text(TextPartViewState(id: "assistant_text", text: "partial"))]
+                ),
             ],
             currentSessionId: "session_1"
         )
@@ -325,7 +378,7 @@ struct AgentRuntimeServiceTests {
         _ = try await service.continueGeneration(state: state)
 
         #expect(await client.sentMessages.map(\.text) == ["Continue."])
-        #expect(await client.sentMessages.map(\.parentEventId) == ["assistant_1"])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["assistant_completed_leaf"])
     }
 
     @Test("edit and resend sends edited text from original parent")
@@ -689,7 +742,8 @@ struct AgentRuntimeServiceTests {
         parentId: String? = nil,
         kind: RuntimeEventKindDTO,
         payload: String,
-        runId: String = "run_1"
+        runId: String = "run_1",
+        blobRefs: [String] = []
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
@@ -700,7 +754,7 @@ struct AgentRuntimeServiceTests {
             depth: 0,
             kind: kind,
             payload: payload,
-            blobRefs: []
+            blobRefs: blobRefs
         )
     }
 
@@ -1365,11 +1419,12 @@ private actor BlockingSendRuntimeClient: RuntimeClient {
     }
 }
 
-private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient {
+private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient {
     struct SentMessage: Equatable, Sendable {
         var sessionId: String
         var parentEventId: String?
         var text: String
+        var blobRefs: [String] = []
     }
 
     struct SubmittedToolResult: Sendable {
@@ -1463,7 +1518,26 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
     func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
 
     func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
-        sentMessages.append(SentMessage(sessionId: sessionId, parentEventId: parentEventId, text: text))
+        try await sendMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    func sendMessage(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) async throws -> AgentTurnResultDTO {
+        sentMessages.append(SentMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: blobRefs
+        ))
         return sendTurns.removeFirst()
     }
 

@@ -138,6 +138,7 @@ fn set_provider_replaces_active_bundle_persists_setting_and_emits_event() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "hello".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     assert!(turn
@@ -211,6 +212,7 @@ fn set_provider_rejects_runs_that_may_continue_generation() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -237,6 +239,7 @@ fn set_provider_rejects_runs_that_may_continue_generation_in_other_sessions() {
             session_id: running_session,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 

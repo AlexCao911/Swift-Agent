@@ -47,6 +47,24 @@ public protocol StreamingRuntimeClient: RuntimeClient {
     ) -> AgentTurnStreamDTO
 }
 
+public protocol BlobReferencingRuntimeClient: RuntimeClient {
+    func sendMessage(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) async throws -> AgentTurnResultDTO
+}
+
+public protocol StreamingBlobReferencingRuntimeClient: StreamingRuntimeClient, BlobReferencingRuntimeClient {
+    func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) -> AgentTurnStreamDTO
+}
+
 public protocol ProviderControllingRuntimeClient: Sendable {
     func providerProfiles() async throws -> [ProviderProfileDTO]
     func activeProvider() async throws -> ProviderProfileDTO

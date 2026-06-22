@@ -38,12 +38,16 @@ enum RuntimeEventReducer {
         guard !state.messages.contains(where: { $0.id == event.id }) else {
             return
         }
+        let decoded = RuntimeBlobRefCodec.decodeUserMessage(from: event.blobRefs)
+        let text = decoded.text ?? event.payload
         state.messages.append(AgentMessageViewState(
             id: event.id,
             sessionId: event.sessionId,
             parentId: event.parentId,
+            branchLeafId: event.id,
             role: .user,
-            parts: [.text(TextPartViewState(id: "\(event.id)_text_0", text: event.payload))],
+            parts: text.isEmpty ? [] : [.text(TextPartViewState(id: "\(event.id)_text_0", text: text))],
+            attachments: decoded.attachments,
             streaming: .idle
         ))
     }
@@ -58,6 +62,7 @@ enum RuntimeEventReducer {
             id: messageId,
             sessionId: event.sessionId,
             parentId: event.parentId,
+            branchLeafId: event.id,
             role: .assistant,
             parts: [],
             streaming: .streaming
@@ -75,6 +80,7 @@ enum RuntimeEventReducer {
                 id: messageId,
                 sessionId: event.sessionId,
                 parentId: event.parentId,
+                branchLeafId: event.id,
                 role: .assistant,
                 parts: [],
                 streaming: .streaming
@@ -91,11 +97,13 @@ enum RuntimeEventReducer {
         if let index = state.messages.firstIndex(where: { $0.id == messageId }) {
             state.messages[index].text = completedText
             state.messages[index].isStreaming = false
+            state.messages[index].branchLeafId = event.id
         } else {
             state.messages.append(AgentMessageViewState(
                 id: messageId,
                 sessionId: event.sessionId,
                 parentId: event.parentId,
+                branchLeafId: event.id,
                 role: .assistant,
                 parts: parsedAssistantParts(from: completedText, isFinal: true),
                 streaming: .idle
@@ -113,6 +121,7 @@ enum RuntimeEventReducer {
             id: event.id,
             sessionId: event.sessionId,
             parentId: event.parentId,
+            branchLeafId: event.id,
             role: .tool,
             parts: [.tool(ToolPartViewState(id: event.id, displayText: displayText))],
             streaming: .idle

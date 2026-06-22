@@ -189,12 +189,23 @@ struct AgentViewModelTests {
         let service = ViewModelServiceStub()
         let viewModel = AgentViewModel(
             service: service,
-            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+            initialState: AgentViewState(
+                phase: .ready,
+                messages: [
+                    AgentMessageViewState(
+                        id: "assistant_ui_message",
+                        branchLeafId: "assistant_completed_event",
+                        role: .assistant,
+                        parts: [.text(TextPartViewState(id: "assistant_text", text: "answer"))]
+                    ),
+                ],
+                currentSessionId: "session_1"
+            )
         )
 
-        await viewModel.forkFromMessage("entry_4")
+        await viewModel.forkFromMessage("assistant_ui_message")
 
-        #expect(viewModel.state.draft.targetParentEventId == "entry_4")
+        #expect(viewModel.state.draft.targetParentEventId == "assistant_completed_event")
     }
 
     @Test("regenerate delegates assistant message id")

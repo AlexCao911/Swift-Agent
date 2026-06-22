@@ -73,6 +73,7 @@ pub struct SendMessageInput {
     pub session_id: SessionId,
     pub parent_event_id: Option<EntryId>,
     pub text: String,
+    pub blob_refs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -460,12 +461,13 @@ impl<S: EventStore> AgentRuntime<S> {
             &input.text,
         )?;
         Self::emit_events(&mut emitted, on_event)?;
-        let user_id = self.append_event(
+        let user_id = self.append_event_with_blob_refs(
             &input.session_id,
             parent_id,
             Some(run_id.clone()),
             EventKind::UserMessage,
             input.text,
+            input.blob_refs,
         )?;
         self.emit_event_by_id(&input.session_id, &user_id, &mut emitted, on_event)?;
         let branch = self.store.active_branch(&input.session_id, &user_id)?;
@@ -1108,8 +1110,22 @@ impl<S: EventStore> AgentRuntime<S> {
         kind: EventKind,
         payload: impl Into<String>,
     ) -> Result<EntryId, AgentError> {
+        self.append_event_with_blob_refs(session_id, parent_id, run_id, kind, payload, Vec::new())
+    }
+
+    fn append_event_with_blob_refs(
+        &mut self,
+        session_id: &SessionId,
+        parent_id: Option<EntryId>,
+        run_id: Option<RunId>,
+        kind: EventKind,
+        payload: impl Into<String>,
+        blob_refs: Vec<String>,
+    ) -> Result<EntryId, AgentError> {
         let entry_id = EntryId(self.ids.next_id("entry"));
-        self.append_event_with_id(entry_id, session_id, parent_id, run_id, kind, payload)
+        self.append_event_with_id_and_blob_refs(
+            entry_id, session_id, parent_id, run_id, kind, payload, blob_refs,
+        )
     }
 
     fn append_event_with_id(
@@ -1120,6 +1136,27 @@ impl<S: EventStore> AgentRuntime<S> {
         run_id: Option<RunId>,
         kind: EventKind,
         payload: impl Into<String>,
+    ) -> Result<EntryId, AgentError> {
+        self.append_event_with_id_and_blob_refs(
+            entry_id,
+            session_id,
+            parent_id,
+            run_id,
+            kind,
+            payload,
+            Vec::new(),
+        )
+    }
+
+    fn append_event_with_id_and_blob_refs(
+        &mut self,
+        entry_id: EntryId,
+        session_id: &SessionId,
+        parent_id: Option<EntryId>,
+        run_id: Option<RunId>,
+        kind: EventKind,
+        payload: impl Into<String>,
+        blob_refs: Vec<String>,
     ) -> Result<EntryId, AgentError> {
         let cursor = self.sessions.get_mut(session_id).ok_or_else(|| {
             AgentError::Storage(format!("missing session cursor: {}", session_id.0))
@@ -1139,6 +1176,7 @@ impl<S: EventStore> AgentRuntime<S> {
             kind,
             payload,
         );
+        let event = RuntimeEvent { blob_refs, ..event };
         let audit_event_kind = format!("{:?}", event.kind);
         let audit_summary = format!("{}: {}", audit_event_kind, event.payload);
         self.store.append(event)?;
@@ -1367,6 +1405,7 @@ mod tests {
                 session_id: session_id.clone(),
                 parent_event_id: None,
                 text: "Hello from the first turn\nwith details".into(),
+                blob_refs: Vec::new(),
             })
             .unwrap();
 
@@ -1381,6 +1420,36 @@ mod tests {
     }
 
     #[test]
+    fn send_message_persists_user_blob_refs_without_changing_prompt_payload() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        let turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "hello".into(),
+                blob_refs: vec!["local-agent-chat:v1:metadata".into()],
+            })
+            .unwrap();
+
+        let user_event = turn
+            .events
+            .iter()
+            .find(|event| event.kind == EventKind::UserMessage)
+            .unwrap();
+        assert_eq!(user_event.payload, "hello");
+        assert_eq!(
+            user_event.blob_refs,
+            vec!["local-agent-chat:v1:metadata".to_string()]
+        );
+        assert!(!runtime
+            .latest_prompt_debug_snapshot()
+            .unwrap()
+            .rendered_text
+            .contains("local-agent-chat"));
+    }
+
+    #[test]
     fn active_branch_events_can_load_explicit_non_active_leaf() {
         let mut runtime = AgentRuntime::new(config());
         let session_id = runtime.create_session().unwrap();
@@ -1389,6 +1458,7 @@ mod tests {
                 session_id: session_id.clone(),
                 parent_event_id: None,
                 text: "root".into(),
+                blob_refs: Vec::new(),
             })
             .unwrap();
         let root_user_id = first_turn
@@ -1405,6 +1475,7 @@ mod tests {
                 session_id: session_id.clone(),
                 parent_event_id: Some(root_user_id),
                 text: "fork".into(),
+                blob_refs: Vec::new(),
             })
             .unwrap();
 

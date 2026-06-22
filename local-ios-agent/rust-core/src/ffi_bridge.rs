@@ -214,6 +214,7 @@ impl RuntimeJsonBridge {
             session_id: SessionId(input.session_id),
             parent_event_id: input.parent_event_id.map(EntryId),
             text: input.text,
+            blob_refs: input.blob_refs,
         };
         let result = match self {
             Self::InMemory(runtime) => runtime.lock()?.send_message_turn(input)?,
@@ -232,6 +233,7 @@ impl RuntimeJsonBridge {
             session_id: SessionId(input.session_id),
             parent_event_id: input.parent_event_id.map(EntryId),
             text: input.text,
+            blob_refs: input.blob_refs,
         };
         let mut emit_event = |event: RuntimeEvent| {
             let event_json = to_json(&RuntimeEventJson::from_event(&event))?;
@@ -604,6 +606,8 @@ struct SendMessageJson {
     session_id: String,
     parent_event_id: Option<String>,
     text: String,
+    #[serde(default)]
+    blob_refs: Vec<String>,
 }
 
 #[derive(Deserialize)]

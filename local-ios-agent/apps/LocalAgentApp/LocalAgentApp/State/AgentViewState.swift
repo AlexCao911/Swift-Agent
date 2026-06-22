@@ -32,6 +32,7 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     let role: AgentMessageRole
     var sessionId: String?
     var parentId: String?
+    var branchLeafId: String?
     var parts: [MessagePartViewState] {
         didSet {
             if !isUpdatingPartsFromSource {
@@ -48,6 +49,7 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         id: String,
         sessionId: String? = nil,
         parentId: String? = nil,
+        branchLeafId: String? = nil,
         role: AgentMessageRole,
         parts: [MessagePartViewState],
         attachments: [AttachmentViewState] = [],
@@ -56,6 +58,7 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         self.id = id
         self.sessionId = sessionId
         self.parentId = parentId
+        self.branchLeafId = branchLeafId ?? id
         self.role = role
         self.parts = parts
         self.attachments = attachments
@@ -69,6 +72,7 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
         self.role = role
         sessionId = nil
         parentId = nil
+        branchLeafId = id
         attachments = []
         streaming = isStreaming ? .streaming : .idle
         sourceText = text

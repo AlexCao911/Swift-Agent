@@ -129,6 +129,7 @@ fn runtime_streams_mock_response_and_persists_events() {
             session_id,
             parent_event_id: None,
             text: "hello".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -164,6 +165,7 @@ fn runtime_reuses_context_controller_between_turns() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "first".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     runtime
@@ -171,6 +173,7 @@ fn runtime_reuses_context_controller_between_turns() {
             session_id,
             parent_event_id: None,
             text: "second".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -195,6 +198,7 @@ fn runtime_passes_cancellation_token_to_provider_calls() {
             session_id,
             parent_event_id: None,
             text: "hello".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -220,6 +224,7 @@ fn runtime_captures_latest_prompt_debug_snapshot_at_provider_call() {
             session_id,
             parent_event_id: None,
             text: "hello".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -245,6 +250,7 @@ fn runtime_persists_compaction_events_when_context_exceeds_budget() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "first turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -253,6 +259,7 @@ fn runtime_persists_compaction_events_when_context_exceeds_budget() {
             session_id,
             parent_event_id: None,
             text: "second turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -285,6 +292,7 @@ fn compaction_keeps_current_user_message_last_in_provider_prompt() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "first turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     runtime
@@ -292,6 +300,7 @@ fn compaction_keeps_current_user_message_last_in_provider_prompt() {
             session_id,
             parent_event_id: None,
             text: "second turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -325,6 +334,7 @@ fn repeated_compaction_preserves_existing_summary_in_new_summary_snapshot() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "first turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     let second_events = runtime
@@ -332,6 +342,7 @@ fn repeated_compaction_preserves_existing_summary_in_new_summary_snapshot() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "second turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     let third_events = runtime
@@ -339,6 +350,7 @@ fn repeated_compaction_preserves_existing_summary_in_new_summary_snapshot() {
             session_id,
             parent_event_id: None,
             text: "third turn".to_string(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 

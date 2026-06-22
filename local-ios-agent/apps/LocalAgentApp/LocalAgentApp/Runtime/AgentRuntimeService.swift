@@ -117,12 +117,46 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         let parentEventId = state.draft.targetParentEventId
         let draftAttachments = state.draft.attachments
         let prompt = promptText(for: text, attachments: draftAttachments)
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(text: text, attachments: draftAttachments)
         let sessionId: String
         if let existing = state.currentSessionId {
             sessionId = existing
         } else {
             sessionId = try await runtimeClient.createSession()
             nextState.currentSessionId = sessionId
+        }
+
+        if let streamingClient = runtimeClient as? any StreamingBlobReferencingRuntimeClient {
+            let stream = streamingClient.sendMessageStream(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt,
+                blobRefs: blobRefs
+            )
+            var streamedEventIds = Set<String>()
+            let initialTurn = try await consume(
+                stream,
+                state: &nextState,
+                streamedEventIds: &streamedEventIds,
+                onEvent: onEvent
+            )
+            activeRun = .running(initialTurn.runId)
+            nextState.phase = .running(runId: initialTurn.runId)
+            nextState.draft = UserDraftViewState()
+            apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
+            reconcileDraftUserMessage(
+                originalText: text,
+                attachments: draftAttachments,
+                events: initialTurn.events,
+                in: &nextState
+            )
+
+            return try await continueToolsIfNeeded(
+                from: initialTurn,
+                state: nextState,
+                streamedEventIds: streamedEventIds,
+                onEvent: onEvent
+            )
         }
 
         if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
@@ -157,11 +191,21 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
         }
 
-        let initialTurn = try await runtimeClient.sendMessage(
-            sessionId: sessionId,
-            parentEventId: parentEventId,
-            text: prompt
-        )
+        let initialTurn: AgentTurnResultDTO
+        if let blobClient = runtimeClient as? any BlobReferencingRuntimeClient {
+            initialTurn = try await blobClient.sendMessage(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt,
+                blobRefs: blobRefs
+            )
+        } else {
+            initialTurn = try await runtimeClient.sendMessage(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt
+            )
+        }
         activeRun = .running(initialTurn.runId)
         nextState.phase = .running(runId: initialTurn.runId)
         nextState.draft = UserDraftViewState()
@@ -277,7 +321,8 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
     func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
         var nextState = state
-        nextState.draft.targetParentEventId = state.messages.last?.id
+        let lastMessage = state.messages.last
+        nextState.draft.targetParentEventId = lastMessage?.branchLeafId ?? lastMessage?.id
         return try await sendMessage("Continue.", state: nextState)
     }
 
