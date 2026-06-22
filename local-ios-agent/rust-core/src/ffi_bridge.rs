@@ -151,6 +151,43 @@ impl RuntimeJsonBridge {
         to_json(&session_ids)
     }
 
+    pub fn conversation_summaries_json(&self) -> Result<String, AgentError> {
+        let summaries = match self {
+            Self::InMemory(runtime) => runtime.lock()?.conversation_summaries()?,
+            Self::Sqlite(runtime) => runtime.lock()?.conversation_summaries()?,
+        };
+        let summaries: Vec<_> = summaries
+            .into_iter()
+            .map(|summary| ConversationSummaryJson {
+                session_id: summary.session_id.0,
+                title: summary.title,
+                active_leaf_id: summary.active_leaf_id.map(|id| id.0),
+                last_event_id: summary.last_event_id.map(|id| id.0),
+                last_updated_sequence: summary.last_updated_sequence,
+            })
+            .collect();
+        to_json(&summaries)
+    }
+
+    pub fn active_branch_json(
+        &self,
+        session_id: &str,
+        leaf_id: Option<&str>,
+    ) -> Result<String, AgentError> {
+        let session_id = SessionId(session_id.to_string());
+        let leaf_id = leaf_id
+            .filter(|value| !value.is_empty())
+            .map(|value| EntryId(value.to_string()));
+        let events = match self {
+            Self::InMemory(runtime) => {
+                runtime.lock()?.active_branch_events(&session_id, leaf_id)?
+            }
+            Self::Sqlite(runtime) => runtime.lock()?.active_branch_events(&session_id, leaf_id)?,
+        };
+        let events: Vec<_> = events.iter().map(RuntimeEventJson::from_event).collect();
+        to_json(&events)
+    }
+
     pub fn register_tool_schema_json(&self, schema_json: &str) -> Result<String, AgentError> {
         let schema: ToolSchemaJson = from_json(schema_json)?;
         let schema = schema.into_tool_schema()?;
@@ -394,6 +431,26 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_session_ids(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
     c_result(|| bridge_ref(runtime)?.session_ids_json())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_conversation_summaries(
+    runtime: *mut RuntimeJsonBridge,
+) -> *mut c_char {
+    c_result(|| bridge_ref(runtime)?.conversation_summaries_json())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_active_branch(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: *const c_char,
+    leaf_id: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let session_id = c_str_arg(session_id, "session_id")?;
+        let leaf_id = optional_c_str_arg(leaf_id, "leaf_id")?;
+        bridge_ref(runtime)?.active_branch_json(session_id, leaf_id)
+    })
 }
 
 #[no_mangle]
@@ -800,6 +857,15 @@ impl RuntimeEventJson {
 }
 
 #[derive(Serialize)]
+struct ConversationSummaryJson {
+    session_id: String,
+    title: String,
+    active_leaf_id: Option<String>,
+    last_event_id: Option<String>,
+    last_updated_sequence: u64,
+}
+
+#[derive(Serialize)]
 struct ToolExecutionRequestJson {
     run_id: String,
     session_id: String,
@@ -910,6 +976,16 @@ unsafe fn c_str_arg<'a>(value: *const c_char, name: &str) -> Result<&'a str, Age
     CStr::from_ptr(value)
         .to_str()
         .map_err(|error| AgentError::Ffi(format!("{name} must be UTF-8: {error}")))
+}
+
+unsafe fn optional_c_str_arg<'a>(
+    value: *const c_char,
+    name: &str,
+) -> Result<Option<&'a str>, AgentError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    c_str_arg(value, name).map(Some)
 }
 
 fn error_payload(error: &AgentError) -> String {

@@ -52,3 +52,8 @@ public protocol ProviderControllingRuntimeClient: Sendable {
     func activeProvider() async throws -> ProviderProfileDTO
     func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO
 }
+
+public protocol ConversationRuntimeClient: Sendable {
+    func conversationSummaries() async throws -> [ConversationSummaryDTO]
+    func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO]
+}

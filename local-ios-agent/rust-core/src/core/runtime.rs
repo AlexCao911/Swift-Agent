@@ -75,6 +75,15 @@ pub struct SendMessageInput {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationSummary {
+    pub session_id: SessionId,
+    pub title: String,
+    pub active_leaf_id: Option<EntryId>,
+    pub last_event_id: Option<EntryId>,
+    pub last_updated_sequence: u64,
+}
+
 pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     config: AgentRuntimeConfig,
     context_controller: ContextController,
@@ -344,6 +353,56 @@ impl<S: EventStore> AgentRuntime<S> {
         let mut session_ids: Vec<_> = self.sessions.keys().cloned().collect();
         session_ids.sort_by(|left, right| left.0.cmp(&right.0));
         session_ids
+    }
+
+    pub fn conversation_summaries(&self) -> Result<Vec<ConversationSummary>, AgentError> {
+        let mut summaries = Vec::new();
+
+        for session_id in self.session_ids() {
+            let active_leaf_id = self.store.active_leaf(&session_id)?;
+            let last_event = self.store.last_event(&session_id)?;
+            let title = match &active_leaf_id {
+                Some(leaf_id) => self
+                    .store
+                    .active_branch(&session_id, leaf_id)?
+                    .into_iter()
+                    .find(|event| event.kind == EventKind::UserMessage)
+                    .map(|event| first_line_title(&event.payload))
+                    .unwrap_or_else(|| "New chat".to_string()),
+                None => "New chat".to_string(),
+            };
+
+            summaries.push(ConversationSummary {
+                session_id,
+                title,
+                active_leaf_id,
+                last_event_id: last_event.as_ref().map(|event| event.id.clone()),
+                last_updated_sequence: last_event.map(|event| event.sequence).unwrap_or(0),
+            });
+        }
+
+        summaries.sort_by(|left, right| {
+            right
+                .last_updated_sequence
+                .cmp(&left.last_updated_sequence)
+                .then_with(|| left.session_id.0.cmp(&right.session_id.0))
+        });
+        Ok(summaries)
+    }
+
+    pub fn active_branch_events(
+        &self,
+        session_id: &SessionId,
+        leaf_id: Option<EntryId>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let leaf_id = match leaf_id {
+            Some(leaf_id) => leaf_id,
+            None => self.store.active_leaf(session_id)?.ok_or_else(|| {
+                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
+            })?,
+        };
+
+        self.store.active_branch(session_id, &leaf_id)
     }
 
     pub fn create_session(&mut self) -> Result<SessionId, AgentError> {
@@ -1200,6 +1259,15 @@ fn numeric_suffix(id: &str) -> Option<u64> {
     id.rsplit_once('_')?.1.parse().ok()
 }
 
+fn first_line_title(payload: &str) -> String {
+    let title = payload.lines().next().unwrap_or("New chat").trim();
+    if title.is_empty() {
+        "New chat".to_string()
+    } else {
+        title.chars().take(48).collect()
+    }
+}
+
 fn active_provider_key() -> String {
     "active_provider".into()
 }
@@ -1288,5 +1356,65 @@ mod tests {
         assert!(token.is_cancelled());
         assert_eq!(event.kind, EventKind::RunCancelled);
         assert!(!runtime.provider_cancellations.contains(&run_id));
+    }
+
+    #[test]
+    fn conversation_summary_uses_first_user_message_as_title() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "Hello from the first turn\nwith details".into(),
+            })
+            .unwrap();
+
+        let summaries = runtime.conversation_summaries().unwrap();
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, session_id);
+        assert_eq!(summaries[0].title, "Hello from the first turn");
+        assert!(summaries[0].active_leaf_id.is_some());
+        assert!(summaries[0].last_event_id.is_some());
+        assert!(summaries[0].last_updated_sequence > 0);
+    }
+
+    #[test]
+    fn active_branch_events_can_load_explicit_non_active_leaf() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        let first_turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "root".into(),
+            })
+            .unwrap();
+        let root_user_id = first_turn
+            .events
+            .iter()
+            .find(|event| event.kind == EventKind::UserMessage)
+            .unwrap()
+            .id
+            .clone();
+        let first_leaf_id = first_turn.events.last().unwrap().id.clone();
+
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: Some(root_user_id),
+                text: "fork".into(),
+            })
+            .unwrap();
+
+        let explicit_branch = runtime
+            .active_branch_events(&session_id, Some(first_leaf_id))
+            .unwrap();
+        let active_branch = runtime.active_branch_events(&session_id, None).unwrap();
+
+        assert!(explicit_branch.iter().any(|event| event.payload == "root"));
+        assert!(!explicit_branch.iter().any(|event| event.payload == "fork"));
+        assert!(active_branch.iter().any(|event| event.payload == "fork"));
     }
 }

@@ -55,6 +55,8 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
             freeString: { value in value?.deallocate() },
             createSession: { _ in Self.makeCString(#""session_1""#) },
             sessionIds: { _ in Self.makeCString(#"["session_1"]"#) },
+            conversationSummaries: { _ in Self.makeCString("[]") },
+            activeBranch: { _, _, _ in Self.makeCString("[]") },
             registerToolSchema: { _, _ in Self.makeCString("null") },
             setPermissionState: { _, _ in Self.makeCString("null") },
             sendMessage: { _, _ in Self.makeCString(Self.turnJson(state: "completed")) },
