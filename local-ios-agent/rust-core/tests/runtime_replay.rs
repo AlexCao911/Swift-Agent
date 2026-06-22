@@ -96,6 +96,7 @@ fn tool_result(text: &str) -> ToolResult {
 fn runtime_replays_sessions_from_sqlite() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
+    let blob_refs = vec!["local-agent-chat:v1:metadata".to_string()];
     let session_id = {
         let store = SqliteEventStore::open(&db_path).unwrap();
         let mut runtime = AgentRuntime::with_store(config(), store).unwrap();
@@ -105,6 +106,7 @@ fn runtime_replays_sessions_from_sqlite() {
                 session_id: session_id.clone(),
                 parent_event_id: None,
                 text: "hello".into(),
+                blob_refs: blob_refs.clone(),
             })
             .unwrap();
         session_id
@@ -114,6 +116,12 @@ fn runtime_replays_sessions_from_sqlite() {
     let runtime = AgentRuntime::with_store(config(), store).unwrap();
 
     assert!(runtime.session_ids().contains(&session_id));
+    let replayed = runtime.active_branch_events(&session_id, None).unwrap();
+    let user_event = replayed
+        .iter()
+        .find(|event| event.kind == EventKind::UserMessage)
+        .unwrap();
+    assert_eq!(user_event.blob_refs, blob_refs);
 }
 
 #[test]
@@ -129,6 +137,7 @@ fn runtime_replays_waiting_tool_run_and_pending_request_from_sqlite() {
                 session_id: session_id.clone(),
                 parent_event_id: None,
                 text: "use tool debug.echo".into(),
+                blob_refs: Vec::new(),
             })
             .unwrap();
 
@@ -166,6 +175,7 @@ fn runtime_replays_suspended_approval_from_sqlite() {
                 session_id: session_id.clone(),
                 parent_event_id: None,
                 text: "use tool debug.echo".into(),
+                blob_refs: Vec::new(),
             })
             .unwrap();
 
@@ -239,6 +249,7 @@ fn create_waiting_tool_run(db_path: &std::path::Path) -> SessionId {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 

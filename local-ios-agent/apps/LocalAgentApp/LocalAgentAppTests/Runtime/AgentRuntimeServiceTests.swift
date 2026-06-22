@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
@@ -51,6 +52,129 @@ struct AgentRuntimeServiceTests {
         #expect(state.provider.active?.id == "local_llm")
     }
 
+    @Test("new chat creates a fresh ready session")
+    func newChatCreatesFreshReadySession() async throws {
+        let client = ScriptedRuntimeClient()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        var state = try await service.prepare()
+        state.messages = [
+            AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false),
+        ]
+
+        let nextState = try await service.newChat(state: state)
+
+        #expect(nextState.phase == .ready)
+        #expect(nextState.currentSessionId == "session_2")
+        #expect(nextState.messages.isEmpty)
+    }
+
+    @Test("load conversations projects runtime summaries")
+    func loadConversationsProjectsRuntimeSummaries() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setConversationSummariesForTest([
+            ConversationSummaryDTO(
+                sessionId: "session_2",
+                title: "Second chat",
+                activeLeafId: "leaf_2",
+                lastEventId: "event_2",
+                lastUpdatedSequence: 4
+            ),
+            ConversationSummaryDTO(
+                sessionId: "session_1",
+                title: "First chat",
+                activeLeafId: "leaf_1",
+                lastEventId: "event_1",
+                lastUpdatedSequence: 2
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.loadConversations(
+            state: AgentViewState(phase: .ready, currentSessionId: "session_2")
+        )
+
+        #expect(state.conversations.conversations.map(\.sessionId) == ["session_2", "session_1"])
+        #expect(state.conversations.conversations.first?.title == "Second chat")
+        #expect(state.conversations.conversations.first?.activeLeafId == "leaf_2")
+    }
+
+    @Test("select conversation loads active branch events")
+    func selectConversationLoadsActiveBranchEvents() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setActiveBranchForTest(
+            sessionId: "session_2",
+            leafId: nil,
+            events: [
+                event(id: "user_2", sessionId: "session_2", kind: .userMessage, payload: "hi", runId: "run_2"),
+                event(
+                    id: "assistant_2",
+                    sessionId: "session_2",
+                    kind: .assistantMessageCompleted,
+                    payload: "there",
+                    runId: "run_2"
+                ),
+            ]
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.selectConversation(
+            sessionId: "session_2",
+            state: AgentViewState(
+                phase: .ready,
+                messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
+                currentSessionId: "session_1"
+            )
+        )
+
+        #expect(await client.activeBranchRequests == [
+            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_2", leafId: nil),
+        ])
+        #expect(state.currentSessionId == "session_2")
+        #expect(state.messages.map(\.text) == ["hi", "there"])
+    }
+
+    @Test("select conversation restores attachment blob refs")
+    func selectConversationRestoresAttachmentBlobRefs() async throws {
+        let client = ScriptedRuntimeClient()
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(
+            text: "hi",
+            attachments: [
+                AttachmentDraftViewState(
+                    id: "link_1",
+                    kind: .link,
+                    displayName: "example.com",
+                    localPath: nil,
+                    urlString: "https://example.com",
+                    mimeType: nil,
+                    byteCount: nil
+                ),
+            ]
+        )
+        await client.setActiveBranchForTest(
+            sessionId: "session_2",
+            leafId: nil,
+            events: [
+                event(
+                    id: "user_2",
+                    sessionId: "session_2",
+                    kind: .userMessage,
+                    payload: "hi\nLink: https://example.com",
+                    runId: "run_2",
+                    blobRefs: blobRefs
+                ),
+            ]
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.selectConversation(
+            sessionId: "session_2",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        #expect(state.messages.map(\.text) == ["hi"])
+        #expect(state.messages[0].attachments.map(\.urlString) == ["https://example.com"])
+    }
+
     @Test("send applies completed mock chat events")
     func sendAppliesCompletedMockChatEvents() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
@@ -77,6 +201,220 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text) == ["hello", "Mock response to: hello"])
     }
 
+    @Test("send uses draft target parent event id for forked turns")
+    func sendUsesDraftTargetParentEventIdForForkedTurns() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_1", kind: .userMessage, payload: "forked"),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "branched"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.targetParentEventId = "entry_4"
+        state = try await service.sendMessage("forked", state: state)
+
+        #expect(await client.sentMessages.map(\.parentEventId) == ["entry_4"])
+        #expect(state.draft.targetParentEventId == nil)
+    }
+
+    @Test("send includes draft link attachments in prompt and visible message")
+    func sendIncludesDraftLinkAttachmentsInPromptAndVisibleMessage() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_1", kind: .userMessage, payload: "hello\nLink: https://example.com"),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "linked"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.text = "hello"
+        state.draft.attachments = [
+            AttachmentDraftViewState(
+                id: "link_1",
+                kind: .link,
+                displayName: "example.com",
+                localPath: nil,
+                urlString: "https://example.com",
+                mimeType: nil,
+                byteCount: nil
+            ),
+        ]
+        state = try await service.sendMessage("hello", state: state)
+
+        let sentMessages = await client.sentMessages
+        #expect(sentMessages.map(\.text) == ["hello\nLink: https://example.com"])
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).text == "hello")
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).attachments.map(\.urlString) == ["https://example.com"])
+        #expect(state.messages[0].text == "hello")
+        #expect(state.messages[0].attachments.count == 1)
+        #expect(state.messages[0].attachments[0].kind == .link)
+        #expect(state.messages[0].attachments[0].urlString == "https://example.com")
+        #expect(state.draft.text.isEmpty)
+        #expect(state.draft.attachments.isEmpty)
+    }
+
+    @Test("send includes draft image metadata in prompt and visible message")
+    func sendIncludesDraftImageMetadataInPromptAndVisibleMessage() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(
+                        id: "user_1",
+                        kind: .userMessage,
+                        payload: "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3"
+                    ),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "image noted"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.text = "look"
+        state.draft.attachments = [
+            AttachmentDraftViewState(
+                id: "image_1",
+                kind: .image,
+                displayName: "photo.png",
+                localPath: "/tmp/photo.png",
+                urlString: nil,
+                mimeType: "image/png",
+                byteCount: 3
+            ),
+        ]
+        state = try await service.sendMessage("look", state: state)
+
+        let sentMessages = await client.sentMessages
+        #expect(sentMessages.map(\.text) == [
+            "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3",
+        ])
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).text == "look")
+        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).attachments.map(\.localPath) == ["/tmp/photo.png"])
+        #expect(state.messages[0].text == "look")
+        #expect(state.messages[0].attachments.count == 1)
+        #expect(state.messages[0].attachments[0].kind == .image)
+        #expect(state.messages[0].attachments[0].localPath == "/tmp/photo.png")
+        #expect(state.draft.text.isEmpty)
+    }
+
+    @Test("regenerate sends from assistant parent event")
+    func regenerateSendsFromAssistantParentEvent() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_regen", kind: .userMessage, payload: "Please regenerate the previous answer."),
+                    event(id: "assistant_regen", kind: .assistantMessageCompleted, payload: "new answer"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(id: "user_1", role: .user, text: "hello", isStreaming: false),
+                AgentMessageViewState(
+                    id: "assistant_1",
+                    sessionId: "session_1",
+                    parentId: "user_1",
+                    role: .assistant,
+                    parts: [.text(TextPartViewState(id: "assistant_text", text: "old answer"))]
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.regenerate(from: "assistant_1", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["Please regenerate the previous answer."])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["user_1"])
+    }
+
+    @Test("continue generation sends from active leaf")
+    func continueGenerationSendsFromActiveLeaf() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_continue", kind: .userMessage, payload: "Continue."),
+                    event(id: "assistant_continue", kind: .assistantMessageCompleted, payload: "more"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(
+                    id: "assistant_ui_message",
+                    branchLeafId: "assistant_completed_leaf",
+                    role: .assistant,
+                    parts: [.text(TextPartViewState(id: "assistant_text", text: "partial"))]
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.continueGeneration(state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["Continue."])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["assistant_completed_leaf"])
+    }
+
+    @Test("edit and resend sends edited text from original parent")
+    func editAndResendSendsEditedTextFromOriginalParent() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_edited", kind: .userMessage, payload: "edited prompt"),
+                    event(id: "assistant_edited", kind: .assistantMessageCompleted, payload: "edited answer"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(
+                    id: "user_1",
+                    sessionId: "session_1",
+                    parentId: "root_event",
+                    role: .user,
+                    parts: [.text(TextPartViewState(id: "user_text", text: "original prompt"))]
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.editAndResend(messageId: "user_1", text: "edited prompt", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["edited prompt"])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["root_event"])
+    }
+
     @Test("streamed delta is delivered before final turn result")
     func streamedDeltaIsDeliveredBeforeFinalTurnResult() async throws {
         let client = StreamingRuntimeClientProbe()
@@ -98,6 +436,106 @@ struct AgentRuntimeServiceTests {
 
         #expect(state.phase == .ready)
         #expect(state.messages.map(\.text) == ["hello", "hello world"])
+    }
+
+    @Test("buffered structured delta is delivered before another stream event arrives")
+    func bufferedStructuredDeltaIsDeliveredBeforeAnotherStreamEventArrives() async throws {
+        let client = BufferedStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let observation = StreamObservation()
+
+        let prepared = try await service.prepare()
+        async let finalState = service.sendMessage("hello", state: prepared) { event in
+            if event.kind == .assistantTextDelta {
+                await observation.observeDelta()
+            }
+        }
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(await observation.didObserveDeltaValue)
+        #expect(await client.didReleaseFinalResult == false)
+
+        await client.releaseFinalResult()
+        let state = try await finalState
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text) == ["hello", "hello world"])
+    }
+
+    @Test("structured stream deltas are coalesced before final turn replay")
+    func structuredStreamDeltasAreCoalescedBeforeFinalTurnReplay() async throws {
+        let client = CoalescingStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let recorder = StreamEventRecorder()
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared) { event in
+            await recorder.record(event)
+        }
+
+        let observedEvents = await recorder.events
+        let observedDeltas = observedEvents.filter { $0.kind == .assistantTextDelta }
+        let payload = try #require(observedDeltas.first?.payload)
+        let payloadObject = try #require(jsonObject(from: payload))
+
+        #expect(observedDeltas.count == 1)
+        #expect(payloadObject["message_id"] == "assistant_1")
+        #expect(payloadObject["text"] == "Hello")
+        #expect(state.messages.count == 2)
+        #expect(state.messages.map(\.text) == ["hello", "Hello!"])
+        #expect(state.lastTerminalReason == .completed)
+    }
+
+    @Test("failed stream result marks partial output failed without terminal event")
+    func failedStreamResultMarksPartialOutputFailedWithoutTerminalEvent() async throws {
+        let client = TerminalResultStreamingRuntimeClientProbe(resultState: .failed)
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared)
+
+        #expect(state.phase == .failed(message: "Run failed."))
+        #expect(state.errorMessage == "Run failed.")
+        #expect(state.lastTerminalReason == .failed("Run failed."))
+        #expect(state.messages.map(\.text) == ["hello", "partial"])
+        #expect(state.messages[1].streaming == .failed("Run failed."))
+    }
+
+    @Test("cancelled stream result marks partial output cancelled without terminal event")
+    func cancelledStreamResultMarksPartialOutputCancelledWithoutTerminalEvent() async throws {
+        let client = TerminalResultStreamingRuntimeClientProbe(resultState: .cancelled)
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let prepared = try await service.prepare()
+        let state = try await service.sendMessage("hello", state: prepared)
+
+        #expect(state.phase == .ready)
+        #expect(state.lastTerminalReason == .cancelled)
+        #expect(state.messages.map(\.text) == ["hello", "partial"])
+        #expect(state.messages[1].streaming == .cancelled)
+    }
+
+    @Test("stream event failure flushes buffered partial output before throwing")
+    func streamEventFailureFlushesBufferedPartialOutputBeforeThrowing() async throws {
+        let client = ThrowingStreamingRuntimeClientProbe()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let recorder = StreamEventRecorder()
+
+        let prepared = try await service.prepare()
+        do {
+            _ = try await service.sendMessage("hello", state: prepared) { event in
+                await recorder.record(event)
+            }
+            Issue.record("Expected stream failure")
+        } catch is RuntimeStreamProbeError {
+        }
+
+        let observedEvents = await recorder.events
+        let observedDeltas = observedEvents.filter { $0.kind == .assistantTextDelta }
+        let payload = try #require(observedDeltas.first?.payload)
+        let payloadObject = try #require(jsonObject(from: payload))
+        #expect(observedDeltas.count == 1)
+        #expect(payloadObject["text"] == "partial")
     }
 
     @Test("second send is rejected while first send is still in flight")
@@ -300,27 +738,43 @@ struct AgentRuntimeServiceTests {
 
     private func event(
         id: String,
+        sessionId: String = "session_1",
+        parentId: String? = nil,
         kind: RuntimeEventKindDTO,
         payload: String,
-        runId: String = "run_1"
+        runId: String = "run_1",
+        blobRefs: [String] = []
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
-            sessionId: "session_1",
-            parentId: nil,
+            sessionId: sessionId,
+            parentId: parentId,
             runId: runId,
             sequence: 1,
             depth: 0,
             kind: kind,
             payload: payload,
-            blobRefs: []
+            blobRefs: blobRefs
         )
+    }
+
+    private func jsonObject(from payload: String) -> [String: String]? {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else {
+            return nil
+        }
+        return object
     }
 }
 
 private actor StreamObservation {
     private var didObserveDelta = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var didObserveDeltaValue: Bool {
+        didObserveDelta
+    }
 
     func observeDelta() {
         didObserveDelta = true
@@ -337,6 +791,14 @@ private actor StreamObservation {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+}
+
+private actor StreamEventRecorder {
+    private(set) var events: [RuntimeEventDTO] = []
+
+    func record(_ event: RuntimeEventDTO) {
+        events.append(event)
     }
 }
 
@@ -461,6 +923,423 @@ private actor StreamingRuntimeClientProbe: StreamingRuntimeClient {
     }
 }
 
+private actor BufferedStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+    private var finalResultContinuation: CheckedContinuation<Void, Never>?
+    private var releasedFinalResult = false
+
+    var didReleaseFinalResult: Bool {
+        releasedFinalResult
+    }
+
+    func releaseFinalResult() {
+        releasedFinalResult = true
+        finalResultContinuation?.resume()
+        finalResultContinuation = nil
+    }
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task<AgentTurnResultDTO, any Error> {
+            continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
+            continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#))
+            continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"hello "}"#))
+            await self.waitForFinalRelease()
+            continuation.yield(Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"hello world"}"#))
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    Self.event(id: "user_1", kind: .userMessage, payload: text),
+                    Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+                    Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"hello "}"#),
+                    Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"hello world"}"#),
+                ],
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private func waitForFinalRelease() async {
+        if releasedFinalResult {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            finalResultContinuation = continuation
+        }
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor CoalescingStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let streamedEvents = [
+            Self.event(id: "user_1", kind: .userMessage, payload: text),
+            Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"Hel"}"#),
+            Self.event(id: "delta_2", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"lo"}"#),
+            Self.event(id: "completed", kind: .assistantMessageCompleted, payload: #"{"message_id":"assistant_1","text":"Hello!"}"#),
+        ]
+        let result = Task<AgentTurnResultDTO, any Error> {
+            for event in streamedEvents {
+                continuation.yield(event)
+            }
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: streamedEvents,
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private actor TerminalResultStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private let resultState: RunStateDTO
+    private var sessionCount = 0
+
+    init(resultState: RunStateDTO) {
+        self.resultState = resultState
+    }
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let streamedEvents = [
+            Self.event(id: "user_1", kind: .userMessage, payload: text),
+            Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#),
+            Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"partial"}"#),
+        ]
+        let state = resultState
+        let result = Task<AgentTurnResultDTO, any Error> {
+            for event in streamedEvents {
+                continuation.yield(event)
+            }
+            continuation.finish()
+            return AgentTurnResultDTO(
+                runId: "run_1",
+                state: state,
+                events: streamedEvents,
+                pendingToolCallId: nil
+            )
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
+private enum RuntimeStreamProbeError: Error {
+    case streamStopped
+}
+
+private actor ThrowingStreamingRuntimeClientProbe: StreamingRuntimeClient {
+    private var sessionCount = 0
+
+    func createSession() async throws -> String {
+        sessionCount += 1
+        return "session_\(sessionCount)"
+    }
+
+    func sessionIds() async throws -> [String] {
+        ["session_1"]
+    }
+
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+    func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
+
+    func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
+        fatalError("streaming service path must call sendMessageStream")
+    }
+
+    nonisolated func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String
+    ) -> AgentTurnStreamDTO {
+        let (events, continuation) = AsyncThrowingStream.makeStream(
+            of: RuntimeEventDTO.self,
+            throwing: Error.self
+        )
+        let result = Task<AgentTurnResultDTO, any Error> {
+            continuation.yield(Self.event(id: "user_1", kind: .userMessage, payload: text))
+            continuation.yield(Self.event(id: "assistant_started", kind: .assistantMessageStarted, payload: #"{"message_id":"assistant_1"}"#))
+            continuation.yield(Self.event(id: "delta_1", kind: .assistantTextDelta, payload: #"{"message_id":"assistant_1","text":"partial"}"#))
+            continuation.finish(throwing: RuntimeStreamProbeError.streamStopped)
+            throw RuntimeStreamProbeError.streamStopped
+        }
+        return AgentTurnStreamDTO(events: events, result: result)
+    }
+
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
+        []
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    nonisolated func submitToolResultStream(
+        runId: String,
+        result: ToolResultDTO
+    ) -> AgentTurnStreamDTO {
+        fatalError("no tool continuation expected")
+    }
+
+    func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO {
+        fatalError("no approval expected")
+    }
+
+    func cancel(runId: String) async throws -> RuntimeEventDTO {
+        Self.event(id: "cancelled", kind: .runCancelled, payload: "cancelled")
+    }
+
+    func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
+        nil
+    }
+
+    private static func event(
+        id: String,
+        kind: RuntimeEventKindDTO,
+        payload: String
+    ) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: kind,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+}
+
 private actor BlockingSendRuntimeClient: RuntimeClient {
     private var sendContinuation: CheckedContinuation<AgentTurnResultDTO, Never>?
     private var sendStartedContinuation: CheckedContinuation<Void, Never>?
@@ -540,11 +1419,12 @@ private actor BlockingSendRuntimeClient: RuntimeClient {
     }
 }
 
-private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient {
+private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient {
     struct SentMessage: Equatable, Sendable {
         var sessionId: String
         var parentEventId: String?
         var text: String
+        var blobRefs: [String] = []
     }
 
     struct SubmittedToolResult: Sendable {
@@ -557,17 +1437,25 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
         var providerId: String
     }
 
+    struct ActiveBranchRequest: Equatable, Sendable {
+        var sessionId: String
+        var leafId: String?
+    }
+
     private var sessionCount = 0
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
     private var pendingRequests: [ToolExecutionRequestDTO]
     private var providerProfilesForTest: [ProviderProfileDTO]
     private var activeProviderForTest: ProviderProfileDTO
+    private var conversationSummariesForTest: [ConversationSummaryDTO] = []
+    private var activeBranchEventsForTest: [String: [RuntimeEventDTO]] = [:]
 
     private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     private(set) var sentMessages: [SentMessage] = []
     private(set) var submittedToolResults: [SubmittedToolResult] = []
     private(set) var selectedProviders: [SelectedProvider] = []
+    private(set) var activeBranchRequests: [ActiveBranchRequest] = []
 
     init(
         sendTurns: [AgentTurnResultDTO] = [],
@@ -599,6 +1487,18 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
         activeProviderForTest = profile
     }
 
+    func setConversationSummariesForTest(_ summaries: [ConversationSummaryDTO]) {
+        conversationSummariesForTest = summaries
+    }
+
+    func setActiveBranchForTest(
+        sessionId: String,
+        leafId: String?,
+        events: [RuntimeEventDTO]
+    ) {
+        activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] = events
+    }
+
     func createSession() async throws -> String {
         sessionCount += 1
         return "session_\(sessionCount)"
@@ -618,7 +1518,26 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
     func setPermissionState(scope: String, state: PermissionStateDTO) async throws {}
 
     func sendMessage(sessionId: String, parentEventId: String?, text: String) async throws -> AgentTurnResultDTO {
-        sentMessages.append(SentMessage(sessionId: sessionId, parentEventId: parentEventId, text: text))
+        try await sendMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    func sendMessage(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) async throws -> AgentTurnResultDTO {
+        sentMessages.append(SentMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: blobRefs
+        ))
         return sendTurns.removeFirst()
     }
 
@@ -682,5 +1601,18 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
             payload: #"{"provider_id":"\#(providerId)"}"#,
             blobRefs: []
         )
+    }
+
+    func conversationSummaries() async throws -> [ConversationSummaryDTO] {
+        conversationSummariesForTest
+    }
+
+    func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
+        activeBranchRequests.append(ActiveBranchRequest(sessionId: sessionId, leafId: leafId))
+        return activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] ?? []
+    }
+
+    private func activeBranchKey(sessionId: String, leafId: String?) -> String {
+        "\(sessionId)#\(leafId ?? "")"
     }
 }

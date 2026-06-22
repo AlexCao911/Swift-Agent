@@ -9,6 +9,12 @@ protocol AgentRuntimeServicing: Sendable {
     ) async throws -> AgentViewState
     func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState
     func cancel(state: AgentViewState) async throws -> AgentViewState
+    func newChat(state: AgentViewState) async throws -> AgentViewState
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState
 }
 
 extension AgentRuntimeServicing {
@@ -19,11 +25,41 @@ extension AgentRuntimeServicing {
     func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
+
+    func newChat(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
 }
 
 enum AgentRuntimeServiceError: Error, Equatable, Sendable {
     case duplicateRun
     case missingPendingToolRequest(String)
+}
+
+private enum StreamBufferInput: Sendable {
+    case event(RuntimeEventDTO)
+    case flushTick
+    case finished
 }
 
 actor AgentRuntimeService: AgentRuntimeServicing {
@@ -34,12 +70,18 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
     private let runtimeClient: any RuntimeClient
     private let toolDriver: MinimalHostToolDriver
+    private let streamFlushNanoseconds: UInt64
     private var activeRun: ActiveRun?
     private var hasPrepared = false
 
-    init(runtimeClient: any RuntimeClient, toolDriver: MinimalHostToolDriver) {
+    init(
+        runtimeClient: any RuntimeClient,
+        toolDriver: MinimalHostToolDriver,
+        streamFlushNanoseconds: UInt64 = 50_000_000
+    ) {
         self.runtimeClient = runtimeClient
         self.toolDriver = toolDriver
+        self.streamFlushNanoseconds = streamFlushNanoseconds
     }
 
     func prepare() async throws -> AgentViewState {
@@ -47,7 +89,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             let ids = try await runtimeClient.sessionIds()
             var state = AgentViewState(phase: .ready, currentSessionId: ids.last)
             try await loadProviderState(into: &state)
-            return state
+            return try await loadConversations(state: state)
         }
 
         try await runtimeClient.registerToolSchema(toolDriver.schema)
@@ -55,7 +97,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         hasPrepared = true
         var state = AgentViewState(phase: .ready, currentSessionId: sessionId)
         try await loadProviderState(into: &state)
-        return state
+        return try await loadConversations(state: state)
     }
 
     func sendMessage(
@@ -72,6 +114,10 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         var nextState = state
+        let parentEventId = state.draft.targetParentEventId
+        let draftAttachments = state.draft.attachments
+        let prompt = promptText(for: text, attachments: draftAttachments)
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(text: text, attachments: draftAttachments)
         let sessionId: String
         if let existing = state.currentSessionId {
             sessionId = existing
@@ -80,11 +126,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             nextState.currentSessionId = sessionId
         }
 
-        if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
+        if let streamingClient = runtimeClient as? any StreamingBlobReferencingRuntimeClient {
             let stream = streamingClient.sendMessageStream(
                 sessionId: sessionId,
-                parentEventId: nil,
-                text: text
+                parentEventId: parentEventId,
+                text: prompt,
+                blobRefs: blobRefs
             )
             var streamedEventIds = Set<String>()
             let initialTurn = try await consume(
@@ -95,7 +142,14 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
             activeRun = .running(initialTurn.runId)
             nextState.phase = .running(runId: initialTurn.runId)
+            nextState.draft = UserDraftViewState()
             apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
+            reconcileDraftUserMessage(
+                originalText: text,
+                attachments: draftAttachments,
+                events: initialTurn.events,
+                in: &nextState
+            )
 
             return try await continueToolsIfNeeded(
                 from: initialTurn,
@@ -105,14 +159,63 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
         }
 
-        let initialTurn = try await runtimeClient.sendMessage(
-            sessionId: sessionId,
-            parentEventId: nil,
-            text: text
-        )
+        if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
+            let stream = streamingClient.sendMessageStream(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt
+            )
+            var streamedEventIds = Set<String>()
+            let initialTurn = try await consume(
+                stream,
+                state: &nextState,
+                streamedEventIds: &streamedEventIds,
+                onEvent: onEvent
+            )
+            activeRun = .running(initialTurn.runId)
+            nextState.phase = .running(runId: initialTurn.runId)
+            nextState.draft = UserDraftViewState()
+            apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
+            reconcileDraftUserMessage(
+                originalText: text,
+                attachments: draftAttachments,
+                events: initialTurn.events,
+                in: &nextState
+            )
+
+            return try await continueToolsIfNeeded(
+                from: initialTurn,
+                state: nextState,
+                streamedEventIds: streamedEventIds,
+                onEvent: onEvent
+            )
+        }
+
+        let initialTurn: AgentTurnResultDTO
+        if let blobClient = runtimeClient as? any BlobReferencingRuntimeClient {
+            initialTurn = try await blobClient.sendMessage(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt,
+                blobRefs: blobRefs
+            )
+        } else {
+            initialTurn = try await runtimeClient.sendMessage(
+                sessionId: sessionId,
+                parentEventId: parentEventId,
+                text: prompt
+            )
+        }
         activeRun = .running(initialTurn.runId)
         nextState.phase = .running(runId: initialTurn.runId)
+        nextState.draft = UserDraftViewState()
         apply(initialTurn.events, to: &nextState)
+        reconcileDraftUserMessage(
+            originalText: text,
+            attachments: draftAttachments,
+            events: initialTurn.events,
+            in: &nextState
+        )
 
         return try await continueToolsIfNeeded(
             from: initialTurn,
@@ -162,6 +265,79 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return nextState
     }
 
+    func newChat(state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+
+        let sessionId = try await runtimeClient.createSession()
+        var nextState = AgentViewState(phase: .ready, currentSessionId: sessionId)
+        try await loadProviderState(into: &nextState)
+        return try await loadConversations(state: nextState)
+    }
+
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        var nextState = state
+        let summaries = try await conversationClient.conversationSummaries()
+        nextState.conversations.conversations = ConversationService.projectSummaries(summaries)
+        nextState.conversations.errorMessage = nil
+        return nextState
+    }
+
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: nil)
+        var nextState = ConversationService.replayActiveBranch(
+            sessionId: sessionId,
+            events: events,
+            from: state
+        )
+        try await loadProviderState(into: &nextState)
+        return nextState
+    }
+
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard let assistant = state.messages.first(where: { $0.id == messageId }),
+              assistant.role == .assistant,
+              let parentId = assistant.parentId
+        else {
+            return state
+        }
+
+        var nextState = state
+        nextState.draft.targetParentEventId = parentId
+        return try await sendMessage("Please regenerate the previous answer.", state: nextState)
+    }
+
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+        var nextState = state
+        let lastMessage = state.messages.last
+        nextState.draft.targetParentEventId = lastMessage?.branchLeafId ?? lastMessage?.id
+        return try await sendMessage("Continue.", state: nextState)
+    }
+
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState {
+        guard let message = state.messages.first(where: { $0.id == messageId }),
+              message.role == .user
+        else {
+            return state
+        }
+
+        var nextState = state
+        nextState.draft.targetParentEventId = message.parentId
+        return try await sendMessage(text, state: nextState)
+    }
+
     private func continueToolsIfNeeded(
         from turn: AgentTurnResultDTO,
         state: AgentViewState,
@@ -205,13 +381,20 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         switch nextTurn.state {
-        case .completed, .cancelled:
+        case .completed:
+            nextState.lastTerminalReason = .completed
+            nextState.finishStreamingMessages(as: .idle)
+            nextState.phase = .ready
+        case .cancelled:
+            nextState.lastTerminalReason = .cancelled
+            nextState.finishStreamingMessages(as: .cancelled)
             nextState.phase = .ready
         case .failed:
-            if nextState.errorMessage == nil {
-                nextState.errorMessage = "Run failed."
-            }
-            nextState.phase = .failed(message: nextState.errorMessage ?? "Run failed.")
+            let message = nextState.errorMessage ?? "Run failed."
+            nextState.errorMessage = message
+            nextState.lastTerminalReason = .failed(message)
+            nextState.finishStreamingMessages(as: .failed(message))
+            nextState.phase = .failed(message: message)
         case .running, .waitingTool, .suspended:
             nextState.phase = .running(runId: nextTurn.runId)
         }
@@ -224,16 +407,127 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         streamedEventIds: inout Set<String>,
         onEvent: @Sendable (RuntimeEventDTO) async -> Void
     ) async throws -> AgentTurnResultDTO {
-        for try await event in stream.events {
-            if let runId = event.runId {
-                activeRun = .running(runId)
-                state.phase = .running(runId: runId)
+        var buffer = RuntimeStreamBuffer()
+        let (inputs, continuation) = AsyncThrowingStream.makeStream(
+            of: StreamBufferInput.self,
+            throwing: Error.self
+        )
+        let events = stream.events
+        let producer = Task {
+            do {
+                for try await event in events {
+                    continuation.yield(.event(event))
+                }
+                continuation.yield(.finished)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
             }
-            RuntimeEventReducer.apply(event, to: &state)
-            streamedEventIds.insert(event.id)
-            await onEvent(event)
         }
+        var flushTask: Task<Void, Never>?
+
+        func updateScheduledFlush() {
+            guard buffer.hasPendingEvents else {
+                flushTask?.cancel()
+                flushTask = nil
+                return
+            }
+
+            flushTask?.cancel()
+            let delay = streamFlushNanoseconds
+            flushTask = Task {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled else {
+                    return
+                }
+                continuation.yield(.flushTick)
+            }
+        }
+
+        defer {
+            producer.cancel()
+            flushTask?.cancel()
+        }
+
+        do {
+            inputLoop: for try await input in inputs {
+                switch input {
+                case .event(let event):
+                    streamedEventIds.insert(event.id)
+                    let events = buffer.append(event)
+                    for bufferedEvent in events {
+                        applyStreamedEvent(
+                            bufferedEvent,
+                            to: &state,
+                            streamedEventIds: &streamedEventIds
+                        )
+                        await onEvent(bufferedEvent)
+                    }
+                    updateScheduledFlush()
+                case .flushTick:
+                    await flushStreamBuffer(
+                        &buffer,
+                        to: &state,
+                        streamedEventIds: &streamedEventIds,
+                        onEvent: onEvent
+                    )
+                    updateScheduledFlush()
+                case .finished:
+                    await flushStreamBuffer(
+                        &buffer,
+                        to: &state,
+                        streamedEventIds: &streamedEventIds,
+                        onEvent: onEvent
+                    )
+                    break inputLoop
+                }
+            }
+        } catch {
+            await flushStreamBuffer(
+                &buffer,
+                to: &state,
+                streamedEventIds: &streamedEventIds,
+                onEvent: onEvent
+            )
+            throw error
+        }
+
+        await flushStreamBuffer(
+            &buffer,
+            to: &state,
+            streamedEventIds: &streamedEventIds,
+            onEvent: onEvent
+        )
         return try await stream.result.value
+    }
+
+    private func flushStreamBuffer(
+        _ buffer: inout RuntimeStreamBuffer,
+        to state: inout AgentViewState,
+        streamedEventIds: inout Set<String>,
+        onEvent: @Sendable (RuntimeEventDTO) async -> Void
+    ) async {
+        for bufferedEvent in buffer.flush() {
+            applyStreamedEvent(
+                bufferedEvent,
+                to: &state,
+                streamedEventIds: &streamedEventIds
+            )
+            await onEvent(bufferedEvent)
+        }
+    }
+
+    private func applyStreamedEvent(
+        _ event: RuntimeEventDTO,
+        to state: inout AgentViewState,
+        streamedEventIds: inout Set<String>
+    ) {
+        if let runId = event.runId {
+            activeRun = .running(runId)
+            state.phase = .running(runId: runId)
+        }
+        RuntimeEventReducer.apply(event, to: &state)
+        streamedEventIds.insert(event.id)
     }
 
     private func apply(_ events: [RuntimeEventDTO], to state: inout AgentViewState) {
@@ -259,5 +553,58 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         state.provider.profiles = try await providerClient.providerProfiles()
         state.provider.active = try await providerClient.activeProvider()
         state.provider.errorMessage = nil
+    }
+
+    private func promptText(
+        for text: String,
+        attachments: [AttachmentDraftViewState]
+    ) -> String {
+        var lines: [String] = []
+        if !text.isEmpty {
+            lines.append(text)
+        }
+
+        for attachment in attachments {
+            switch attachment.kind {
+            case .link:
+                if let urlString = attachment.urlString {
+                    lines.append("Link: \(urlString)")
+                }
+            case .image:
+                var imageDescription = "Image: \(attachment.displayName)"
+                if let localPath = attachment.localPath {
+                    imageDescription += " path=\(localPath)"
+                }
+                if let mimeType = attachment.mimeType {
+                    imageDescription += " mime=\(mimeType)"
+                }
+                if let byteCount = attachment.byteCount {
+                    imageDescription += " bytes=\(byteCount)"
+                }
+                lines.append(imageDescription)
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func reconcileDraftUserMessage(
+        originalText: String,
+        attachments: [AttachmentDraftViewState],
+        events: [RuntimeEventDTO],
+        in state: inout AgentViewState
+    ) {
+        guard !attachments.isEmpty else {
+            return
+        }
+
+        let visibleAttachments = attachments.map { AttachmentViewState(draft: $0) }
+        for event in events where event.kind == .userMessage {
+            guard let index = state.messages.firstIndex(where: { $0.id == event.id }) else {
+                continue
+            }
+            state.messages[index].text = originalText
+            state.messages[index].attachments = visibleAttachments
+        }
     }
 }

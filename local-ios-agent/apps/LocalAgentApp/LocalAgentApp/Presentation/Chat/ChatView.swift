@@ -1,31 +1,29 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 struct ChatView: View {
-    // 配合你最新的 @Observable 模型使用
     @Bindable var viewModel: AgentViewModel
-    
-    // 用于控制滚动
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var editingMessage: AgentMessageViewState?
+    @State private var editText = ""
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isAddingLink = false
+    @State private var linkText = ""
 
     var body: some View {
         NavigationStack {
             ZStack {
-                // 1. 背景色：使用系统标准背景
                 Color(.systemBackground)
                     .ignoresSafeArea()
-
-                // 2. 消息列表
                 messageList
             }
-            // 3. 底部输入栏：使用 safeAreaInset 是现代 iOS 的标准做法
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composerView
-                    .background(.thinMaterial) // 使用毛玻璃效果作为输入栏背景
+                    .background(.thinMaterial)
             }
-            // 4. 原生导航栏配置
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // 中间的主标题和副标题
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
                         Text("Local Agent")
@@ -36,8 +34,27 @@ struct ChatView: View {
                     }
                 }
 
-                // 右侧的停止按钮
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task {
+                            await viewModel.loadConversations()
+                            viewModel.state.conversations.isPresented = true
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .accessibilityLabel("Chats")
+                }
+
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await viewModel.newChat() }
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel("New Chat")
+                    .disabled(viewModel.state.phase.isRunning)
+
                     if viewModel.state.phase.isRunning {
                         Button {
                             Task { await viewModel.cancel() }
@@ -47,67 +64,220 @@ struct ChatView: View {
                                 .foregroundStyle(.red)
                                 .font(.system(size: 22))
                         }
+                        .accessibilityLabel("Stop")
                     }
-                }
 
-                ToolbarItem(placement: .topBarLeading) {
                     providerMenu
                 }
             }
         }
         .task {
-             // 启动逻辑保持不变
-             if case .booting = viewModel.state.phase {
-                 await viewModel.bootstrap()
-             }
-         }
+            if case .booting = viewModel.state.phase {
+                await viewModel.bootstrap()
+            }
+        }
+        .sheet(isPresented: $viewModel.state.conversations.isPresented) {
+            ConversationListView(
+                conversations: viewModel.state.conversations.conversations,
+                activeSessionId: viewModel.state.currentSessionId,
+                onNewChat: {
+                    viewModel.state.conversations.isPresented = false
+                    Task { await viewModel.newChat() }
+                },
+                onSelect: { sessionId in
+                    viewModel.state.conversations.isPresented = false
+                    Task { await viewModel.selectConversation(sessionId) }
+                }
+            )
+        }
+        .alert("Edit Message", isPresented: isEditingMessagePresented) {
+            TextField("Message", text: $editText)
+            Button("Send") {
+                guard let editingMessage else {
+                    return
+                }
+                let text = editText
+                self.editingMessage = nil
+                editText = ""
+                Task {
+                    await viewModel.editAndResend(messageId: editingMessage.id, text: text)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                editingMessage = nil
+                editText = ""
+            }
+        }
+        .alert("Add Link", isPresented: $isAddingLink) {
+            TextField("URL", text: $linkText)
+            Button("Add") {
+                let rawValue = linkText
+                linkText = ""
+                Task {
+                    await viewModel.addLink(rawValue)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                linkText = ""
+            }
+        }
+        .onChange(of: selectedPhotoItem) {
+            guard let selectedPhotoItem else {
+                return
+            }
+            Task {
+                await loadSelectedPhoto(selectedPhotoItem)
+                self.selectedPhotoItem = nil
+            }
+        }
     }
-
-    // MARK: - Message List View
 
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    // 顶部留白，让第一条消息不顶着导航栏
                     Color.clear.frame(height: 8)
 
                     ForEach(viewModel.state.messages) { message in
                         MessageBubble(message: message)
-                            .id(message.id) // 确保你的 AgentMessageViewState 有 id 属性
+                            .id(message.id)
+                            .contextMenu {
+                                Button {
+                                    UIPasteboard.general.string = message.text
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+
+                                Button {
+                                    Task { await viewModel.forkFromMessage(message.id) }
+                                } label: {
+                                    Label("Fork from Here", systemImage: "arrow.triangle.branch")
+                                }
+
+                                if message.role == .assistant {
+                                    Button {
+                                        Task { await viewModel.regenerate(from: message.id) }
+                                    } label: {
+                                        Label("Regenerate", systemImage: "arrow.clockwise")
+                                    }
+
+                                    Button {
+                                        Task { await viewModel.continueGeneration() }
+                                    } label: {
+                                        Label("Continue", systemImage: "text.append")
+                                    }
+                                }
+
+                                if message.role == .user {
+                                    Button {
+                                        editingMessage = message
+                                        editText = message.text
+                                    } label: {
+                                        Label("Edit and Resend", systemImage: "pencil")
+                                    }
+                                }
+                            }
                     }
 
                     if let error = viewModel.state.errorMessage {
                         errorView(text: error)
                     }
-                    
-                    // 底部留白，防止最后一条消息被输入栏遮挡太紧
+
                     Color.clear.frame(height: 8)
                 }
                 .padding(.horizontal, 16)
             }
             .scrollDismissesKeyboard(.interactively)
             .onAppear { scrollProxy = proxy }
-            // 监听消息数量变化以自动滚动到底部
             .onChange(of: viewModel.state.messages.count) {
                 scrollToBottom()
             }
-            // 监听键盘弹出导致的排版变化，确保最后一条消息可见
-            .onChange(of: viewModel.state.draft) {
+            .onChange(of: viewModel.state.draftText) {
                 scrollToBottom()
             }
         }
     }
-    
+
+    private var composerView: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            if !viewModel.state.draft.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(viewModel.state.draft.attachments) { attachment in
+                            DraftAttachmentChip(attachment: attachment) {
+                                Task { await viewModel.removeAttachment(attachment.id) }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                }
+            }
+
+            HStack(alignment: .bottom, spacing: 12) {
+                Menu {
+                    Button {
+                        isAddingLink = true
+                    } label: {
+                        Label("Link", systemImage: "link")
+                    }
+
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        Label("Photo", systemImage: "photo")
+                    }
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                }
+                .disabled(viewModel.state.phase.isRunning)
+
+                TextField("Message Local Agent", text: $viewModel.state.draftText, axis: .vertical)
+                    .font(.body)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background {
+                        Capsule()
+                            .fill(Color(.systemGray6))
+                    }
+                    .overlay {
+                        Capsule()
+                            .stroke(Color(.separator).opacity(0.5), lineWidth: 0.5)
+                    }
+                    .lineLimit(1...6)
+                    .disabled(viewModel.state.phase.isRunning)
+
+                Button {
+                    Task { await viewModel.send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(
+                            isSendDisabled ? Color(.systemGray4) : .white,
+                            isSendDisabled ? Color(.systemGray5) : Color.accentColor
+                        )
+                        .background(Color.white.opacity(0.01))
+                }
+                .disabled(isSendDisabled)
+                .animation(.easeInOut(duration: 0.2), value: isSendDisabled)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
     private func scrollToBottom() {
-        guard let lastId = viewModel.state.messages.last?.id else { return }
-        // 使用较短的动画让滚动更跟手
+        guard let lastId = viewModel.state.messages.last?.id else {
+            return
+        }
         withAnimation(.easeOut(duration: 0.25)) {
             scrollProxy?.scrollTo(lastId, anchor: .bottom)
         }
     }
 
-    // 错误提示 View
     private func errorView(text: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -121,51 +291,11 @@ struct ChatView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - Composer View (Input Bar)
-
-    private var composerView: some View {
-        VStack(spacing: 0) {
-            Divider() // 顶部一条细分割线
-            
-            HStack(alignment: .bottom, spacing: 12) {
-                // 输入框：模仿 iMessage 的胶囊样式
-                TextField("iMessage", text: $viewModel.state.draft, axis: .vertical)
-                    .font(.body)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background {
-                        Capsule()
-                            .fill(Color(.systemGray6)) // 使用极浅的灰色填充
-                    }
-                    .overlay {
-                        Capsule()
-                            .stroke(Color(.separator).opacity(0.5), lineWidth: 0.5)
-                    }
-                    .lineLimit(1...6) // 限制最大高度
-                    .disabled(viewModel.state.phase.isRunning)
-
-                // 发送按钮
-                Button {
-                    Task { await viewModel.send() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(isSendDisabled ? Color(.systemGray4) : .white, isSendDisabled ? Color(.systemGray5) : Color.accentColor)
-                        .background(Color.white.opacity(0.01)) // 增加点击热区
-                }
-                .disabled(isSendDisabled)
-                .animation(.easeInOut(duration: 0.2), value: isSendDisabled)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        }
-    }
-
-    // MARK: - Helpers
-    
     private var isSendDisabled: Bool {
-        viewModel.state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.state.phase.isRunning
+        (
+            viewModel.state.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && viewModel.state.draft.attachments.isEmpty
+        ) || viewModel.state.phase.isRunning
     }
 
     private var providerMenu: some View {
@@ -182,67 +312,109 @@ struct ChatView: View {
                 .disabled(viewModel.state.phase.isRunning)
             }
         } label: {
-            Image(systemName: "cpu")
+            Image(systemName: "ellipsis.circle")
         }
         .accessibilityLabel("Provider")
         .disabled(viewModel.state.provider.profiles.isEmpty)
     }
 
+    private var isEditingMessagePresented: Binding<Bool> {
+        Binding(
+            get: { editingMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    editingMessage = nil
+                    editText = ""
+                }
+            }
+        )
+    }
+
     private var phaseText: String {
         switch viewModel.state.phase {
-        // 如果你的 phase 枚举名称有所不同，请在这里微调
-        case .booting:    return "正在启动..."
-        case .ready:      return "在线"
-        case .running:    return "对方正在输入..."
-        case .failed:     return "连接中断"
+        case .booting: return "Starting"
+        case .ready: return "Online"
+        case .running: return "Thinking"
+        case .failed: return "Disconnected"
         }
+    }
+
+    private func loadSelectedPhoto(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            viewModel.state.errorMessage = "Unable to load selected photo."
+            return
+        }
+
+        let contentType = item.supportedContentTypes.first
+        let filenameExtension = contentType?.preferredFilenameExtension ?? "jpg"
+        await viewModel.addImage(
+            data: data,
+            suggestedName: "photo.\(filenameExtension)",
+            mimeType: contentType?.preferredMIMEType ?? "image/jpeg"
+        )
     }
 }
 
-// MARK: - Message Bubble Subview
+private struct DraftAttachmentChip: View {
+    let attachment: AttachmentDraftViewState
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: attachment.kind == .image ? "photo" : "link")
+            Text(attachment.displayName)
+                .lineLimit(1)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.footnote)
+        .padding(.vertical, 6)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .background(Color(.secondarySystemBackground), in: Capsule())
+    }
+}
 
 private struct MessageBubble: View {
-    let message: AgentMessageViewState // 确保这里是你真实的 Model 类型
-    @Environment(\.colorScheme) var colorScheme
+    let message: AgentMessageViewState
 
-    var isUser: Bool { message.role == .user }
+    private var isUser: Bool {
+        message.role == .user
+    }
 
     var body: some View {
         HStack {
-            if isUser { Spacer(minLength: 60) }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(messageText)
-                    .font(.body)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .foregroundStyle(foreground)
-                    .background {
-                        // 更大的圆角，模仿现代 iOS 风格
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(background)
-                    }
+            if isUser {
+                Spacer(minLength: 60)
             }
-            // 控制最大宽度
-            .frame(maxWidth: UIScreen.main.bounds.width * 0.75, alignment: isUser ? .trailing : .leading)
 
-            if !isUser { Spacer(minLength: 60) }
+            MessageContentView(message: message)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .foregroundStyle(foreground)
+                .background {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(background)
+                }
+                .frame(
+                    maxWidth: UIScreen.main.bounds.width * (isUser ? 0.75 : 0.86),
+                    alignment: isUser ? .trailing : .leading
+                )
+
+            if !isUser {
+                Spacer(minLength: 60)
+            }
         }
-    }
-    
-    private var messageText: String {
-        // 如果你的模型没有 isStreaming 属性，可以直接返回 message.text
-        if message.text.isEmpty && message.isStreaming {
-            return "..."
-        }
-        return message.text
     }
 
     private var background: AnyShapeStyle {
         if isUser {
-            return AnyShapeStyle(Color.accentColor)
+            AnyShapeStyle(Color.accentColor)
         } else {
-            return AnyShapeStyle(Color(.systemGray5))
+            AnyShapeStyle(Color(.systemGray5))
         }
     }
 

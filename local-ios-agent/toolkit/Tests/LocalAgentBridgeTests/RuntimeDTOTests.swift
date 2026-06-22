@@ -4,6 +4,27 @@ import Testing
 
 @Suite("Runtime DTOs")
 struct RuntimeDTOTests {
+    @Test("conversation summary decodes snake case fields")
+    func conversationSummaryDecodes() throws {
+        let json = """
+        {
+          "session_id": "session_1",
+          "title": "Hello",
+          "active_leaf_id": "entry_2",
+          "last_event_id": "entry_2",
+          "last_updated_sequence": 4
+        }
+        """.data(using: .utf8)!
+
+        let summary = try JSONDecoder().decode(ConversationSummaryDTO.self, from: json)
+
+        #expect(summary.sessionId == "session_1")
+        #expect(summary.title == "Hello")
+        #expect(summary.activeLeafId == "entry_2")
+        #expect(summary.lastEventId == "entry_2")
+        #expect(summary.lastUpdatedSequence == 4)
+    }
+
     @Test
     func decodesRustTurnResultJSONIntoSwiftDTOs() throws {
         let json = """

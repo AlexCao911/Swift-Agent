@@ -160,6 +160,7 @@ fn runtime_exposes_pending_swift_tool_request() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -187,6 +188,7 @@ fn runtime_suspends_confirm_tool_until_approval() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -218,6 +220,7 @@ fn approval_response_resumes_suspended_tool_execution() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     let approval = runtime.pending_approval_requests()[0].clone();
@@ -261,6 +264,7 @@ fn approval_rejection_resumes_with_tool_error_result() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     let approval = runtime.pending_approval_requests()[0].clone();
@@ -311,6 +315,7 @@ fn runtime_writes_audit_rows_for_security_sensitive_events() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
     drop(runtime);
@@ -343,6 +348,7 @@ fn runtime_recovers_from_denied_tool_route() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -371,6 +377,7 @@ fn runtime_persists_structured_tool_call_payload() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -403,6 +410,7 @@ fn submit_tool_result_consumes_matching_pending_request() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -432,6 +440,7 @@ fn runtime_routes_follow_up_tool_call_after_tool_result() {
             session_id,
             parent_event_id: None,
             text: "start".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -470,6 +479,7 @@ fn runtime_rejects_provider_tool_call_with_empty_id() {
             session_id,
             parent_event_id: None,
             text: "start".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap_err();
 
@@ -494,6 +504,7 @@ fn runtime_filters_secret_audit_only_tool_result_from_followup_context() {
             session_id,
             parent_event_id: None,
             text: "start".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 

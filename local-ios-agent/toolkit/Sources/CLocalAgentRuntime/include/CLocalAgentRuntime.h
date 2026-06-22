@@ -15,6 +15,12 @@ void local_agent_runtime_bridge_string_free(char *value);
 
 char *local_agent_runtime_bridge_create_session(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_session_ids(LocalAgentRuntimeBridge *runtime);
+char *local_agent_runtime_bridge_conversation_summaries(LocalAgentRuntimeBridge *runtime);
+char *local_agent_runtime_bridge_active_branch(
+    LocalAgentRuntimeBridge *runtime,
+    const char *session_id,
+    const char *leaf_id
+);
 char *local_agent_runtime_bridge_register_tool_schema(
     LocalAgentRuntimeBridge *runtime,
     const char *schema_json

@@ -60,6 +60,7 @@ fn runtime_emits_provider_outputs_during_provider_callback() {
                 session_id: SessionId(session_id.0.clone()),
                 parent_event_id: None,
                 text: "hello".into(),
+                blob_refs: Vec::new(),
             },
             &mut |event| {
                 streamed_kinds.push(event.kind.clone());

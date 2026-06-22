@@ -14,6 +14,13 @@ enum AppRuntimePhase: Equatable, Sendable {
     }
 }
 
+enum RunTerminalReason: Equatable, Sendable {
+    case completed
+    case cancelled
+    case failed(String)
+    case reachedLimit
+}
+
 enum AgentMessageRole: Equatable, Sendable {
     case user
     case assistant
@@ -23,8 +30,106 @@ enum AgentMessageRole: Equatable, Sendable {
 struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     let id: String
     let role: AgentMessageRole
-    var text: String
-    var isStreaming: Bool
+    var sessionId: String?
+    var parentId: String?
+    var branchLeafId: String?
+    var parts: [MessagePartViewState] {
+        didSet {
+            if !isUpdatingPartsFromSource {
+                sourceText = parts.map(\.plainText).joined()
+            }
+        }
+    }
+    var attachments: [AttachmentViewState]
+    var streaming: MessageStreamingState
+    private var sourceText: String
+    private var isUpdatingPartsFromSource: Bool
+
+    init(
+        id: String,
+        sessionId: String? = nil,
+        parentId: String? = nil,
+        branchLeafId: String? = nil,
+        role: AgentMessageRole,
+        parts: [MessagePartViewState],
+        attachments: [AttachmentViewState] = [],
+        streaming: MessageStreamingState = .idle
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.parentId = parentId
+        self.branchLeafId = branchLeafId ?? id
+        self.role = role
+        self.parts = parts
+        self.attachments = attachments
+        self.streaming = streaming
+        sourceText = parts.map(\.plainText).joined()
+        isUpdatingPartsFromSource = false
+    }
+
+    init(id: String, role: AgentMessageRole, text: String, isStreaming: Bool) {
+        self.id = id
+        self.role = role
+        sessionId = nil
+        parentId = nil
+        branchLeafId = id
+        attachments = []
+        streaming = isStreaming ? .streaming : .idle
+        sourceText = text
+        isUpdatingPartsFromSource = false
+        parts = Self.parts(for: role, text: text, isStreaming: isStreaming)
+    }
+
+    var text: String {
+        get {
+            parts.map(\.plainText).joined()
+        }
+        set {
+            sourceText = newValue
+            updatePartsFromSource()
+        }
+        _modify {
+            defer {
+                updatePartsFromSource()
+            }
+            yield &sourceText
+        }
+    }
+
+    var isStreaming: Bool {
+        get {
+            streaming.isStreaming
+        }
+        set {
+            streaming = newValue ? .streaming : .idle
+            updatePartsFromSource()
+        }
+    }
+
+    private mutating func updatePartsFromSource() {
+        isUpdatingPartsFromSource = true
+        parts = Self.parts(for: role, text: sourceText, isStreaming: isStreaming)
+        isUpdatingPartsFromSource = false
+    }
+
+    private static func parts(for role: AgentMessageRole, text: String, isStreaming: Bool) -> [MessagePartViewState] {
+        switch role {
+        case .assistant:
+            var parser = ReasoningTagParser()
+            parser.append(text)
+            return parser.snapshot(isFinal: !isStreaming)
+        case .tool:
+            guard !text.isEmpty else {
+                return []
+            }
+            return [.tool(ToolPartViewState(id: "tool_0", displayText: text))]
+        case .user:
+            guard !text.isEmpty else {
+                return []
+            }
+            return [.text(TextPartViewState(id: "text_0", text: text))]
+        }
+    }
 }
 
 struct ProviderSelectionViewState: Equatable, Sendable {
@@ -43,21 +148,51 @@ struct ProviderSelectionViewState: Equatable, Sendable {
     }
 }
 
+struct ConversationSummaryViewState: Equatable, Identifiable, Sendable {
+    var id: String { sessionId }
+
+    let sessionId: String
+    var title: String
+    var activeLeafId: String?
+    var lastEventId: String?
+    var lastUpdatedSequence: UInt64
+}
+
+struct ConversationListViewState: Equatable, Sendable {
+    var conversations: [ConversationSummaryViewState]
+    var isPresented: Bool
+    var errorMessage: String?
+
+    init(
+        conversations: [ConversationSummaryViewState] = [],
+        isPresented: Bool = false,
+        errorMessage: String? = nil
+    ) {
+        self.conversations = conversations
+        self.isPresented = isPresented
+        self.errorMessage = errorMessage
+    }
+}
+
 struct AgentViewState: Equatable, Sendable {
     var phase: AppRuntimePhase
     var messages: [AgentMessageViewState]
-    var draft: String
+    var draft: UserDraftViewState
     var currentSessionId: String?
     var errorMessage: String?
     var provider: ProviderSelectionViewState
+    var conversations: ConversationListViewState
+    var lastTerminalReason: RunTerminalReason?
 
     init(
         phase: AppRuntimePhase = .booting,
         messages: [AgentMessageViewState] = [],
-        draft: String = "",
+        draft: UserDraftViewState = UserDraftViewState(),
         currentSessionId: String? = nil,
         errorMessage: String? = nil,
-        provider: ProviderSelectionViewState = ProviderSelectionViewState()
+        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
+        conversations: ConversationListViewState = ConversationListViewState(),
+        lastTerminalReason: RunTerminalReason? = nil
     ) {
         self.phase = phase
         self.messages = messages
@@ -65,5 +200,41 @@ struct AgentViewState: Equatable, Sendable {
         self.currentSessionId = currentSessionId
         self.errorMessage = errorMessage
         self.provider = provider
+        self.conversations = conversations
+        self.lastTerminalReason = lastTerminalReason
+    }
+
+    init(
+        phase: AppRuntimePhase = .booting,
+        messages: [AgentMessageViewState] = [],
+        draft: String,
+        currentSessionId: String? = nil,
+        errorMessage: String? = nil,
+        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
+        conversations: ConversationListViewState = ConversationListViewState(),
+        lastTerminalReason: RunTerminalReason? = nil
+    ) {
+        self.init(
+            phase: phase,
+            messages: messages,
+            draft: UserDraftViewState(text: draft),
+            currentSessionId: currentSessionId,
+            errorMessage: errorMessage,
+            provider: provider,
+            conversations: conversations,
+            lastTerminalReason: lastTerminalReason
+        )
+    }
+
+    var draftText: String {
+        get { draft.text }
+        set { draft.text = newValue }
+    }
+
+    mutating func finishStreamingMessages(as terminalState: MessageStreamingState) {
+        for index in messages.indices where messages[index].isStreaming {
+            messages[index].isStreaming = false
+            messages[index].streaming = terminalState
+        }
     }
 }

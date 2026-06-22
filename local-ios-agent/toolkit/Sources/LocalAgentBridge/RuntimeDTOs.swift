@@ -105,6 +105,36 @@ public struct RuntimeEventDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
+    public var sessionId: String
+    public var title: String
+    public var activeLeafId: String?
+    public var lastEventId: String?
+    public var lastUpdatedSequence: UInt64
+
+    public init(
+        sessionId: String,
+        title: String,
+        activeLeafId: String?,
+        lastEventId: String?,
+        lastUpdatedSequence: UInt64
+    ) {
+        self.sessionId = sessionId
+        self.title = title
+        self.activeLeafId = activeLeafId
+        self.lastEventId = lastEventId
+        self.lastUpdatedSequence = lastUpdatedSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case title
+        case activeLeafId = "active_leaf_id"
+        case lastEventId = "last_event_id"
+        case lastUpdatedSequence = "last_updated_sequence"
+    }
+}
+
 public struct AgentTurnResultDTO: Codable, Equatable, Sendable {
     public var runId: String
     public var state: RunStateDTO

@@ -174,6 +174,8 @@ struct RustRuntimeClientContractTests {
             sessionId: "session_1",
             providerId: "mock"
         )
+        let summaries = try await client?.conversationSummaries()
+        let activeBranch = try await client?.activeBranch(sessionId: "session_1", leafId: "entry_leaf")
 
         #expect(turn?.state == .waitingTool)
         #expect(pendingTools?.first?.runId == "run_3")
@@ -187,6 +189,9 @@ struct RustRuntimeClientContractTests {
         #expect(profiles?.map(\.id) == ["mock"])
         #expect(activeProvider?.id == "mock")
         #expect(providerEvent?.kind == .providerChanged)
+        #expect(summaries?.first?.sessionId == "session_1")
+        #expect(summaries?.first?.activeLeafId == "entry_leaf")
+        #expect(activeBranch?.first?.id == "entry_leaf")
 
         let registeredSchema = try decodedObject(try #require(probe.registeredSchemaJson))
         let permissionState = try decodedObject(try #require(probe.permissionStateJson))
@@ -204,11 +209,13 @@ struct RustRuntimeClientContractTests {
         #expect(approvalResponse["reason"] is NSNull)
         #expect(setProvider["session_id"] as? String == "session_1")
         #expect(setProvider["provider_id"] as? String == "mock")
+        #expect(probe.activeBranchSessionId == "session_1")
+        #expect(probe.activeBranchLeafId == "entry_leaf")
 
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 14)
+        #expect(probe.freedStrings == 16)
     }
 
     @Test
@@ -265,6 +272,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
     var setProviderJson: String?
+    var activeBranchSessionId: String?
+    var activeBranchLeafId: String?
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
 
@@ -275,6 +284,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             freeString: freeString,
             createSession: createSession,
             sessionIds: sessionIds,
+            conversationSummaries: conversationSummaries,
+            activeBranch: activeBranch,
             registerToolSchema: registerToolSchema,
             setPermissionState: setPermissionState,
             sendMessage: sendMessage,
@@ -313,6 +324,40 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
 
     func sessionIds(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
         makeCString(#"["session_1"]"#)
+    }
+
+    func conversationSummaries(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
+        makeCString("""
+        [{
+          "session_id": "session_1",
+          "title": "Hello",
+          "active_leaf_id": "entry_leaf",
+          "last_event_id": "entry_leaf",
+          "last_updated_sequence": 4
+        }]
+        """)
+    }
+
+    func activeBranch(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ sessionId: UnsafePointer<CChar>?,
+        _ leafId: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        activeBranchSessionId = String(cString: sessionId!)
+        activeBranchLeafId = leafId.map { String(cString: $0) }
+        return makeCString("""
+        [{
+          "id": "entry_leaf",
+          "session_id": "session_1",
+          "parent_id": null,
+          "run_id": "run_3",
+          "sequence": 4,
+          "depth": 0,
+          "kind": "assistant_message_completed",
+          "payload": "done",
+          "blob_refs": []
+        }]
+        """)
     }
 
     func registerToolSchema(

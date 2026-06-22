@@ -34,6 +34,7 @@ fn runtime_stops_at_tool_call_and_marks_waiting_tool() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -60,6 +61,7 @@ fn runtime_resumes_from_tool_result_and_completes() {
             session_id: session_id.clone(),
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 
@@ -105,6 +107,7 @@ fn runtime_cancel_appends_run_cancelled() {
             session_id,
             parent_event_id: None,
             text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
         })
         .unwrap();
 

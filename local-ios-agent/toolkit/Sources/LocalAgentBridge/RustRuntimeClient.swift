@@ -153,6 +153,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var freeString: (StringResult) -> Void
     public var createSession: (RuntimeHandle?) -> StringResult
     public var sessionIds: (RuntimeHandle?) -> StringResult
+    public var conversationSummaries: (RuntimeHandle?) -> StringResult
+    public var activeBranch: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var sendMessage: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -189,6 +195,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         freeString: @escaping (StringResult) -> Void,
         createSession: @escaping (RuntimeHandle?) -> StringResult,
         sessionIds: @escaping (RuntimeHandle?) -> StringResult,
+        conversationSummaries: @escaping (RuntimeHandle?) -> StringResult,
+        activeBranch: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?
+        ) -> StringResult,
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         sendMessage: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
@@ -224,6 +236,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.freeString = freeString
         self.createSession = createSession
         self.sessionIds = sessionIds
+        self.conversationSummaries = conversationSummaries
+        self.activeBranch = activeBranch
         self.registerToolSchema = registerToolSchema
         self.setPermissionState = setPermissionState
         self.sendMessage = sendMessage
@@ -262,6 +276,16 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             },
             sessionIds: { runtime in
                 local_agent_runtime_bridge_session_ids(runtime.map { OpaquePointer($0) })
+            },
+            conversationSummaries: { runtime in
+                local_agent_runtime_bridge_conversation_summaries(runtime.map { OpaquePointer($0) })
+            },
+            activeBranch: { runtime, sessionId, leafId in
+                local_agent_runtime_bridge_active_branch(
+                    runtime.map { OpaquePointer($0) },
+                    sessionId,
+                    leafId
+                )
             },
             registerToolSchema: { runtime, schemaJson in
                 local_agent_runtime_bridge_register_tool_schema(
@@ -338,7 +362,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllingRuntimeClient, @unchecked Sendable {
+public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -369,6 +393,31 @@ public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllin
         try decode(functions.sessionIds(handle), as: [String].self)
     }
 
+    public func conversationSummaries() async throws -> [ConversationSummaryDTO] {
+        try decode(
+            functions.conversationSummaries(handle),
+            as: [ConversationSummaryDTO].self
+        )
+    }
+
+    public func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
+        try sessionId.withCString { sessionPointer in
+            if let leafId {
+                return try leafId.withCString { leafPointer in
+                    try decode(
+                        functions.activeBranch(handle, sessionPointer, leafPointer),
+                        as: [RuntimeEventDTO].self
+                    )
+                }
+            }
+
+            return try decode(
+                functions.activeBranch(handle, sessionPointer, nil),
+                as: [RuntimeEventDTO].self
+            )
+        }
+    }
+
     public func registerToolSchema(_ schema: ToolSchemaDTO) async throws {
         let json = try encode(schema)
         _ = try json.withCString { pointer in
@@ -389,10 +438,25 @@ public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllin
         parentEventId: String?,
         text: String
     ) async throws -> AgentTurnResultDTO {
+        try await sendMessage(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    public func sendMessage(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) async throws -> AgentTurnResultDTO {
         let request = SendMessageRequest(
             sessionId: sessionId,
             parentEventId: parentEventId,
-            text: text
+            text: text,
+            blobRefs: blobRefs
         )
         let json = try encode(request)
         return try json.withCString { pointer in
@@ -405,11 +469,26 @@ public final class RustRuntimeClient: StreamingRuntimeClient, ProviderControllin
         parentEventId: String?,
         text: String
     ) -> AgentTurnStreamDTO {
+        sendMessageStream(
+            sessionId: sessionId,
+            parentEventId: parentEventId,
+            text: text,
+            blobRefs: []
+        )
+    }
+
+    public func sendMessageStream(
+        sessionId: String,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String]
+    ) -> AgentTurnStreamDTO {
         do {
             let request = SendMessageRequest(
                 sessionId: sessionId,
                 parentEventId: parentEventId,
-                text: text
+                text: text,
+                blobRefs: blobRefs
             )
             let json = try encode(request)
             return makeTurnStream { callback, userData in
@@ -603,11 +682,13 @@ private struct SendMessageRequest: Encodable {
     var sessionId: String
     var parentEventId: String?
     var text: String
+    var blobRefs: [String] = []
 
     private enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case parentEventId = "parent_event_id"
         case text
+        case blobRefs = "blob_refs"
     }
 }
 

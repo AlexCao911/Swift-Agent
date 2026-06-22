@@ -1,8 +1,13 @@
 # Local iOS Agent Chat Experience Design
 
 Date: 2026-06-22
-Status: Draft for user review
+Status: Implemented
 Project path: `/Users/alexandercou/Projects/Alex-agent/local-ios-agent`
+
+Implementation note: completed on branch `codex/ios-chat-experience` in
+commits `2dda71f` through `7c9bb4e`. The implementation adds structured message
+parts, reasoning block rendering, stream buffering, Rust-backed conversation
+branch APIs, conversation UI, branch actions, and link/photo attachment support.
 
 ## 1. Purpose
 

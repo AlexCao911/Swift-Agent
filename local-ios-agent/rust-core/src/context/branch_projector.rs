@@ -62,3 +62,28 @@ fn declares_tool_result_type(payload: &str) -> bool {
         })
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{EntryId, EventKind, RuntimeEvent, SessionId};
+
+    #[test]
+    fn user_blob_refs_do_not_leak_into_prompt_projection() {
+        let mut event = RuntimeEvent::new(
+            EntryId("entry_1".into()),
+            SessionId("session_1".into()),
+            None,
+            None,
+            1,
+            0,
+            EventKind::UserMessage,
+            "hello",
+        );
+        event.blob_refs = vec!["local-agent-chat:v1:metadata".into()];
+
+        let messages = BranchProjector::new().project(vec![event]);
+
+        assert_eq!(messages, vec![PromptMessage::User("hello".into())]);
+    }
+}

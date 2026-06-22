@@ -31,8 +31,7 @@ pub struct CAbiLocalAgentBackendStream {
     _private: [u8; 0],
 }
 
-pub type CAbiTokenCallback =
-    unsafe extern "C" fn(*const c_char, *mut c_void) -> LocalAgentStatus;
+pub type CAbiTokenCallback = unsafe extern "C" fn(*const c_char, *mut c_void) -> LocalAgentStatus;
 
 pub type CAbiInitFn = unsafe extern "C" fn(*mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 pub type CAbiLoadModelFn =

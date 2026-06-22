@@ -286,6 +286,78 @@ fn bridge_exposes_provider_control_json() {
 }
 
 #[test]
+fn bridge_exposes_conversation_summary_and_active_branch_json() {
+    let bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+    let first_turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"root title"}}"#
+            ))
+            .unwrap(),
+    );
+    let root_user_id = first_turn["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "user_message")
+        .and_then(|event| event["id"].as_str())
+        .unwrap();
+    let first_leaf_id = first_turn["events"]
+        .as_array()
+        .unwrap()
+        .last()
+        .and_then(|event| event["id"].as_str())
+        .unwrap();
+
+    let _fork_turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":"{root_user_id}","text":"fork title"}}"#
+            ))
+            .unwrap(),
+    );
+
+    let summaries = decode(&bridge.conversation_summaries_json().unwrap());
+    assert_eq!(summaries.as_array().unwrap().len(), 1);
+    assert_eq!(summaries[0]["session_id"], session_id);
+    assert_eq!(summaries[0]["title"], "root title");
+    assert!(summaries[0]["active_leaf_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("entry_"));
+    assert!(summaries[0]["last_event_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("entry_"));
+    assert!(summaries[0]["last_updated_sequence"].as_u64().unwrap() > 0);
+
+    let active_branch = decode(&bridge.active_branch_json(session_id, None).unwrap());
+    assert!(active_branch
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"] == "fork title"));
+
+    let explicit_branch = decode(
+        &bridge
+            .active_branch_json(session_id, Some(first_leaf_id))
+            .unwrap(),
+    );
+    assert!(explicit_branch
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"] == "root title"));
+    assert!(!explicit_branch
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"] == "fork title"));
+}
+
+#[test]
 fn bridge_config_can_create_runtime_with_desktop_minicpm_provider() {
     let bridge = RuntimeJsonBridge::from_config_json(
         r#"{

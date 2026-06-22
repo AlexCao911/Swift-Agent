@@ -21,12 +21,14 @@ enum RuntimeEventReducer {
         case .runCancelled:
             state.phase = .ready
             state.errorMessage = nil
-            stopStreamingMessages(in: &state)
+            state.lastTerminalReason = .cancelled
+            state.finishStreamingMessages(as: .cancelled)
         case .runFailed:
             let message = payloadString("message", from: event.payload) ?? event.payload
             state.phase = .failed(message: message)
             state.errorMessage = message
-            stopStreamingMessages(in: &state)
+            state.lastTerminalReason = .failed(message)
+            state.finishStreamingMessages(as: .failed(message))
         default:
             break
         }
@@ -36,11 +38,17 @@ enum RuntimeEventReducer {
         guard !state.messages.contains(where: { $0.id == event.id }) else {
             return
         }
+        let decoded = RuntimeBlobRefCodec.decodeUserMessage(from: event.blobRefs)
+        let text = decoded.text ?? event.payload
         state.messages.append(AgentMessageViewState(
             id: event.id,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
+            branchLeafId: event.id,
             role: .user,
-            text: event.payload,
-            isStreaming: false
+            parts: text.isEmpty ? [] : [.text(TextPartViewState(id: "\(event.id)_text_0", text: text))],
+            attachments: decoded.attachments,
+            streaming: .idle
         ))
     }
 
@@ -52,9 +60,12 @@ enum RuntimeEventReducer {
 
         state.messages.append(AgentMessageViewState(
             id: messageId,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
+            branchLeafId: event.id,
             role: .assistant,
-            text: "",
-            isStreaming: true
+            parts: [],
+            streaming: .streaming
         ))
     }
 
@@ -62,15 +73,20 @@ enum RuntimeEventReducer {
         let text = payloadString("text", from: event.payload) ?? event.payload
         let messageId = assistantMessageId(for: event, in: state)
         if let index = state.messages.firstIndex(where: { $0.id == messageId }) {
+            state.messages[index].streaming = .streaming
             state.messages[index].text += text
-            state.messages[index].isStreaming = true
         } else {
-            state.messages.append(AgentMessageViewState(
+            var message = AgentMessageViewState(
                 id: messageId,
+                sessionId: event.sessionId,
+                parentId: event.parentId,
+                branchLeafId: event.id,
                 role: .assistant,
-                text: text,
-                isStreaming: true
-            ))
+                parts: [],
+                streaming: .streaming
+            )
+            message.text += text
+            state.messages.append(message)
         }
     }
 
@@ -81,12 +97,16 @@ enum RuntimeEventReducer {
         if let index = state.messages.firstIndex(where: { $0.id == messageId }) {
             state.messages[index].text = completedText
             state.messages[index].isStreaming = false
+            state.messages[index].branchLeafId = event.id
         } else {
             state.messages.append(AgentMessageViewState(
                 id: messageId,
+                sessionId: event.sessionId,
+                parentId: event.parentId,
+                branchLeafId: event.id,
                 role: .assistant,
-                text: completedText,
-                isStreaming: false
+                parts: parsedAssistantParts(from: completedText, isFinal: true),
+                streaming: .idle
             ))
         }
     }
@@ -99,10 +119,19 @@ enum RuntimeEventReducer {
         let displayText = payloadString("display_text", from: event.payload) ?? event.payload
         state.messages.append(AgentMessageViewState(
             id: event.id,
+            sessionId: event.sessionId,
+            parentId: event.parentId,
+            branchLeafId: event.id,
             role: .tool,
-            text: displayText,
-            isStreaming: false
+            parts: [.tool(ToolPartViewState(id: event.id, displayText: displayText))],
+            streaming: .idle
         ))
+    }
+
+    private static func parsedAssistantParts(from text: String, isFinal: Bool) -> [MessagePartViewState] {
+        var parser = ReasoningTagParser()
+        parser.append(text)
+        return isFinal ? parser.finish() : parser.snapshot(isFinal: false)
     }
 
     private static func assistantMessageId(for event: RuntimeEventDTO, in state: AgentViewState) -> String {
@@ -116,12 +145,6 @@ enum RuntimeEventReducer {
             return event.id
         }
         return state.messages.last(where: { $0.role == .assistant })?.id ?? event.id
-    }
-
-    private static func stopStreamingMessages(in state: inout AgentViewState) {
-        for index in state.messages.indices where state.messages[index].isStreaming {
-            state.messages[index].isStreaming = false
-        }
     }
 
     private static func payloadString(_ key: String, from payload: String) -> String? {
