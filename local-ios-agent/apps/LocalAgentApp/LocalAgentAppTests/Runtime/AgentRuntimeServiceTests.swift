@@ -182,6 +182,89 @@ struct AgentRuntimeServiceTests {
         #expect(state.draft.targetParentEventId == nil)
     }
 
+    @Test("send includes draft link attachments in prompt and visible message")
+    func sendIncludesDraftLinkAttachmentsInPromptAndVisibleMessage() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_1", kind: .userMessage, payload: "hello\nLink: https://example.com"),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "linked"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.text = "hello"
+        state.draft.attachments = [
+            AttachmentDraftViewState(
+                id: "link_1",
+                kind: .link,
+                displayName: "example.com",
+                localPath: nil,
+                urlString: "https://example.com",
+                mimeType: nil,
+                byteCount: nil
+            ),
+        ]
+        state = try await service.sendMessage("hello", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["hello\nLink: https://example.com"])
+        #expect(state.messages[0].text == "hello")
+        #expect(state.messages[0].attachments.count == 1)
+        #expect(state.messages[0].attachments[0].kind == .link)
+        #expect(state.messages[0].attachments[0].urlString == "https://example.com")
+        #expect(state.draft.text.isEmpty)
+        #expect(state.draft.attachments.isEmpty)
+    }
+
+    @Test("send includes draft image metadata in prompt and visible message")
+    func sendIncludesDraftImageMetadataInPromptAndVisibleMessage() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(
+                        id: "user_1",
+                        kind: .userMessage,
+                        payload: "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3"
+                    ),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "image noted"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.text = "look"
+        state.draft.attachments = [
+            AttachmentDraftViewState(
+                id: "image_1",
+                kind: .image,
+                displayName: "photo.png",
+                localPath: "/tmp/photo.png",
+                urlString: nil,
+                mimeType: "image/png",
+                byteCount: 3
+            ),
+        ]
+        state = try await service.sendMessage("look", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == [
+            "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3",
+        ])
+        #expect(state.messages[0].text == "look")
+        #expect(state.messages[0].attachments.count == 1)
+        #expect(state.messages[0].attachments[0].kind == .image)
+        #expect(state.messages[0].attachments[0].localPath == "/tmp/photo.png")
+        #expect(state.draft.text.isEmpty)
+    }
+
     @Test("regenerate sends from assistant parent event")
     func regenerateSendsFromAssistantParentEvent() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [

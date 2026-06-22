@@ -76,6 +76,7 @@ private struct AttachmentChipView: View {
         Label(attachment.displayName, systemImage: attachment.kind == .image ? "photo" : "link")
             .font(.footnote)
             .lineLimit(1)
+            .foregroundStyle(.primary)
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
             .background(Color(.tertiarySystemBackground), in: Capsule())

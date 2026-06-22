@@ -115,6 +115,8 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
         var nextState = state
         let parentEventId = state.draft.targetParentEventId
+        let draftAttachments = state.draft.attachments
+        let prompt = promptText(for: text, attachments: draftAttachments)
         let sessionId: String
         if let existing = state.currentSessionId {
             sessionId = existing
@@ -127,7 +129,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             let stream = streamingClient.sendMessageStream(
                 sessionId: sessionId,
                 parentEventId: parentEventId,
-                text: text
+                text: prompt
             )
             var streamedEventIds = Set<String>()
             let initialTurn = try await consume(
@@ -138,8 +140,14 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
             activeRun = .running(initialTurn.runId)
             nextState.phase = .running(runId: initialTurn.runId)
-            nextState.draft.targetParentEventId = nil
+            nextState.draft = UserDraftViewState()
             apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
+            reconcileDraftUserMessage(
+                originalText: text,
+                attachments: draftAttachments,
+                events: initialTurn.events,
+                in: &nextState
+            )
 
             return try await continueToolsIfNeeded(
                 from: initialTurn,
@@ -152,12 +160,18 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         let initialTurn = try await runtimeClient.sendMessage(
             sessionId: sessionId,
             parentEventId: parentEventId,
-            text: text
+            text: prompt
         )
         activeRun = .running(initialTurn.runId)
         nextState.phase = .running(runId: initialTurn.runId)
-        nextState.draft.targetParentEventId = nil
+        nextState.draft = UserDraftViewState()
         apply(initialTurn.events, to: &nextState)
+        reconcileDraftUserMessage(
+            originalText: text,
+            attachments: draftAttachments,
+            events: initialTurn.events,
+            in: &nextState
+        )
 
         return try await continueToolsIfNeeded(
             from: initialTurn,
@@ -494,5 +508,58 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         state.provider.profiles = try await providerClient.providerProfiles()
         state.provider.active = try await providerClient.activeProvider()
         state.provider.errorMessage = nil
+    }
+
+    private func promptText(
+        for text: String,
+        attachments: [AttachmentDraftViewState]
+    ) -> String {
+        var lines: [String] = []
+        if !text.isEmpty {
+            lines.append(text)
+        }
+
+        for attachment in attachments {
+            switch attachment.kind {
+            case .link:
+                if let urlString = attachment.urlString {
+                    lines.append("Link: \(urlString)")
+                }
+            case .image:
+                var imageDescription = "Image: \(attachment.displayName)"
+                if let localPath = attachment.localPath {
+                    imageDescription += " path=\(localPath)"
+                }
+                if let mimeType = attachment.mimeType {
+                    imageDescription += " mime=\(mimeType)"
+                }
+                if let byteCount = attachment.byteCount {
+                    imageDescription += " bytes=\(byteCount)"
+                }
+                lines.append(imageDescription)
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func reconcileDraftUserMessage(
+        originalText: String,
+        attachments: [AttachmentDraftViewState],
+        events: [RuntimeEventDTO],
+        in state: inout AgentViewState
+    ) {
+        guard !attachments.isEmpty else {
+            return
+        }
+
+        let visibleAttachments = attachments.map { AttachmentViewState(draft: $0) }
+        for event in events where event.kind == .userMessage {
+            guard let index = state.messages.firstIndex(where: { $0.id == event.id }) else {
+                continue
+            }
+            state.messages[index].text = originalText
+            state.messages[index].attachments = visibleAttachments
+        }
     }
 }

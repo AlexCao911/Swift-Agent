@@ -88,6 +88,20 @@ struct AttachmentViewState: Equatable, Identifiable, Sendable {
     var byteCount: Int?
 }
 
+extension AttachmentViewState {
+    init(draft: AttachmentDraftViewState) {
+        self.init(
+            id: draft.id,
+            kind: draft.kind,
+            displayName: draft.displayName,
+            localPath: draft.localPath,
+            urlString: draft.urlString,
+            mimeType: draft.mimeType,
+            byteCount: draft.byteCount
+        )
+    }
+}
+
 struct AttachmentDraftViewState: Equatable, Identifiable, Sendable {
     let id: String
     var kind: AttachmentKindViewState

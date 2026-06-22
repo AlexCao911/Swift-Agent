@@ -43,6 +43,36 @@ struct AgentViewModelTests {
         #expect(viewModel.state.messages.map(\.text) == ["hello"])
     }
 
+    @Test("send allows attachment only draft")
+    func sendAllowsAttachmentOnlyDraft() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(
+                phase: .ready,
+                draft: UserDraftViewState(
+                    text: "   ",
+                    attachments: [
+                        AttachmentDraftViewState(
+                            id: "link_1",
+                            kind: .link,
+                            displayName: "example.com",
+                            localPath: nil,
+                            urlString: "https://example.com",
+                            mimeType: nil,
+                            byteCount: nil
+                        ),
+                    ]
+                ),
+                currentSessionId: "session_1"
+            )
+        )
+
+        await viewModel.send()
+
+        #expect(await service.sentTexts == [""])
+    }
+
     @Test("send applies streamed event before final state")
     func sendAppliesStreamedEventBeforeFinalState() async {
         let service = StreamingViewModelServiceStub()
@@ -63,6 +93,45 @@ struct AgentViewModelTests {
 
         #expect(viewModel.state.messages.map(\.text) == ["final"])
     }
+
+    @Test("streamed user message preserves visible attachments")
+    func streamedUserMessagePreservesVisibleAttachments() async {
+        let service = AttachmentStreamingViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(
+                phase: .ready,
+                draft: UserDraftViewState(
+                    text: "hello",
+                    attachments: [
+                        AttachmentDraftViewState(
+                            id: "link_1",
+                            kind: .link,
+                            displayName: "example.com",
+                            localPath: nil,
+                            urlString: "https://example.com",
+                            mimeType: nil,
+                            byteCount: nil
+                        ),
+                    ]
+                ),
+                currentSessionId: "session_1"
+            )
+        )
+
+        let sendTask = Task {
+            await viewModel.send()
+        }
+        await service.waitForStreamedEvent()
+
+        #expect(viewModel.state.draft.attachments.isEmpty)
+        #expect(viewModel.state.messages.first?.text == "hello")
+        #expect(viewModel.state.messages.first?.attachments.count == 1)
+
+        await service.releaseFinalState()
+        await sendTask.value
+    }
+
 
     @Test("send failure marks streamed partial output failed")
     func sendFailureMarksStreamedPartialOutputFailed() async {
@@ -153,6 +222,109 @@ struct AgentViewModelTests {
 
         #expect(await service.didContinueGeneration)
     }
+
+    @Test("add link appends draft attachment")
+    func addLinkAppendsDraftAttachment() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addLink("https://example.com/path")
+
+        #expect(viewModel.state.draft.attachments.count == 1)
+        #expect(viewModel.state.draft.attachments[0].kind == .link)
+        #expect(viewModel.state.draft.attachments[0].displayName == "example.com")
+        #expect(viewModel.state.draft.attachments[0].urlString == "https://example.com/path")
+    }
+
+    @Test("invalid link reports error")
+    func invalidLinkReportsError() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addLink("https://")
+
+        #expect(viewModel.state.draft.attachments.isEmpty)
+        #expect(viewModel.state.errorMessage == "Enter a valid http or https URL.")
+    }
+
+    @Test("add image writes draft attachment")
+    func addImageWritesDraftAttachment() async throws {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addImage(data: Data([1, 2, 3]), suggestedName: "photo.png", mimeType: "image/png")
+
+        let attachment = try #require(viewModel.state.draft.attachments.first)
+        #expect(attachment.kind == .image)
+        #expect(attachment.displayName == "photo.png")
+        #expect(attachment.mimeType == "image/png")
+        #expect(attachment.byteCount == 3)
+        #expect(attachment.localPath != nil)
+        let localPath = try #require(attachment.localPath)
+        #expect(FileManager.default.contents(atPath: localPath) == Data([1, 2, 3]))
+    }
+
+    @Test("unsupported image type reports error")
+    func unsupportedImageTypeReportsError() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addImage(data: Data([1, 2, 3]), suggestedName: "note.txt", mimeType: "text/plain")
+
+        #expect(viewModel.state.draft.attachments.isEmpty)
+        #expect(viewModel.state.errorMessage == "Only image attachments are supported.")
+    }
+
+    @Test("remove attachment deletes matching draft")
+    func removeAttachmentDeletesMatchingDraft() async throws {
+        let directory = attachmentTestDirectory()
+        let service = ViewModelServiceStub()
+        let attachmentService = AttachmentService(directory: directory)
+        let draft = try await attachmentService.imageDraft(
+            data: Data([1, 2, 3]),
+            suggestedName: "photo.png",
+            mimeType: "image/png"
+        )
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: attachmentService,
+            initialState: AgentViewState(
+                phase: .ready,
+                draft: UserDraftViewState(
+                    attachments: [draft]
+                ),
+                currentSessionId: "session_1"
+            )
+        )
+
+        await viewModel.removeAttachment(draft.id)
+
+        #expect(viewModel.state.draft.attachments.isEmpty)
+        let localPath = try #require(draft.localPath)
+        #expect(!FileManager.default.fileExists(atPath: localPath))
+    }
+}
+
+private func attachmentTestDirectory() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("LocalAgentAttachmentTests")
+        .appendingPathComponent(UUID().uuidString)
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {
@@ -264,6 +436,76 @@ private actor StreamingViewModelServiceStub: AgentRuntimeServicing {
                     id: "assistant_final",
                     role: .assistant,
                     text: "final",
+                    isStreaming: false
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+    }
+
+    func waitForStreamedEvent() async {
+        if didStreamEvent {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            streamedEventContinuation = continuation
+        }
+    }
+
+    func releaseFinalState() {
+        canReturnFinalState = true
+        finalStateContinuation?.resume()
+        finalStateContinuation = nil
+    }
+
+    func cancel(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+}
+
+private actor AttachmentStreamingViewModelServiceStub: AgentRuntimeServicing {
+    private var streamedEventContinuation: CheckedContinuation<Void, Never>?
+    private var finalStateContinuation: CheckedContinuation<Void, Never>?
+    private var didStreamEvent = false
+    private var canReturnFinalState = false
+
+    func prepare() async throws -> AgentViewState {
+        AgentViewState(phase: .ready, currentSessionId: "session_1")
+    }
+
+    func sendMessage(
+        _ text: String,
+        state: AgentViewState,
+        onEvent: @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws -> AgentViewState {
+        await onEvent(RuntimeEventDTO(
+            id: "user_1",
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_1",
+            sequence: 1,
+            depth: 0,
+            kind: .userMessage,
+            payload: "hello\nLink: https://example.com",
+            blobRefs: []
+        ))
+        didStreamEvent = true
+        streamedEventContinuation?.resume()
+        streamedEventContinuation = nil
+
+        if !canReturnFinalState {
+            await withCheckedContinuation { continuation in
+                finalStateContinuation = continuation
+            }
+        }
+
+        return AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(
+                    id: "user_1",
+                    role: .user,
+                    text: "hello",
                     isStreaming: false
                 ),
             ],

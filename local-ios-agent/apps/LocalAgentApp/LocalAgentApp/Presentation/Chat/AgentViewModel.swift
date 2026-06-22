@@ -1,4 +1,5 @@
 import Foundation
+import LocalAgentBridge
 import Observation
 
 @MainActor
@@ -7,9 +8,15 @@ final class AgentViewModel {
     var state: AgentViewState
 
     private let service: any AgentRuntimeServicing
+    private let attachmentService: AttachmentService
 
-    init(service: any AgentRuntimeServicing, initialState: AgentViewState = AgentViewState()) {
+    init(
+        service: any AgentRuntimeServicing,
+        attachmentService: AttachmentService = AttachmentService(),
+        initialState: AgentViewState = AgentViewState()
+    ) {
         self.service = service
+        self.attachmentService = attachmentService
         self.state = initialState
     }
 
@@ -23,19 +30,28 @@ final class AgentViewModel {
 
     func send() async {
         let text = state.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !state.phase.isRunning else {
+        guard (!text.isEmpty || !state.draft.attachments.isEmpty), !state.phase.isRunning else {
             return
         }
 
+        let draftForSend = state.draft
+        var serviceState = state
+        serviceState.draft = draftForSend
         state.draftText = ""
+        state.draft.attachments.removeAll()
         state.errorMessage = nil
         do {
-            state = try await service.sendMessage(text, state: state) { [weak self] event in
+            state = try await service.sendMessage(text, state: serviceState) { [weak self] event in
                 await MainActor.run {
                     guard let self else {
                         return
                     }
                     RuntimeEventReducer.apply(event, to: &self.state)
+                    self.reconcileStreamedUserMessage(
+                        event,
+                        originalText: text,
+                        draft: draftForSend
+                    )
                 }
             }
         } catch {
@@ -111,10 +127,58 @@ final class AgentViewModel {
         }
     }
 
+    func addLink(_ rawValue: String) async {
+        do {
+            let draft = try await attachmentService.linkDraft(from: rawValue)
+            state.draft.attachments.append(draft)
+            state.errorMessage = nil
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func addImage(data: Data, suggestedName: String, mimeType: String) async {
+        do {
+            let draft = try await attachmentService.imageDraft(
+                data: data,
+                suggestedName: suggestedName,
+                mimeType: mimeType
+            )
+            state.draft.attachments.append(draft)
+            state.errorMessage = nil
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeAttachment(_ id: String) async {
+        guard let attachment = state.draft.attachments.first(where: { $0.id == id }) else {
+            return
+        }
+        state.draft.attachments.removeAll { $0.id == id }
+        await attachmentService.removeDraft(attachment)
+    }
+
     private func markRunFailed(_ message: String) {
         state.finishStreamingMessages(as: .failed(message))
         state.lastTerminalReason = .failed(message)
         state.phase = .failed(message: message)
         state.errorMessage = message
+    }
+
+    private func reconcileStreamedUserMessage(
+        _ event: RuntimeEventDTO,
+        originalText: String,
+        draft: UserDraftViewState
+    ) {
+        guard event.kind == .userMessage, !draft.attachments.isEmpty else {
+            return
+        }
+        guard let index = state.messages.firstIndex(where: { $0.id == event.id }) else {
+            return
+        }
+
+        state.messages[index].text = originalText
+        state.messages[index].attachments = draft.attachments.map { AttachmentViewState(draft: $0) }
     }
 }

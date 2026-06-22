@@ -33,6 +33,7 @@
 		0A0000010000000000000018 /* ConversationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010F /* ConversationService.swift */; };
 		0A0000010000000000000019 /* MessageContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000118 /* MessageContentView.swift */; };
 		0A000001000000000000001A /* ConversationListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000119 /* ConversationListView.swift */; };
+		0A000001000000000000001B /* AttachmentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011A /* AttachmentService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
 		0A0000010000000000000119 /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
+		0A000001000000000000011A /* AttachmentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -151,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
+				0A000001000000000000011A /* AttachmentService.swift */,
 				0A000001000000000000010F /* ConversationService.swift */,
 				0A000001000000000000010E /* RuntimeStreamBuffer.swift */,
 			);
@@ -388,6 +391,7 @@
 				0A0000010000000000000018 /* ConversationService.swift in Sources */,
 				0A0000010000000000000019 /* MessageContentView.swift in Sources */,
 				0A000001000000000000001A /* ConversationListView.swift in Sources */,
+				0A000001000000000000001B /* AttachmentService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

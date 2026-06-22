@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -6,6 +7,9 @@ struct ChatView: View {
     @State private var scrollProxy: ScrollViewProxy?
     @State private var editingMessage: AgentMessageViewState?
     @State private var editText = ""
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isAddingLink = false
+    @State private var linkText = ""
 
     var body: some View {
         NavigationStack {
@@ -104,6 +108,28 @@ struct ChatView: View {
                 editText = ""
             }
         }
+        .alert("Add Link", isPresented: $isAddingLink) {
+            TextField("URL", text: $linkText)
+            Button("Add") {
+                let rawValue = linkText
+                linkText = ""
+                Task {
+                    await viewModel.addLink(rawValue)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                linkText = ""
+            }
+        }
+        .onChange(of: selectedPhotoItem) {
+            guard let selectedPhotoItem else {
+                return
+            }
+            Task {
+                await loadSelectedPhoto(selectedPhotoItem)
+                self.selectedPhotoItem = nil
+            }
+        }
     }
 
     private var messageList: some View {
@@ -176,7 +202,38 @@ struct ChatView: View {
         VStack(spacing: 0) {
             Divider()
 
+            if !viewModel.state.draft.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(viewModel.state.draft.attachments) { attachment in
+                            DraftAttachmentChip(attachment: attachment) {
+                                Task { await viewModel.removeAttachment(attachment.id) }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                }
+            }
+
             HStack(alignment: .bottom, spacing: 12) {
+                Menu {
+                    Button {
+                        isAddingLink = true
+                    } label: {
+                        Label("Link", systemImage: "link")
+                    }
+
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        Label("Photo", systemImage: "photo")
+                    }
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                }
+                .disabled(viewModel.state.phase.isRunning)
+
                 TextField("Message Local Agent", text: $viewModel.state.draftText, axis: .vertical)
                     .font(.body)
                     .padding(.horizontal, 16)
@@ -235,7 +292,10 @@ struct ChatView: View {
     }
 
     private var isSendDisabled: Bool {
-        viewModel.state.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.state.phase.isRunning
+        (
+            viewModel.state.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && viewModel.state.draft.attachments.isEmpty
+        ) || viewModel.state.phase.isRunning
     }
 
     private var providerMenu: some View {
@@ -277,6 +337,44 @@ struct ChatView: View {
         case .running: return "Thinking"
         case .failed: return "Disconnected"
         }
+    }
+
+    private func loadSelectedPhoto(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            viewModel.state.errorMessage = "Unable to load selected photo."
+            return
+        }
+
+        let contentType = item.supportedContentTypes.first
+        let filenameExtension = contentType?.preferredFilenameExtension ?? "jpg"
+        await viewModel.addImage(
+            data: data,
+            suggestedName: "photo.\(filenameExtension)",
+            mimeType: contentType?.preferredMIMEType ?? "image/jpeg"
+        )
+    }
+}
+
+private struct DraftAttachmentChip: View {
+    let attachment: AttachmentDraftViewState
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: attachment.kind == .image ? "photo" : "link")
+            Text(attachment.displayName)
+                .lineLimit(1)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.footnote)
+        .padding(.vertical, 6)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .background(Color(.secondarySystemBackground), in: Capsule())
     }
 }
 
