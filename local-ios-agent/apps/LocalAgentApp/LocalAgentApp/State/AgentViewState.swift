@@ -144,22 +144,50 @@ struct ProviderSelectionViewState: Equatable, Sendable {
     }
 }
 
+struct ConversationSummaryViewState: Equatable, Identifiable, Sendable {
+    var id: String { sessionId }
+
+    let sessionId: String
+    var title: String
+    var activeLeafId: String?
+    var lastEventId: String?
+    var lastUpdatedSequence: UInt64
+}
+
+struct ConversationListViewState: Equatable, Sendable {
+    var conversations: [ConversationSummaryViewState]
+    var isPresented: Bool
+    var errorMessage: String?
+
+    init(
+        conversations: [ConversationSummaryViewState] = [],
+        isPresented: Bool = false,
+        errorMessage: String? = nil
+    ) {
+        self.conversations = conversations
+        self.isPresented = isPresented
+        self.errorMessage = errorMessage
+    }
+}
+
 struct AgentViewState: Equatable, Sendable {
     var phase: AppRuntimePhase
     var messages: [AgentMessageViewState]
-    var draft: String
+    var draft: UserDraftViewState
     var currentSessionId: String?
     var errorMessage: String?
     var provider: ProviderSelectionViewState
+    var conversations: ConversationListViewState
     var lastTerminalReason: RunTerminalReason?
 
     init(
         phase: AppRuntimePhase = .booting,
         messages: [AgentMessageViewState] = [],
-        draft: String = "",
+        draft: UserDraftViewState = UserDraftViewState(),
         currentSessionId: String? = nil,
         errorMessage: String? = nil,
         provider: ProviderSelectionViewState = ProviderSelectionViewState(),
+        conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil
     ) {
         self.phase = phase
@@ -168,7 +196,35 @@ struct AgentViewState: Equatable, Sendable {
         self.currentSessionId = currentSessionId
         self.errorMessage = errorMessage
         self.provider = provider
+        self.conversations = conversations
         self.lastTerminalReason = lastTerminalReason
+    }
+
+    init(
+        phase: AppRuntimePhase = .booting,
+        messages: [AgentMessageViewState] = [],
+        draft: String,
+        currentSessionId: String? = nil,
+        errorMessage: String? = nil,
+        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
+        conversations: ConversationListViewState = ConversationListViewState(),
+        lastTerminalReason: RunTerminalReason? = nil
+    ) {
+        self.init(
+            phase: phase,
+            messages: messages,
+            draft: UserDraftViewState(text: draft),
+            currentSessionId: currentSessionId,
+            errorMessage: errorMessage,
+            provider: provider,
+            conversations: conversations,
+            lastTerminalReason: lastTerminalReason
+        )
+    }
+
+    var draftText: String {
+        get { draft.text }
+        set { draft.text = newValue }
     }
 
     mutating func finishStreamingMessages(as terminalState: MessageStreamingState) {

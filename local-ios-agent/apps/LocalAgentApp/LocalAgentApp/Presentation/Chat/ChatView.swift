@@ -93,7 +93,7 @@ struct ChatView: View {
                 scrollToBottom()
             }
             // 监听键盘弹出导致的排版变化，确保最后一条消息可见
-            .onChange(of: viewModel.state.draft) {
+            .onChange(of: viewModel.state.draftText) {
                 scrollToBottom()
             }
         }
@@ -129,7 +129,7 @@ struct ChatView: View {
             
             HStack(alignment: .bottom, spacing: 12) {
                 // 输入框：模仿 iMessage 的胶囊样式
-                TextField("iMessage", text: $viewModel.state.draft, axis: .vertical)
+                TextField("iMessage", text: $viewModel.state.draftText, axis: .vertical)
                     .font(.body)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -165,7 +165,7 @@ struct ChatView: View {
     // MARK: - Helpers
     
     private var isSendDisabled: Bool {
-        viewModel.state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.state.phase.isRunning
+        viewModel.state.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.state.phase.isRunning
     }
 
     private var providerMenu: some View {

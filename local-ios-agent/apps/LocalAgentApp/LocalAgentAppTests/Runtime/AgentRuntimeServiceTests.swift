@@ -52,6 +52,87 @@ struct AgentRuntimeServiceTests {
         #expect(state.provider.active?.id == "local_llm")
     }
 
+    @Test("new chat creates a fresh ready session")
+    func newChatCreatesFreshReadySession() async throws {
+        let client = ScriptedRuntimeClient()
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        var state = try await service.prepare()
+        state.messages = [
+            AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false),
+        ]
+
+        let nextState = try await service.newChat(state: state)
+
+        #expect(nextState.phase == .ready)
+        #expect(nextState.currentSessionId == "session_2")
+        #expect(nextState.messages.isEmpty)
+    }
+
+    @Test("load conversations projects runtime summaries")
+    func loadConversationsProjectsRuntimeSummaries() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setConversationSummariesForTest([
+            ConversationSummaryDTO(
+                sessionId: "session_2",
+                title: "Second chat",
+                activeLeafId: "leaf_2",
+                lastEventId: "event_2",
+                lastUpdatedSequence: 4
+            ),
+            ConversationSummaryDTO(
+                sessionId: "session_1",
+                title: "First chat",
+                activeLeafId: "leaf_1",
+                lastEventId: "event_1",
+                lastUpdatedSequence: 2
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.loadConversations(
+            state: AgentViewState(phase: .ready, currentSessionId: "session_2")
+        )
+
+        #expect(state.conversations.conversations.map(\.sessionId) == ["session_2", "session_1"])
+        #expect(state.conversations.conversations.first?.title == "Second chat")
+        #expect(state.conversations.conversations.first?.activeLeafId == "leaf_2")
+    }
+
+    @Test("select conversation loads active branch events")
+    func selectConversationLoadsActiveBranchEvents() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setActiveBranchForTest(
+            sessionId: "session_2",
+            leafId: nil,
+            events: [
+                event(id: "user_2", sessionId: "session_2", kind: .userMessage, payload: "hi", runId: "run_2"),
+                event(
+                    id: "assistant_2",
+                    sessionId: "session_2",
+                    kind: .assistantMessageCompleted,
+                    payload: "there",
+                    runId: "run_2"
+                ),
+            ]
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        let state = try await service.selectConversation(
+            sessionId: "session_2",
+            state: AgentViewState(
+                phase: .ready,
+                messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
+                currentSessionId: "session_1"
+            )
+        )
+
+        #expect(await client.activeBranchRequests == [
+            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_2", leafId: nil),
+        ])
+        #expect(state.currentSessionId == "session_2")
+        #expect(state.messages.map(\.text) == ["hi", "there"])
+    }
+
     @Test("send applies completed mock chat events")
     func sendAppliesCompletedMockChatEvents() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
@@ -76,6 +157,29 @@ struct AgentRuntimeServiceTests {
         #expect(await client.sentMessages.map(\.text) == ["hello"])
         #expect(state.phase == .ready)
         #expect(state.messages.map(\.text) == ["hello", "Mock response to: hello"])
+    }
+
+    @Test("send uses draft target parent event id for forked turns")
+    func sendUsesDraftTargetParentEventIdForForkedTurns() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_1", kind: .userMessage, payload: "forked"),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "branched"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.targetParentEventId = "entry_4"
+        state = try await service.sendMessage("forked", state: state)
+
+        #expect(await client.sentMessages.map(\.parentEventId) == ["entry_4"])
+        #expect(state.draft.targetParentEventId == nil)
     }
 
     @Test("streamed delta is delivered before final turn result")
@@ -401,14 +505,16 @@ struct AgentRuntimeServiceTests {
 
     private func event(
         id: String,
+        sessionId: String = "session_1",
+        parentId: String? = nil,
         kind: RuntimeEventKindDTO,
         payload: String,
         runId: String = "run_1"
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
-            sessionId: "session_1",
-            parentId: nil,
+            sessionId: sessionId,
+            parentId: parentId,
             runId: runId,
             sequence: 1,
             depth: 0,
@@ -1079,7 +1185,7 @@ private actor BlockingSendRuntimeClient: RuntimeClient {
     }
 }
 
-private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient {
+private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient {
     struct SentMessage: Equatable, Sendable {
         var sessionId: String
         var parentEventId: String?
@@ -1096,17 +1202,25 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
         var providerId: String
     }
 
+    struct ActiveBranchRequest: Equatable, Sendable {
+        var sessionId: String
+        var leafId: String?
+    }
+
     private var sessionCount = 0
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
     private var pendingRequests: [ToolExecutionRequestDTO]
     private var providerProfilesForTest: [ProviderProfileDTO]
     private var activeProviderForTest: ProviderProfileDTO
+    private var conversationSummariesForTest: [ConversationSummaryDTO] = []
+    private var activeBranchEventsForTest: [String: [RuntimeEventDTO]] = [:]
 
     private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     private(set) var sentMessages: [SentMessage] = []
     private(set) var submittedToolResults: [SubmittedToolResult] = []
     private(set) var selectedProviders: [SelectedProvider] = []
+    private(set) var activeBranchRequests: [ActiveBranchRequest] = []
 
     init(
         sendTurns: [AgentTurnResultDTO] = [],
@@ -1136,6 +1250,18 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
 
     func setActiveProviderForTest(_ profile: ProviderProfileDTO) {
         activeProviderForTest = profile
+    }
+
+    func setConversationSummariesForTest(_ summaries: [ConversationSummaryDTO]) {
+        conversationSummariesForTest = summaries
+    }
+
+    func setActiveBranchForTest(
+        sessionId: String,
+        leafId: String?,
+        events: [RuntimeEventDTO]
+    ) {
+        activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] = events
     }
 
     func createSession() async throws -> String {
@@ -1221,5 +1347,18 @@ private actor ScriptedRuntimeClient: RuntimeClient, ProviderControllingRuntimeCl
             payload: #"{"provider_id":"\#(providerId)"}"#,
             blobRefs: []
         )
+    }
+
+    func conversationSummaries() async throws -> [ConversationSummaryDTO] {
+        conversationSummariesForTest
+    }
+
+    func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
+        activeBranchRequests.append(ActiveBranchRequest(sessionId: sessionId, leafId: leafId))
+        return activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] ?? []
+    }
+
+    private func activeBranchKey(sessionId: String, leafId: String?) -> String {
+        "\(sessionId)#\(leafId ?? "")"
     }
 }

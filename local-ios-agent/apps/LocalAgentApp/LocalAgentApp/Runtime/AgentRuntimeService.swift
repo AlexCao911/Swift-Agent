@@ -9,6 +9,9 @@ protocol AgentRuntimeServicing: Sendable {
     ) async throws -> AgentViewState
     func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState
     func cancel(state: AgentViewState) async throws -> AgentViewState
+    func newChat(state: AgentViewState) async throws -> AgentViewState
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
 }
 
 extension AgentRuntimeServicing {
@@ -17,6 +20,18 @@ extension AgentRuntimeServicing {
     }
 
     func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func newChat(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 }
@@ -59,7 +74,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             let ids = try await runtimeClient.sessionIds()
             var state = AgentViewState(phase: .ready, currentSessionId: ids.last)
             try await loadProviderState(into: &state)
-            return state
+            return try await loadConversations(state: state)
         }
 
         try await runtimeClient.registerToolSchema(toolDriver.schema)
@@ -67,7 +82,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         hasPrepared = true
         var state = AgentViewState(phase: .ready, currentSessionId: sessionId)
         try await loadProviderState(into: &state)
-        return state
+        return try await loadConversations(state: state)
     }
 
     func sendMessage(
@@ -84,6 +99,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         var nextState = state
+        let parentEventId = state.draft.targetParentEventId
         let sessionId: String
         if let existing = state.currentSessionId {
             sessionId = existing
@@ -95,7 +111,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
             let stream = streamingClient.sendMessageStream(
                 sessionId: sessionId,
-                parentEventId: nil,
+                parentEventId: parentEventId,
                 text: text
             )
             var streamedEventIds = Set<String>()
@@ -107,6 +123,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
             activeRun = .running(initialTurn.runId)
             nextState.phase = .running(runId: initialTurn.runId)
+            nextState.draft.targetParentEventId = nil
             apply(initialTurn.events, to: &nextState, skipping: streamedEventIds)
 
             return try await continueToolsIfNeeded(
@@ -119,11 +136,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
         let initialTurn = try await runtimeClient.sendMessage(
             sessionId: sessionId,
-            parentEventId: nil,
+            parentEventId: parentEventId,
             text: text
         )
         activeRun = .running(initialTurn.runId)
         nextState.phase = .running(runId: initialTurn.runId)
+        nextState.draft.targetParentEventId = nil
         apply(initialTurn.events, to: &nextState)
 
         return try await continueToolsIfNeeded(
@@ -170,6 +188,47 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             providerId: providerId
         )
         RuntimeEventReducer.apply(event, to: &nextState)
+        try await loadProviderState(into: &nextState)
+        return nextState
+    }
+
+    func newChat(state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+
+        let sessionId = try await runtimeClient.createSession()
+        var nextState = AgentViewState(phase: .ready, currentSessionId: sessionId)
+        try await loadProviderState(into: &nextState)
+        return try await loadConversations(state: nextState)
+    }
+
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        var nextState = state
+        let summaries = try await conversationClient.conversationSummaries()
+        nextState.conversations.conversations = ConversationService.projectSummaries(summaries)
+        nextState.conversations.errorMessage = nil
+        return nextState
+    }
+
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: nil)
+        var nextState = ConversationService.replayActiveBranch(
+            sessionId: sessionId,
+            events: events,
+            from: state
+        )
         try await loadProviderState(into: &nextState)
         return nextState
     }

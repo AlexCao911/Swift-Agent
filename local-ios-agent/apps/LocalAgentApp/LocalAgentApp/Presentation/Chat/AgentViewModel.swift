@@ -22,12 +22,12 @@ final class AgentViewModel {
     }
 
     func send() async {
-        let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = state.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !state.phase.isRunning else {
             return
         }
 
-        state.draft = ""
+        state.draftText = ""
         state.errorMessage = nil
         do {
             state = try await service.sendMessage(text, state: state) { [weak self] event in
@@ -57,6 +57,34 @@ final class AgentViewModel {
         } catch {
             state.provider.errorMessage = error.localizedDescription
         }
+    }
+
+    func newChat() async {
+        do {
+            state = try await service.newChat(state: state)
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadConversations() async {
+        do {
+            state = try await service.loadConversations(state: state)
+        } catch {
+            state.conversations.errorMessage = error.localizedDescription
+        }
+    }
+
+    func selectConversation(_ sessionId: String) async {
+        do {
+            state = try await service.selectConversation(sessionId: sessionId, state: state)
+        } catch {
+            state.conversations.errorMessage = error.localizedDescription
+        }
+    }
+
+    func forkFromMessage(_ messageId: String) async {
+        state.draft.targetParentEventId = messageId
     }
 
     private func markRunFailed(_ message: String) {

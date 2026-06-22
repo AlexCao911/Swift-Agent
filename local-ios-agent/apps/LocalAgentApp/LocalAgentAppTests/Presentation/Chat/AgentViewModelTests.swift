@@ -17,7 +17,7 @@ struct AgentViewModelTests {
         await viewModel.send()
 
         #expect(await service.sentTexts.isEmpty)
-        #expect(viewModel.state.draft == "   ")
+        #expect(viewModel.state.draftText == "   ")
     }
 
     @Test("successful send trims draft and updates state")
@@ -39,7 +39,7 @@ struct AgentViewModelTests {
         await viewModel.send()
 
         #expect(await service.sentTexts == ["hello"])
-        #expect(viewModel.state.draft == "")
+        #expect(viewModel.state.draftText == "")
         #expect(viewModel.state.messages.map(\.text) == ["hello"])
     }
 
@@ -93,20 +93,58 @@ struct AgentViewModelTests {
 
         #expect(await service.selectedProviderIds == ["local_llm"])
     }
+
+    @Test("new chat delegates to service and clears messages")
+    func newChatDelegatesToService() async {
+        let service = ViewModelServiceStub(
+            newChatState: AgentViewState(phase: .ready, messages: [], currentSessionId: "session_2")
+        )
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(
+                phase: .ready,
+                messages: [AgentMessageViewState(id: "user_1", role: .user, text: "old", isStreaming: false)],
+                currentSessionId: "session_1"
+            )
+        )
+
+        await viewModel.newChat()
+
+        #expect(await service.didCreateNewChat)
+        #expect(viewModel.state.currentSessionId == "session_2")
+        #expect(viewModel.state.messages.isEmpty)
+    }
+
+    @Test("fork from message stores target parent event id")
+    func forkFromMessageStoresParent() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.forkFromMessage("entry_4")
+
+        #expect(viewModel.state.draft.targetParentEventId == "entry_4")
+    }
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {
     var sentTexts: [String] = []
     var selectedProviderIds: [String] = []
+    var didCreateNewChat = false
     private let preparedState: AgentViewState
     private let sentState: AgentViewState
+    private let newChatState: AgentViewState
 
     init(
         preparedState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_1"),
-        sentState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_1")
+        sentState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_1"),
+        newChatState: AgentViewState = AgentViewState(phase: .ready, messages: [], currentSessionId: "session_2")
     ) {
         self.preparedState = preparedState
         self.sentState = sentState
+        self.newChatState = newChatState
     }
 
     func prepare() async throws -> AgentViewState {
@@ -129,6 +167,19 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
     func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
         selectedProviderIds.append(providerId)
         return state
+    }
+
+    func newChat(state: AgentViewState) async throws -> AgentViewState {
+        didCreateNewChat = true
+        return newChatState
+    }
+
+    func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
     }
 }
 
