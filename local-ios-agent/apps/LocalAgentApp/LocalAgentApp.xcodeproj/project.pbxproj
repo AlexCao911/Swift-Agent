@@ -31,6 +31,8 @@
 		0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */; };
 		0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010E /* RuntimeStreamBuffer.swift */; };
 		0A0000010000000000000018 /* ConversationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010F /* ConversationService.swift */; };
+		0A0000010000000000000019 /* MessageContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000118 /* MessageContentView.swift */; };
+		0A000001000000000000001A /* ConversationListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000119 /* ConversationListView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,6 +70,8 @@
 		0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustRuntimeAppIntegrationTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
+		0A0000010000000000000119 /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -185,6 +189,8 @@
 			children = (
 				0A0000010000000000000104 /* AgentViewModel.swift */,
 				0A0000010000000000000109 /* ChatView.swift */,
+				0A0000010000000000000119 /* ConversationListView.swift */,
+				0A0000010000000000000118 /* MessageContentView.swift */,
 			);
 			path = Chat;
 			sourceTree = "<group>";
@@ -380,6 +386,8 @@
 				0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */,
 				0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */,
 				0A0000010000000000000018 /* ConversationService.swift in Sources */,
+				0A0000010000000000000019 /* MessageContentView.swift in Sources */,
+				0A000001000000000000001A /* ConversationListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
