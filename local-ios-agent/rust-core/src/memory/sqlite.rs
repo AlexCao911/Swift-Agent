@@ -68,7 +68,8 @@ impl SqliteEventStore {
 
                 create table if not exists sessions (
                   id text primary key,
-                  active_leaf_id text
+                  active_leaf_id text,
+                  archived integer not null default 0
                 );
 
                 create table if not exists events (
@@ -145,12 +146,32 @@ impl SqliteEventStore {
             )
             .map_err(storage_error)?;
 
+        self.ensure_sessions_archived_column()?;
+
         let version = self.schema_version()?;
         if version != 1 {
             return Err(AgentError::Storage(format!(
                 "unsupported sqlite schema version: {version}"
             )));
         }
+        Ok(())
+    }
+
+    fn ensure_sessions_archived_column(&self) -> Result<(), AgentError> {
+        if self
+            .conn
+            .prepare("select archived from sessions limit 0")
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        self.conn
+            .execute(
+                "alter table sessions add column archived integer not null default 0",
+                [],
+            )
+            .map_err(storage_error)?;
         Ok(())
     }
 
@@ -462,9 +483,11 @@ impl EventStore for SqliteEventStore {
         let tx = self.conn.transaction().map_err(storage_error)?;
         tx.execute(
             "
-            insert into sessions(id, active_leaf_id)
-            values (?1, ?2)
-            on conflict(id) do update set active_leaf_id = excluded.active_leaf_id
+            insert into sessions(id, active_leaf_id, archived)
+            values (?1, ?2, 0)
+            on conflict(id) do update set
+              active_leaf_id = excluded.active_leaf_id,
+              archived = 0
             ",
             params![event.session_id.0, event.id.0],
         )
@@ -618,6 +641,22 @@ impl EventStore for SqliteEventStore {
     fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
         let mut statement = self
             .conn
+            .prepare("select id from sessions where archived = 0 order by id")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(SessionId(row.map_err(storage_error)?));
+        }
+        Ok(sessions)
+    }
+
+    fn list_all_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        let mut statement = self
+            .conn
             .prepare("select id from sessions order by id")
             .map_err(storage_error)?;
         let rows = statement
@@ -673,6 +712,54 @@ impl EventStore for SqliteEventStore {
             }
             None => Ok(None),
         }
+    }
+
+    fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        let changed = self
+            .conn
+            .execute(
+                "update sessions set archived = 1 where id = ?1",
+                params![session_id.0.as_str()],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(AgentError::Storage(format!(
+                "session not found: {}",
+                session_id.0
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        let tx = self.conn.transaction().map_err(storage_error)?;
+        tx.execute(
+            "delete from branch_summaries where session_id = ?1",
+            params![session_id.0.as_str()],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "delete from audit_log where session_id = ?1",
+            params![session_id.0.as_str()],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "delete from event_paths where session_id = ?1",
+            params![session_id.0.as_str()],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "delete from events where session_id = ?1",
+            params![session_id.0.as_str()],
+        )
+        .map_err(storage_error)?;
+        tx.execute(
+            "delete from sessions where id = ?1",
+            params![session_id.0.as_str()],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(())
     }
 
     fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError> {

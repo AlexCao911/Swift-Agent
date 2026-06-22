@@ -115,13 +115,45 @@ fn runtime_replays_sessions_from_sqlite() {
     let store = SqliteEventStore::open(&db_path).unwrap();
     let runtime = AgentRuntime::with_store(config(), store).unwrap();
 
-    assert!(runtime.session_ids().contains(&session_id));
+    assert!(runtime.session_ids().unwrap().contains(&session_id));
     let replayed = runtime.active_branch_events(&session_id, None).unwrap();
     let user_event = replayed
         .iter()
         .find(|event| event.kind == EventKind::UserMessage)
         .unwrap();
     assert_eq!(user_event.blob_refs, blob_refs);
+}
+
+#[test]
+fn runtime_replay_seeds_ids_from_archived_sqlite_sessions() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let archived_session_id = {
+        let store = SqliteEventStore::open(&db_path).unwrap();
+        let mut runtime = AgentRuntime::with_store(config(), store).unwrap();
+        let session_id = runtime.create_session().unwrap();
+        runtime
+            .send_message(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "archive me".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+        runtime.archive_session(&session_id).unwrap();
+        session_id
+    };
+
+    let store = SqliteEventStore::open(&db_path).unwrap();
+    let mut runtime = AgentRuntime::with_store(config(), store).unwrap();
+    let next_session_id = runtime.create_session().unwrap();
+
+    assert_ne!(next_session_id, archived_session_id);
+    assert!(!runtime
+        .session_ids()
+        .unwrap()
+        .contains(&archived_session_id));
+    assert!(runtime.session_ids().unwrap().contains(&next_session_id));
 }
 
 #[test]
@@ -149,7 +181,7 @@ fn runtime_replays_waiting_tool_run_and_pending_request_from_sqlite() {
     let store = SqliteEventStore::open(&db_path).unwrap();
     let mut runtime = AgentRuntime::with_store(tool_config(), store).unwrap();
 
-    assert!(runtime.session_ids().contains(&session_id));
+    assert!(runtime.session_ids().unwrap().contains(&session_id));
     assert_eq!(runtime.pending_tool_requests().len(), 1);
     assert_eq!(runtime.pending_tool_requests()[0].run_id.0, run_id);
     assert_eq!(runtime.pending_tool_requests()[0].tool_name, "debug.echo");
@@ -191,7 +223,7 @@ fn runtime_replays_suspended_approval_from_sqlite() {
     let store = SqliteEventStore::open(&db_path).unwrap();
     let runtime = AgentRuntime::with_store(confirm_tool_config(), store).unwrap();
 
-    assert!(runtime.session_ids().contains(&session_id));
+    assert!(runtime.session_ids().unwrap().contains(&session_id));
     assert!(runtime.pending_tool_requests().is_empty());
     assert_eq!(runtime.pending_approval_requests().len(), 1);
     assert_eq!(

@@ -11,7 +11,9 @@ protocol AgentRuntimeServicing: Sendable {
     func cancel(state: AgentViewState) async throws -> AgentViewState
     func newChat(state: AgentViewState) async throws -> AgentViewState
     func loadConversations(state: AgentViewState) async throws -> AgentViewState
-    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func selectConversation(sessionId: String, leafId: String?, state: AgentViewState) async throws -> AgentViewState
+    func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
     func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState
     func continueGeneration(state: AgentViewState) async throws -> AgentViewState
     func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState
@@ -34,7 +36,19 @@ extension AgentRuntimeServicing {
         state
     }
 
+    func selectConversation(sessionId: String, leafId: String?, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
     func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        try await selectConversation(sessionId: sessionId, leafId: nil, state: state)
+    }
+
+    func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 
@@ -55,6 +69,8 @@ enum AgentRuntimeServiceError: Error, Equatable, Sendable {
     case duplicateRun
     case missingPendingToolRequest(String)
 }
+
+private let rootParentEventId = "__local_agent_root__"
 
 private enum StreamBufferInput: Sendable {
     case event(RuntimeEventDTO)
@@ -288,7 +304,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return nextState
     }
 
-    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+    func selectConversation(sessionId: String, leafId: String?, state: AgentViewState) async throws -> AgentViewState {
         guard activeRun == nil, !state.phase.isRunning else {
             throw AgentRuntimeServiceError.duplicateRun
         }
@@ -296,7 +312,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             return state
         }
 
-        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: nil)
+        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: leafId)
         var nextState = ConversationService.replayActiveBranch(
             sessionId: sessionId,
             events: events,
@@ -306,17 +322,51 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return nextState
     }
 
+    func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        try await selectConversation(sessionId: sessionId, leafId: nil, state: state)
+    }
+
+    func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        try await conversationClient.archiveSession(sessionId: sessionId)
+        var nextState = stateAfterRemovingConversation(sessionId: sessionId, from: state)
+        try? await loadProviderState(into: &nextState)
+        return await reloadingConversationsIfPossible(state: nextState)
+    }
+
+    func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        try await conversationClient.deleteSession(sessionId: sessionId)
+        var nextState = stateAfterRemovingConversation(sessionId: sessionId, from: state)
+        try? await loadProviderState(into: &nextState)
+        return await reloadingConversationsIfPossible(state: nextState)
+    }
+
     func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
         guard let assistant = state.messages.first(where: { $0.id == messageId }),
               assistant.role == .assistant,
-              let parentId = assistant.parentId
+              let originalUserId = assistant.parentId,
+              let originalUser = state.messages.first(where: { $0.id == originalUserId && $0.role == .user })
         else {
             return state
         }
 
         var nextState = state
-        nextState.draft.targetParentEventId = parentId
-        return try await sendMessage("Please regenerate the previous answer.", state: nextState)
+        nextState.draft.targetParentEventId = originalUser.parentId ?? rootParentEventId
+        nextState.draft.attachments = originalUser.attachments.map(AttachmentDraftViewState.init(viewState:))
+        return try await sendMessage(originalUser.text, state: nextState)
     }
 
     func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
@@ -553,6 +603,33 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         state.provider.profiles = try await providerClient.providerProfiles()
         state.provider.active = try await providerClient.activeProvider()
         state.provider.errorMessage = nil
+    }
+
+    private func stateAfterRemovingConversation(
+        sessionId: String,
+        from state: AgentViewState
+    ) -> AgentViewState {
+        var nextState = state
+        nextState.conversations.conversations.removeAll { $0.sessionId == sessionId }
+        if state.currentSessionId == sessionId {
+            nextState.messages = []
+            nextState.draft = UserDraftViewState()
+            nextState.currentSessionId = nil
+            nextState.phase = .ready
+            nextState.errorMessage = nil
+            nextState.lastTerminalReason = nil
+        }
+        return nextState
+    }
+
+    private func reloadingConversationsIfPossible(state: AgentViewState) async -> AgentViewState {
+        do {
+            return try await loadConversations(state: state)
+        } catch {
+            var nextState = state
+            nextState.conversations.errorMessage = error.localizedDescription
+            return nextState
+        }
     }
 
     private func promptText(

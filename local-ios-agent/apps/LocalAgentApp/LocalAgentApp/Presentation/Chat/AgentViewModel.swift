@@ -100,8 +100,46 @@ final class AgentViewModel {
     }
 
     func forkFromMessage(_ messageId: String) async {
-        let message = state.messages.first { $0.id == messageId }
-        state.draft.targetParentEventId = message?.branchLeafId ?? messageId
+        guard let message = state.messages.first(where: { $0.id == messageId }) else {
+            return
+        }
+        let leafId = message.branchLeafId ?? message.id
+        guard let sessionId = message.sessionId ?? state.currentSessionId else {
+            state.draft.targetParentEventId = leafId
+            return
+        }
+
+        do {
+            var nextState = try await service.selectConversation(
+                sessionId: sessionId,
+                leafId: leafId,
+                state: state
+            )
+            nextState.draft.targetParentEventId = leafId
+            state = nextState
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func archiveConversation(_ sessionId: String) async {
+        do {
+            state = try await service.archiveConversation(sessionId: sessionId, state: state)
+        } catch {
+            state.conversations.errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteConversation(_ sessionId: String) async {
+        do {
+            state = try await service.deleteConversation(sessionId: sessionId, state: state)
+        } catch {
+            state.conversations.errorMessage = error.localizedDescription
+        }
+    }
+
+    func clearForkTarget() {
+        state.draft.targetParentEventId = nil
     }
 
     func regenerate(from messageId: String) async {

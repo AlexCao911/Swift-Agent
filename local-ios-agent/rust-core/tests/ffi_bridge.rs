@@ -355,6 +355,15 @@ fn bridge_exposes_conversation_summary_and_active_branch_json() {
         .unwrap()
         .iter()
         .any(|event| event["payload"] == "fork title"));
+
+    bridge.archive_session_json(session_id).unwrap();
+    assert_eq!(
+        decode(&bridge.conversation_summaries_json().unwrap()),
+        json!([])
+    );
+
+    bridge.delete_session_json(session_id).unwrap();
+    assert_eq!(decode(&bridge.session_ids_json().unwrap()), json!([]));
 }
 
 #[test]

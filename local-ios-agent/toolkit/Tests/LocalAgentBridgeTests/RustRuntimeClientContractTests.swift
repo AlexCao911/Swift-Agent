@@ -176,6 +176,8 @@ struct RustRuntimeClientContractTests {
         )
         let summaries = try await client?.conversationSummaries()
         let activeBranch = try await client?.activeBranch(sessionId: "session_1", leafId: "entry_leaf")
+        try await client?.archiveSession(sessionId: "session_1")
+        try await client?.deleteSession(sessionId: "session_1")
 
         #expect(turn?.state == .waitingTool)
         #expect(pendingTools?.first?.runId == "run_3")
@@ -211,11 +213,13 @@ struct RustRuntimeClientContractTests {
         #expect(setProvider["provider_id"] as? String == "mock")
         #expect(probe.activeBranchSessionId == "session_1")
         #expect(probe.activeBranchLeafId == "entry_leaf")
+        #expect(probe.archivedSessionId == "session_1")
+        #expect(probe.deletedSessionId == "session_1")
 
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 16)
+        #expect(probe.freedStrings == 18)
     }
 
     @Test
@@ -274,6 +278,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var setProviderJson: String?
     var activeBranchSessionId: String?
     var activeBranchLeafId: String?
+    var archivedSessionId: String?
+    var deletedSessionId: String?
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
 
@@ -286,6 +292,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             sessionIds: sessionIds,
             conversationSummaries: conversationSummaries,
             activeBranch: activeBranch,
+            archiveSession: archiveSession,
+            deleteSession: deleteSession,
             registerToolSchema: registerToolSchema,
             setPermissionState: setPermissionState,
             sendMessage: sendMessage,
@@ -358,6 +366,22 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
           "blob_refs": []
         }]
         """)
+    }
+
+    func archiveSession(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ sessionId: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        archivedSessionId = String(cString: sessionId!)
+        return makeCString("null")
+    }
+
+    func deleteSession(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ sessionId: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        deletedSessionId = String(cString: sessionId!)
+        return makeCString("null")
     }
 
     func registerToolSchema(

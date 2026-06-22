@@ -21,6 +21,7 @@ pub struct InMemoryEventStore {
     events: HashMap<(SessionId, EntryId), RuntimeEvent>,
     paths: Vec<PathRow>,
     children: HashMap<(SessionId, EntryId), HashSet<EntryId>>,
+    archived_sessions: HashSet<SessionId>,
     provider_settings: HashMap<String, ProviderSetting>,
 }
 
@@ -171,6 +172,7 @@ impl EventStore for InMemoryEventStore {
             .map(|(session_id, _)| session_id.clone())
             .collect::<HashSet<_>>()
             .into_iter()
+            .filter(|session_id| !self.archived_sessions.contains(session_id))
             .collect();
         sessions.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(sessions)
@@ -187,6 +189,31 @@ impl EventStore for InMemoryEventStore {
             .filter(|event| event.session_id == *session_id)
             .max_by_key(|event| event.sequence)
             .cloned())
+    }
+
+    fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        if !self
+            .events
+            .keys()
+            .any(|(event_session_id, _)| event_session_id == session_id)
+        {
+            return Err(AgentError::Storage(format!(
+                "session not found: {}",
+                session_id.0
+            )));
+        }
+        self.archived_sessions.insert(session_id.clone());
+        Ok(())
+    }
+
+    fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        self.events
+            .retain(|(event_session_id, _), _| event_session_id != session_id);
+        self.paths.retain(|row| row.key.session_id != *session_id);
+        self.children
+            .retain(|(child_session_id, _), _| child_session_id != session_id);
+        self.archived_sessions.remove(session_id);
+        Ok(())
     }
 
     fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError> {

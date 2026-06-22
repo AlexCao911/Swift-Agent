@@ -18,8 +18,13 @@ pub trait EventStore {
         leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError>;
     fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError>;
+    fn list_all_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
+        self.list_sessions()
+    }
     fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError>;
     fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError>;
+    fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
+    fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
     fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError>;
     fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError>;
 }

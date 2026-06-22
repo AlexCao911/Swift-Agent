@@ -142,8 +142,8 @@ impl RuntimeJsonBridge {
 
     pub fn session_ids_json(&self) -> Result<String, AgentError> {
         let session_ids: Vec<_> = match self {
-            Self::InMemory(runtime) => runtime.lock()?.session_ids(),
-            Self::Sqlite(runtime) => runtime.lock()?.session_ids(),
+            Self::InMemory(runtime) => runtime.lock()?.session_ids()?,
+            Self::Sqlite(runtime) => runtime.lock()?.session_ids()?,
         }
         .into_iter()
         .map(|session_id| session_id.0)
@@ -167,6 +167,24 @@ impl RuntimeJsonBridge {
             })
             .collect();
         to_json(&summaries)
+    }
+
+    pub fn archive_session_json(&self, session_id: &str) -> Result<String, AgentError> {
+        let session_id = SessionId(session_id.to_string());
+        match self {
+            Self::InMemory(runtime) => runtime.lock()?.archive_session(&session_id)?,
+            Self::Sqlite(runtime) => runtime.lock()?.archive_session(&session_id)?,
+        }
+        Ok("null".to_string())
+    }
+
+    pub fn delete_session_json(&self, session_id: &str) -> Result<String, AgentError> {
+        let session_id = SessionId(session_id.to_string());
+        match self {
+            Self::InMemory(runtime) => runtime.lock()?.delete_session(&session_id)?,
+            Self::Sqlite(runtime) => runtime.lock()?.delete_session(&session_id)?,
+        }
+        Ok("null".to_string())
     }
 
     pub fn active_branch_json(
@@ -452,6 +470,28 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_active_branch(
         let session_id = c_str_arg(session_id, "session_id")?;
         let leaf_id = optional_c_str_arg(leaf_id, "leaf_id")?;
         bridge_ref(runtime)?.active_branch_json(session_id, leaf_id)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_archive_session(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let session_id = c_str_arg(session_id, "session_id")?;
+        bridge_ref(runtime)?.archive_session_json(session_id)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_delete_session(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let session_id = c_str_arg(session_id, "session_id")?;
+        bridge_ref(runtime)?.delete_session_json(session_id)
     })
 }
 

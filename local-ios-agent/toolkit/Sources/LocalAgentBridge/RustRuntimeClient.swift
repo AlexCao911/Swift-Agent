@@ -159,6 +159,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> StringResult
+    public var archiveSession: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var deleteSession: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var sendMessage: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -201,6 +203,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             UnsafePointer<CChar>?,
             UnsafePointer<CChar>?
         ) -> StringResult,
+        archiveSession: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        deleteSession: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         sendMessage: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
@@ -238,6 +242,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.sessionIds = sessionIds
         self.conversationSummaries = conversationSummaries
         self.activeBranch = activeBranch
+        self.archiveSession = archiveSession
+        self.deleteSession = deleteSession
         self.registerToolSchema = registerToolSchema
         self.setPermissionState = setPermissionState
         self.sendMessage = sendMessage
@@ -285,6 +291,18 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     sessionId,
                     leafId
+                )
+            },
+            archiveSession: { runtime, sessionId in
+                local_agent_runtime_bridge_archive_session(
+                    runtime.map { OpaquePointer($0) },
+                    sessionId
+                )
+            },
+            deleteSession: { runtime, sessionId in
+                local_agent_runtime_bridge_delete_session(
+                    runtime.map { OpaquePointer($0) },
+                    sessionId
                 )
             },
             registerToolSchema: { runtime, schemaJson in
@@ -415,6 +433,18 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                 functions.activeBranch(handle, sessionPointer, nil),
                 as: [RuntimeEventDTO].self
             )
+        }
+    }
+
+    public func archiveSession(sessionId: String) async throws {
+        _ = try sessionId.withCString { sessionPointer in
+            try consume(functions.archiveSession(handle, sessionPointer))
+        }
+    }
+
+    public func deleteSession(sessionId: String) async throws {
+        _ = try sessionId.withCString { sessionPointer in
+            try consume(functions.deleteSession(handle, sessionPointer))
         }
     }
 

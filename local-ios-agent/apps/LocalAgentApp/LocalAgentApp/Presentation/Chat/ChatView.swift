@@ -8,6 +8,7 @@ struct ChatView: View {
     @State private var editingMessage: AgentMessageViewState?
     @State private var editText = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isPhotoPickerPresented = false
     @State private var isAddingLink = false
     @State private var linkText = ""
 
@@ -87,6 +88,12 @@ struct ChatView: View {
                 onSelect: { sessionId in
                     viewModel.state.conversations.isPresented = false
                     Task { await viewModel.selectConversation(sessionId) }
+                },
+                onArchive: { sessionId in
+                    Task { await viewModel.archiveConversation(sessionId) }
+                },
+                onDelete: { sessionId in
+                    Task { await viewModel.deleteConversation(sessionId) }
                 }
             )
         }
@@ -130,6 +137,11 @@ struct ChatView: View {
                 self.selectedPhotoItem = nil
             }
         }
+        .photosPicker(
+            isPresented: $isPhotoPickerPresented,
+            selection: $selectedPhotoItem,
+            matching: .images
+        )
     }
 
     private var messageList: some View {
@@ -202,6 +214,26 @@ struct ChatView: View {
         VStack(spacing: 0) {
             Divider()
 
+            if viewModel.state.draft.targetParentEventId != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.branch")
+                    Text("Forking from here")
+                        .lineLimit(1)
+                    Button {
+                        viewModel.clearForkTarget()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if !viewModel.state.draft.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -224,7 +256,9 @@ struct ChatView: View {
                         Label("Link", systemImage: "link")
                     }
 
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    Button {
+                        isPhotoPickerPresented = true
+                    } label: {
                         Label("Photo", systemImage: "photo")
                     }
                 } label: {

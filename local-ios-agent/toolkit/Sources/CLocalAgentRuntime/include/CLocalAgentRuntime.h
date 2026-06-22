@@ -21,6 +21,14 @@ char *local_agent_runtime_bridge_active_branch(
     const char *session_id,
     const char *leaf_id
 );
+char *local_agent_runtime_bridge_archive_session(
+    LocalAgentRuntimeBridge *runtime,
+    const char *session_id
+);
+char *local_agent_runtime_bridge_delete_session(
+    LocalAgentRuntimeBridge *runtime,
+    const char *session_id
+);
 char *local_agent_runtime_bridge_register_tool_schema(
     LocalAgentRuntimeBridge *runtime,
     const char *schema_json

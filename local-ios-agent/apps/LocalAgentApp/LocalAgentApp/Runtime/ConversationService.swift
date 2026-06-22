@@ -4,15 +4,22 @@ enum ConversationService {
     static func projectSummaries(
         _ summaries: [ConversationSummaryDTO]
     ) -> [ConversationSummaryViewState] {
-        summaries.map {
-            ConversationSummaryViewState(
-                sessionId: $0.sessionId,
-                title: $0.title,
-                activeLeafId: $0.activeLeafId,
-                lastEventId: $0.lastEventId,
-                lastUpdatedSequence: $0.lastUpdatedSequence
-            )
-        }
+        summaries
+            .sorted {
+                if $0.lastUpdatedSequence == $1.lastUpdatedSequence {
+                    return $0.sessionId < $1.sessionId
+                }
+                return $0.lastUpdatedSequence > $1.lastUpdatedSequence
+            }
+            .map {
+                ConversationSummaryViewState(
+                    sessionId: $0.sessionId,
+                    title: $0.title,
+                    activeLeafId: $0.activeLeafId,
+                    lastEventId: $0.lastEventId,
+                    lastUpdatedSequence: $0.lastUpdatedSequence
+                )
+            }
     }
 
     static func replayActiveBranch(

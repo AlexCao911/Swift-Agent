@@ -114,6 +114,20 @@ struct AttachmentDraftViewState: Equatable, Identifiable, Sendable {
     var byteCount: Int?
 }
 
+extension AttachmentDraftViewState {
+    init(viewState: AttachmentViewState) {
+        self.init(
+            id: viewState.id,
+            kind: viewState.kind,
+            displayName: viewState.displayName,
+            localPath: viewState.localPath,
+            urlString: viewState.urlString,
+            mimeType: viewState.mimeType,
+            byteCount: viewState.byteCount
+        )
+    }
+}
+
 struct UserDraftViewState: Equatable, Sendable {
     var text: String
     var attachments: [AttachmentDraftViewState]

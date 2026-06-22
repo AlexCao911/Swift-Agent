@@ -5,6 +5,8 @@ struct ConversationListView: View {
     let activeSessionId: String?
     let onNewChat: () -> Void
     let onSelect: (String) -> Void
+    let onArchive: (String) -> Void
+    let onDelete: (String) -> Void
 
     var body: some View {
         NavigationStack {
@@ -25,16 +27,45 @@ struct ConversationListView: View {
                                     Text(conversation.title)
                                         .lineLimit(1)
                                         .foregroundStyle(.primary)
-                                    Text(conversation.sessionId)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                    if conversation.sessionId == activeSessionId {
+                                        Text("Current")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
                                 }
                                 Spacer()
                                 if conversation.sessionId == activeSessionId {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(.tint)
                                 }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                onDelete(conversation.sessionId)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+
+                            Button {
+                                onArchive(conversation.sessionId)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(.gray)
+                        }
+                        .contextMenu {
+                            Button {
+                                onArchive(conversation.sessionId)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+
+                            Button(role: .destructive) {
+                                onDelete(conversation.sessionId)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }

@@ -98,12 +98,12 @@ struct AgentRuntimeServiceTests {
         #expect(state.conversations.conversations.first?.activeLeafId == "leaf_2")
     }
 
-    @Test("select conversation loads active branch events")
-    func selectConversationLoadsActiveBranchEvents() async throws {
+    @Test("select conversation can load explicit branch leaf events")
+    func selectConversationCanLoadExplicitBranchLeafEvents() async throws {
         let client = ScriptedRuntimeClient()
         await client.setActiveBranchForTest(
             sessionId: "session_2",
-            leafId: nil,
+            leafId: "leaf_2",
             events: [
                 event(id: "user_2", sessionId: "session_2", kind: .userMessage, payload: "hi", runId: "run_2"),
                 event(
@@ -119,6 +119,7 @@ struct AgentRuntimeServiceTests {
 
         let state = try await service.selectConversation(
             sessionId: "session_2",
+            leafId: "leaf_2",
             state: AgentViewState(
                 phase: .ready,
                 messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
@@ -127,7 +128,7 @@ struct AgentRuntimeServiceTests {
         )
 
         #expect(await client.activeBranchRequests == [
-            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_2", leafId: nil),
+            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_2", leafId: "leaf_2"),
         ])
         #expect(state.currentSessionId == "session_2")
         #expect(state.messages.map(\.text) == ["hi", "there"])
@@ -173,6 +174,62 @@ struct AgentRuntimeServiceTests {
 
         #expect(state.messages.map(\.text) == ["hi"])
         #expect(state.messages[0].attachments.map(\.urlString) == ["https://example.com"])
+    }
+
+    @Test("archive active conversation hides it and clears the active chat")
+    func archiveActiveConversationHidesItAndClearsActiveChat() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setConversationSummariesForTest([])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
+            currentSessionId: "session_1",
+            conversations: ConversationListViewState(conversations: [
+                ConversationSummaryViewState(
+                    sessionId: "session_1",
+                    title: "Old",
+                    activeLeafId: "leaf_1",
+                    lastEventId: "leaf_1",
+                    lastUpdatedSequence: 1
+                ),
+            ])
+        )
+
+        let nextState = try await service.archiveConversation(sessionId: "session_1", state: state)
+
+        #expect(await client.archivedSessionIds == ["session_1"])
+        #expect(nextState.currentSessionId == nil)
+        #expect(nextState.messages.isEmpty)
+        #expect(nextState.conversations.conversations.isEmpty)
+    }
+
+    @Test("delete active conversation removes it and clears the active chat")
+    func deleteActiveConversationRemovesItAndClearsActiveChat() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setConversationSummariesForTest([])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
+            currentSessionId: "session_1",
+            conversations: ConversationListViewState(conversations: [
+                ConversationSummaryViewState(
+                    sessionId: "session_1",
+                    title: "Old",
+                    activeLeafId: "leaf_1",
+                    lastEventId: "leaf_1",
+                    lastUpdatedSequence: 1
+                ),
+            ])
+        )
+
+        let nextState = try await service.deleteConversation(sessionId: "session_1", state: state)
+
+        #expect(await client.deletedSessionIds == ["session_1"])
+        #expect(nextState.currentSessionId == nil)
+        #expect(nextState.messages.isEmpty)
+        #expect(nextState.conversations.conversations.isEmpty)
     }
 
     @Test("send applies completed mock chat events")
@@ -313,14 +370,14 @@ struct AgentRuntimeServiceTests {
         #expect(state.draft.text.isEmpty)
     }
 
-    @Test("regenerate sends from assistant parent event")
-    func regenerateSendsFromAssistantParentEvent() async throws {
+    @Test("regenerate root response resends original user message from root")
+    func regenerateRootResponseResendsOriginalUserMessageFromRoot() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
             AgentTurnResultDTO(
                 runId: "run_1",
                 state: .completed,
                 events: [
-                    event(id: "user_regen", kind: .userMessage, payload: "Please regenerate the previous answer."),
+                    event(id: "user_regen", kind: .userMessage, payload: "hello"),
                     event(id: "assistant_regen", kind: .assistantMessageCompleted, payload: "new answer"),
                 ],
                 pendingToolCallId: nil
@@ -330,7 +387,13 @@ struct AgentRuntimeServiceTests {
         let state = AgentViewState(
             phase: .ready,
             messages: [
-                AgentMessageViewState(id: "user_1", role: .user, text: "hello", isStreaming: false),
+                AgentMessageViewState(
+                    id: "user_1",
+                    sessionId: "session_1",
+                    parentId: nil,
+                    role: .user,
+                    parts: [.text(TextPartViewState(id: "user_text", text: "hello"))]
+                ),
                 AgentMessageViewState(
                     id: "assistant_1",
                     sessionId: "session_1",
@@ -344,8 +407,8 @@ struct AgentRuntimeServiceTests {
 
         _ = try await service.regenerate(from: "assistant_1", state: state)
 
-        #expect(await client.sentMessages.map(\.text) == ["Please regenerate the previous answer."])
-        #expect(await client.sentMessages.map(\.parentEventId) == ["user_1"])
+        #expect(await client.sentMessages.map(\.text) == ["hello"])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["__local_agent_root__"])
     }
 
     @Test("continue generation sends from active leaf")
@@ -1456,6 +1519,8 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     private(set) var submittedToolResults: [SubmittedToolResult] = []
     private(set) var selectedProviders: [SelectedProvider] = []
     private(set) var activeBranchRequests: [ActiveBranchRequest] = []
+    private(set) var archivedSessionIds: [String] = []
+    private(set) var deletedSessionIds: [String] = []
 
     init(
         sendTurns: [AgentTurnResultDTO] = [],
@@ -1610,6 +1675,14 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
         activeBranchRequests.append(ActiveBranchRequest(sessionId: sessionId, leafId: leafId))
         return activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] ?? []
+    }
+
+    func archiveSession(sessionId: String) async throws {
+        archivedSessionIds.append(sessionId)
+    }
+
+    func deleteSession(sessionId: String) async throws {
+        deletedSessionIds.append(sessionId)
     }
 
     private func activeBranchKey(sessionId: String, leafId: String?) -> String {

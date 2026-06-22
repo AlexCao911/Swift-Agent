@@ -172,7 +172,7 @@ fn runtime_restores_persisted_active_provider_when_registry_can_build_it() {
     let runtime =
         AgentRuntime::with_store_and_registry(mock_config(), store, registry_with_alt()).unwrap();
 
-    assert_eq!(runtime.session_ids(), vec![session_id]);
+    assert_eq!(runtime.session_ids().unwrap(), vec![session_id]);
     assert_eq!(runtime.active_provider().id, "alt");
 }
 

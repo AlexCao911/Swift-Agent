@@ -76,6 +76,8 @@ pub struct SendMessageInput {
     pub blob_refs: Vec<String>,
 }
 
+const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationSummary {
     pub session_id: SessionId,
@@ -117,7 +119,7 @@ impl<S: EventStore> AgentRuntime<S> {
         provider_registry: ProviderRegistry,
     ) -> Result<Self, AgentError> {
         let mut sessions = HashMap::new();
-        for session_id in store.list_sessions()? {
+        for session_id in store.list_all_sessions()? {
             let cursor =
                 SessionCursor::from_last_event(session_id.clone(), store.last_event(&session_id)?);
             sessions.insert(session_id, cursor);
@@ -350,35 +352,38 @@ impl<S: EventStore> AgentRuntime<S> {
         }
     }
 
-    pub fn session_ids(&self) -> Vec<SessionId> {
-        let mut session_ids: Vec<_> = self.sessions.keys().cloned().collect();
-        session_ids.sort_by(|left, right| left.0.cmp(&right.0));
-        session_ids
+    pub fn session_ids(&self) -> Result<Vec<SessionId>, AgentError> {
+        self.store.list_sessions()
     }
 
     pub fn conversation_summaries(&self) -> Result<Vec<ConversationSummary>, AgentError> {
         let mut summaries = Vec::new();
 
-        for session_id in self.session_ids() {
+        for session_id in self.session_ids()? {
             let active_leaf_id = self.store.active_leaf(&session_id)?;
             let last_event = self.store.last_event(&session_id)?;
-            let title = match &active_leaf_id {
-                Some(leaf_id) => self
-                    .store
-                    .active_branch(&session_id, leaf_id)?
-                    .into_iter()
-                    .find(|event| event.kind == EventKind::UserMessage)
-                    .map(|event| first_line_title(&event.payload))
-                    .unwrap_or_else(|| "New chat".to_string()),
-                None => "New chat".to_string(),
+            let Some(leaf_id) = &active_leaf_id else {
+                continue;
             };
+            let branch = self.store.active_branch(&session_id, leaf_id)?;
+            let Some(first_user_event) = branch
+                .into_iter()
+                .find(|event| event.kind == EventKind::UserMessage)
+            else {
+                continue;
+            };
+            let title = first_line_title(&first_user_event.payload);
+            let last_updated_sequence = last_event
+                .as_ref()
+                .and_then(|event| numeric_suffix(&event.id.0))
+                .unwrap_or_else(|| last_event.as_ref().map(|event| event.sequence).unwrap_or(0));
 
             summaries.push(ConversationSummary {
                 session_id,
                 title,
                 active_leaf_id,
                 last_event_id: last_event.as_ref().map(|event| event.id.clone()),
-                last_updated_sequence: last_event.map(|event| event.sequence).unwrap_or(0),
+                last_updated_sequence,
             });
         }
 
@@ -389,6 +394,21 @@ impl<S: EventStore> AgentRuntime<S> {
                 .then_with(|| left.session_id.0.cmp(&right.session_id.0))
         });
         Ok(summaries)
+    }
+
+    pub fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        self.store.archive_session(session_id)?;
+        self.sessions.remove(session_id);
+        Ok(())
+    }
+
+    pub fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
+        self.store.delete_session(session_id)?;
+        self.sessions.remove(session_id);
+        self.pending_tool_requests
+            .retain(|request| request.session_id != *session_id);
+        self.runs.retain(|_, run| run.session_id != *session_id);
+        Ok(())
     }
 
     pub fn active_branch_events(
@@ -449,10 +469,11 @@ impl<S: EventStore> AgentRuntime<S> {
             AgentError::Storage(format!("missing session: {}", input.session_id.0))
         })?;
 
-        let parent_id = input
-            .parent_event_id
-            .clone()
-            .or_else(|| cursor.active_leaf.clone());
+        let parent_id = match input.parent_event_id.clone() {
+            Some(parent_event_id) if parent_event_id.0 == ROOT_PARENT_EVENT_ID => None,
+            Some(parent_event_id) => Some(parent_event_id),
+            None => cursor.active_leaf.clone(),
+        };
         let (parent_id, mut emitted) = self.prepare_context_parent(
             &input.session_id,
             parent_id,
@@ -1420,6 +1441,91 @@ mod tests {
     }
 
     #[test]
+    fn conversation_summaries_omit_empty_sessions() {
+        let mut runtime = AgentRuntime::new(config());
+        runtime.create_session().unwrap();
+
+        let summaries = runtime.conversation_summaries().unwrap();
+
+        assert!(summaries.is_empty());
+    }
+
+    #[test]
+    fn conversation_summaries_sort_by_global_recency() {
+        let mut runtime = AgentRuntime::new(config());
+        let first_session = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: first_session.clone(),
+                parent_event_id: None,
+                text: "first".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        let second_session = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: second_session.clone(),
+                parent_event_id: None,
+                text: "second".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        let summaries = runtime.conversation_summaries().unwrap();
+
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.session_id.clone())
+                .collect::<Vec<_>>(),
+            vec![second_session, first_session]
+        );
+    }
+
+    #[test]
+    fn archived_sessions_are_hidden_from_conversation_summaries() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "hello".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        runtime.archive_session(&session_id).unwrap();
+
+        assert!(runtime.conversation_summaries().unwrap().is_empty());
+        assert!(!runtime.session_ids().unwrap().contains(&session_id));
+    }
+
+    #[test]
+    fn deleted_sessions_are_removed_from_runtime_and_store() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        let turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "hello".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+        let leaf_id = turn.events.last().unwrap().id.clone();
+
+        runtime.delete_session(&session_id).unwrap();
+
+        assert!(!runtime.session_ids().unwrap().contains(&session_id));
+        assert!(runtime
+            .active_branch_events(&session_id, Some(leaf_id))
+            .is_err());
+    }
+
+    #[test]
     fn send_message_persists_user_blob_refs_without_changing_prompt_payload() {
         let mut runtime = AgentRuntime::new(config());
         let session_id = runtime.create_session().unwrap();
@@ -1487,5 +1593,35 @@ mod tests {
         assert!(explicit_branch.iter().any(|event| event.payload == "root"));
         assert!(!explicit_branch.iter().any(|event| event.payload == "fork"));
         assert!(active_branch.iter().any(|event| event.payload == "fork"));
+    }
+
+    #[test]
+    fn send_message_can_explicitly_branch_from_root_after_active_leaf_exists() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "first".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        let root_turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: Some(EntryId(ROOT_PARENT_EVENT_ID.into())),
+                text: "regenerated root".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        let regenerated_user = root_turn
+            .events
+            .iter()
+            .find(|event| event.kind == EventKind::UserMessage)
+            .unwrap();
+        assert_eq!(regenerated_user.parent_id, None);
     }
 }
