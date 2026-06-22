@@ -127,12 +127,40 @@ struct AgentViewModelTests {
 
         #expect(viewModel.state.draft.targetParentEventId == "entry_4")
     }
+
+    @Test("regenerate delegates assistant message id")
+    func regenerateDelegatesMessageId() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.regenerate(from: "assistant_1")
+
+        #expect(await service.regeneratedMessageIds == ["assistant_1"])
+    }
+
+    @Test("continue generation delegates")
+    func continueGenerationDelegates() async {
+        let service = ViewModelServiceStub()
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.continueGeneration()
+
+        #expect(await service.didContinueGeneration)
+    }
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {
     var sentTexts: [String] = []
     var selectedProviderIds: [String] = []
     var didCreateNewChat = false
+    var regeneratedMessageIds: [String] = []
+    var didContinueGeneration = false
     private let preparedState: AgentViewState
     private let sentState: AgentViewState
     private let newChatState: AgentViewState
@@ -180,6 +208,16 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
 
     func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
         state
+    }
+
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        regeneratedMessageIds.append(messageId)
+        return state
+    }
+
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+        didContinueGeneration = true
+        return state
     }
 }
 

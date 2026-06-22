@@ -182,6 +182,103 @@ struct AgentRuntimeServiceTests {
         #expect(state.draft.targetParentEventId == nil)
     }
 
+    @Test("regenerate sends from assistant parent event")
+    func regenerateSendsFromAssistantParentEvent() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_regen", kind: .userMessage, payload: "Please regenerate the previous answer."),
+                    event(id: "assistant_regen", kind: .assistantMessageCompleted, payload: "new answer"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(id: "user_1", role: .user, text: "hello", isStreaming: false),
+                AgentMessageViewState(
+                    id: "assistant_1",
+                    sessionId: "session_1",
+                    parentId: "user_1",
+                    role: .assistant,
+                    parts: [.text(TextPartViewState(id: "assistant_text", text: "old answer"))]
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.regenerate(from: "assistant_1", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["Please regenerate the previous answer."])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["user_1"])
+    }
+
+    @Test("continue generation sends from active leaf")
+    func continueGenerationSendsFromActiveLeaf() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_continue", kind: .userMessage, payload: "Continue."),
+                    event(id: "assistant_continue", kind: .assistantMessageCompleted, payload: "more"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(id: "assistant_1", role: .assistant, text: "partial", isStreaming: false),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.continueGeneration(state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["Continue."])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["assistant_1"])
+    }
+
+    @Test("edit and resend sends edited text from original parent")
+    func editAndResendSendsEditedTextFromOriginalParent() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_edited", kind: .userMessage, payload: "edited prompt"),
+                    event(id: "assistant_edited", kind: .assistantMessageCompleted, payload: "edited answer"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [
+                AgentMessageViewState(
+                    id: "user_1",
+                    sessionId: "session_1",
+                    parentId: "root_event",
+                    role: .user,
+                    parts: [.text(TextPartViewState(id: "user_text", text: "original prompt"))]
+                ),
+            ],
+            currentSessionId: "session_1"
+        )
+
+        _ = try await service.editAndResend(messageId: "user_1", text: "edited prompt", state: state)
+
+        #expect(await client.sentMessages.map(\.text) == ["edited prompt"])
+        #expect(await client.sentMessages.map(\.parentEventId) == ["root_event"])
+    }
+
     @Test("streamed delta is delivered before final turn result")
     func streamedDeltaIsDeliveredBeforeFinalTurnResult() async throws {
         let client = StreamingRuntimeClientProbe()

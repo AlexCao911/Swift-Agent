@@ -87,6 +87,30 @@ final class AgentViewModel {
         state.draft.targetParentEventId = messageId
     }
 
+    func regenerate(from messageId: String) async {
+        do {
+            state = try await service.regenerate(from: messageId, state: state)
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func continueGeneration() async {
+        do {
+            state = try await service.continueGeneration(state: state)
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
+    func editAndResend(messageId: String, text: String) async {
+        do {
+            state = try await service.editAndResend(messageId: messageId, text: text, state: state)
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
     private func markRunFailed(_ message: String) {
         state.finishStreamingMessages(as: .failed(message))
         state.lastTerminalReason = .failed(message)

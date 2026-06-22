@@ -12,6 +12,9 @@ protocol AgentRuntimeServicing: Sendable {
     func newChat(state: AgentViewState) async throws -> AgentViewState
     func loadConversations(state: AgentViewState) async throws -> AgentViewState
     func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState
 }
 
 extension AgentRuntimeServicing {
@@ -32,6 +35,18 @@ extension AgentRuntimeServicing {
     }
 
     func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 }
@@ -231,6 +246,37 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         )
         try await loadProviderState(into: &nextState)
         return nextState
+    }
+
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard let assistant = state.messages.first(where: { $0.id == messageId }),
+              assistant.role == .assistant,
+              let parentId = assistant.parentId
+        else {
+            return state
+        }
+
+        var nextState = state
+        nextState.draft.targetParentEventId = parentId
+        return try await sendMessage("Please regenerate the previous answer.", state: nextState)
+    }
+
+    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+        var nextState = state
+        nextState.draft.targetParentEventId = state.messages.last?.id
+        return try await sendMessage("Continue.", state: nextState)
+    }
+
+    func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState {
+        guard let message = state.messages.first(where: { $0.id == messageId }),
+              message.role == .user
+        else {
+            return state
+        }
+
+        var nextState = state
+        nextState.draft.targetParentEventId = message.parentId
+        return try await sendMessage(text, state: nextState)
     }
 
     private func continueToolsIfNeeded(

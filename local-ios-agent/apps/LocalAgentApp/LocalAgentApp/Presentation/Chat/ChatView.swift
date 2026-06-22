@@ -4,6 +4,8 @@ import UIKit
 struct ChatView: View {
     @Bindable var viewModel: AgentViewModel
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var editingMessage: AgentMessageViewState?
+    @State private var editText = ""
 
     var body: some View {
         NavigationStack {
@@ -84,6 +86,24 @@ struct ChatView: View {
                 }
             )
         }
+        .alert("Edit Message", isPresented: isEditingMessagePresented) {
+            TextField("Message", text: $editText)
+            Button("Send") {
+                guard let editingMessage else {
+                    return
+                }
+                let text = editText
+                self.editingMessage = nil
+                editText = ""
+                Task {
+                    await viewModel.editAndResend(messageId: editingMessage.id, text: text)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                editingMessage = nil
+                editText = ""
+            }
+        }
     }
 
     private var messageList: some View {
@@ -106,6 +126,29 @@ struct ChatView: View {
                                     Task { await viewModel.forkFromMessage(message.id) }
                                 } label: {
                                     Label("Fork from Here", systemImage: "arrow.triangle.branch")
+                                }
+
+                                if message.role == .assistant {
+                                    Button {
+                                        Task { await viewModel.regenerate(from: message.id) }
+                                    } label: {
+                                        Label("Regenerate", systemImage: "arrow.clockwise")
+                                    }
+
+                                    Button {
+                                        Task { await viewModel.continueGeneration() }
+                                    } label: {
+                                        Label("Continue", systemImage: "text.append")
+                                    }
+                                }
+
+                                if message.role == .user {
+                                    Button {
+                                        editingMessage = message
+                                        editText = message.text
+                                    } label: {
+                                        Label("Edit and Resend", systemImage: "pencil")
+                                    }
                                 }
                             }
                     }
@@ -213,6 +256,18 @@ struct ChatView: View {
         }
         .accessibilityLabel("Provider")
         .disabled(viewModel.state.provider.profiles.isEmpty)
+    }
+
+    private var isEditingMessagePresented: Binding<Bool> {
+        Binding(
+            get: { editingMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    editingMessage = nil
+                    editText = ""
+                }
+            }
+        )
     }
 
     private var phaseText: String {
