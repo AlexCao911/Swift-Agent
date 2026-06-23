@@ -185,6 +185,29 @@ struct AgentViewModelTests {
         #expect(viewModel.state.messages.isEmpty)
     }
 
+    @Test("start chat handoff creates new chat and prefills draft")
+    func startChatHandoffCreatesNewChatAndPrefillsDraft() async {
+        let service = ViewModelServiceStub(
+            newChatState: AgentViewState(phase: .ready, messages: [], currentSessionId: "session_2")
+        )
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(
+                phase: .ready,
+                messages: [AgentMessageViewState(id: "user_1", role: .user, text: "old", isStreaming: false)],
+                currentSessionId: "session_1"
+            )
+        )
+
+        await viewModel.startNewChat(prefilledText: "  explain this image  ")
+
+        #expect(await service.didCreateNewChat)
+        #expect(await service.sentTexts.isEmpty)
+        #expect(viewModel.state.currentSessionId == "session_2")
+        #expect(viewModel.state.messages.isEmpty)
+        #expect(viewModel.state.draftText == "explain this image")
+    }
+
     @Test("fork from message creates and selects a new conversation")
     func forkFromMessageCreatesAndSelectsNewConversation() async {
         let service = ViewModelServiceStub(

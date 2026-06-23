@@ -76,8 +76,17 @@ final class AgentViewModel {
     }
 
     func newChat() async {
+        await startNewChat(prefilledText: nil)
+    }
+
+    func startNewChat(prefilledText: String?) async {
         do {
             state = try await service.newChat(state: state)
+            if let text = prefilledText?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty
+            {
+                state.draftText = text
+            }
         } catch {
             state.errorMessage = error.localizedDescription
         }

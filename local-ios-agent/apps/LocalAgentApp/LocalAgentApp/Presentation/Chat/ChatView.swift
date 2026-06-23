@@ -10,6 +10,7 @@ struct ChatView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isAddingLink = false
     @State private var linkText = ""
+    @State private var intentRouter = AppIntentRouter.shared
 
     var body: some View {
         NavigationStack {
@@ -74,6 +75,17 @@ struct ChatView: View {
         .task {
             if case .booting = viewModel.state.phase {
                 await viewModel.bootstrap()
+            }
+            await handleIntentRouteIfReady()
+        }
+        .onChange(of: intentRouter.pendingRoute?.id) {
+            Task {
+                await handleIntentRouteIfReady()
+            }
+        }
+        .onChange(of: viewModel.state.phase.isRunning) {
+            Task {
+                await handleIntentRouteIfReady()
             }
         }
         .sheet(isPresented: $viewModel.state.conversations.isPresented) {
@@ -377,6 +389,29 @@ struct ChatView: View {
             suggestedName: "photo.\(filenameExtension)",
             mimeType: contentType?.preferredMIMEType ?? "image/jpeg"
         )
+    }
+
+    @MainActor
+    private func handleIntentRouteIfReady() async {
+        guard !viewModel.state.phase.isRunning else {
+            return
+        }
+        if case .booting = viewModel.state.phase {
+            return
+        }
+        guard let route = intentRouter.consumePendingRoute() else {
+            return
+        }
+
+        switch route.destination {
+        case .chat:
+            if route.startsNewChat {
+                await viewModel.startNewChat(prefilledText: route.prefilledText)
+            }
+        case .conversations:
+            await viewModel.loadConversations()
+            viewModel.state.conversations.isPresented = true
+        }
     }
 }
 
