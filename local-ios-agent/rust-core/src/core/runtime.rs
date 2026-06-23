@@ -85,6 +85,7 @@ pub struct ConversationSummary {
     pub active_leaf_id: Option<EntryId>,
     pub last_event_id: Option<EntryId>,
     pub last_updated_sequence: u64,
+    pub last_updated_at_millis: u64,
 }
 
 pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
@@ -377,6 +378,10 @@ impl<S: EventStore> AgentRuntime<S> {
                 .as_ref()
                 .and_then(|event| numeric_suffix(&event.id.0))
                 .unwrap_or_else(|| last_event.as_ref().map(|event| event.sequence).unwrap_or(0));
+            let last_updated_at_millis = last_event
+                .as_ref()
+                .map(|event| event.created_at_millis)
+                .unwrap_or(0);
 
             summaries.push(ConversationSummary {
                 session_id,
@@ -384,6 +389,7 @@ impl<S: EventStore> AgentRuntime<S> {
                 active_leaf_id,
                 last_event_id: last_event.as_ref().map(|event| event.id.clone()),
                 last_updated_sequence,
+                last_updated_at_millis,
             });
         }
 
@@ -1479,6 +1485,7 @@ mod tests {
         assert!(summaries[0].active_leaf_id.is_some());
         assert!(summaries[0].last_event_id.is_some());
         assert!(summaries[0].last_updated_sequence > 0);
+        assert!(summaries[0].last_updated_at_millis > 0);
     }
 
     #[test]

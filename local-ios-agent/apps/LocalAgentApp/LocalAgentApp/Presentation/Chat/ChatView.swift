@@ -1,6 +1,7 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var viewModel: AgentViewModel
@@ -8,8 +9,7 @@ struct ChatView: View {
     @State private var editingMessage: AgentMessageViewState?
     @State private var editText = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isAddingLink = false
-    @State private var linkText = ""
+    @State private var isImportingFile = false
     @State private var intentRouter = AppIntentRouter.shared
 
     var body: some View {
@@ -126,17 +126,13 @@ struct ChatView: View {
                 editText = ""
             }
         }
-        .alert("Add Link", isPresented: $isAddingLink) {
-            TextField("URL", text: $linkText)
-            Button("Add") {
-                let rawValue = linkText
-                linkText = ""
-                Task {
-                    await viewModel.addLink(rawValue)
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                linkText = ""
+        .fileImporter(
+            isPresented: $isImportingFile,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            Task {
+                await importSelectedFiles(result)
             }
         }
         .onChange(of: selectedPhotoItem) {
@@ -251,13 +247,13 @@ struct ChatView: View {
             HStack(alignment: .bottom, spacing: 12) {
                 HStack(spacing: 8) {
                     Button {
-                        isAddingLink = true
+                        isImportingFile = true
                     } label: {
-                        Image(systemName: "link.circle")
+                        Image(systemName: "paperclip.circle")
                             .font(.system(size: 24))
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Add Link")
+                    .accessibilityLabel("Add File")
 
                     PhotosPicker(
                         selection: $selectedPhotoItem,
@@ -391,6 +387,17 @@ struct ChatView: View {
         )
     }
 
+    private func importSelectedFiles(_ result: Result<[URL], any Error>) async {
+        do {
+            let urls = try result.get()
+            for url in urls {
+                await viewModel.addFile(url)
+            }
+        } catch {
+            viewModel.state.errorMessage = "Unable to import selected file."
+        }
+    }
+
     @MainActor
     private func handleIntentRouteIfReady() async {
         guard !viewModel.state.phase.isRunning else {
@@ -421,7 +428,7 @@ private struct DraftAttachmentChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: attachment.kind == .image ? "photo" : "link")
+            Image(systemName: attachmentIconName)
             Text(attachment.displayName)
                 .lineLimit(1)
             Button(action: onRemove) {
@@ -435,6 +442,17 @@ private struct DraftAttachmentChip: View {
         .padding(.leading, 10)
         .padding(.trailing, 6)
         .background(Color(.secondarySystemBackground), in: Capsule())
+    }
+
+    private var attachmentIconName: String {
+        switch attachment.kind {
+        case .image:
+            "photo"
+        case .link:
+            "link"
+        case .file:
+            "doc.text"
+        }
     }
 }
 

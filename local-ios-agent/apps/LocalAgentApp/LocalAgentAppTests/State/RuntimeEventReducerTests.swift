@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
@@ -175,6 +176,90 @@ struct RuntimeEventReducerTests {
                 byteCount: nil
             ),
         ])
+    }
+
+    @Test("user blob refs restore visible file attachments")
+    func userBlobRefsRestoreVisibleFileAttachments() {
+        var state = AgentViewState()
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(
+            text: "summarize",
+            attachments: [
+                AttachmentDraftViewState(
+                    id: "file_1",
+                    kind: .file,
+                    displayName: "notes.txt",
+                    localPath: "/tmp/notes.txt",
+                    urlString: nil,
+                    mimeType: "text/plain",
+                    byteCount: 9,
+                    textContent: "Trip plan"
+                ),
+            ]
+        )
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "user_1",
+                kind: .userMessage,
+                payload: "summarize\nFile attached: notes.txt\nFile contents:\nTrip plan",
+                blobRefs: blobRefs
+            ),
+            to: &state
+        )
+
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].text == "summarize")
+        #expect(state.messages[0].attachments == [
+            AttachmentViewState(
+                id: "file_1",
+                kind: .file,
+                displayName: "notes.txt",
+                localPath: "/tmp/notes.txt",
+                urlString: nil,
+                mimeType: "text/plain",
+                byteCount: 9,
+                textContent: "Trip plan"
+            ),
+        ])
+    }
+
+    @Test("user blob refs restore image preview data for history")
+    func userBlobRefsRestoreImagePreviewDataForHistory() {
+        var state = AgentViewState()
+        let previewDataBase64 = "iVBORw0KGgo="
+        let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(
+            text: "what is this",
+            attachments: [
+                AttachmentDraftViewState(
+                    id: "image_1",
+                    kind: .image,
+                    displayName: "photo.jpeg",
+                    localPath: "/missing/photo.jpeg",
+                    urlString: nil,
+                    mimeType: "image/jpeg",
+                    byteCount: 42,
+                    imageWidth: 2,
+                    imageHeight: 3,
+                    rgbDataBase64: "AQIDBAUG",
+                    previewDataBase64: previewDataBase64
+                ),
+            ]
+        )
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "user_1",
+                kind: .userMessage,
+                payload: "what is this\nImage attached: photo.jpeg",
+                blobRefs: blobRefs
+            ),
+            to: &state
+        )
+
+        #expect(state.messages.count == 1)
+        #expect(state.messages[0].text == "what is this")
+        #expect(state.messages[0].attachments[0].previewDataBase64 == previewDataBase64)
+        #expect(state.messages[0].attachments[0].previewImageData == Data(base64Encoded: previewDataBase64))
     }
 
     @Test("assistant delta fallback preserves split reasoning source")

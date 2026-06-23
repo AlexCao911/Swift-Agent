@@ -1,4 +1,5 @@
 use crate::core::types::{EntryId, RunId, SessionId};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventKind {
@@ -32,6 +33,7 @@ pub struct RuntimeEvent {
     pub parent_id: Option<EntryId>,
     pub run_id: Option<RunId>,
     pub sequence: u64,
+    pub created_at_millis: u64,
     pub depth: u32,
     pub kind: EventKind,
     pub payload: String,
@@ -55,10 +57,18 @@ impl RuntimeEvent {
             parent_id,
             run_id,
             sequence,
+            created_at_millis: current_time_millis(),
             depth,
             kind,
             payload: payload.into(),
             blob_refs: Vec::new(),
         }
     }
+}
+
+fn current_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }

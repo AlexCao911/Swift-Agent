@@ -50,10 +50,9 @@ fn sqlite_store_appends_and_reads_event() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
     let mut store = SqliteEventStore::open(&db_path).unwrap();
+    let source_event = sqlite_event("root", None, 1, 0, "root");
 
-    store
-        .append(sqlite_event("root", None, 1, 0, "root"))
-        .unwrap();
+    store.append(source_event.clone()).unwrap();
 
     let event = store
         .get(
@@ -64,6 +63,7 @@ fn sqlite_store_appends_and_reads_event() {
 
     assert_eq!(event.payload, "root");
     assert_eq!(event.kind, EventKind::UserMessage);
+    assert_eq!(event.created_at_millis, source_event.created_at_millis);
 }
 
 #[test]

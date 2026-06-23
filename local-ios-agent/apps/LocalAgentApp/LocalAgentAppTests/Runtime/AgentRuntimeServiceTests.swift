@@ -77,7 +77,8 @@ struct AgentRuntimeServiceTests {
                 title: "Second chat",
                 activeLeafId: "leaf_2",
                 lastEventId: "event_2",
-                lastUpdatedSequence: 4
+                lastUpdatedSequence: 4,
+                lastUpdatedAtMillis: 1_719_999_999_000
             ),
             ConversationSummaryDTO(
                 sessionId: "session_1",
@@ -96,6 +97,10 @@ struct AgentRuntimeServiceTests {
         #expect(state.conversations.conversations.map(\.sessionId) == ["session_2", "session_1"])
         #expect(state.conversations.conversations.first?.title == "Second chat")
         #expect(state.conversations.conversations.first?.activeLeafId == "leaf_2")
+        #expect(
+            state.conversations.conversations.first?.lastMessageDate
+                == Date(timeIntervalSince1970: 1_719_999_999)
+        )
     }
 
     @Test("select conversation can load explicit branch leaf events")
@@ -433,6 +438,58 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages[0].attachments[0].kind == .image)
         #expect(state.messages[0].attachments[0].localPath == "/tmp/photo.png")
         #expect(state.draft.text.isEmpty)
+    }
+
+    @Test("send includes draft file contents in prompt and visible message")
+    func sendIncludesDraftFileContentsInPromptAndVisibleMessage() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(
+                        id: "user_1",
+                        kind: .userMessage,
+                        payload: "summarize\nFile attached: notes.txt\nFile contents:\nTrip plan"
+                    ),
+                    event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "noted"),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state.draft.text = "summarize"
+        state.draft.attachments = [
+            AttachmentDraftViewState(
+                id: "file_1",
+                kind: .file,
+                displayName: "notes.txt",
+                localPath: "/tmp/notes.txt",
+                urlString: nil,
+                mimeType: "text/plain",
+                byteCount: 9,
+                textContent: "Trip plan"
+            ),
+        ]
+        state = try await service.sendMessage("summarize", state: state)
+
+        let sentMessages = await client.sentMessages
+        #expect(sentMessages.map(\.text) == [
+            "summarize\nFile attached: notes.txt\nFile contents:\nTrip plan",
+        ])
+        let decoded = RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs)
+        #expect(decoded.text == "summarize")
+        #expect(decoded.attachments.map(\.kind) == [.file])
+        #expect(decoded.attachments.map(\.localPath) == ["/tmp/notes.txt"])
+        #expect(decoded.attachments.map(\.textContent) == ["Trip plan"])
+        #expect(state.messages[0].text == "summarize")
+        #expect(state.messages[0].attachments.count == 1)
+        #expect(state.messages[0].attachments[0].kind == .file)
+        #expect(state.messages[0].attachments[0].displayName == "notes.txt")
+        #expect(state.draft.text.isEmpty)
+        #expect(state.draft.attachments.isEmpty)
     }
 
     @Test("regenerate root response resends original user message from root")

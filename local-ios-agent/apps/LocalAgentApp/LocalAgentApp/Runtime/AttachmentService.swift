@@ -1,10 +1,15 @@
 import Foundation
+import PDFKit
 import UIKit
+import UniformTypeIdentifiers
 
 enum AttachmentServiceError: Error, Equatable, LocalizedError, Sendable {
     case invalidURL
     case unsupportedImageType
     case invalidImageData
+    case unsupportedFileType
+    case fileTooLarge(maxBytes: Int)
+    case unreadableFile
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +19,12 @@ enum AttachmentServiceError: Error, Equatable, LocalizedError, Sendable {
             "Only image attachments are supported."
         case .invalidImageData:
             "The selected image could not be decoded."
+        case .unsupportedFileType:
+            "Only text-based files can be attached for now."
+        case .fileTooLarge(let maxBytes):
+            "The selected file is larger than \(maxBytes / 1024) KB."
+        case .unreadableFile:
+            "The selected file could not be read."
         }
     }
 }
@@ -23,11 +34,14 @@ actor AttachmentService {
         var width: Int
         var height: Int
         var data: Data
+        var previewData: Data
     }
 
     private let fileManager: FileManager
     private let directory: URL
     private let maxImageDimension: CGFloat = 448
+    private let maxFileBytes = 512 * 1024
+    private let maxFileContentCharacters = 20_000
 
     init(
         fileManager: FileManager = .default,
@@ -93,7 +107,58 @@ actor AttachmentService {
             byteCount: data.count,
             imageWidth: rgbInput.width,
             imageHeight: rgbInput.height,
-            rgbDataBase64: rgbInput.data.base64EncodedString()
+            rgbDataBase64: rgbInput.data.base64EncodedString(),
+            previewDataBase64: rgbInput.previewData.base64EncodedString()
+        )
+    }
+
+    func fileDraft(
+        from sourceURL: URL,
+        contentType explicitContentType: UTType? = nil
+    ) async throws -> AttachmentDraftViewState {
+        let didStartSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartSecurityScope {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let resourceValues = try? sourceURL.resourceValues(forKeys: [.contentTypeKey])
+        let contentType = explicitContentType
+            ?? resourceValues?.contentType
+            ?? UTType(filenameExtension: sourceURL.pathExtension)
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: sourceURL)
+        } catch {
+            throw AttachmentServiceError.unreadableFile
+        }
+        guard data.count <= maxFileBytes else {
+            throw AttachmentServiceError.fileTooLarge(maxBytes: maxFileBytes)
+        }
+        let text = try textContent(from: data, contentType: contentType)
+
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        let displayName = sourceURL.lastPathComponent.isEmpty ? "file.txt" : sourceURL.lastPathComponent
+        let filename = "\(UUID().uuidString)-\(sanitizedFilename(displayName))"
+        let url = directory.appendingPathComponent(filename)
+        try data.write(to: url, options: .atomic)
+
+        return AttachmentDraftViewState(
+            id: "file_\(UUID().uuidString)",
+            kind: .file,
+            displayName: displayName,
+            localPath: url.path,
+            urlString: nil,
+            mimeType: contentType?.preferredMIMEType ?? "text/plain",
+            byteCount: data.count,
+            textContent: clippedTextContent(text)
         )
     }
 
@@ -122,6 +187,9 @@ actor AttachmentService {
         let width = max(1, Int((image.size.width * scale).rounded()))
         let height = max(1, Int((image.size.height * scale).rounded()))
         let rendered = render(image: image, width: width, height: height)
+        guard let previewData = rendered.jpegData(compressionQuality: 0.78) else {
+            throw AttachmentServiceError.invalidImageData
+        }
         guard let cgImage = rendered.cgImage else {
             throw AttachmentServiceError.invalidImageData
         }
@@ -161,7 +229,67 @@ actor AttachmentService {
             }
         }
 
-        return RGBImageInput(width: width, height: height, data: Data(rgbBytes))
+        return RGBImageInput(width: width, height: height, data: Data(rgbBytes), previewData: previewData)
+    }
+
+    private func textContent(from data: Data, contentType: UTType?) throws -> String {
+        if contentType?.conforms(to: .pdf) == true {
+            guard let text = pdfTextContent(from: data) else {
+                throw AttachmentServiceError.unsupportedFileType
+            }
+            return text
+        }
+
+        guard let text = decodedTextContent(from: data, contentType: contentType) else {
+            throw AttachmentServiceError.unsupportedFileType
+        }
+        return text
+    }
+
+    private func pdfTextContent(from data: Data) -> String? {
+        guard let document = PDFDocument(data: data),
+              let text = document.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private func decodedTextContent(from data: Data, contentType: UTType?) -> String? {
+        let decoded = [
+            String(data: data, encoding: .utf8),
+            String(data: data, encoding: .utf16),
+            String(data: data, encoding: .utf16LittleEndian),
+            String(data: data, encoding: .utf16BigEndian),
+        ].compactMap { $0 }.first
+
+        guard let decoded,
+              !decoded.contains("\u{0}")
+        else {
+            return nil
+        }
+
+        if let contentType,
+           !contentType.conforms(to: .text),
+           contentType.preferredMIMEType?.hasPrefix("text/") != true
+        {
+            return nil
+        }
+
+        return decoded
+    }
+
+    private func clippedTextContent(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard normalized.count > maxFileContentCharacters else {
+            return normalized
+        }
+
+        return String(normalized.prefix(maxFileContentCharacters))
+            + "\n[File content truncated]"
     }
 
     private func render(image: UIImage, width: Int, height: Int) -> UIImage {

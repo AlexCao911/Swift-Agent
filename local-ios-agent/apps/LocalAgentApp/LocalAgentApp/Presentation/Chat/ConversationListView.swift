@@ -27,11 +27,23 @@ struct ConversationListView: View {
                                     Text(conversation.title)
                                         .lineLimit(1)
                                         .foregroundStyle(.primary)
-                                    if conversation.sessionId == activeSessionId {
-                                        Text("Current")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
+                                    if conversation.sessionId == activeSessionId || conversation.lastMessageDate != nil {
+                                        HStack(spacing: 4) {
+                                            if conversation.sessionId == activeSessionId {
+                                                Text("Current")
+                                            }
+                                            if conversation.sessionId == activeSessionId,
+                                               conversation.lastMessageDate != nil
+                                            {
+                                                Text("·")
+                                            }
+                                            if let date = conversation.lastMessageDate {
+                                                Text(date, style: .time)
+                                            }
+                                        }
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
                                     }
                                 }
                                 Spacer()

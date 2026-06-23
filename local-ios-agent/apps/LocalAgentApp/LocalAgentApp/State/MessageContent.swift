@@ -78,6 +78,7 @@ enum MessageStreamingState: Equatable, Sendable {
 enum AttachmentKindViewState: String, Equatable, Sendable {
     case image
     case link
+    case file
 }
 
 struct AttachmentViewState: Equatable, Identifiable, Sendable {
@@ -91,6 +92,8 @@ struct AttachmentViewState: Equatable, Identifiable, Sendable {
     var imageWidth: Int? = nil
     var imageHeight: Int? = nil
     var rgbDataBase64: String? = nil
+    var previewDataBase64: String? = nil
+    var textContent: String? = nil
 }
 
 extension AttachmentViewState {
@@ -105,8 +108,17 @@ extension AttachmentViewState {
             byteCount: draft.byteCount,
             imageWidth: draft.imageWidth,
             imageHeight: draft.imageHeight,
-            rgbDataBase64: draft.rgbDataBase64
+            rgbDataBase64: draft.rgbDataBase64,
+            previewDataBase64: draft.previewDataBase64,
+            textContent: draft.textContent
         )
+    }
+
+    var previewImageData: Data? {
+        guard let previewDataBase64 else {
+            return nil
+        }
+        return Data(base64Encoded: previewDataBase64)
     }
 }
 
@@ -121,6 +133,8 @@ struct AttachmentDraftViewState: Equatable, Identifiable, Sendable {
     var imageWidth: Int? = nil
     var imageHeight: Int? = nil
     var rgbDataBase64: String? = nil
+    var previewDataBase64: String? = nil
+    var textContent: String? = nil
 }
 
 extension AttachmentDraftViewState {
@@ -135,7 +149,9 @@ extension AttachmentDraftViewState {
             byteCount: viewState.byteCount,
             imageWidth: viewState.imageWidth,
             imageHeight: viewState.imageHeight,
-            rgbDataBase64: viewState.rgbDataBase64
+            rgbDataBase64: viewState.rgbDataBase64,
+            previewDataBase64: viewState.previewDataBase64,
+            textContent: viewState.textContent
         )
     }
 }
@@ -172,6 +188,8 @@ enum RuntimeBlobRefCodec {
         var imageWidth: Int?
         var imageHeight: Int?
         var rgbDataBase64: String?
+        var previewDataBase64: String?
+        var textContent: String?
     }
 
     static func encodeUserMessage(
@@ -219,7 +237,9 @@ enum RuntimeBlobRefCodec {
             byteCount: attachment.byteCount,
             imageWidth: attachment.imageWidth,
             imageHeight: attachment.imageHeight,
-            rgbDataBase64: attachment.rgbDataBase64
+            rgbDataBase64: attachment.rgbDataBase64,
+            previewDataBase64: attachment.previewDataBase64,
+            textContent: attachment.textContent
         )
     }
 
@@ -242,7 +262,9 @@ enum RuntimeBlobRefCodec {
             byteCount: payload.byteCount,
             imageWidth: payload.imageWidth,
             imageHeight: payload.imageHeight,
-            rgbDataBase64: payload.rgbDataBase64
+            rgbDataBase64: payload.rgbDataBase64,
+            previewDataBase64: payload.previewDataBase64,
+            textContent: payload.textContent
         )
     }
 

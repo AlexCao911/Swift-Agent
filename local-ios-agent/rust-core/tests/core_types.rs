@@ -38,4 +38,5 @@ fn runtime_event_captures_tree_and_run_metadata() {
     assert_eq!(event.depth, 2);
     assert_eq!(event.payload, "hello");
     assert!(event.blob_refs.is_empty());
+    assert!(event.created_at_millis > 0);
 }

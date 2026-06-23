@@ -164,6 +164,7 @@ impl RuntimeJsonBridge {
                 active_leaf_id: summary.active_leaf_id.map(|id| id.0),
                 last_event_id: summary.last_event_id.map(|id| id.0),
                 last_updated_sequence: summary.last_updated_sequence,
+                last_updated_at_millis: summary.last_updated_at_millis,
             })
             .collect();
         to_json(&summaries)
@@ -903,6 +904,7 @@ struct RuntimeEventJson {
     parent_id: Option<String>,
     run_id: Option<String>,
     sequence: u64,
+    created_at_millis: u64,
     depth: u32,
     kind: &'static str,
     payload: String,
@@ -917,6 +919,7 @@ impl RuntimeEventJson {
             parent_id: event.parent_id.as_ref().map(|id| id.0.clone()),
             run_id: event.run_id.as_ref().map(|id| id.0.clone()),
             sequence: event.sequence,
+            created_at_millis: event.created_at_millis,
             depth: event.depth,
             kind: event_kind_json(&event.kind),
             payload: event.payload.clone(),
@@ -932,6 +935,7 @@ struct ConversationSummaryJson {
     active_leaf_id: Option<String>,
     last_event_id: Option<String>,
     last_updated_sequence: u64,
+    last_updated_at_millis: u64,
 }
 
 #[derive(Serialize)]

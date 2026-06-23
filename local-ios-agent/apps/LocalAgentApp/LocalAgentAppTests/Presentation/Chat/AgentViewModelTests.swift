@@ -289,6 +289,63 @@ struct AgentViewModelTests {
         #expect(viewModel.state.errorMessage == "Enter a valid http or https URL.")
     }
 
+    @Test("add local file reads text content into draft attachment")
+    func addLocalFileReadsTextContentIntoDraftAttachment() async throws {
+        let service = ViewModelServiceStub()
+        let directory = attachmentTestDirectory()
+        let sourceURL = directory.appendingPathComponent("notes.txt")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try Data("Trip plan\nBring a camera.".utf8).write(to: sourceURL)
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addFile(sourceURL)
+
+        let attachment = try #require(viewModel.state.draft.attachments.first)
+        #expect(attachment.kind == .file)
+        #expect(attachment.displayName == "notes.txt")
+        #expect(attachment.mimeType == "text/plain")
+        #expect(attachment.byteCount == 25)
+        #expect(attachment.textContent == "Trip plan\nBring a camera.")
+        let localPath = try #require(attachment.localPath)
+        #expect(FileManager.default.contents(atPath: localPath) == Data("Trip plan\nBring a camera.".utf8))
+        #expect(viewModel.state.errorMessage == nil)
+    }
+
+    @Test("add PDF file extracts text content into draft attachment")
+    func addPDFFileExtractsTextContentIntoDraftAttachment() async throws {
+        let service = ViewModelServiceStub()
+        let directory = attachmentTestDirectory()
+        let sourceURL = directory.appendingPathComponent("brief.pdf")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try samplePDFData(text: "Trip PDF brief").write(to: sourceURL)
+        let viewModel = AgentViewModel(
+            service: service,
+            attachmentService: AttachmentService(directory: attachmentTestDirectory()),
+            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        await viewModel.addFile(sourceURL)
+
+        let attachment = try #require(viewModel.state.draft.attachments.first)
+        #expect(attachment.kind == .file)
+        #expect(attachment.displayName == "brief.pdf")
+        #expect(attachment.mimeType == "application/pdf")
+        #expect(attachment.textContent?.trimmingCharacters(in: .whitespacesAndNewlines) == "Trip PDF brief")
+        #expect(viewModel.state.errorMessage == nil)
+    }
+
     @Test("add image writes draft attachment")
     func addImageWritesDraftAttachment() async throws {
         let service = ViewModelServiceStub()
@@ -310,6 +367,7 @@ struct AgentViewModelTests {
         #expect(attachment.imageWidth == 2)
         #expect(attachment.imageHeight == 2)
         #expect(attachment.rgbDataBase64 != nil)
+        #expect(attachment.previewDataBase64 != nil)
         #expect(attachment.localPath != nil)
         let localPath = try #require(attachment.localPath)
         #expect(FileManager.default.contents(atPath: localPath) == imageData)
@@ -375,6 +433,17 @@ private func samplePNGData() throws -> Data {
         context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
     }
     return try #require(image.pngData())
+}
+
+private func samplePDFData(text: String) -> Data {
+    let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 240, height: 120))
+    return renderer.pdfData { context in
+        context.beginPage()
+        text.draw(
+            at: CGPoint(x: 20, y: 40),
+            withAttributes: [.font: UIFont.systemFont(ofSize: 16)]
+        )
+    }
 }
 
 private actor ViewModelServiceStub: AgentRuntimeServicing {

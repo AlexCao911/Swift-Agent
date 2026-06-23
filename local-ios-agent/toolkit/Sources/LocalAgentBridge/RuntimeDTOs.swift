@@ -65,6 +65,7 @@ public struct RuntimeEventDTO: Codable, Equatable, Sendable {
     public var parentId: String?
     public var runId: String?
     public var sequence: UInt64
+    public var createdAtMillis: UInt64?
     public var depth: UInt32
     public var kind: RuntimeEventKindDTO
     public var payload: String
@@ -76,6 +77,7 @@ public struct RuntimeEventDTO: Codable, Equatable, Sendable {
         parentId: String?,
         runId: String?,
         sequence: UInt64,
+        createdAtMillis: UInt64? = nil,
         depth: UInt32,
         kind: RuntimeEventKindDTO,
         payload: String,
@@ -86,6 +88,7 @@ public struct RuntimeEventDTO: Codable, Equatable, Sendable {
         self.parentId = parentId
         self.runId = runId
         self.sequence = sequence
+        self.createdAtMillis = createdAtMillis
         self.depth = depth
         self.kind = kind
         self.payload = payload
@@ -98,6 +101,7 @@ public struct RuntimeEventDTO: Codable, Equatable, Sendable {
         case parentId = "parent_id"
         case runId = "run_id"
         case sequence
+        case createdAtMillis = "created_at_millis"
         case depth
         case kind
         case payload
@@ -111,19 +115,22 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
     public var activeLeafId: String?
     public var lastEventId: String?
     public var lastUpdatedSequence: UInt64
+    public var lastUpdatedAtMillis: UInt64?
 
     public init(
         sessionId: String,
         title: String,
         activeLeafId: String?,
         lastEventId: String?,
-        lastUpdatedSequence: UInt64
+        lastUpdatedSequence: UInt64,
+        lastUpdatedAtMillis: UInt64? = nil
     ) {
         self.sessionId = sessionId
         self.title = title
         self.activeLeafId = activeLeafId
         self.lastEventId = lastEventId
         self.lastUpdatedSequence = lastUpdatedSequence
+        self.lastUpdatedAtMillis = lastUpdatedAtMillis
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -132,6 +139,7 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
         case activeLeafId = "active_leaf_id"
         case lastEventId = "last_event_id"
         case lastUpdatedSequence = "last_updated_sequence"
+        case lastUpdatedAtMillis = "last_updated_at_millis"
     }
 }
 

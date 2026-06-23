@@ -696,6 +696,13 @@ actor AgentRuntimeService: AgentRuntimeServicing {
                 }
             case .image:
                 lines.append("Image attached: \(attachment.displayName)")
+            case .file:
+                lines.append("File attached: \(attachment.displayName)")
+                if let textContent = attachment.textContent,
+                   !textContent.isEmpty
+                {
+                    lines.append("File contents:\n\(textContent)")
+                }
             }
         }
 

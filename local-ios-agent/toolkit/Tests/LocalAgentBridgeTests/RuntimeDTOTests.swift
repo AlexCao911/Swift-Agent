@@ -12,7 +12,8 @@ struct RuntimeDTOTests {
           "title": "Hello",
           "active_leaf_id": "entry_2",
           "last_event_id": "entry_2",
-          "last_updated_sequence": 4
+          "last_updated_sequence": 4,
+          "last_updated_at_millis": 1719999999000
         }
         """.data(using: .utf8)!
 
@@ -23,6 +24,7 @@ struct RuntimeDTOTests {
         #expect(summary.activeLeafId == "entry_2")
         #expect(summary.lastEventId == "entry_2")
         #expect(summary.lastUpdatedSequence == 4)
+        #expect(summary.lastUpdatedAtMillis == 1_719_999_999_000)
     }
 
     @Test
@@ -39,6 +41,7 @@ struct RuntimeDTOTests {
               "parent_id": null,
               "run_id": "run_7",
               "sequence": 3,
+              "created_at_millis": 1719999999123,
               "depth": 2,
               "kind": "assistant_text_delta",
               "payload": "hello",
@@ -59,6 +62,7 @@ struct RuntimeDTOTests {
         #expect(result.events[0].parentId == nil)
         #expect(result.events[0].runId == "run_7")
         #expect(result.events[0].sequence == 3)
+        #expect(result.events[0].createdAtMillis == 1_719_999_999_123)
         #expect(result.events[0].depth == 2)
         #expect(result.events[0].kind == .assistantTextDelta)
         #expect(result.events[0].payload == "hello")

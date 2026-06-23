@@ -189,6 +189,16 @@ final class AgentViewModel {
         }
     }
 
+    func addFile(_ url: URL) async {
+        do {
+            let draft = try await attachmentService.fileDraft(from: url)
+            state.draft.attachments.append(draft)
+            state.errorMessage = nil
+        } catch {
+            state.errorMessage = error.localizedDescription
+        }
+    }
+
     func removeAttachment(_ id: String) async {
         guard let attachment = state.draft.attachments.first(where: { $0.id == id }) else {
             return

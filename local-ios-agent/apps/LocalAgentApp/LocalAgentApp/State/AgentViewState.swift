@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 
 enum AppRuntimePhase: Equatable, Sendable {
@@ -156,6 +157,7 @@ struct ConversationSummaryViewState: Equatable, Identifiable, Sendable {
     var activeLeafId: String?
     var lastEventId: String?
     var lastUpdatedSequence: UInt64
+    var lastMessageDate: Date? = nil
 }
 
 struct ConversationListViewState: Equatable, Sendable {

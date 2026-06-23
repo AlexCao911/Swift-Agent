@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 
 enum ConversationService {
@@ -17,7 +18,8 @@ enum ConversationService {
                     title: $0.title,
                     activeLeafId: $0.activeLeafId,
                     lastEventId: $0.lastEventId,
-                    lastUpdatedSequence: $0.lastUpdatedSequence
+                    lastUpdatedSequence: $0.lastUpdatedSequence,
+                    lastMessageDate: date(fromMillis: $0.lastUpdatedAtMillis)
                 )
             }
     }
@@ -43,5 +45,12 @@ enum ConversationService {
         nextState.currentSessionId = sessionId
         nextState.phase = .ready
         return nextState
+    }
+
+    private static func date(fromMillis millis: UInt64?) -> Date? {
+        guard let millis, millis > 0 else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: TimeInterval(millis) / 1000)
     }
 }

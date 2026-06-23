@@ -92,7 +92,7 @@ private struct AttachmentChipView: View {
             .padding(6)
             .background(chipBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else {
-            Label(attachment.displayName, systemImage: attachment.kind == .image ? "photo" : "link")
+            Label(attachment.displayName, systemImage: attachmentIconName)
                 .font(.footnote)
                 .lineLimit(1)
                 .foregroundStyle(labelForeground)
@@ -102,11 +102,78 @@ private struct AttachmentChipView: View {
         }
     }
 
+    private var attachmentIconName: String {
+        switch attachment.kind {
+        case .image:
+            "photo"
+        case .link:
+            "link"
+        case .file:
+            "doc.text"
+        }
+    }
+
     private var image: UIImage? {
-        guard let localPath = attachment.localPath else {
+        if let localPath = attachment.localPath,
+           let image = UIImage(contentsOfFile: localPath)
+        {
+            return image
+        }
+        guard let previewImageData = attachment.previewImageData else {
+            return rgbImage
+        }
+        return UIImage(data: previewImageData) ?? rgbImage
+    }
+
+    private var rgbImage: UIImage? {
+        guard let width = attachment.imageWidth,
+              let height = attachment.imageHeight,
+              width > 0,
+              height > 0,
+              let rgbDataBase64 = attachment.rgbDataBase64,
+              let rgbData = Data(base64Encoded: rgbDataBase64),
+              rgbData.count == width * height * 3
+        else {
             return nil
         }
-        return UIImage(contentsOfFile: localPath)
+
+        var rgbaData = Data(count: width * height * 4)
+        rgbaData.withUnsafeMutableBytes { rgbaBuffer in
+            rgbData.withUnsafeBytes { rgbBuffer in
+                let rgbBytes = rgbBuffer.bindMemory(to: UInt8.self)
+                let rgbaBytes = rgbaBuffer.bindMemory(to: UInt8.self)
+
+                for pixelIndex in 0..<(width * height) {
+                    let rgbIndex = pixelIndex * 3
+                    let rgbaIndex = pixelIndex * 4
+                    rgbaBytes[rgbaIndex] = rgbBytes[rgbIndex]
+                    rgbaBytes[rgbaIndex + 1] = rgbBytes[rgbIndex + 1]
+                    rgbaBytes[rgbaIndex + 2] = rgbBytes[rgbIndex + 2]
+                    rgbaBytes[rgbaIndex + 3] = 255
+                }
+            }
+        }
+
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        guard let provider = CGDataProvider(data: rgbaData as CFData),
+              let cgImage = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: bitmapInfo,
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: true,
+                intent: .defaultIntent
+              )
+        else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 
     private var labelForeground: Color {

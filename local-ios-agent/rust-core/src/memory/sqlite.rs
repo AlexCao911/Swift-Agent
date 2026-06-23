@@ -78,6 +78,7 @@ impl SqliteEventStore {
                   parent_id text,
                   run_id text,
                   sequence integer not null,
+                  created_at_millis integer not null default 0,
                   depth integer not null,
                   kind text not null,
                   payload text not null,
@@ -147,6 +148,7 @@ impl SqliteEventStore {
             .map_err(storage_error)?;
 
         self.ensure_sessions_archived_column()?;
+        self.ensure_events_created_at_millis_column()?;
 
         let version = self.schema_version()?;
         if version != 1 {
@@ -169,6 +171,24 @@ impl SqliteEventStore {
         self.conn
             .execute(
                 "alter table sessions add column archived integer not null default 0",
+                [],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn ensure_events_created_at_millis_column(&self) -> Result<(), AgentError> {
+        if self
+            .conn
+            .prepare("select created_at_millis from events limit 0")
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        self.conn
+            .execute(
+                "alter table events add column created_at_millis integer not null default 0",
                 [],
             )
             .map_err(storage_error)?;
@@ -496,9 +516,9 @@ impl EventStore for SqliteEventStore {
         tx.execute(
             "
             insert into events(
-              id, session_id, parent_id, run_id, sequence, depth, kind, payload, blob_refs
+              id, session_id, parent_id, run_id, sequence, created_at_millis, depth, kind, payload, blob_refs
             )
-            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ",
             params![
                 event.id.0,
@@ -506,6 +526,7 @@ impl EventStore for SqliteEventStore {
                 event.parent_id.as_ref().map(|id| id.0.as_str()),
                 event.run_id.as_ref().map(|id| id.0.as_str()),
                 event.sequence as i64,
+                event.created_at_millis as i64,
                 event.depth as i64,
                 event_kind_to_str(&event.kind),
                 event.payload,
@@ -553,7 +574,7 @@ impl EventStore for SqliteEventStore {
         self.conn
             .query_row(
                 "
-                select id, session_id, parent_id, run_id, sequence, depth, kind, payload, blob_refs
+                select id, session_id, parent_id, run_id, sequence, created_at_millis, depth, kind, payload, blob_refs
                 from events
                 where session_id = ?1 and id = ?2
                 ",
@@ -564,25 +585,46 @@ impl EventStore for SqliteEventStore {
                     let parent_id: Option<String> = row.get(2)?;
                     let run_id: Option<String> = row.get(3)?;
                     let sequence: i64 = row.get(4)?;
-                    let depth: i64 = row.get(5)?;
-                    let kind: String = row.get(6)?;
-                    let payload: String = row.get(7)?;
-                    let blob_refs: String = row.get(8)?;
+                    let created_at_millis: i64 = row.get(5)?;
+                    let depth: i64 = row.get(6)?;
+                    let kind: String = row.get(7)?;
+                    let payload: String = row.get(8)?;
+                    let blob_refs: String = row.get(9)?;
                     Ok((
-                        id, session_id, parent_id, run_id, sequence, depth, kind, payload,
+                        id,
+                        session_id,
+                        parent_id,
+                        run_id,
+                        sequence,
+                        created_at_millis,
+                        depth,
+                        kind,
+                        payload,
                         blob_refs,
                     ))
                 },
             )
             .map_err(storage_error)
             .and_then(
-                |(id, session_id, parent_id, run_id, sequence, depth, kind, payload, blob_refs)| {
+                |(
+                    id,
+                    session_id,
+                    parent_id,
+                    run_id,
+                    sequence,
+                    created_at_millis,
+                    depth,
+                    kind,
+                    payload,
+                    blob_refs,
+                )| {
                     Ok(RuntimeEvent {
                         id: EntryId(id),
                         session_id: SessionId(session_id),
                         parent_id: parent_id.map(EntryId),
                         run_id: run_id.map(RunId),
                         sequence: sequence as u64,
+                        created_at_millis: created_at_millis.max(0) as u64,
                         depth: depth as u32,
                         kind: event_kind_from_str(&kind)?,
                         payload,
