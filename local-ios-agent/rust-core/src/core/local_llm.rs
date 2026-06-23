@@ -347,7 +347,7 @@ impl ModelProvider for LocalLLMProvider {
         prompt["stream"] = Value::Bool(true);
 
         let prompt_json = prompt.to_string();
-        let image = first_image_input(frame)?;
+        let image = latest_image_input(frame)?;
         let mut emit_token = |token_json: &str| on_output(parse_backend_token(token_json)?);
         if let Some(image) = image {
             self.backend.stream_chat_with_image(
@@ -516,9 +516,9 @@ impl CAbiLocalInferenceBackend {
     }
 }
 
-fn first_image_input(frame: &PromptFrame) -> Result<Option<ImageInput>, AgentError> {
-    for message in &frame.messages {
-        for blob_ref in message.blob_refs() {
+fn latest_image_input(frame: &PromptFrame) -> Result<Option<ImageInput>, AgentError> {
+    for message in frame.messages.iter().rev() {
+        for blob_ref in message.blob_refs().iter().rev() {
             if let Some(image) = image_input_from_blob_ref(blob_ref)? {
                 return Ok(Some(image));
             }

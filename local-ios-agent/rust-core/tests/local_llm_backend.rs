@@ -160,7 +160,7 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
 }
 
 #[test]
-fn local_llm_provider_streams_first_image_blob_through_backend() {
+fn local_llm_provider_streams_single_image_blob_through_backend() {
     let backend = RecordingBackend::streaming(MOCK_TOKEN_JSON);
     let provider = LocalLLMProvider::new(
         "minicpm",
@@ -201,6 +201,51 @@ fn local_llm_provider_streams_first_image_blob_through_backend() {
             width: 2,
             height: 1,
             rgb_data: vec![1, 2, 3, 4, 5, 6],
+        }]
+    );
+}
+
+#[test]
+fn local_llm_provider_streams_latest_image_blob_through_backend() {
+    let backend = RecordingBackend::streaming(MOCK_TOKEN_JSON);
+    let provider = LocalLLMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend.clone()),
+    );
+    let frame = PromptFrame {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        messages: vec![
+            PromptMessage::UserWithBlobRefs {
+                content: "what is in this first picture?".into(),
+                blob_refs: vec![
+                    "local-agent-chat:v1:eyJ0eXBlIjoiaW1hZ2VfaW5wdXQiLCJpbWFnZVdpZHRoIjoyLCJpbWFnZUhlaWdodCI6MSwicmdiRGF0YUJhc2U2NCI6IkFRSURCQVVHIn0".into(),
+                ],
+            },
+            PromptMessage::Assistant("the first picture shows flowers".into()),
+            PromptMessage::User("does that place look good for ice cream?".into()),
+            PromptMessage::Assistant("the flower area looks nice".into()),
+            PromptMessage::UserWithBlobRefs {
+                content: "what is this new picture?".into(),
+                blob_refs: vec![
+                    "local-agent-chat:v1:eyJ0eXBlIjoiaW1hZ2VfaW5wdXQiLCJpbWFnZVdpZHRoIjoxLCJpbWFnZUhlaWdodCI6MSwicmdiRGF0YUJhc2U2NCI6IkNRZ0gifQ".into(),
+                ],
+            },
+        ],
+    };
+
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |_| Ok(()))
+        .unwrap();
+
+    assert_eq!(
+        backend.image_inputs(),
+        vec![ImageInput {
+            width: 1,
+            height: 1,
+            rgb_data: vec![9, 8, 7],
         }]
     );
 }
