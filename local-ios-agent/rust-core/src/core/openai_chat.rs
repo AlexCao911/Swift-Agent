@@ -16,6 +16,10 @@ pub fn build_openai_chat_request(model: &str, frame: &PromptFrame) -> Value {
                 "role": "user",
                 "content": content,
             }),
+            PromptMessage::UserWithBlobRefs { content, .. } => json!({
+                "role": "user",
+                "content": content,
+            }),
             PromptMessage::Assistant(content) | PromptMessage::Summary(content) => json!({
                 "role": "assistant",
                 "content": content,

@@ -88,6 +88,9 @@ struct AttachmentViewState: Equatable, Identifiable, Sendable {
     var urlString: String?
     var mimeType: String?
     var byteCount: Int?
+    var imageWidth: Int? = nil
+    var imageHeight: Int? = nil
+    var rgbDataBase64: String? = nil
 }
 
 extension AttachmentViewState {
@@ -99,7 +102,10 @@ extension AttachmentViewState {
             localPath: draft.localPath,
             urlString: draft.urlString,
             mimeType: draft.mimeType,
-            byteCount: draft.byteCount
+            byteCount: draft.byteCount,
+            imageWidth: draft.imageWidth,
+            imageHeight: draft.imageHeight,
+            rgbDataBase64: draft.rgbDataBase64
         )
     }
 }
@@ -112,6 +118,9 @@ struct AttachmentDraftViewState: Equatable, Identifiable, Sendable {
     var urlString: String?
     var mimeType: String?
     var byteCount: Int?
+    var imageWidth: Int? = nil
+    var imageHeight: Int? = nil
+    var rgbDataBase64: String? = nil
 }
 
 extension AttachmentDraftViewState {
@@ -123,7 +132,10 @@ extension AttachmentDraftViewState {
             localPath: viewState.localPath,
             urlString: viewState.urlString,
             mimeType: viewState.mimeType,
-            byteCount: viewState.byteCount
+            byteCount: viewState.byteCount,
+            imageWidth: viewState.imageWidth,
+            imageHeight: viewState.imageHeight,
+            rgbDataBase64: viewState.rgbDataBase64
         )
     }
 }
@@ -157,6 +169,9 @@ enum RuntimeBlobRefCodec {
         var urlString: String?
         var mimeType: String?
         var byteCount: Int?
+        var imageWidth: Int?
+        var imageHeight: Int?
+        var rgbDataBase64: String?
     }
 
     static func encodeUserMessage(
@@ -201,7 +216,10 @@ enum RuntimeBlobRefCodec {
             localPath: attachment.localPath,
             urlString: attachment.urlString,
             mimeType: attachment.mimeType,
-            byteCount: attachment.byteCount
+            byteCount: attachment.byteCount,
+            imageWidth: attachment.imageWidth,
+            imageHeight: attachment.imageHeight,
+            rgbDataBase64: attachment.rgbDataBase64
         )
     }
 
@@ -221,7 +239,10 @@ enum RuntimeBlobRefCodec {
             localPath: payload.localPath,
             urlString: payload.urlString,
             mimeType: payload.mimeType,
-            byteCount: payload.byteCount
+            byteCount: payload.byteCount,
+            imageWidth: payload.imageWidth,
+            imageHeight: payload.imageHeight,
+            rgbDataBase64: payload.rgbDataBase64
         )
     }
 

@@ -66,13 +66,15 @@ fn main() {
             .arg(inference_dir.join("backends/llama_cpp"));
         if link_llama_cpp {
             compile.arg("-DLOCAL_AGENT_ENABLE_LLAMA_CPP");
-            compile.arg("-I").arg(required_path("LLAMA_CPP_HEADERS"));
+            for include_path in required_paths("LLAMA_CPP_HEADERS") {
+                compile.arg("-I").arg(include_path);
+            }
         }
         if link_llama_cpp_mtmd {
             compile.arg("-DLOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD");
-            compile
-                .arg("-I")
-                .arg(required_path("LLAMA_CPP_MTMD_HEADERS"));
+            for include_path in required_paths("LLAMA_CPP_MTMD_HEADERS") {
+                compile.arg("-I").arg(include_path);
+            }
         }
         compile
             .arg("-c")
@@ -186,6 +188,16 @@ fn required_path(name: &str) -> PathBuf {
     env::var_os(name)
         .map(PathBuf::from)
         .unwrap_or_else(|| panic!("{name} must be set for the selected local inference feature"))
+}
+
+fn required_paths(name: &str) -> Vec<PathBuf> {
+    let value = env::var_os(name)
+        .unwrap_or_else(|| panic!("{name} must be set for the selected local inference feature"));
+    let paths: Vec<PathBuf> = env::split_paths(&value).collect();
+    if paths.is_empty() {
+        panic!("{name} must include at least one path");
+    }
+    paths
 }
 
 fn link_llama_cpp_artifact() {

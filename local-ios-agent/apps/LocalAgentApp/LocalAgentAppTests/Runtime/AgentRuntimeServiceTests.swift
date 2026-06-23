@@ -134,6 +134,64 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text) == ["hi", "there"])
     }
 
+    @Test("fork conversation creates a new chat from the selected branch leaf")
+    func forkConversationCreatesNewChatFromSelectedBranchLeaf() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setForkSessionResultForTest("session_2")
+        await client.setActiveBranchForTest(
+            sessionId: "session_2",
+            leafId: nil,
+            events: [
+                event(id: "user_2", sessionId: "session_2", kind: .userMessage, payload: "hi", runId: "run_2"),
+                event(
+                    id: "assistant_2",
+                    sessionId: "session_2",
+                    kind: .assistantMessageCompleted,
+                    payload: "there",
+                    runId: "run_2"
+                ),
+            ]
+        )
+        await client.setConversationSummariesForTest([
+            ConversationSummaryDTO(
+                sessionId: "session_2",
+                title: "hi",
+                activeLeafId: "assistant_2",
+                lastEventId: "assistant_2",
+                lastUpdatedSequence: 8
+            ),
+            ConversationSummaryDTO(
+                sessionId: "session_1",
+                title: "old",
+                activeLeafId: "assistant_1",
+                lastEventId: "assistant_1",
+                lastUpdatedSequence: 4
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(
+            phase: .ready,
+            messages: [AgentMessageViewState(id: "old", role: .user, text: "old", isStreaming: false)],
+            currentSessionId: "session_1"
+        )
+
+        let nextState = try await service.forkConversation(
+            sessionId: "session_1",
+            leafId: "assistant_1",
+            state: state
+        )
+
+        #expect(await client.forkSessionRequests == [
+            ScriptedRuntimeClient.ForkSessionRequest(sessionId: "session_1", leafId: "assistant_1"),
+        ])
+        #expect(await client.activeBranchRequests == [
+            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_2", leafId: nil),
+        ])
+        #expect(nextState.currentSessionId == "session_2")
+        #expect(nextState.messages.map(\.text) == ["hi", "there"])
+        #expect(nextState.conversations.conversations.map(\.sessionId) == ["session_2", "session_1"])
+    }
+
     @Test("select conversation restores attachment blob refs")
     func selectConversationRestoresAttachmentBlobRefs() async throws {
         let client = ScriptedRuntimeClient()
@@ -333,7 +391,7 @@ struct AgentRuntimeServiceTests {
                     event(
                         id: "user_1",
                         kind: .userMessage,
-                        payload: "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3"
+                        payload: "look\nImage attached: photo.png"
                     ),
                     event(id: "assistant_1", kind: .assistantMessageCompleted, payload: "image noted"),
                 ],
@@ -352,17 +410,24 @@ struct AgentRuntimeServiceTests {
                 localPath: "/tmp/photo.png",
                 urlString: nil,
                 mimeType: "image/png",
-                byteCount: 3
+                byteCount: 3,
+                imageWidth: 1,
+                imageHeight: 2,
+                rgbDataBase64: "AQIDBAUG"
             ),
         ]
         state = try await service.sendMessage("look", state: state)
 
         let sentMessages = await client.sentMessages
         #expect(sentMessages.map(\.text) == [
-            "look\nImage: photo.png path=/tmp/photo.png mime=image/png bytes=3",
+            "look\nImage attached: photo.png",
         ])
-        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).text == "look")
-        #expect(RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs).attachments.map(\.localPath) == ["/tmp/photo.png"])
+        let decoded = RuntimeBlobRefCodec.decodeUserMessage(from: sentMessages[0].blobRefs)
+        #expect(decoded.text == "look")
+        #expect(decoded.attachments.map(\.localPath) == ["/tmp/photo.png"])
+        #expect(decoded.attachments.map(\.imageWidth) == [1])
+        #expect(decoded.attachments.map(\.imageHeight) == [2])
+        #expect(decoded.attachments.map(\.rgbDataBase64) == ["AQIDBAUG"])
         #expect(state.messages[0].text == "look")
         #expect(state.messages[0].attachments.count == 1)
         #expect(state.messages[0].attachments[0].kind == .image)
@@ -411,41 +476,8 @@ struct AgentRuntimeServiceTests {
         #expect(await client.sentMessages.map(\.parentEventId) == ["__local_agent_root__"])
     }
 
-    @Test("continue generation sends from active leaf")
-    func continueGenerationSendsFromActiveLeaf() async throws {
-        let client = ScriptedRuntimeClient(sendTurns: [
-            AgentTurnResultDTO(
-                runId: "run_1",
-                state: .completed,
-                events: [
-                    event(id: "user_continue", kind: .userMessage, payload: "Continue."),
-                    event(id: "assistant_continue", kind: .assistantMessageCompleted, payload: "more"),
-                ],
-                pendingToolCallId: nil
-            ),
-        ])
-        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
-        let state = AgentViewState(
-            phase: .ready,
-            messages: [
-                AgentMessageViewState(
-                    id: "assistant_ui_message",
-                    branchLeafId: "assistant_completed_leaf",
-                    role: .assistant,
-                    parts: [.text(TextPartViewState(id: "assistant_text", text: "partial"))]
-                ),
-            ],
-            currentSessionId: "session_1"
-        )
-
-        _ = try await service.continueGeneration(state: state)
-
-        #expect(await client.sentMessages.map(\.text) == ["Continue."])
-        #expect(await client.sentMessages.map(\.parentEventId) == ["assistant_completed_leaf"])
-    }
-
-    @Test("edit and resend sends edited text from original parent")
-    func editAndResendSendsEditedTextFromOriginalParent() async throws {
+    @Test("edit and resend replaces the visible branch with edited text")
+    func editAndResendReplacesVisibleBranchWithEditedText() async throws {
         let client = ScriptedRuntimeClient(sendTurns: [
             AgentTurnResultDTO(
                 runId: "run_1",
@@ -457,6 +489,28 @@ struct AgentRuntimeServiceTests {
                 pendingToolCallId: nil
             ),
         ])
+        await client.setActiveBranchForTest(
+            sessionId: "session_1",
+            leafId: nil,
+            events: [
+                event(
+                    id: "user_edited",
+                    sessionId: "session_1",
+                    parentId: "root_event",
+                    kind: .userMessage,
+                    payload: "edited prompt",
+                    runId: "run_1"
+                ),
+                event(
+                    id: "assistant_edited",
+                    sessionId: "session_1",
+                    parentId: "user_edited",
+                    kind: .assistantMessageCompleted,
+                    payload: "edited answer",
+                    runId: "run_1"
+                ),
+            ]
+        )
         let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
         let state = AgentViewState(
             phase: .ready,
@@ -472,10 +526,14 @@ struct AgentRuntimeServiceTests {
             currentSessionId: "session_1"
         )
 
-        _ = try await service.editAndResend(messageId: "user_1", text: "edited prompt", state: state)
+        let nextState = try await service.editAndResend(messageId: "user_1", text: "edited prompt", state: state)
 
         #expect(await client.sentMessages.map(\.text) == ["edited prompt"])
         #expect(await client.sentMessages.map(\.parentEventId) == ["root_event"])
+        #expect(await client.activeBranchRequests == [
+            ScriptedRuntimeClient.ActiveBranchRequest(sessionId: "session_1", leafId: nil),
+        ])
+        #expect(nextState.messages.map(\.text) == ["edited prompt", "edited answer"])
     }
 
     @Test("streamed delta is delivered before final turn result")
@@ -1505,6 +1563,11 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
         var leafId: String?
     }
 
+    struct ForkSessionRequest: Equatable, Sendable {
+        var sessionId: String
+        var leafId: String
+    }
+
     private var sessionCount = 0
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
@@ -1513,12 +1576,14 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     private var activeProviderForTest: ProviderProfileDTO
     private var conversationSummariesForTest: [ConversationSummaryDTO] = []
     private var activeBranchEventsForTest: [String: [RuntimeEventDTO]] = [:]
+    private var forkSessionResultForTest = "session_forked"
 
     private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     private(set) var sentMessages: [SentMessage] = []
     private(set) var submittedToolResults: [SubmittedToolResult] = []
     private(set) var selectedProviders: [SelectedProvider] = []
     private(set) var activeBranchRequests: [ActiveBranchRequest] = []
+    private(set) var forkSessionRequests: [ForkSessionRequest] = []
     private(set) var archivedSessionIds: [String] = []
     private(set) var deletedSessionIds: [String] = []
 
@@ -1562,6 +1627,10 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
         events: [RuntimeEventDTO]
     ) {
         activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] = events
+    }
+
+    func setForkSessionResultForTest(_ sessionId: String) {
+        forkSessionResultForTest = sessionId
     }
 
     func createSession() async throws -> String {
@@ -1670,6 +1739,11 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
 
     func conversationSummaries() async throws -> [ConversationSummaryDTO] {
         conversationSummariesForTest
+    }
+
+    func forkSession(sessionId: String, leafId: String) async throws -> String {
+        forkSessionRequests.append(ForkSessionRequest(sessionId: sessionId, leafId: leafId))
+        return forkSessionResultForTest
     }
 
     func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {

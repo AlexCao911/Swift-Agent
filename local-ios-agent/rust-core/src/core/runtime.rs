@@ -426,6 +426,47 @@ impl<S: EventStore> AgentRuntime<S> {
         self.store.active_branch(session_id, &leaf_id)
     }
 
+    pub fn fork_session(
+        &mut self,
+        source_session_id: &SessionId,
+        leaf_id: &EntryId,
+    ) -> Result<SessionId, AgentError> {
+        let source_branch = self.store.active_branch(source_session_id, leaf_id)?;
+        let target_session_id = self.create_session()?;
+        let target_root_id = self.store.active_leaf(&target_session_id)?.ok_or_else(|| {
+            AgentError::Storage(format!(
+                "new fork session has no root event: {}",
+                target_session_id.0
+            ))
+        })?;
+        let mut copied_ids = HashMap::new();
+
+        for event in source_branch {
+            if event.kind == EventKind::SessionCreated {
+                copied_ids.insert(event.id, target_root_id.clone());
+                continue;
+            }
+
+            let target_id = EntryId(self.ids.next_id("entry"));
+            let parent_id = event
+                .parent_id
+                .as_ref()
+                .and_then(|parent_id| copied_ids.get(parent_id).cloned());
+            self.append_event_with_id_and_blob_refs(
+                target_id.clone(),
+                &target_session_id,
+                parent_id,
+                None,
+                event.kind,
+                event.payload,
+                event.blob_refs,
+            )?;
+            copied_ids.insert(event.id, target_id);
+        }
+
+        Ok(target_session_id)
+    }
+
     pub fn create_session(&mut self) -> Result<SessionId, AgentError> {
         let session_id = SessionId(self.ids.next_id("session"));
         self.sessions
@@ -1593,6 +1634,65 @@ mod tests {
         assert!(explicit_branch.iter().any(|event| event.payload == "root"));
         assert!(!explicit_branch.iter().any(|event| event.payload == "fork"));
         assert!(active_branch.iter().any(|event| event.payload == "fork"));
+    }
+
+    #[test]
+    fn fork_session_copies_selected_branch_into_new_conversation() {
+        let mut runtime = AgentRuntime::new(config());
+        let source_session = runtime.create_session().unwrap();
+        let first_turn = runtime
+            .send_message_turn(SendMessageInput {
+                session_id: source_session.clone(),
+                parent_event_id: None,
+                text: "root".into(),
+                blob_refs: vec!["local-agent-chat:v1:metadata".into()],
+            })
+            .unwrap();
+        let root_user_id = first_turn
+            .events
+            .iter()
+            .find(|event| event.kind == EventKind::UserMessage)
+            .unwrap()
+            .id
+            .clone();
+        let first_leaf_id = first_turn.events.last().unwrap().id.clone();
+
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: source_session.clone(),
+                parent_event_id: Some(root_user_id),
+                text: "alternate".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        let forked_session = runtime
+            .fork_session(&source_session, &first_leaf_id)
+            .unwrap();
+        let forked_branch = runtime.active_branch_events(&forked_session, None).unwrap();
+        let copied_user = forked_branch
+            .iter()
+            .find(|event| event.kind == EventKind::UserMessage)
+            .unwrap();
+
+        assert_ne!(forked_session, source_session);
+        assert_eq!(copied_user.payload, "root");
+        assert_eq!(
+            copied_user.blob_refs,
+            vec!["local-agent-chat:v1:metadata".to_string()]
+        );
+        assert_eq!(copied_user.run_id, None);
+        assert!(forked_branch
+            .iter()
+            .any(|event| event.kind == EventKind::AssistantMessageCompleted));
+        assert!(!forked_branch
+            .iter()
+            .any(|event| event.payload == "alternate"));
+        assert!(runtime
+            .conversation_summaries()
+            .unwrap()
+            .iter()
+            .any(|summary| summary.session_id == forked_session));
     }
 
     #[test]

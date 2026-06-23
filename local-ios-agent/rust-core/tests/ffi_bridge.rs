@@ -4,11 +4,11 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
-    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_free,
-    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message,
-    local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
-    local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_string_free,
-    RuntimeJsonBridge,
+    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
+    local_agent_runtime_bridge_free, local_agent_runtime_bridge_new_with_config,
+    local_agent_runtime_bridge_send_message, local_agent_runtime_bridge_send_message_streaming,
+    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
+    local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
 };
 use local_ios_agent_runtime::tool::ToolCall;
 use serde_json::{json, Value};
@@ -364,6 +364,100 @@ fn bridge_exposes_conversation_summary_and_active_branch_json() {
 
     bridge.delete_session_json(session_id).unwrap();
     assert_eq!(decode(&bridge.session_ids_json().unwrap()), json!([]));
+}
+
+#[test]
+fn bridge_can_fork_selected_branch_into_new_session() {
+    let bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+    let first_turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"root title"}}"#
+            ))
+            .unwrap(),
+    );
+    let root_user_id = first_turn["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "user_message")
+        .and_then(|event| event["id"].as_str())
+        .unwrap();
+    let first_leaf_id = first_turn["events"]
+        .as_array()
+        .unwrap()
+        .last()
+        .and_then(|event| event["id"].as_str())
+        .unwrap();
+
+    let _fork_turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":"{root_user_id}","text":"alternate title"}}"#
+            ))
+            .unwrap(),
+    );
+
+    let forked_session = decode(&bridge.fork_session_json(session_id, first_leaf_id).unwrap());
+    let forked_session_id = forked_session.as_str().unwrap();
+    let forked_branch = decode(&bridge.active_branch_json(forked_session_id, None).unwrap());
+
+    assert_ne!(forked_session_id, session_id);
+    assert!(forked_branch
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"] == "root title"));
+    assert!(!forked_branch
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"] == "alternate title"));
+
+    let summaries = decode(&bridge.conversation_summaries_json().unwrap());
+    assert!(summaries
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|summary| summary["session_id"] == forked_session_id));
+}
+
+#[test]
+fn c_abi_bridge_can_fork_selected_branch_into_new_session() {
+    unsafe {
+        let runtime = Box::into_raw(Box::new(bridge()));
+        let session = take_bridge_string(local_agent_runtime_bridge_create_session(runtime));
+        let session_id = decode(&session).as_str().unwrap().to_string();
+        let input = CString::new(format!(
+            r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"hello"}}"#
+        ))
+        .unwrap();
+        let first_turn = take_bridge_string(local_agent_runtime_bridge_send_message(
+            runtime,
+            input.as_ptr(),
+        ));
+        let first_turn = decode(&first_turn);
+        let first_leaf_id = first_turn["events"]
+            .as_array()
+            .unwrap()
+            .last()
+            .and_then(|event| event["id"].as_str())
+            .unwrap()
+            .to_string();
+
+        let session = CString::new(session_id.clone()).unwrap();
+        let leaf = CString::new(first_leaf_id).unwrap();
+        let forked = take_bridge_string(local_agent_runtime_bridge_fork_session(
+            runtime,
+            session.as_ptr(),
+            leaf.as_ptr(),
+        ));
+
+        assert_ne!(decode(&forked).as_str().unwrap(), session_id);
+        local_agent_runtime_bridge_free(runtime);
+    }
 }
 
 #[test]

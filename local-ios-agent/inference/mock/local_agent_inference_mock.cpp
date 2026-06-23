@@ -130,7 +130,11 @@ LocalAgentStatus local_agent_backend_start_chat_with_image(
     ) {
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    auto *stream = new LocalAgentBackendStream();
+    stream->backend = backend;
+    *out_stream = stream;
+
+    return LOCAL_AGENT_STATUS_OK;
 }
 
 LocalAgentStatus local_agent_backend_read_stream(

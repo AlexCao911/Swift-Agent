@@ -57,28 +57,26 @@ struct ReasoningTagParser: Equatable, Sendable {
             reasoningBuffer = ""
         }
 
-        while index < source.endIndex {
-            let remainder = source[index...]
-
+        parseLoop: while index < source.endIndex {
             switch mode {
             case .text:
-                if remainder.hasPrefix(openingTag) {
+                if hasTag(openingTag, in: source, at: index) {
                     appendTextPart()
-                    index = source.index(index, offsetBy: openingTag.count)
+                    advance(&index, in: source, by: openingTag.count)
                     mode = .reasoning
-                } else if remainder.first == "<", openingTag.hasPrefix(remainder), !isFinal {
-                    break
+                } else if isPartialTagPrefix(openingTag, in: source, at: index, isFinal: isFinal) {
+                    break parseLoop
                 } else {
                     textBuffer.append(source[index])
                     index = source.index(after: index)
                 }
             case .reasoning:
-                if remainder.hasPrefix(closingTag) {
+                if hasTag(closingTag, in: source, at: index) {
                     appendReasoningPart(isClosed: true)
-                    index = source.index(index, offsetBy: closingTag.count)
+                    advance(&index, in: source, by: closingTag.count)
                     mode = .text
-                } else if remainder.first == "<", closingTag.hasPrefix(remainder), !isFinal {
-                    break
+                } else if isPartialTagPrefix(closingTag, in: source, at: index, isFinal: isFinal) {
+                    break parseLoop
                 } else {
                     reasoningBuffer.append(source[index])
                     index = source.index(after: index)
@@ -94,5 +92,54 @@ struct ReasoningTagParser: Equatable, Sendable {
         }
 
         return parts
+    }
+
+    private func hasTag(_ tag: String, in source: String, at index: String.Index) -> Bool {
+        var sourceIndex = index
+        for tagCharacter in tag {
+            guard sourceIndex < source.endIndex, source[sourceIndex] == tagCharacter else {
+                return false
+            }
+            sourceIndex = source.index(after: sourceIndex)
+        }
+        return true
+    }
+
+    private func isPartialTagPrefix(
+        _ tag: String,
+        in source: String,
+        at index: String.Index,
+        isFinal: Bool
+    ) -> Bool {
+        guard !isFinal, index < source.endIndex, source[index] == "<" else {
+            return false
+        }
+
+        var sourceIndex = index
+        var matchedCount = 0
+        for tagCharacter in tag {
+            guard sourceIndex < source.endIndex else {
+                return matchedCount > 0 && matchedCount < tag.count
+            }
+
+            guard source[sourceIndex] == tagCharacter else {
+                return false
+            }
+
+            matchedCount += 1
+            sourceIndex = source.index(after: sourceIndex)
+        }
+
+        guard sourceIndex == source.endIndex else {
+            return false
+        }
+
+        return matchedCount < tag.count
+    }
+
+    private func advance(_ index: inout String.Index, in source: String, by count: Int) {
+        for _ in 0..<count where index < source.endIndex {
+            index = source.index(after: index)
+        }
     }
 }

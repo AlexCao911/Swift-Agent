@@ -9,6 +9,7 @@
 
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD)
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #endif
 
 #include <stdexcept>
@@ -49,8 +50,23 @@ std::string render_prompt_for_llama_cpp(
     ,
     const llama_model *model
 #endif
+    ,
+    const char *media_marker
 ) {
     std::vector<LlamaPromptMessage> parsed_messages = parse_llama_prompt_messages(prompt_json);
+    if (media_marker != nullptr && media_marker[0] != '\0') {
+        bool injected = false;
+        for (auto message = parsed_messages.rbegin(); message != parsed_messages.rend(); ++message) {
+            if (message->role == "user") {
+                message->content = std::string(media_marker) + "\n" + message->content;
+                injected = true;
+                break;
+            }
+        }
+        if (!injected) {
+            throw std::invalid_argument("image input requires a user prompt message");
+        }
+    }
 
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP)
     const char *chat_template = nullptr;
@@ -237,7 +253,7 @@ private:
 
         llama_memory_clear(llama_get_memory(context_), true);
 
-        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_);
+        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_, nullptr);
 
         int prompt_token_count = -llama_tokenize(
             vocab,
@@ -349,9 +365,18 @@ private:
 
         llama_memory_clear(llama_get_memory(context_), true);
 
-        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_);
+        const std::string prompt = render_prompt_for_llama_cpp(
+            prompt_json,
+            config,
+            model_,
+            mtmd_default_marker()
+        );
+        mtmd_input_text text;
+        text.text = prompt.c_str();
+        text.add_special = true;
+        text.parse_special = true;
         const mtmd_bitmap *bitmaps[1] = {bitmap};
-        int32_t tokenize_status = mtmd_tokenize(mtmd_, chunks, prompt.c_str(), bitmaps, 1);
+        int32_t tokenize_status = mtmd_tokenize(mtmd_, chunks, &text, bitmaps, 1);
         if (tokenize_status != 0) {
             mtmd_input_chunks_free(chunks);
             mtmd_bitmap_free(bitmap);

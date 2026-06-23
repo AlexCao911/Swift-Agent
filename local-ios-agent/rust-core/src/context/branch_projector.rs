@@ -15,7 +15,13 @@ impl BranchProjector {
         let mut messages = Vec::new();
         for event in branch {
             match event.kind {
-                EventKind::UserMessage => messages.push(PromptMessage::User(event.payload)),
+                EventKind::UserMessage if event.blob_refs.is_empty() => {
+                    messages.push(PromptMessage::User(event.payload));
+                }
+                EventKind::UserMessage => messages.push(PromptMessage::UserWithBlobRefs {
+                    content: event.payload,
+                    blob_refs: event.blob_refs,
+                }),
                 EventKind::AssistantMessageCompleted => {
                     messages.push(PromptMessage::Assistant(event.payload));
                 }
@@ -69,7 +75,7 @@ mod tests {
     use crate::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 
     #[test]
-    fn user_blob_refs_do_not_leak_into_prompt_projection() {
+    fn user_blob_refs_are_available_to_provider_projection() {
         let mut event = RuntimeEvent::new(
             EntryId("entry_1".into()),
             SessionId("session_1".into()),
@@ -84,6 +90,12 @@ mod tests {
 
         let messages = BranchProjector::new().project(vec![event]);
 
-        assert_eq!(messages, vec![PromptMessage::User("hello".into())]);
+        assert_eq!(
+            messages,
+            vec![PromptMessage::UserWithBlobRefs {
+                content: "hello".into(),
+                blob_refs: vec!["local-agent-chat:v1:metadata".into()],
+            }]
+        );
     }
 }

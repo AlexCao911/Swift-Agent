@@ -56,6 +56,7 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
             createSession: { _ in Self.makeCString(#""session_1""#) },
             sessionIds: { _ in Self.makeCString(#"["session_1"]"#) },
             conversationSummaries: { _ in Self.makeCString("[]") },
+            forkSession: { _, _, _ in Self.makeCString(#""session_forked""#) },
             activeBranch: { _, _, _ in Self.makeCString("[]") },
             archiveSession: { _, _ in Self.makeCString("null") },
             deleteSession: { _, _ in Self.makeCString("null") },

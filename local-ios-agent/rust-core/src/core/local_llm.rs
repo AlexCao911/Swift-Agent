@@ -41,6 +41,14 @@ pub type CAbiStartChatFn = unsafe extern "C" fn(
     *const c_char,
     *mut *mut CAbiLocalAgentBackendStream,
 ) -> LocalAgentStatus;
+pub type CAbiStartChatWithImageFn = unsafe extern "C" fn(
+    *mut CAbiLocalAgentBackend,
+    *const c_char,
+    *const u8,
+    u32,
+    u32,
+    *mut *mut CAbiLocalAgentBackendStream,
+) -> LocalAgentStatus;
 pub type CAbiReadStreamFn = unsafe extern "C" fn(
     *mut CAbiLocalAgentBackendStream,
     CAbiTokenCallback,
@@ -57,10 +65,18 @@ pub struct CAbiFunctions {
     pub init: CAbiInitFn,
     pub load_model: CAbiLoadModelFn,
     pub start_chat: CAbiStartChatFn,
+    pub start_chat_with_image: CAbiStartChatWithImageFn,
     pub read_stream: CAbiReadStreamFn,
     pub cancel: CAbiCancelFn,
     pub release_stream: CAbiReleaseStreamFn,
     pub release_backend: CAbiReleaseBackendFn,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImageInput {
+    pub width: u32,
+    pub height: u32,
+    pub rgb_data: Vec<u8>,
 }
 
 pub trait LocalInferenceBackend: Send + Sync {
@@ -71,6 +87,18 @@ pub trait LocalInferenceBackend: Send + Sync {
         cancellation: CancellationToken,
         on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
     ) -> Result<(), AgentError>;
+    fn stream_chat_with_image(
+        &self,
+        prompt_json: &str,
+        image: ImageInput,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        let _ = (prompt_json, image, cancellation, on_token);
+        Err(AgentError::Provider(
+            "on-device backend does not support image input".into(),
+        ))
+    }
 }
 
 pub struct MockLocalInferenceBackend {
@@ -126,6 +154,14 @@ extern "C" {
         prompt_json: *const c_char,
         out_stream: *mut *mut CAbiLocalAgentBackendStream,
     ) -> LocalAgentStatus;
+    fn local_agent_backend_start_chat_with_image(
+        backend: *mut CAbiLocalAgentBackend,
+        prompt_json: *const c_char,
+        rgb_data: *const u8,
+        width: u32,
+        height: u32,
+        out_stream: *mut *mut CAbiLocalAgentBackendStream,
+    ) -> LocalAgentStatus;
     fn local_agent_backend_read_stream(
         stream: *mut CAbiLocalAgentBackendStream,
         callback: CAbiTokenCallback,
@@ -145,6 +181,7 @@ impl CAbiFunctions {
             init: local_agent_backend_init,
             load_model: local_agent_backend_load_model,
             start_chat: local_agent_backend_start_chat,
+            start_chat_with_image: local_agent_backend_start_chat_with_image,
             read_stream: local_agent_backend_read_stream,
             cancel: local_agent_backend_cancel,
             release_stream: local_agent_backend_release_stream,
@@ -205,6 +242,26 @@ impl LocalInferenceBackend for MockLocalInferenceBackend {
             }
         }
         Ok(())
+    }
+
+    fn stream_chat_with_image(
+        &self,
+        prompt_json: &str,
+        image: ImageInput,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        let expected = image
+            .width
+            .checked_mul(image.height)
+            .and_then(|pixels| pixels.checked_mul(3))
+            .ok_or_else(|| AgentError::Provider("image dimensions overflow".into()))?;
+        if image.rgb_data.len() != expected as usize {
+            return Err(AgentError::Provider(
+                "image RGB buffer size does not match dimensions".into(),
+            ));
+        }
+        self.stream_chat(prompt_json, cancellation, on_token)
     }
 }
 
@@ -289,10 +346,20 @@ impl ModelProvider for LocalLLMProvider {
         let mut prompt = build_openai_chat_request(&self.model, frame);
         prompt["stream"] = Value::Bool(true);
 
-        self.backend
-            .stream_chat(&prompt.to_string(), cancellation, &mut |token_json| {
-                on_output(parse_backend_token(token_json)?)
-            })?;
+        let prompt_json = prompt.to_string();
+        let image = first_image_input(frame)?;
+        let mut emit_token = |token_json: &str| on_output(parse_backend_token(token_json)?);
+        if let Some(image) = image {
+            self.backend.stream_chat_with_image(
+                &prompt_json,
+                image,
+                cancellation,
+                &mut emit_token,
+            )?;
+        } else {
+            self.backend
+                .stream_chat(&prompt_json, cancellation, &mut emit_token)?;
+        }
         Ok(())
     }
 }
@@ -322,26 +389,77 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         }
 
         let prompt = c_string(prompt_json, "prompt")?;
-        let backend_ptr = {
-            let backend = self.backend.lock().unwrap();
-            if backend.0.is_null() {
-                return Err(AgentError::Provider(
-                    "on-device backend has been released".into(),
-                ));
-            }
-            backend.0
-        };
+        let stream = self.start_stream(&prompt)?;
+        self.read_started_stream(stream, cancellation, on_token)
+    }
 
-        let mut stream = ptr::null_mut();
-        let start_status =
-            unsafe { (self.functions.start_chat)(backend_ptr, prompt.as_ptr(), &mut stream) };
-        status_to_result(start_status, "start on-device stream")?;
-        if stream.is_null() {
+    fn stream_chat_with_image(
+        &self,
+        prompt_json: &str,
+        image: ImageInput,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
+        }
+        validate_image_input(&image)?;
+
+        let prompt = c_string(prompt_json, "prompt")?;
+        let stream = self.start_image_stream(&prompt, &image)?;
+        self.read_started_stream(stream, cancellation, on_token)
+    }
+}
+
+impl CAbiLocalInferenceBackend {
+    fn backend_ptr(&self) -> Result<*mut CAbiLocalAgentBackend, AgentError> {
+        let backend = self.backend.lock().unwrap();
+        if backend.0.is_null() {
             return Err(AgentError::Provider(
-                "on-device stream start returned null".into(),
+                "on-device backend has been released".into(),
             ));
         }
+        Ok(backend.0)
+    }
 
+    fn start_stream(
+        &self,
+        prompt: &CString,
+    ) -> Result<*mut CAbiLocalAgentBackendStream, AgentError> {
+        let mut stream = ptr::null_mut();
+        let start_status = unsafe {
+            (self.functions.start_chat)(self.backend_ptr()?, prompt.as_ptr(), &mut stream)
+        };
+        status_to_result(start_status, "start on-device stream")?;
+        ensure_stream(stream)
+    }
+
+    fn start_image_stream(
+        &self,
+        prompt: &CString,
+        image: &ImageInput,
+    ) -> Result<*mut CAbiLocalAgentBackendStream, AgentError> {
+        let mut stream = ptr::null_mut();
+        let start_status = unsafe {
+            (self.functions.start_chat_with_image)(
+                self.backend_ptr()?,
+                prompt.as_ptr(),
+                image.rgb_data.as_ptr(),
+                image.width,
+                image.height,
+                &mut stream,
+            )
+        };
+        status_to_result(start_status, "start on-device image stream")?;
+        ensure_stream(stream)
+    }
+
+    fn read_started_stream(
+        &self,
+        stream: *mut CAbiLocalAgentBackendStream,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
         let done = Arc::new(AtomicBool::new(false));
         let cancel_called = Arc::new(AtomicBool::new(false));
         let watcher = spawn_cancellation_watcher(
@@ -351,7 +469,6 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
             done.clone(),
             cancel_called.clone(),
         );
-
         let mut callback_error = None;
         let mut state = CallbackState {
             on_token,
@@ -396,6 +513,126 @@ impl LocalInferenceBackend for CAbiLocalInferenceBackend {
         }
         status_to_result(read_status, "read on-device stream")?;
         status_to_result(release_status, "release on-device stream")
+    }
+}
+
+fn first_image_input(frame: &PromptFrame) -> Result<Option<ImageInput>, AgentError> {
+    for message in &frame.messages {
+        for blob_ref in message.blob_refs() {
+            if let Some(image) = image_input_from_blob_ref(blob_ref)? {
+                return Ok(Some(image));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn image_input_from_blob_ref(blob_ref: &str) -> Result<Option<ImageInput>, AgentError> {
+    const PREFIX: &str = "local-agent-chat:v1:";
+    if !blob_ref.starts_with(PREFIX) {
+        return Ok(None);
+    }
+
+    let encoded = &blob_ref[PREFIX.len()..];
+    let data = base64_url_decode(encoded).map_err(|error| {
+        AgentError::Provider(format!("invalid local image blob metadata: {error}"))
+    })?;
+    let value: Value = serde_json::from_slice(&data)
+        .map_err(|error| AgentError::Provider(format!("invalid local image blob JSON: {error}")))?;
+    let rgb_base64 = value
+        .get("rgbDataBase64")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("rgb_data_base64").and_then(Value::as_str));
+    let Some(rgb_base64) = rgb_base64 else {
+        return Ok(None);
+    };
+    let width = json_u32(&value, "imageWidth")
+        .or_else(|| json_u32(&value, "image_width"))
+        .ok_or_else(|| AgentError::Provider("local image blob missing width".into()))?;
+    let height = json_u32(&value, "imageHeight")
+        .or_else(|| json_u32(&value, "image_height"))
+        .ok_or_else(|| AgentError::Provider("local image blob missing height".into()))?;
+    let rgb_data = base64_decode(rgb_base64)
+        .map_err(|error| AgentError::Provider(format!("invalid local image RGB data: {error}")))?;
+    let image = ImageInput {
+        width,
+        height,
+        rgb_data,
+    };
+    validate_image_input(&image)?;
+    Ok(Some(image))
+}
+
+fn json_u32(value: &Value, key: &str) -> Option<u32> {
+    value.get(key)?.as_u64()?.try_into().ok()
+}
+
+fn validate_image_input(image: &ImageInput) -> Result<(), AgentError> {
+    if image.width == 0 || image.height == 0 {
+        return Err(AgentError::Provider(
+            "image dimensions must be non-zero".into(),
+        ));
+    }
+    let expected = image
+        .width
+        .checked_mul(image.height)
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or_else(|| AgentError::Provider("image dimensions overflow".into()))?;
+    if image.rgb_data.len() != expected as usize {
+        return Err(AgentError::Provider(
+            "image RGB buffer size does not match dimensions".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn base64_url_decode(encoded: &str) -> Result<Vec<u8>, String> {
+    let mut standard = encoded.replace('-', "+").replace('_', "/");
+    match standard.len() % 4 {
+        0 => {}
+        remainder => standard.push_str(&"=".repeat(4 - remainder)),
+    }
+    base64_decode(&standard)
+}
+
+fn base64_decode(encoded: &str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::with_capacity(encoded.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0u8;
+
+    for byte in encoded.bytes() {
+        if byte == b'=' {
+            break;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'\r' | b'\n' | b'\t' | b' ' => continue,
+            other => return Err(format!("invalid base64 byte: {other}")),
+        } as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        while bits >= 8 {
+            bits -= 8;
+            output.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+
+    Ok(output)
+}
+
+fn ensure_stream(
+    stream: *mut CAbiLocalAgentBackendStream,
+) -> Result<*mut CAbiLocalAgentBackendStream, AgentError> {
+    if stream.is_null() {
+        Err(AgentError::Provider(
+            "on-device stream start returned null".into(),
+        ))
+    } else {
+        Ok(stream)
     }
 }
 
@@ -522,6 +759,11 @@ fn status_to_error(status: LocalAgentStatus, action: &str) -> AgentError {
         LocalAgentStatus::Cancelled => AgentError::Cancelled("on-device backend cancelled".into()),
         LocalAgentStatus::InvalidArgument => {
             AgentError::Provider(format!("{action} rejected invalid argument"))
+        }
+        LocalAgentStatus::Error if action == "start on-device image stream" => {
+            AgentError::Provider(
+                "start on-device image stream failed; image input requires a llama.cpp mtmd build. Rebuild the simulator runtime with link-llama-cpp-mtmd-local-inference and provide LLAMA_CPP_MTMD_HEADERS plus LLAMA_CPP_MTMD_LIBRARY.".into(),
+            )
         }
         LocalAgentStatus::Error => AgentError::Provider(format!("{action} failed")),
     }

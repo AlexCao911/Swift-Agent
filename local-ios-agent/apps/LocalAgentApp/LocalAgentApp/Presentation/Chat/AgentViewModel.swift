@@ -110,13 +110,11 @@ final class AgentViewModel {
         }
 
         do {
-            var nextState = try await service.selectConversation(
+            state = try await service.forkConversation(
                 sessionId: sessionId,
                 leafId: leafId,
                 state: state
             )
-            nextState.draft.targetParentEventId = leafId
-            state = nextState
         } catch {
             state.errorMessage = error.localizedDescription
         }
@@ -145,14 +143,6 @@ final class AgentViewModel {
     func regenerate(from messageId: String) async {
         do {
             state = try await service.regenerate(from: messageId, state: state)
-        } catch {
-            state.errorMessage = error.localizedDescription
-        }
-    }
-
-    func continueGeneration() async {
-        do {
-            state = try await service.continueGeneration(state: state)
         } catch {
             state.errorMessage = error.localizedDescription
         }

@@ -175,6 +175,7 @@ struct RustRuntimeClientContractTests {
             providerId: "mock"
         )
         let summaries = try await client?.conversationSummaries()
+        let forkedSession = try await client?.forkSession(sessionId: "session_1", leafId: "entry_leaf")
         let activeBranch = try await client?.activeBranch(sessionId: "session_1", leafId: "entry_leaf")
         try await client?.archiveSession(sessionId: "session_1")
         try await client?.deleteSession(sessionId: "session_1")
@@ -193,6 +194,7 @@ struct RustRuntimeClientContractTests {
         #expect(providerEvent?.kind == .providerChanged)
         #expect(summaries?.first?.sessionId == "session_1")
         #expect(summaries?.first?.activeLeafId == "entry_leaf")
+        #expect(forkedSession == "session_forked")
         #expect(activeBranch?.first?.id == "entry_leaf")
 
         let registeredSchema = try decodedObject(try #require(probe.registeredSchemaJson))
@@ -211,6 +213,8 @@ struct RustRuntimeClientContractTests {
         #expect(approvalResponse["reason"] is NSNull)
         #expect(setProvider["session_id"] as? String == "session_1")
         #expect(setProvider["provider_id"] as? String == "mock")
+        #expect(probe.forkSessionId == "session_1")
+        #expect(probe.forkLeafId == "entry_leaf")
         #expect(probe.activeBranchSessionId == "session_1")
         #expect(probe.activeBranchLeafId == "entry_leaf")
         #expect(probe.archivedSessionId == "session_1")
@@ -219,7 +223,7 @@ struct RustRuntimeClientContractTests {
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 18)
+        #expect(probe.freedStrings == 19)
     }
 
     @Test
@@ -240,6 +244,16 @@ struct RustRuntimeClientContractTests {
 
         #expect(probe.freedStrings == 1)
         #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
+    func runtimeBridgeErrorUsesBridgeMessageAsLocalizedDescription() {
+        let error = RuntimeBridgeError(
+            kind: "provider",
+            message: "start on-device image stream failed"
+        )
+
+        #expect(error.localizedDescription == "start on-device image stream failed")
     }
 
     @Test
@@ -276,6 +290,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
     var setProviderJson: String?
+    var forkSessionId: String?
+    var forkLeafId: String?
     var activeBranchSessionId: String?
     var activeBranchLeafId: String?
     var archivedSessionId: String?
@@ -291,6 +307,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             createSession: createSession,
             sessionIds: sessionIds,
             conversationSummaries: conversationSummaries,
+            forkSession: forkSession,
             activeBranch: activeBranch,
             archiveSession: archiveSession,
             deleteSession: deleteSession,
@@ -344,6 +361,16 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
           "last_updated_sequence": 4
         }]
         """)
+    }
+
+    func forkSession(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ sessionId: UnsafePointer<CChar>?,
+        _ leafId: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        forkSessionId = String(cString: sessionId!)
+        forkLeafId = String(cString: leafId!)
+        return makeCString(#""session_forked""#)
     }
 
     func activeBranch(

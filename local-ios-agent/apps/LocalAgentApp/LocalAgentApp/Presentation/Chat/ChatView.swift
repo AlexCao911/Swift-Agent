@@ -8,7 +8,6 @@ struct ChatView: View {
     @State private var editingMessage: AgentMessageViewState?
     @State private var editText = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isPhotoPickerPresented = false
     @State private var isAddingLink = false
     @State private var linkText = ""
 
@@ -137,11 +136,6 @@ struct ChatView: View {
                 self.selectedPhotoItem = nil
             }
         }
-        .photosPicker(
-            isPresented: $isPhotoPickerPresented,
-            selection: $selectedPhotoItem,
-            matching: .images
-        )
     }
 
     private var messageList: some View {
@@ -171,12 +165,6 @@ struct ChatView: View {
                                         Task { await viewModel.regenerate(from: message.id) }
                                     } label: {
                                         Label("Regenerate", systemImage: "arrow.clockwise")
-                                    }
-
-                                    Button {
-                                        Task { await viewModel.continueGeneration() }
-                                    } label: {
-                                        Label("Continue", systemImage: "text.append")
                                     }
                                 }
 
@@ -249,22 +237,25 @@ struct ChatView: View {
             }
 
             HStack(alignment: .bottom, spacing: 12) {
-                Menu {
+                HStack(spacing: 8) {
                     Button {
                         isAddingLink = true
                     } label: {
-                        Label("Link", systemImage: "link")
+                        Image(systemName: "link.circle")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.secondary)
                     }
+                    .accessibilityLabel("Add Link")
 
-                    Button {
-                        isPhotoPickerPresented = true
-                    } label: {
-                        Label("Photo", systemImage: "photo")
+                    PhotosPicker(
+                        selection: $selectedPhotoItem,
+                        matching: .images
+                    ) {
+                        Image(systemName: "photo.circle")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.secondary)
                     }
-                } label: {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.secondary)
+                    .accessibilityLabel("Add Photo")
                 }
                 .disabled(viewModel.state.phase.isRunning)
 
@@ -425,7 +416,7 @@ private struct MessageBubble: View {
                 Spacer(minLength: 60)
             }
 
-            MessageContentView(message: message)
+            MessageContentView(message: message, isUserMessage: isUser)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .foregroundStyle(foreground)

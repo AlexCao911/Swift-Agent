@@ -6,11 +6,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON:?set LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON}"
 : "${SIMULATOR_UDID:?set SIMULATOR_UDID}"
 
-FEATURES="${LOCAL_AGENT_LOCAL_INFERENCE_FEATURES:-link-llama-cpp-local-inference}"
+DEFAULT_FEATURES="link-llama-cpp-local-inference"
+if [[ -n "${LOCAL_AGENT_SIMULATOR_MMPROJ:-}" ]]; then
+  DEFAULT_FEATURES="link-llama-cpp-mtmd-local-inference"
+fi
+FEATURES="${LOCAL_AGENT_LOCAL_INFERENCE_FEATURES:-$DEFAULT_FEATURES}"
 if [[ "$FEATURES" == *"link-llama-cpp"* ]]; then
   : "${LLAMA_CPP_HEADERS:?set LLAMA_CPP_HEADERS}"
   if [[ -z "${LLAMA_CPP_LIBRARY:-}" && -z "${LLAMA_CPP_XCFRAMEWORK:-}" ]]; then
     echo "set LLAMA_CPP_LIBRARY or LLAMA_CPP_XCFRAMEWORK" >&2
+    exit 2
+  fi
+fi
+if [[ "$FEATURES" == *"link-llama-cpp-mtmd-local-inference"* ]]; then
+  : "${LLAMA_CPP_MTMD_HEADERS:?set LLAMA_CPP_MTMD_HEADERS}"
+  : "${LLAMA_CPP_MTMD_LIBRARY:?set LLAMA_CPP_MTMD_LIBRARY}"
+  if [[ -z "${LLAMA_CPP_LIBRARY:-}" ]]; then
+    echo "set LLAMA_CPP_LIBRARY to a combined static llama.cpp archive for mtmd simulator builds" >&2
+    echo "hint: run scripts/build-llama-cpp-mtmd-ios-simulator.sh and eval its exported paths" >&2
     exit 2
   fi
 fi

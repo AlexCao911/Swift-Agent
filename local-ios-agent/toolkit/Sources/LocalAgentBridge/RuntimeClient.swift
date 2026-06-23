@@ -73,6 +73,7 @@ public protocol ProviderControllingRuntimeClient: Sendable {
 
 public protocol ConversationRuntimeClient: Sendable {
     func conversationSummaries() async throws -> [ConversationSummaryDTO]
+    func forkSession(sessionId: String, leafId: String) async throws -> String
     func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO]
     func archiveSession(sessionId: String) async throws
     func deleteSession(sessionId: String) async throws

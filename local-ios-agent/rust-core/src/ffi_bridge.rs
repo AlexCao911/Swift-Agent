@@ -169,6 +169,18 @@ impl RuntimeJsonBridge {
         to_json(&summaries)
     }
 
+    pub fn fork_session_json(&self, session_id: &str, leaf_id: &str) -> Result<String, AgentError> {
+        let source_session_id = SessionId(session_id.to_string());
+        let leaf_id = EntryId(leaf_id.to_string());
+        let forked_session_id = match self {
+            Self::InMemory(runtime) => {
+                runtime.lock()?.fork_session(&source_session_id, &leaf_id)?
+            }
+            Self::Sqlite(runtime) => runtime.lock()?.fork_session(&source_session_id, &leaf_id)?,
+        };
+        to_json(&forked_session_id.0)
+    }
+
     pub fn archive_session_json(&self, session_id: &str) -> Result<String, AgentError> {
         let session_id = SessionId(session_id.to_string());
         match self {
@@ -458,6 +470,19 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_conversation_summaries(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
     c_result(|| bridge_ref(runtime)?.conversation_summaries_json())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_fork_session(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: *const c_char,
+    leaf_id: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let session_id = c_str_arg(session_id, "session_id")?;
+        let leaf_id = c_str_arg(leaf_id, "leaf_id")?;
+        bridge_ref(runtime)?.fork_session_json(session_id, leaf_id)
+    })
 }
 
 #[no_mangle]

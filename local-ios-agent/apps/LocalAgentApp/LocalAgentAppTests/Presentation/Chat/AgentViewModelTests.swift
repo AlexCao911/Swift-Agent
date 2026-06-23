@@ -1,6 +1,7 @@
 import Foundation
 import LocalAgentBridge
 import Testing
+import UIKit
 @testable import LocalAgentApp
 
 @Suite("Agent view model")
@@ -184,9 +185,17 @@ struct AgentViewModelTests {
         #expect(viewModel.state.messages.isEmpty)
     }
 
-    @Test("fork from message stores target parent event id")
-    func forkFromMessageStoresParent() async {
-        let service = ViewModelServiceStub()
+    @Test("fork from message creates and selects a new conversation")
+    func forkFromMessageCreatesAndSelectsNewConversation() async {
+        let service = ViewModelServiceStub(
+            forkedState: AgentViewState(
+                phase: .ready,
+                messages: [
+                    AgentMessageViewState(id: "assistant_copy", role: .assistant, text: "answer", isStreaming: false),
+                ],
+                currentSessionId: "session_2"
+            )
+        )
         let viewModel = AgentViewModel(
             service: service,
             initialState: AgentViewState(
@@ -205,7 +214,11 @@ struct AgentViewModelTests {
 
         await viewModel.forkFromMessage("assistant_ui_message")
 
-        #expect(viewModel.state.draft.targetParentEventId == "assistant_completed_event")
+        #expect(await service.forkRequests == [
+            ViewModelServiceStub.ForkRequest(sessionId: "session_1", leafId: "assistant_completed_event"),
+        ])
+        #expect(viewModel.state.currentSessionId == "session_2")
+        #expect(viewModel.state.messages.map(\.text) == ["answer"])
     }
 
     @Test("regenerate delegates assistant message id")
@@ -219,19 +232,6 @@ struct AgentViewModelTests {
         await viewModel.regenerate(from: "assistant_1")
 
         #expect(await service.regeneratedMessageIds == ["assistant_1"])
-    }
-
-    @Test("continue generation delegates")
-    func continueGenerationDelegates() async {
-        let service = ViewModelServiceStub()
-        let viewModel = AgentViewModel(
-            service: service,
-            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
-        )
-
-        await viewModel.continueGeneration()
-
-        #expect(await service.didContinueGeneration)
     }
 
     @Test("add link appends draft attachment")
@@ -275,16 +275,21 @@ struct AgentViewModelTests {
             initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
         )
 
-        await viewModel.addImage(data: Data([1, 2, 3]), suggestedName: "photo.png", mimeType: "image/png")
+        let imageData = try samplePNGData()
+
+        await viewModel.addImage(data: imageData, suggestedName: "photo.png", mimeType: "image/png")
 
         let attachment = try #require(viewModel.state.draft.attachments.first)
         #expect(attachment.kind == .image)
         #expect(attachment.displayName == "photo.png")
         #expect(attachment.mimeType == "image/png")
-        #expect(attachment.byteCount == 3)
+        #expect(attachment.byteCount == imageData.count)
+        #expect(attachment.imageWidth == 2)
+        #expect(attachment.imageHeight == 2)
+        #expect(attachment.rgbDataBase64 != nil)
         #expect(attachment.localPath != nil)
         let localPath = try #require(attachment.localPath)
-        #expect(FileManager.default.contents(atPath: localPath) == Data([1, 2, 3]))
+        #expect(FileManager.default.contents(atPath: localPath) == imageData)
     }
 
     @Test("unsupported image type reports error")
@@ -308,7 +313,7 @@ struct AgentViewModelTests {
         let service = ViewModelServiceStub()
         let attachmentService = AttachmentService(directory: directory)
         let draft = try await attachmentService.imageDraft(
-            data: Data([1, 2, 3]),
+            data: samplePNGData(),
             suggestedName: "photo.png",
             mimeType: "image/png"
         )
@@ -338,24 +343,43 @@ private func attachmentTestDirectory() -> URL {
         .appendingPathComponent(UUID().uuidString)
 }
 
+private func samplePNGData() throws -> Data {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2), format: format)
+    let image = renderer.image { context in
+        UIColor.red.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+    }
+    return try #require(image.pngData())
+}
+
 private actor ViewModelServiceStub: AgentRuntimeServicing {
+    struct ForkRequest: Equatable, Sendable {
+        var sessionId: String
+        var leafId: String
+    }
+
     var sentTexts: [String] = []
     var selectedProviderIds: [String] = []
     var didCreateNewChat = false
     var regeneratedMessageIds: [String] = []
-    var didContinueGeneration = false
+    var forkRequests: [ForkRequest] = []
     private let preparedState: AgentViewState
     private let sentState: AgentViewState
     private let newChatState: AgentViewState
+    private let forkedState: AgentViewState
 
     init(
         preparedState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_1"),
         sentState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_1"),
-        newChatState: AgentViewState = AgentViewState(phase: .ready, messages: [], currentSessionId: "session_2")
+        newChatState: AgentViewState = AgentViewState(phase: .ready, messages: [], currentSessionId: "session_2"),
+        forkedState: AgentViewState = AgentViewState(phase: .ready, currentSessionId: "session_2")
     ) {
         self.preparedState = preparedState
         self.sentState = sentState
         self.newChatState = newChatState
+        self.forkedState = forkedState
     }
 
     func prepare() async throws -> AgentViewState {
@@ -393,13 +417,13 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
         state
     }
 
-    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
-        regeneratedMessageIds.append(messageId)
-        return state
+    func forkConversation(sessionId: String, leafId: String, state: AgentViewState) async throws -> AgentViewState {
+        forkRequests.append(ForkRequest(sessionId: sessionId, leafId: leafId))
+        return forkedState
     }
 
-    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
-        didContinueGeneration = true
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+        regeneratedMessageIds.append(messageId)
         return state
     }
 }

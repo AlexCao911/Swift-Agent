@@ -6,6 +6,10 @@ use crate::core::{AgentError, RuntimeEvent};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PromptMessage {
     User(String),
+    UserWithBlobRefs {
+        content: String,
+        blob_refs: Vec<String>,
+    },
     Assistant(String),
     ToolResult(String),
     Summary(String),
@@ -15,9 +19,17 @@ impl PromptMessage {
     pub fn content(&self) -> &str {
         match self {
             Self::User(content)
+            | Self::UserWithBlobRefs { content, .. }
             | Self::Assistant(content)
             | Self::ToolResult(content)
             | Self::Summary(content) => content,
+        }
+    }
+
+    pub fn blob_refs(&self) -> &[String] {
+        match self {
+            Self::UserWithBlobRefs { blob_refs, .. } => blob_refs,
+            _ => &[],
         }
     }
 }

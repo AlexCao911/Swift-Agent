@@ -4,13 +4,17 @@ import Foundation
 import CLocalAgentRuntime
 #endif
 
-public struct RuntimeBridgeError: Error, Equatable, Sendable, CustomStringConvertible {
+public struct RuntimeBridgeError: LocalizedError, Equatable, Sendable, CustomStringConvertible {
     public var kind: String
     public var message: String
 
     public init(kind: String, message: String) {
         self.kind = kind
         self.message = message
+    }
+
+    public var errorDescription: String? {
+        message
     }
 
     public var description: String {
@@ -154,6 +158,11 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var createSession: (RuntimeHandle?) -> StringResult
     public var sessionIds: (RuntimeHandle?) -> StringResult
     public var conversationSummaries: (RuntimeHandle?) -> StringResult
+    public var forkSession: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
     public var activeBranch: (
         RuntimeHandle?,
         UnsafePointer<CChar>?,
@@ -198,6 +207,11 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         createSession: @escaping (RuntimeHandle?) -> StringResult,
         sessionIds: @escaping (RuntimeHandle?) -> StringResult,
         conversationSummaries: @escaping (RuntimeHandle?) -> StringResult,
+        forkSession: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?
+        ) -> StringResult,
         activeBranch: @escaping (
             RuntimeHandle?,
             UnsafePointer<CChar>?,
@@ -241,6 +255,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.createSession = createSession
         self.sessionIds = sessionIds
         self.conversationSummaries = conversationSummaries
+        self.forkSession = forkSession
         self.activeBranch = activeBranch
         self.archiveSession = archiveSession
         self.deleteSession = deleteSession
@@ -285,6 +300,13 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             },
             conversationSummaries: { runtime in
                 local_agent_runtime_bridge_conversation_summaries(runtime.map { OpaquePointer($0) })
+            },
+            forkSession: { runtime, sessionId, leafId in
+                local_agent_runtime_bridge_fork_session(
+                    runtime.map { OpaquePointer($0) },
+                    sessionId,
+                    leafId
+                )
             },
             activeBranch: { runtime, sessionId, leafId in
                 local_agent_runtime_bridge_active_branch(
@@ -416,6 +438,17 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
             functions.conversationSummaries(handle),
             as: [ConversationSummaryDTO].self
         )
+    }
+
+    public func forkSession(sessionId: String, leafId: String) async throws -> String {
+        try sessionId.withCString { sessionPointer in
+            try leafId.withCString { leafPointer in
+                try decode(
+                    functions.forkSession(handle, sessionPointer, leafPointer),
+                    as: String.self
+                )
+            }
+        }
     }
 
     public func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {

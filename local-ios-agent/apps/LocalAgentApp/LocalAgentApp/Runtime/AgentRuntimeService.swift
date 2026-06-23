@@ -14,8 +14,8 @@ protocol AgentRuntimeServicing: Sendable {
     func selectConversation(sessionId: String, leafId: String?, state: AgentViewState) async throws -> AgentViewState
     func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
     func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func forkConversation(sessionId: String, leafId: String, state: AgentViewState) async throws -> AgentViewState
     func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState
-    func continueGeneration(state: AgentViewState) async throws -> AgentViewState
     func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState
 }
 
@@ -52,11 +52,11 @@ extension AgentRuntimeServicing {
         state
     }
 
-    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
+    func forkConversation(sessionId: String, leafId: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 
-    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
+    func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 
@@ -312,11 +312,11 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             return state
         }
 
-        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: leafId)
-        var nextState = ConversationService.replayActiveBranch(
+        var nextState = try await replayConversation(
             sessionId: sessionId,
-            events: events,
-            from: state
+            leafId: leafId,
+            from: state,
+            using: conversationClient
         )
         try await loadProviderState(into: &nextState)
         return nextState
@@ -354,6 +354,28 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return await reloadingConversationsIfPossible(state: nextState)
     }
 
+    func forkConversation(sessionId: String, leafId: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        let forkedSessionId = try await conversationClient.forkSession(
+            sessionId: sessionId,
+            leafId: leafId
+        )
+        var nextState = try await replayConversation(
+            sessionId: forkedSessionId,
+            leafId: nil,
+            from: state,
+            using: conversationClient
+        )
+        try await loadProviderState(into: &nextState)
+        return try await loadConversations(state: nextState)
+    }
+
     func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState {
         guard let assistant = state.messages.first(where: { $0.id == messageId }),
               assistant.role == .assistant,
@@ -366,14 +388,8 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         var nextState = state
         nextState.draft.targetParentEventId = originalUser.parentId ?? rootParentEventId
         nextState.draft.attachments = originalUser.attachments.map(AttachmentDraftViewState.init(viewState:))
-        return try await sendMessage(originalUser.text, state: nextState)
-    }
-
-    func continueGeneration(state: AgentViewState) async throws -> AgentViewState {
-        var nextState = state
-        let lastMessage = state.messages.last
-        nextState.draft.targetParentEventId = lastMessage?.branchLeafId ?? lastMessage?.id
-        return try await sendMessage("Continue.", state: nextState)
+        let sentState = try await sendMessage(originalUser.text, state: nextState)
+        return try await replayCurrentConversationIfPossible(state: sentState)
     }
 
     func editAndResend(messageId: String, text: String, state: AgentViewState) async throws -> AgentViewState {
@@ -385,7 +401,9 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
         var nextState = state
         nextState.draft.targetParentEventId = message.parentId
-        return try await sendMessage(text, state: nextState)
+        nextState.draft.attachments = message.attachments.map(AttachmentDraftViewState.init(viewState:))
+        let sentState = try await sendMessage(text, state: nextState)
+        return try await replayCurrentConversationIfPossible(state: sentState)
     }
 
     private func continueToolsIfNeeded(
@@ -622,6 +640,35 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return nextState
     }
 
+    private func replayCurrentConversationIfPossible(state: AgentViewState) async throws -> AgentViewState {
+        guard let sessionId = state.currentSessionId,
+              let conversationClient = runtimeClient as? any ConversationRuntimeClient
+        else {
+            return state
+        }
+
+        return try await replayConversation(
+            sessionId: sessionId,
+            leafId: nil,
+            from: state,
+            using: conversationClient
+        )
+    }
+
+    private func replayConversation(
+        sessionId: String,
+        leafId: String?,
+        from state: AgentViewState,
+        using conversationClient: any ConversationRuntimeClient
+    ) async throws -> AgentViewState {
+        let events = try await conversationClient.activeBranch(sessionId: sessionId, leafId: leafId)
+        return ConversationService.replayActiveBranch(
+            sessionId: sessionId,
+            events: events,
+            from: state
+        )
+    }
+
     private func reloadingConversationsIfPossible(state: AgentViewState) async -> AgentViewState {
         do {
             return try await loadConversations(state: state)
@@ -648,17 +695,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
                     lines.append("Link: \(urlString)")
                 }
             case .image:
-                var imageDescription = "Image: \(attachment.displayName)"
-                if let localPath = attachment.localPath {
-                    imageDescription += " path=\(localPath)"
-                }
-                if let mimeType = attachment.mimeType {
-                    imageDescription += " mime=\(mimeType)"
-                }
-                if let byteCount = attachment.byteCount {
-                    imageDescription += " bytes=\(byteCount)"
-                }
-                lines.append(imageDescription)
+                lines.append("Image attached: \(attachment.displayName)")
             }
         }
 

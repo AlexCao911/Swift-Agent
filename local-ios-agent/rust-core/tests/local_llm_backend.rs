@@ -7,7 +7,7 @@ use std::time::Duration;
 use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
-    CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, LocalAgentStatus,
+    CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, ImageInput, LocalAgentStatus,
     LocalInferenceBackend, LocalLLMProvider, MockLocalInferenceBackend, ModelProvider,
     ModelProviderOutput,
 };
@@ -30,6 +30,7 @@ struct RecordingBackend {
 struct RecordingBackendState {
     loaded_configs: Mutex<Vec<String>>,
     prompts: Mutex<Vec<String>>,
+    image_inputs: Mutex<Vec<ImageInput>>,
 }
 
 impl RecordingBackend {
@@ -59,6 +60,10 @@ impl RecordingBackend {
 
     fn prompts(&self) -> Vec<String> {
         self.state.prompts.lock().unwrap().clone()
+    }
+
+    fn image_inputs(&self) -> Vec<ImageInput> {
+        self.state.image_inputs.lock().unwrap().clone()
     }
 }
 
@@ -90,6 +95,17 @@ impl LocalInferenceBackend for RecordingBackend {
             on_token(token)?;
         }
         Ok(())
+    }
+
+    fn stream_chat_with_image(
+        &self,
+        prompt_json: &str,
+        image: ImageInput,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        self.state.image_inputs.lock().unwrap().push(image);
+        self.stream_chat(prompt_json, cancellation, on_token)
     }
 }
 
@@ -141,6 +157,52 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
         .as_str()
         .unwrap()
         .contains("Available tools"));
+}
+
+#[test]
+fn local_llm_provider_streams_first_image_blob_through_backend() {
+    let backend = RecordingBackend::streaming(MOCK_TOKEN_JSON);
+    let provider = LocalLLMProvider::new(
+        "minicpm",
+        r#"{"model_path":"mock.gguf"}"#,
+        Box::new(backend.clone()),
+    );
+    let frame = PromptFrame {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        messages: vec![PromptMessage::UserWithBlobRefs {
+            content: "what is in this picture?".into(),
+            blob_refs: vec![
+                "local-agent-chat:v1:eyJ0eXBlIjoiaW1hZ2VfaW5wdXQiLCJpbWFnZVdpZHRoIjoyLCJpbWFnZUhlaWdodCI6MSwicmdiRGF0YUJhc2U2NCI6IkFRSURCQVVHIn0".into(),
+            ],
+        }],
+    };
+
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        output,
+        vec![
+            ModelProviderOutput::TextDelta("On-device ".into()),
+            ModelProviderOutput::TextDelta("mock response".into()),
+            ModelProviderOutput::Completed("On-device mock response".into()),
+        ]
+    );
+    assert_eq!(
+        backend.image_inputs(),
+        vec![ImageInput {
+            width: 2,
+            height: 1,
+            rgb_data: vec![1, 2, 3, 4, 5, 6],
+        }]
+    );
 }
 
 #[test]
@@ -289,6 +351,7 @@ fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_STREAM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_BACKEND_CALLS: AtomicUsize = AtomicUsize::new(0);
+static START_IMAGE_CALLS: AtomicUsize = AtomicUsize::new(0);
 static C_ABI_FAKE_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" fn fake_init(out_backend: *mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus {
@@ -310,6 +373,34 @@ unsafe extern "C" fn fake_start_chat(
 ) -> LocalAgentStatus {
     *out_stream = 0x22usize as *mut CAbiLocalAgentBackendStream;
     LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_start_chat_with_image(
+    _backend: *mut CAbiLocalAgentBackend,
+    _prompt_json: *const c_char,
+    rgb_data: *const u8,
+    width: u32,
+    height: u32,
+    out_stream: *mut *mut CAbiLocalAgentBackendStream,
+) -> LocalAgentStatus {
+    if rgb_data.is_null() || width != 2 || height != 1 {
+        return LocalAgentStatus::InvalidArgument;
+    }
+    START_IMAGE_CALLS.fetch_add(1, Ordering::SeqCst);
+    *out_stream = 0x33usize as *mut CAbiLocalAgentBackendStream;
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_start_chat_with_image_error(
+    _backend: *mut CAbiLocalAgentBackend,
+    _prompt_json: *const c_char,
+    _rgb_data: *const u8,
+    _width: u32,
+    _height: u32,
+    out_stream: *mut *mut CAbiLocalAgentBackendStream,
+) -> LocalAgentStatus {
+    *out_stream = std::ptr::null_mut();
+    LocalAgentStatus::Error
 }
 
 unsafe extern "C" fn fake_read_stream(
@@ -366,12 +457,14 @@ fn c_abi_backend_calls_cancel_and_releases_stream_once() {
     CANCEL_CALLS.store(0, Ordering::SeqCst);
     RELEASE_STREAM_CALLS.store(0, Ordering::SeqCst);
     RELEASE_BACKEND_CALLS.store(0, Ordering::SeqCst);
+    START_IMAGE_CALLS.store(0, Ordering::SeqCst);
 
     let backend = unsafe {
         CAbiLocalInferenceBackend::with_functions(CAbiFunctions {
             init: fake_init,
             load_model: fake_load_model,
             start_chat: fake_start_chat,
+            start_chat_with_image: fake_start_chat_with_image,
             read_stream: fake_read_stream,
             cancel: fake_cancel,
             release_stream: fake_release_stream,
@@ -410,12 +503,14 @@ fn c_abi_backend_cancels_blocked_read_from_cancellation_token() {
     CANCEL_CALLS.store(0, Ordering::SeqCst);
     RELEASE_STREAM_CALLS.store(0, Ordering::SeqCst);
     RELEASE_BACKEND_CALLS.store(0, Ordering::SeqCst);
+    START_IMAGE_CALLS.store(0, Ordering::SeqCst);
 
     let backend = unsafe {
         CAbiLocalInferenceBackend::with_functions(CAbiFunctions {
             init: fake_init,
             load_model: fake_load_model,
             start_chat: fake_start_chat,
+            start_chat_with_image: fake_start_chat_with_image,
             read_stream: fake_blocking_read_stream,
             cancel: fake_cancel,
             release_stream: fake_release_stream,
@@ -443,4 +538,49 @@ fn c_abi_backend_cancels_blocked_read_from_cancellation_token() {
     assert!(matches!(error, AgentError::Cancelled(_)));
     assert!(CANCEL_CALLS.load(Ordering::SeqCst) > 0);
     assert_eq!(RELEASE_STREAM_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn c_abi_backend_image_start_error_mentions_mtmd_build_requirement() {
+    let _guard = C_ABI_FAKE_LOCK.lock().unwrap();
+    CANCEL_CALLS.store(0, Ordering::SeqCst);
+    RELEASE_STREAM_CALLS.store(0, Ordering::SeqCst);
+    RELEASE_BACKEND_CALLS.store(0, Ordering::SeqCst);
+    START_IMAGE_CALLS.store(0, Ordering::SeqCst);
+
+    let backend = unsafe {
+        CAbiLocalInferenceBackend::with_functions(CAbiFunctions {
+            init: fake_init,
+            load_model: fake_load_model,
+            start_chat: fake_start_chat,
+            start_chat_with_image: fake_start_chat_with_image_error,
+            read_stream: fake_read_stream,
+            cancel: fake_cancel,
+            release_stream: fake_release_stream,
+            release_backend: fake_release_backend,
+        })
+    }
+    .unwrap();
+    backend.load_model(r#"{"model_path":"mock.gguf"}"#).unwrap();
+
+    let error = backend
+        .stream_chat_with_image(
+            r#"{"messages":[{"role":"user","content":"describe"}]}"#,
+            ImageInput {
+                width: 2,
+                height: 1,
+                rgb_data: vec![1, 2, 3, 4, 5, 6],
+            },
+            CancellationToken::default(),
+            &mut |_token| Ok(()),
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("link-llama-cpp-mtmd-local-inference"),
+        "{error}"
+    );
+    assert_eq!(RELEASE_STREAM_CALLS.load(Ordering::SeqCst), 0);
 }

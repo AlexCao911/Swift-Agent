@@ -1,7 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct MessageContentView: View {
     let message: AgentMessageViewState
+    let isUserMessage: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -22,12 +24,12 @@ struct MessageContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 case .attachment(let attachment):
-                    AttachmentChipView(attachment: attachment)
+                    AttachmentChipView(attachment: attachment, isUserMessage: isUserMessage)
                 }
             }
 
             ForEach(message.attachments) { attachment in
-                AttachmentChipView(attachment: attachment)
+                AttachmentChipView(attachment: attachment, isUserMessage: isUserMessage)
             }
 
             if message.isStreaming {
@@ -71,14 +73,47 @@ struct ReasoningBlockView: View {
 
 private struct AttachmentChipView: View {
     let attachment: AttachmentViewState
+    let isUserMessage: Bool
 
     var body: some View {
-        Label(attachment.displayName, systemImage: attachment.kind == .image ? "photo" : "link")
-            .font(.footnote)
-            .lineLimit(1)
-            .foregroundStyle(.primary)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .background(Color(.tertiarySystemBackground), in: Capsule())
+        if attachment.kind == .image, let image = image {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 148, height: 104)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                Label(attachment.displayName, systemImage: "photo")
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(labelForeground)
+            }
+            .padding(6)
+            .background(chipBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+            Label(attachment.displayName, systemImage: attachment.kind == .image ? "photo" : "link")
+                .font(.footnote)
+                .lineLimit(1)
+                .foregroundStyle(labelForeground)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .background(chipBackground, in: Capsule())
+        }
+    }
+
+    private var image: UIImage? {
+        guard let localPath = attachment.localPath else {
+            return nil
+        }
+        return UIImage(contentsOfFile: localPath)
+    }
+
+    private var labelForeground: Color {
+        isUserMessage ? .white : .primary
+    }
+
+    private var chipBackground: Color {
+        isUserMessage ? .white.opacity(0.18) : Color(.tertiarySystemBackground)
     }
 }
