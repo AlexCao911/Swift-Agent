@@ -280,8 +280,9 @@ struct ChatView: View {
                     } label: {
                         Image(systemName: "paperclip")
                             .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.primary)
                     }
+                    .tint(.primary)
                     .accessibilityLabel("Add File")
 
                     PhotosPicker(
@@ -290,8 +291,9 @@ struct ChatView: View {
                     ) {
                         Image(systemName: "photo")
                             .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.primary)
                     }
+                    .tint(.primary)
                     .accessibilityLabel("Add Photo")
                 }
                 .disabled(viewModel.state.phase.isRunning)
@@ -305,6 +307,7 @@ struct ChatView: View {
                         .padding(.top, 10)
                         .padding(.bottom, 10)
                         .lineLimit(1...6)
+                        .tint(.primary)
                         .disabled(viewModel.state.phase.isRunning)
 
                     Button {
@@ -314,10 +317,11 @@ struct ChatView: View {
                             .font(.system(size: 28))
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(
-                                isSendDisabled ? Color(.systemGray4) : .white,
-                                isSendDisabled ? Color(.systemGray5) : Color.accentColor
+                                isSendDisabled ? Color.primary : .white,
+                                isSendDisabled ? Color.primary.opacity(0.1) : Color.primary
                             )
                     }
+                    .tint(.primary)
                     .disabled(isSendDisabled)
                     .animation(.easeInOut(duration: 0.2), value: isSendDisabled)
                     .padding(.trailing, 6)
