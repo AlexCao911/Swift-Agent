@@ -86,5 +86,25 @@ struct LocalAgentAppShortcuts: AppShortcutsProvider {
             shortTitle: "Start Chat",
             systemImageName: "square.and.pencil"
         )
+
+        AppShortcut(
+            intent: OpenLocalAgentIntent(destination: .prompts),
+            phrases: [
+                "Open prompts in \(.applicationName)",
+                "Show prompts in \(.applicationName)",
+            ],
+            shortTitle: "Prompts",
+            systemImageName: "text.quote"
+        )
+
+        AppShortcut(
+            intent: OpenLocalAgentIntent(destination: .settings),
+            phrases: [
+                "Open settings in \(.applicationName)",
+                "Show model settings in \(.applicationName)",
+            ],
+            shortTitle: "Settings",
+            systemImageName: "slider.horizontal.3"
+        )
     }
 }

@@ -13,7 +13,8 @@ struct RuntimeDTOTests {
           "active_leaf_id": "entry_2",
           "last_event_id": "entry_2",
           "last_updated_sequence": 4,
-          "last_updated_at_millis": 1719999999000
+          "last_updated_at_millis": 1719999999000,
+          "search_text": "hello there"
         }
         """.data(using: .utf8)!
 
@@ -25,6 +26,7 @@ struct RuntimeDTOTests {
         #expect(summary.lastEventId == "entry_2")
         #expect(summary.lastUpdatedSequence == 4)
         #expect(summary.lastUpdatedAtMillis == 1_719_999_999_000)
+        #expect(summary.searchText == "hello there")
     }
 
     @Test

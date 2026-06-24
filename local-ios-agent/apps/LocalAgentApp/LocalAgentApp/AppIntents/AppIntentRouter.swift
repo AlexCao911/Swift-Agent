@@ -5,6 +5,8 @@ import Observation
 enum LocalAgentIntentDestination: String, AppEnum, CaseIterable, Sendable {
     case chat
     case conversations
+    case prompts
+    case settings
 
     static var typeDisplayName: LocalizedStringResource { "Destination" }
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Destination")
@@ -13,6 +15,8 @@ enum LocalAgentIntentDestination: String, AppEnum, CaseIterable, Sendable {
         [
             .chat: DisplayRepresentation(title: "Chat"),
             .conversations: DisplayRepresentation(title: "Conversations"),
+            .prompts: DisplayRepresentation(title: "Prompts"),
+            .settings: DisplayRepresentation(title: "Settings"),
         ]
     }
 }

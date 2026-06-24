@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::context::{PromptFrame, TokenizerAdapter};
+use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
     AgentTurnResult, CAbiLocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
@@ -161,6 +161,7 @@ impl RuntimeJsonBridge {
             .map(|summary| ConversationSummaryJson {
                 session_id: summary.session_id.0,
                 title: summary.title,
+                search_text: summary.search_text,
                 active_leaf_id: summary.active_leaf_id.map(|id| id.0),
                 last_event_id: summary.last_event_id.map(|id| id.0),
                 last_updated_sequence: summary.last_updated_sequence,
@@ -187,6 +188,36 @@ impl RuntimeJsonBridge {
         match self {
             Self::InMemory(runtime) => runtime.lock()?.archive_session(&session_id)?,
             Self::Sqlite(runtime) => runtime.lock()?.archive_session(&session_id)?,
+        }
+        Ok("null".to_string())
+    }
+
+    pub fn rename_session_json(&self, session_id: &str, title: &str) -> Result<String, AgentError> {
+        let session_id = SessionId(session_id.to_string());
+        match self {
+            Self::InMemory(runtime) => runtime.lock()?.rename_session(&session_id, title.into())?,
+            Self::Sqlite(runtime) => runtime.lock()?.rename_session(&session_id, title.into())?,
+        }
+        Ok("null".to_string())
+    }
+
+    pub fn update_runtime_options_json(&self, options_json: &str) -> Result<String, AgentError> {
+        let options: RuntimeOptionsJson = from_json(options_json)?;
+        let inference_options = InferenceOptions {
+            temperature: options.temperature,
+            top_p: options.top_p,
+        };
+        match self {
+            Self::InMemory(runtime) => runtime.lock()?.update_runtime_options(
+                options.system_prompt,
+                options.runtime_policy,
+                inference_options,
+            )?,
+            Self::Sqlite(runtime) => runtime.lock()?.update_runtime_options(
+                options.system_prompt,
+                options.runtime_policy,
+                inference_options,
+            )?,
         }
         Ok("null".to_string())
     }
@@ -507,6 +538,30 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_archive_session(
     c_result(|| {
         let session_id = c_str_arg(session_id, "session_id")?;
         bridge_ref(runtime)?.archive_session_json(session_id)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_rename_session(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: *const c_char,
+    title: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let session_id = c_str_arg(session_id, "session_id")?;
+        let title = c_str_arg(title, "title")?;
+        bridge_ref(runtime)?.rename_session_json(session_id, title)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_update_runtime_options(
+    runtime: *mut RuntimeJsonBridge,
+    options_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let options_json = c_str_arg(options_json, "options_json")?;
+        bridge_ref(runtime)?.update_runtime_options_json(options_json)
     })
 }
 
@@ -932,10 +987,19 @@ impl RuntimeEventJson {
 struct ConversationSummaryJson {
     session_id: String,
     title: String,
+    search_text: String,
     active_leaf_id: Option<String>,
     last_event_id: Option<String>,
     last_updated_sequence: u64,
     last_updated_at_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct RuntimeOptionsJson {
+    system_prompt: String,
+    runtime_policy: String,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
 }
 
 #[derive(Serialize)]

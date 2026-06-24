@@ -71,10 +71,41 @@ public protocol ProviderControllingRuntimeClient: Sendable {
     func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO
 }
 
+public struct RuntimeOptionsDTO: Codable, Equatable, Sendable {
+    public var systemPrompt: String
+    public var runtimePolicy: String
+    public var temperature: Double?
+    public var topP: Double?
+
+    public init(
+        systemPrompt: String,
+        runtimePolicy: String,
+        temperature: Double?,
+        topP: Double?
+    ) {
+        self.systemPrompt = systemPrompt
+        self.runtimePolicy = runtimePolicy
+        self.temperature = temperature
+        self.topP = topP
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case systemPrompt = "system_prompt"
+        case runtimePolicy = "runtime_policy"
+        case temperature
+        case topP = "top_p"
+    }
+}
+
+public protocol RuntimeOptionsControllingRuntimeClient: Sendable {
+    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws
+}
+
 public protocol ConversationRuntimeClient: Sendable {
     func conversationSummaries() async throws -> [ConversationSummaryDTO]
     func forkSession(sessionId: String, leafId: String) async throws -> String
     func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO]
     func archiveSession(sessionId: String) async throws
+    func renameSession(sessionId: String, title: String) async throws
     func deleteSession(sessionId: String) async throws
 }

@@ -19,6 +19,24 @@
 namespace local_agent {
 namespace {
 
+ModelConfig apply_prompt_generation_overrides(
+    const std::string &prompt_json,
+    const ModelConfig &config
+) {
+    ModelConfig effective = config;
+    effective.generation.temperature = optional_json_float(
+        prompt_json,
+        "temperature",
+        config.generation.temperature
+    );
+    effective.generation.top_p = optional_json_float(
+        prompt_json,
+        "top_p",
+        config.generation.top_p
+    );
+    return effective;
+}
+
 class UnavailableLlamaCppSession final : public LlamaCppSession {
 public:
     void load(const ModelConfig &) override {
@@ -190,7 +208,11 @@ public:
         const LlamaTokenEmit &emit
     ) override {
         require_loaded();
-        run_llama_generation(prompt_json, config, emit);
+        run_llama_generation(
+            prompt_json,
+            apply_prompt_generation_overrides(prompt_json, config),
+            emit
+        );
     }
 
     void stream_generate_with_image(
@@ -204,8 +226,9 @@ public:
             throw std::invalid_argument("llama.cpp mmproj_path is required for image input");
         }
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD)
-        run_mtmd_prefill(prompt_json, image, config);
-        sample_from_context(config, emit);
+        const ModelConfig effective_config = apply_prompt_generation_overrides(prompt_json, config);
+        run_mtmd_prefill(prompt_json, image, effective_config);
+        sample_from_context(effective_config, emit);
 #else
         throw std::runtime_error("llama.cpp mtmd backend is not linked in this build");
 #endif

@@ -13,6 +13,7 @@ protocol AgentRuntimeServicing: Sendable {
     func loadConversations(state: AgentViewState) async throws -> AgentViewState
     func selectConversation(sessionId: String, leafId: String?, state: AgentViewState) async throws -> AgentViewState
     func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
+    func renameConversation(sessionId: String, title: String, state: AgentViewState) async throws -> AgentViewState
     func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState
     func forkConversation(sessionId: String, leafId: String, state: AgentViewState) async throws -> AgentViewState
     func regenerate(from messageId: String, state: AgentViewState) async throws -> AgentViewState
@@ -45,6 +46,10 @@ extension AgentRuntimeServicing {
     }
 
     func archiveConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
+        state
+    }
+
+    func renameConversation(sessionId: String, title: String, state: AgentViewState) async throws -> AgentViewState {
         state
     }
 
@@ -134,6 +139,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         let draftAttachments = state.draft.attachments
         let prompt = promptText(for: text, attachments: draftAttachments)
         let blobRefs = RuntimeBlobRefCodec.encodeUserMessage(text: text, attachments: draftAttachments)
+        try await applyRuntimeOptions(from: state)
         let sessionId: String
         if let existing = state.currentSessionId {
             sessionId = existing
@@ -287,7 +293,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         let sessionId = try await runtimeClient.createSession()
-        var nextState = AgentViewState(phase: .ready, currentSessionId: sessionId)
+        var nextState = AgentViewState(
+            phase: .ready,
+            currentSessionId: sessionId,
+            promptLibrary: state.promptLibrary,
+            modelSettings: state.modelSettings
+        )
         try await loadProviderState(into: &nextState)
         return try await loadConversations(state: nextState)
     }
@@ -338,6 +349,23 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         var nextState = stateAfterRemovingConversation(sessionId: sessionId, from: state)
         try? await loadProviderState(into: &nextState)
         return await reloadingConversationsIfPossible(state: nextState)
+    }
+
+    func renameConversation(sessionId: String, title: String, state: AgentViewState) async throws -> AgentViewState {
+        guard activeRun == nil, !state.phase.isRunning else {
+            throw AgentRuntimeServiceError.duplicateRun
+        }
+        guard let conversationClient = runtimeClient as? any ConversationRuntimeClient else {
+            return state
+        }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            return state
+        }
+
+        try await conversationClient.renameSession(sessionId: sessionId, title: trimmedTitle)
+        return try await loadConversations(state: state)
     }
 
     func deleteConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {
@@ -621,6 +649,19 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         state.provider.profiles = try await providerClient.providerProfiles()
         state.provider.active = try await providerClient.activeProvider()
         state.provider.errorMessage = nil
+    }
+
+    private func applyRuntimeOptions(from state: AgentViewState) async throws {
+        guard let optionsClient = runtimeClient as? any RuntimeOptionsControllingRuntimeClient else {
+            return
+        }
+
+        try await optionsClient.updateRuntimeOptions(RuntimeOptionsDTO(
+            systemPrompt: state.promptLibrary.renderedSystemPrompt,
+            runtimePolicy: AgentPromptDefaults.runtimePolicy,
+            temperature: state.modelSettings.temperature,
+            topP: state.modelSettings.topP
+        ))
     }
 
     private func stateAfterRemovingConversation(

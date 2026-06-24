@@ -103,6 +103,110 @@ struct AgentRuntimeServiceTests {
         )
     }
 
+    @Test("conversation sections group by recency and filter search")
+    func conversationSectionsGroupByRecencyAndFilterSearch() {
+        let now = date(year: 2026, month: 6, day: 26, hour: 12)
+        let conversations = [
+            conversation("today", title: "Trip today", date: date(year: 2026, month: 6, day: 26, hour: 9)),
+            conversation("yesterday", title: "Trip yesterday", date: date(year: 2026, month: 6, day: 25, hour: 18)),
+            conversation("before", title: "Trip before", date: date(year: 2026, month: 6, day: 24, hour: 18)),
+            conversation("week", title: "Trip week", date: date(year: 2026, month: 6, day: 22, hour: 18)),
+            conversation("month", title: "Trip month", date: date(year: 2026, month: 6, day: 21, hour: 18)),
+            conversation("may", title: "Trip may", date: date(year: 2026, month: 5, day: 12, hour: 18)),
+            conversation("other", title: "Notes", date: date(year: 2026, month: 6, day: 24, hour: 8)),
+            conversation(
+                "content",
+                title: "Untitled",
+                date: date(year: 2026, month: 6, day: 26, hour: 8),
+                searchText: "hidden trip notes"
+            ),
+        ]
+
+        let sections = ConversationService.groupConversations(
+            conversations,
+            searchQuery: "trip",
+            now: now,
+            calendar: gregorianCalendar
+        )
+
+        #expect(sections.map(\.title) == ["今天", "昨天", "前天", "本周", "本月", "5月"])
+        #expect(sections.flatMap(\.conversations).map(\.sessionId) == [
+            "today", "content", "yesterday", "before", "week", "month", "may",
+        ])
+    }
+
+    @Test("rename conversation persists title and reloads summaries")
+    func renameConversationPersistsTitleAndReloadsSummaries() async throws {
+        let client = ScriptedRuntimeClient()
+        await client.setConversationSummariesForTest([
+            ConversationSummaryDTO(
+                sessionId: "session_1",
+                title: "Old title",
+                activeLeafId: "leaf_1",
+                lastEventId: "leaf_1",
+                lastUpdatedSequence: 4
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        let state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+
+        let nextState = try await service.renameConversation(
+            sessionId: "session_1",
+            title: " Travel plan ",
+            state: state
+        )
+
+        #expect(await client.renamedSessions == [
+            ScriptedRuntimeClient.RenamedSession(sessionId: "session_1", title: "Travel plan"),
+        ])
+        #expect(nextState.conversations.conversations.map(\.title) == ["Travel plan"])
+    }
+
+    @Test("send applies prompt and model settings to runtime before inference")
+    func sendAppliesPromptAndModelSettingsToRuntimeBeforeInference() async throws {
+        let client = ScriptedRuntimeClient(sendTurns: [
+            AgentTurnResultDTO(
+                runId: "run_1",
+                state: .completed,
+                events: [
+                    event(id: "user_1", sessionId: "session_1", kind: .userMessage, payload: "hi", runId: "run_1"),
+                    event(
+                        id: "assistant_1",
+                        sessionId: "session_1",
+                        parentId: "user_1",
+                        kind: .assistantMessageCompleted,
+                        payload: "hello",
+                        runId: "run_1"
+                    ),
+                ],
+                pendingToolCallId: nil
+            ),
+        ])
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+        var state = AgentViewState(
+            phase: .ready,
+            draft: "hi",
+            currentSessionId: "session_1",
+            promptLibrary: PromptLibraryViewState(sections: [
+                PromptSectionViewState(id: "system", name: "System Prompt", content: "Be concise."),
+                PromptSectionViewState(id: "style", name: "Style", content: "Use plain language."),
+            ]),
+            modelSettings: ModelSettingsViewState(temperature: 0.25, topP: 0.8)
+        )
+
+        state = try await service.sendMessage(state.draftText, state: state)
+
+        #expect(await client.runtimeOptions == [
+            ScriptedRuntimeClient.RuntimeOptionsSubmission(
+                systemPrompt: "### System Prompt\nBe concise.\n\n### Style\nUse plain language.",
+                runtimePolicy: AgentPromptDefaults.runtimePolicy,
+                temperature: 0.25,
+                topP: 0.8
+            ),
+        ])
+        #expect(state.messages.map(\.text).contains("hello"))
+    }
+
     @Test("select conversation can load explicit branch leaf events")
     func selectConversationCanLoadExplicitBranchLeafEvents() async throws {
         let client = ScriptedRuntimeClient()
@@ -1597,7 +1701,7 @@ private actor BlockingSendRuntimeClient: RuntimeClient {
     }
 }
 
-private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient {
+private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient {
     struct SentMessage: Equatable, Sendable {
         var sessionId: String
         var parentEventId: String?
@@ -1625,6 +1729,18 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
         var leafId: String
     }
 
+    struct RenamedSession: Equatable, Sendable {
+        var sessionId: String
+        var title: String
+    }
+
+    struct RuntimeOptionsSubmission: Equatable, Sendable {
+        var systemPrompt: String
+        var runtimePolicy: String
+        var temperature: Double?
+        var topP: Double?
+    }
+
     private var sessionCount = 0
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
@@ -1641,6 +1757,8 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     private(set) var selectedProviders: [SelectedProvider] = []
     private(set) var activeBranchRequests: [ActiveBranchRequest] = []
     private(set) var forkSessionRequests: [ForkSessionRequest] = []
+    private(set) var renamedSessions: [RenamedSession] = []
+    private(set) var runtimeOptions: [RuntimeOptionsSubmission] = []
     private(set) var archivedSessionIds: [String] = []
     private(set) var deletedSessionIds: [String] = []
 
@@ -1808,6 +1926,27 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
         return activeBranchEventsForTest[activeBranchKey(sessionId: sessionId, leafId: leafId)] ?? []
     }
 
+    func renameSession(sessionId: String, title: String) async throws {
+        renamedSessions.append(RenamedSession(sessionId: sessionId, title: title))
+        conversationSummariesForTest = conversationSummariesForTest.map { summary in
+            guard summary.sessionId == sessionId else {
+                return summary
+            }
+            var renamed = summary
+            renamed.title = title
+            return renamed
+        }
+    }
+
+    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
+        runtimeOptions.append(RuntimeOptionsSubmission(
+            systemPrompt: options.systemPrompt,
+            runtimePolicy: options.runtimePolicy,
+            temperature: options.temperature,
+            topP: options.topP
+        ))
+    }
+
     func archiveSession(sessionId: String) async throws {
         archivedSessionIds.append(sessionId)
     }
@@ -1819,4 +1958,38 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     private func activeBranchKey(sessionId: String, leafId: String?) -> String {
         "\(sessionId)#\(leafId ?? "")"
     }
+}
+
+private let gregorianCalendar: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    calendar.firstWeekday = 2
+    return calendar
+}()
+
+private func date(year: Int, month: Int, day: Int, hour: Int) -> Date {
+    gregorianCalendar.date(from: DateComponents(
+        timeZone: TimeZone(secondsFromGMT: 0),
+        year: year,
+        month: month,
+        day: day,
+        hour: hour
+    ))!
+}
+
+private func conversation(
+    _ id: String,
+    title: String,
+    date: Date?,
+    searchText: String = ""
+) -> ConversationSummaryViewState {
+    ConversationSummaryViewState(
+        sessionId: id,
+        title: title,
+        activeLeafId: nil,
+        lastEventId: nil,
+        lastUpdatedSequence: 1,
+        lastMessageDate: date,
+        searchText: searchText
+    )
 }

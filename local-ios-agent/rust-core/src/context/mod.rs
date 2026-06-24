@@ -12,6 +12,6 @@ pub use budget::ContextBudget;
 pub use compaction::CompactionCandidate;
 pub use debug_snapshot::PromptDebugSnapshot;
 pub use injection_policy::ContextInjectionPolicy;
-pub use prompt_frame::{ContextController, PromptFrame, PromptMessage};
+pub use prompt_frame::{ContextController, InferenceOptions, PromptFrame, PromptMessage};
 pub use prompt_layers::PromptLayers;
 pub use tokenizer::{MockTokenizer, TokenizerAdapter};

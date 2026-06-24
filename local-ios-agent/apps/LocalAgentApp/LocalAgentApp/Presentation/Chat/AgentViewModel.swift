@@ -137,6 +137,18 @@ final class AgentViewModel {
         }
     }
 
+    func renameConversation(_ sessionId: String, title: String) async {
+        do {
+            state = try await service.renameConversation(
+                sessionId: sessionId,
+                title: title,
+                state: state
+            )
+        } catch {
+            state.conversations.errorMessage = error.localizedDescription
+        }
+    }
+
     func deleteConversation(_ sessionId: String) async {
         do {
             state = try await service.deleteConversation(sessionId: sessionId, state: state)

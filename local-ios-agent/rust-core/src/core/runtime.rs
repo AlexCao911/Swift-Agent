@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::context::{ContextController, PromptDebugSnapshot, PromptFrame, TokenizerAdapter};
+use crate::context::{
+    ContextController, InferenceOptions, PromptDebugSnapshot, PromptFrame, TokenizerAdapter,
+};
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
     ModelProviderOutput, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
@@ -82,6 +84,7 @@ const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
 pub struct ConversationSummary {
     pub session_id: SessionId,
     pub title: String,
+    pub search_text: String,
     pub active_leaf_id: Option<EntryId>,
     pub last_event_id: Option<EntryId>,
     pub last_updated_sequence: u64,
@@ -367,13 +370,18 @@ impl<S: EventStore> AgentRuntime<S> {
                 continue;
             };
             let branch = self.store.active_branch(&session_id, leaf_id)?;
+            let search_text = conversation_search_text(&branch);
             let Some(first_user_event) = branch
                 .into_iter()
                 .find(|event| event.kind == EventKind::UserMessage)
             else {
                 continue;
             };
-            let title = first_line_title(&first_user_event.payload);
+            let title = self
+                .store
+                .session_title_override(&session_id)?
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| first_line_title(&first_user_event.payload));
             let last_updated_sequence = last_event
                 .as_ref()
                 .and_then(|event| numeric_suffix(&event.id.0))
@@ -386,6 +394,7 @@ impl<S: EventStore> AgentRuntime<S> {
             summaries.push(ConversationSummary {
                 session_id,
                 title,
+                search_text,
                 active_leaf_id,
                 last_event_id: last_event.as_ref().map(|event| event.id.clone()),
                 last_updated_sequence,
@@ -405,6 +414,37 @@ impl<S: EventStore> AgentRuntime<S> {
     pub fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
         self.store.archive_session(session_id)?;
         self.sessions.remove(session_id);
+        Ok(())
+    }
+
+    pub fn rename_session(
+        &mut self,
+        session_id: &SessionId,
+        title: String,
+    ) -> Result<(), AgentError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(AgentError::Storage(
+                "conversation title cannot be empty".into(),
+            ));
+        }
+        self.store.rename_session(session_id, title.to_string())
+    }
+
+    pub fn update_runtime_options(
+        &mut self,
+        system_prompt: String,
+        runtime_policy: String,
+        inference_options: InferenceOptions,
+    ) -> Result<(), AgentError> {
+        validate_inference_options(inference_options)?;
+        self.config.system_prompt = system_prompt.clone();
+        self.config.runtime_policy = runtime_policy.clone();
+        self.context_controller.update_runtime_options(
+            system_prompt,
+            runtime_policy,
+            inference_options,
+        );
         Ok(())
     }
 
@@ -1374,6 +1414,41 @@ fn first_line_title(payload: &str) -> String {
     }
 }
 
+fn conversation_search_text(events: &[RuntimeEvent]) -> String {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                EventKind::UserMessage
+                    | EventKind::AssistantTextDelta
+                    | EventKind::AssistantMessageCompleted
+                    | EventKind::ToolResultMessage
+                    | EventKind::CompactionCreated
+                    | EventKind::BranchSummaryCreated
+            )
+        })
+        .map(|event| event.payload.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn validate_inference_options(options: InferenceOptions) -> Result<(), AgentError> {
+    if let Some(temperature) = options.temperature {
+        if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
+            return Err(AgentError::Provider(format!(
+                "invalid temperature: {temperature}"
+            )));
+        }
+    }
+    if let Some(top_p) = options.top_p {
+        if !top_p.is_finite() || !(0.0..=1.0).contains(&top_p) {
+            return Err(AgentError::Provider(format!("invalid top_p: {top_p}")));
+        }
+    }
+    Ok(())
+}
+
 fn active_provider_key() -> String {
     "active_provider".into()
 }
@@ -1486,6 +1561,27 @@ mod tests {
         assert!(summaries[0].last_event_id.is_some());
         assert!(summaries[0].last_updated_sequence > 0);
         assert!(summaries[0].last_updated_at_millis > 0);
+    }
+
+    #[test]
+    fn rename_session_overrides_conversation_summary_title() {
+        let mut runtime = AgentRuntime::new(config());
+        let session_id = runtime.create_session().unwrap();
+        runtime
+            .send_message_turn(SendMessageInput {
+                session_id: session_id.clone(),
+                parent_event_id: None,
+                text: "Original title".into(),
+                blob_refs: Vec::new(),
+            })
+            .unwrap();
+
+        runtime
+            .rename_session(&session_id, " Travel plan ".to_string())
+            .unwrap();
+        let summaries = runtime.conversation_summaries().unwrap();
+
+        assert_eq!(summaries[0].title, "Travel plan");
     }
 
     #[test]

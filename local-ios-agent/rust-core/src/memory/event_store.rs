@@ -23,6 +23,8 @@ pub trait EventStore {
     }
     fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError>;
     fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError>;
+    fn rename_session(&mut self, session_id: &SessionId, title: String) -> Result<(), AgentError>;
+    fn session_title_override(&self, session_id: &SessionId) -> Result<Option<String>, AgentError>;
     fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
     fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
     fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError>;

@@ -11,6 +11,7 @@ struct ChatView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isImportingFile = false
     @State private var intentRouter = AppIntentRouter.shared
+    @State private var managementSheet: ChatManagementSheet?
 
     var body: some View {
         NavigationStack {
@@ -26,13 +27,29 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    VStack(spacing: 2) {
-                        Text("Local Agent")
-                            .font(.headline)
-                        Text(phaseText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                    Menu {
+                        Button {
+                            managementSheet = .prompts
+                        } label: {
+                            Label("Prompt", systemImage: "text.quote")
+                        }
+
+                        Button {
+                            managementSheet = .settings
+                        } label: {
+                            Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text("Local Agent")
+                                .font(.headline)
+                            Text(phaseText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Agent options")
                 }
 
                 ToolbarItem(placement: .topBarLeading) {
@@ -92,6 +109,7 @@ struct ChatView: View {
             ConversationListView(
                 conversations: viewModel.state.conversations.conversations,
                 activeSessionId: viewModel.state.currentSessionId,
+                errorMessage: viewModel.state.conversations.errorMessage,
                 onNewChat: {
                     viewModel.state.conversations.isPresented = false
                     Task { await viewModel.newChat() }
@@ -100,6 +118,9 @@ struct ChatView: View {
                     viewModel.state.conversations.isPresented = false
                     Task { await viewModel.selectConversation(sessionId) }
                 },
+                onRename: { sessionId, title in
+                    Task { await viewModel.renameConversation(sessionId, title: title) }
+                },
                 onArchive: { sessionId in
                     Task { await viewModel.archiveConversation(sessionId) }
                 },
@@ -107,6 +128,14 @@ struct ChatView: View {
                     Task { await viewModel.deleteConversation(sessionId) }
                 }
             )
+        }
+        .sheet(item: $managementSheet) { sheet in
+            switch sheet {
+            case .prompts:
+                PromptLibrarySheet(library: $viewModel.state.promptLibrary)
+            case .settings:
+                ModelSettingsSheet(settings: $viewModel.state.modelSettings)
+            }
         }
         .alert("Edit Message", isPresented: isEditingMessagePresented) {
             TextField("Message", text: $editText)
@@ -418,8 +447,19 @@ struct ChatView: View {
         case .conversations:
             await viewModel.loadConversations()
             viewModel.state.conversations.isPresented = true
+        case .prompts:
+            managementSheet = .prompts
+        case .settings:
+            managementSheet = .settings
         }
     }
+}
+
+private enum ChatManagementSheet: String, Identifiable {
+    case prompts
+    case settings
+
+    var id: String { rawValue }
 }
 
 private struct DraftAttachmentChip: View {

@@ -1,4 +1,4 @@
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     build_openai_chat_request, parse_openai_chat_response, ModelProviderOutput,
 };
@@ -10,6 +10,10 @@ fn openai_chat_request_maps_prompt_frame_to_text_chat_messages() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: vec!["debug.echo".into()],
+        inference_options: InferenceOptions {
+            temperature: Some(0.2),
+            top_p: Some(0.75),
+        },
         messages: vec![
             PromptMessage::User("hello".into()),
             PromptMessage::Assistant("hi".into()),
@@ -21,6 +25,8 @@ fn openai_chat_request_maps_prompt_frame_to_text_chat_messages() {
 
     assert_eq!(request["model"], "minicpm");
     assert_eq!(request["stream"], false);
+    assert!((request["temperature"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+    assert!((request["top_p"].as_f64().unwrap() - 0.75).abs() < 1e-6);
     assert_eq!(request["messages"][0]["role"], "system");
     assert!(request["messages"][0]["content"]
         .as_str()

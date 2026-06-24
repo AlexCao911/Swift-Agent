@@ -116,6 +116,7 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
     public var lastEventId: String?
     public var lastUpdatedSequence: UInt64
     public var lastUpdatedAtMillis: UInt64?
+    public var searchText: String?
 
     public init(
         sessionId: String,
@@ -123,7 +124,8 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
         activeLeafId: String?,
         lastEventId: String?,
         lastUpdatedSequence: UInt64,
-        lastUpdatedAtMillis: UInt64? = nil
+        lastUpdatedAtMillis: UInt64? = nil,
+        searchText: String? = nil
     ) {
         self.sessionId = sessionId
         self.title = title
@@ -131,6 +133,7 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
         self.lastEventId = lastEventId
         self.lastUpdatedSequence = lastUpdatedSequence
         self.lastUpdatedAtMillis = lastUpdatedAtMillis
+        self.searchText = searchText
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -140,6 +143,7 @@ public struct ConversationSummaryDTO: Codable, Equatable, Sendable {
         case lastEventId = "last_event_id"
         case lastUpdatedSequence = "last_updated_sequence"
         case lastUpdatedAtMillis = "last_updated_at_millis"
+        case searchText = "search_text"
     }
 }
 

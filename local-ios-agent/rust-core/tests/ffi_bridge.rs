@@ -262,6 +262,33 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
 }
 
 #[test]
+fn bridge_update_runtime_options_changes_next_prompt_snapshot() {
+    let bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+
+    bridge
+        .update_runtime_options_json(
+            r#"{"system_prompt":"custom system","runtime_policy":"custom policy","temperature":0.25,"top_p":0.8}"#,
+        )
+        .unwrap();
+    let turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"hello"}}"#
+            ))
+            .unwrap(),
+    );
+
+    assert_eq!(turn["state"], "completed");
+    let snapshot = decode(&bridge.latest_prompt_debug_snapshot_json().unwrap());
+    assert!(snapshot["rendered_text"]
+        .as_str()
+        .unwrap()
+        .contains("custom system\ncustom policy"));
+}
+
+#[test]
 fn bridge_exposes_provider_control_json() {
     let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
@@ -364,6 +391,27 @@ fn bridge_exposes_conversation_summary_and_active_branch_json() {
 
     bridge.delete_session_json(session_id).unwrap();
     assert_eq!(decode(&bridge.session_ids_json().unwrap()), json!([]));
+}
+
+#[test]
+fn bridge_renames_conversation_summary_title() {
+    let bridge = bridge();
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+    decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"original title"}}"#
+            ))
+            .unwrap(),
+    );
+
+    bridge
+        .rename_session_json(session_id, "Travel plan")
+        .unwrap();
+    let summaries = decode(&bridge.conversation_summaries_json().unwrap());
+
+    assert_eq!(summaries[0]["title"], "Travel plan");
 }
 
 #[test]

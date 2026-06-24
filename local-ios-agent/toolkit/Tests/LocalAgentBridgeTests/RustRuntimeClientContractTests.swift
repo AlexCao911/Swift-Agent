@@ -178,6 +178,13 @@ struct RustRuntimeClientContractTests {
         let forkedSession = try await client?.forkSession(sessionId: "session_1", leafId: "entry_leaf")
         let activeBranch = try await client?.activeBranch(sessionId: "session_1", leafId: "entry_leaf")
         try await client?.archiveSession(sessionId: "session_1")
+        try await client?.renameSession(sessionId: "session_1", title: "Travel plan")
+        try await client?.updateRuntimeOptions(RuntimeOptionsDTO(
+            systemPrompt: "custom system",
+            runtimePolicy: "custom policy",
+            temperature: 0.25,
+            topP: 0.8
+        ))
         try await client?.deleteSession(sessionId: "session_1")
 
         #expect(turn?.state == .waitingTool)
@@ -203,6 +210,7 @@ struct RustRuntimeClientContractTests {
         let submittedResult = try decodedObject(try #require(probe.submittedToolResultJson))
         let approvalResponse = try decodedObject(try #require(probe.submittedApprovalResponseJson))
         let setProvider = try decodedObject(try #require(probe.setProviderJson))
+        let runtimeOptions = try decodedObject(try #require(probe.runtimeOptionsJson))
 
         #expect(registeredSchema["risk_level"] as? String == "confirm")
         #expect(permissionState["scope"] as? String == "calendar.events")
@@ -213,17 +221,23 @@ struct RustRuntimeClientContractTests {
         #expect(approvalResponse["reason"] is NSNull)
         #expect(setProvider["session_id"] as? String == "session_1")
         #expect(setProvider["provider_id"] as? String == "mock")
+        #expect(runtimeOptions["system_prompt"] as? String == "custom system")
+        #expect(runtimeOptions["runtime_policy"] as? String == "custom policy")
+        #expect(runtimeOptions["temperature"] as? Double == 0.25)
+        #expect(runtimeOptions["top_p"] as? Double == 0.8)
         #expect(probe.forkSessionId == "session_1")
         #expect(probe.forkLeafId == "entry_leaf")
         #expect(probe.activeBranchSessionId == "session_1")
         #expect(probe.activeBranchLeafId == "entry_leaf")
         #expect(probe.archivedSessionId == "session_1")
+        #expect(probe.renamedSessionId == "session_1")
+        #expect(probe.renamedSessionTitle == "Travel plan")
         #expect(probe.deletedSessionId == "session_1")
 
         client = nil
 
         #expect(probe.freedRuntimeHandles == 1)
-        #expect(probe.freedStrings == 19)
+        #expect(probe.freedStrings == 21)
     }
 
     @Test
@@ -290,11 +304,14 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
     var setProviderJson: String?
+    var runtimeOptionsJson: String?
     var forkSessionId: String?
     var forkLeafId: String?
     var activeBranchSessionId: String?
     var activeBranchLeafId: String?
     var archivedSessionId: String?
+    var renamedSessionId: String?
+    var renamedSessionTitle: String?
     var deletedSessionId: String?
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
@@ -310,6 +327,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             forkSession: forkSession,
             activeBranch: activeBranch,
             archiveSession: archiveSession,
+            renameSession: renameSession,
+            updateRuntimeOptions: updateRuntimeOptions,
             deleteSession: deleteSession,
             registerToolSchema: registerToolSchema,
             setPermissionState: setPermissionState,
@@ -400,6 +419,24 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         _ sessionId: UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>? {
         archivedSessionId = String(cString: sessionId!)
+        return makeCString("null")
+    }
+
+    func renameSession(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ sessionId: UnsafePointer<CChar>?,
+        _ title: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        renamedSessionId = String(cString: sessionId!)
+        renamedSessionTitle = String(cString: title!)
+        return makeCString("null")
+    }
+
+    func updateRuntimeOptions(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ optionsJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        runtimeOptionsJson = String(cString: optionsJson!)
         return makeCString("null")
     }
 

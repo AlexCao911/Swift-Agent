@@ -14,8 +14,8 @@ enum AppBootstrapper {
             runtimeStore = .sqlite(path: try sqliteURL().path)
         }
         let client = try RustRuntimeClient(configuration: RustRuntimeConfiguration(
-            systemPrompt: "You are Local Agent.",
-            runtimePolicy: "Use registered tools when helpful. Ask before risky work.",
+            systemPrompt: AgentPromptDefaults.systemPrompt,
+            runtimePolicy: AgentPromptDefaults.runtimePolicy,
             providerId: runtimeProviderId(environment: environment, providers: providers),
             store: runtimeStore,
             providers: providers

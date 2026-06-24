@@ -54,6 +54,21 @@ impl SqliteEventStore {
         <Self as EventStore>::last_event(self, session_id)
     }
 
+    pub fn rename_session(
+        &mut self,
+        session_id: &SessionId,
+        title: String,
+    ) -> Result<(), AgentError> {
+        <Self as EventStore>::rename_session(self, session_id, title)
+    }
+
+    pub fn session_title_override(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<String>, AgentError> {
+        <Self as EventStore>::session_title_override(self, session_id)
+    }
+
     fn migrate(&self) -> Result<(), AgentError> {
         self.conn
             .execute_batch(
@@ -69,7 +84,8 @@ impl SqliteEventStore {
                 create table if not exists sessions (
                   id text primary key,
                   active_leaf_id text,
-                  archived integer not null default 0
+                  archived integer not null default 0,
+                  title_override text
                 );
 
                 create table if not exists events (
@@ -148,6 +164,7 @@ impl SqliteEventStore {
             .map_err(storage_error)?;
 
         self.ensure_sessions_archived_column()?;
+        self.ensure_sessions_title_override_column()?;
         self.ensure_events_created_at_millis_column()?;
 
         let version = self.schema_version()?;
@@ -173,6 +190,21 @@ impl SqliteEventStore {
                 "alter table sessions add column archived integer not null default 0",
                 [],
             )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn ensure_sessions_title_override_column(&self) -> Result<(), AgentError> {
+        if self
+            .conn
+            .prepare("select title_override from sessions limit 0")
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        self.conn
+            .execute("alter table sessions add column title_override text", [])
             .map_err(storage_error)?;
         Ok(())
     }
@@ -752,6 +784,38 @@ impl EventStore for SqliteEventStore {
                 let entry_id: String = row.get(0).map_err(storage_error)?;
                 self.get(session_id, &EntryId(entry_id)).map(Some)
             }
+            None => Ok(None),
+        }
+    }
+
+    fn rename_session(&mut self, session_id: &SessionId, title: String) -> Result<(), AgentError> {
+        let changed = self
+            .conn
+            .execute(
+                "update sessions set title_override = ?2 where id = ?1",
+                params![session_id.0.as_str(), title.as_str()],
+            )
+            .map_err(storage_error)?;
+        if changed == 0 {
+            return Err(AgentError::Storage(format!(
+                "session not found: {}",
+                session_id.0
+            )));
+        }
+        Ok(())
+    }
+
+    fn session_title_override(&self, session_id: &SessionId) -> Result<Option<String>, AgentError> {
+        let mut statement = self
+            .conn
+            .prepare("select title_override from sessions where id = ?1")
+            .map_err(storage_error)?;
+        let mut rows = statement
+            .query(params![session_id.0.as_str()])
+            .map_err(storage_error)?;
+
+        match rows.next().map_err(storage_error)? {
+            Some(row) => row.get::<_, Option<String>>(0).map_err(storage_error),
             None => Ok(None),
         }
     }

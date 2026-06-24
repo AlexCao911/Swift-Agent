@@ -22,6 +22,7 @@ pub struct InMemoryEventStore {
     paths: Vec<PathRow>,
     children: HashMap<(SessionId, EntryId), HashSet<EntryId>>,
     archived_sessions: HashSet<SessionId>,
+    session_title_overrides: HashMap<SessionId, String>,
     provider_settings: HashMap<String, ProviderSetting>,
 }
 
@@ -60,6 +61,21 @@ impl InMemoryEventStore {
 
     pub fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
         <Self as EventStore>::last_event(self, session_id)
+    }
+
+    pub fn rename_session(
+        &mut self,
+        session_id: &SessionId,
+        title: String,
+    ) -> Result<(), AgentError> {
+        <Self as EventStore>::rename_session(self, session_id, title)
+    }
+
+    pub fn session_title_override(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<String>, AgentError> {
+        <Self as EventStore>::session_title_override(self, session_id)
     }
 
     fn insert_paths(&mut self, event: &RuntimeEvent) {
@@ -191,6 +207,26 @@ impl EventStore for InMemoryEventStore {
             .cloned())
     }
 
+    fn rename_session(&mut self, session_id: &SessionId, title: String) -> Result<(), AgentError> {
+        if !self
+            .events
+            .keys()
+            .any(|(event_session_id, _)| event_session_id == session_id)
+        {
+            return Err(AgentError::Storage(format!(
+                "session not found: {}",
+                session_id.0
+            )));
+        }
+        self.session_title_overrides
+            .insert(session_id.clone(), title);
+        Ok(())
+    }
+
+    fn session_title_override(&self, session_id: &SessionId) -> Result<Option<String>, AgentError> {
+        Ok(self.session_title_overrides.get(session_id).cloned())
+    }
+
     fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
         if !self
             .events
@@ -213,6 +249,7 @@ impl EventStore for InMemoryEventStore {
         self.children
             .retain(|(child_session_id, _), _| child_session_id != session_id);
         self.archived_sessions.remove(session_id);
+        self.session_title_overrides.remove(session_id);
         Ok(())
     }
 

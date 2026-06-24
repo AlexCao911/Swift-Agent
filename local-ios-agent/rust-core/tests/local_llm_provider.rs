@@ -1,4 +1,4 @@
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     CancellationToken, LocalLLMProvider, MockLocalInferenceBackend, ModelProvider,
     ModelProviderOutput,
@@ -19,6 +19,7 @@ fn local_llm_provider_is_model_agnostic() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: vec![PromptMessage::User("hello".into())],
     };
 

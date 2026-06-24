@@ -1,4 +1,4 @@
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput,
 };
@@ -11,6 +11,7 @@ fn mock_provider_streams_response_to_last_user_message() {
         system_prompt: "system".to_string(),
         runtime_policy: "policy".to_string(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: vec![
             PromptMessage::User("first".to_string()),
             PromptMessage::Assistant("ack".to_string()),
@@ -43,6 +44,7 @@ fn mock_provider_can_emit_tool_call() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: vec!["debug.echo".into()],
+        inference_options: InferenceOptions::default(),
         messages: vec![PromptMessage::User("use tool debug.echo".into())],
     };
 

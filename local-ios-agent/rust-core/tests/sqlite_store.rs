@@ -129,3 +129,28 @@ fn sqlite_store_exposes_replay_queries() {
         "leaf"
     );
 }
+
+#[test]
+fn sqlite_store_persists_session_title_override() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db_path = tempdir.path().join("agent.sqlite");
+    let mut store = SqliteEventStore::open(&db_path).unwrap();
+
+    store
+        .append(sqlite_event("root", None, 1, 0, "root"))
+        .unwrap();
+    store
+        .rename_session(
+            &SessionId("session_sqlite".into()),
+            "Travel plan".to_string(),
+        )
+        .unwrap();
+
+    let reopened = SqliteEventStore::open(&db_path).unwrap();
+    assert_eq!(
+        reopened
+            .session_title_override(&SessionId("session_sqlite".into()))
+            .unwrap(),
+        Some("Travel plan".to_string())
+    );
+}

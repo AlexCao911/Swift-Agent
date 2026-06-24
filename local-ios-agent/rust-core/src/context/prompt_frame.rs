@@ -34,12 +34,19 @@ impl PromptMessage {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PromptFrame {
     pub system_prompt: String,
     pub runtime_policy: String,
     pub tool_schemas: Vec<String>,
+    pub inference_options: InferenceOptions,
     pub messages: Vec<PromptMessage>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InferenceOptions {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
 }
 
 pub struct ContextBuildResult {
@@ -50,6 +57,7 @@ pub struct ContextBuildResult {
 pub struct ContextController {
     layers: PromptLayers,
     tool_schemas: Vec<String>,
+    inference_options: InferenceOptions,
     tokenizer: Box<dyn TokenizerAdapter>,
 }
 
@@ -86,8 +94,20 @@ impl ContextController {
                 memory,
             },
             tool_schemas,
+            inference_options: InferenceOptions::default(),
             tokenizer,
         }
+    }
+
+    pub fn update_runtime_options(
+        &mut self,
+        system_prompt: impl Into<String>,
+        runtime_policy: impl Into<String>,
+        inference_options: InferenceOptions,
+    ) {
+        self.layers.system = system_prompt.into();
+        self.layers.policy = runtime_policy.into();
+        self.inference_options = inference_options;
     }
 
     pub fn build_prompt_frame(&self, branch: Vec<RuntimeEvent>) -> Result<PromptFrame, AgentError> {
@@ -177,6 +197,7 @@ impl ContextController {
             system_prompt: self.layers.render_system_prompt(),
             runtime_policy: self.layers.policy.clone(),
             tool_schemas: self.tool_schemas.clone(),
+            inference_options: self.inference_options,
             messages,
         }
     }

@@ -36,6 +36,7 @@
 		0A000001000000000000001B /* AttachmentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011A /* AttachmentService.swift */; };
 		0A000001000000000000001C /* AppIntentRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011B /* AppIntentRouter.swift */; };
 		0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011C /* LocalAgentShortcuts.swift */; };
+		0A000001000000000000001E /* ChatManagementSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011D /* ChatManagementSheets.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,6 +79,7 @@
 		0A000001000000000000011A /* AttachmentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentService.swift; sourceTree = "<group>"; };
 		0A000001000000000000011B /* AppIntentRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouter.swift; sourceTree = "<group>"; };
 		0A000001000000000000011C /* LocalAgentShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentShortcuts.swift; sourceTree = "<group>"; };
+		0A000001000000000000011D /* ChatManagementSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatManagementSheets.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -196,6 +198,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000104 /* AgentViewModel.swift */,
+				0A000001000000000000011D /* ChatManagementSheets.swift */,
 				0A0000010000000000000109 /* ChatView.swift */,
 				0A0000010000000000000119 /* ConversationListView.swift */,
 				0A0000010000000000000118 /* MessageContentView.swift */,
@@ -408,6 +411,7 @@
 				0A000001000000000000001B /* AttachmentService.swift in Sources */,
 				0A000001000000000000001C /* AppIntentRouter.swift in Sources */,
 				0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */,
+				0A000001000000000000001E /* ChatManagementSheets.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

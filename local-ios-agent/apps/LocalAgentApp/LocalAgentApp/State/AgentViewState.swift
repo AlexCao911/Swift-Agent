@@ -1,6 +1,11 @@
 import Foundation
 import LocalAgentBridge
 
+enum AgentPromptDefaults {
+    static let systemPrompt = "You are Local Agent."
+    static let runtimePolicy = "Use registered tools when helpful. Ask before risky work."
+}
+
 enum AppRuntimePhase: Equatable, Sendable {
     case booting
     case ready
@@ -158,6 +163,7 @@ struct ConversationSummaryViewState: Equatable, Identifiable, Sendable {
     var lastEventId: String?
     var lastUpdatedSequence: UInt64
     var lastMessageDate: Date? = nil
+    var searchText: String = ""
 }
 
 struct ConversationListViewState: Equatable, Sendable {
@@ -176,6 +182,56 @@ struct ConversationListViewState: Equatable, Sendable {
     }
 }
 
+struct ConversationSectionViewState: Equatable, Identifiable, Sendable {
+    let id: String
+    var title: String
+    var conversations: [ConversationSummaryViewState]
+}
+
+struct PromptSectionViewState: Equatable, Identifiable, Sendable {
+    var id: String
+    var name: String
+    var content: String
+}
+
+struct PromptLibraryViewState: Equatable, Sendable {
+    var sections: [PromptSectionViewState]
+
+    init(
+        sections: [PromptSectionViewState] = [
+            PromptSectionViewState(id: "system", name: "System Prompt", content: ""),
+            PromptSectionViewState(id: "style", name: "Response Style", content: ""),
+        ]
+    ) {
+        self.sections = sections
+    }
+
+    var renderedSystemPrompt: String {
+        let rendered = sections.compactMap { section in
+            let content = section.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else {
+                return nil
+            }
+            let name = section.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = name.isEmpty ? "Prompt" : name
+            return "### \(title)\n\(content)"
+        }
+        .joined(separator: "\n\n")
+
+        return rendered.isEmpty ? AgentPromptDefaults.systemPrompt : rendered
+    }
+}
+
+struct ModelSettingsViewState: Equatable, Sendable {
+    var temperature: Double
+    var topP: Double
+
+    init(temperature: Double = 0.7, topP: Double = 0.9) {
+        self.temperature = temperature
+        self.topP = topP
+    }
+}
+
 struct AgentViewState: Equatable, Sendable {
     var phase: AppRuntimePhase
     var messages: [AgentMessageViewState]
@@ -185,6 +241,8 @@ struct AgentViewState: Equatable, Sendable {
     var provider: ProviderSelectionViewState
     var conversations: ConversationListViewState
     var lastTerminalReason: RunTerminalReason?
+    var promptLibrary: PromptLibraryViewState
+    var modelSettings: ModelSettingsViewState
 
     init(
         phase: AppRuntimePhase = .booting,
@@ -194,7 +252,9 @@ struct AgentViewState: Equatable, Sendable {
         errorMessage: String? = nil,
         provider: ProviderSelectionViewState = ProviderSelectionViewState(),
         conversations: ConversationListViewState = ConversationListViewState(),
-        lastTerminalReason: RunTerminalReason? = nil
+        lastTerminalReason: RunTerminalReason? = nil,
+        promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
+        modelSettings: ModelSettingsViewState = ModelSettingsViewState()
     ) {
         self.phase = phase
         self.messages = messages
@@ -204,6 +264,8 @@ struct AgentViewState: Equatable, Sendable {
         self.provider = provider
         self.conversations = conversations
         self.lastTerminalReason = lastTerminalReason
+        self.promptLibrary = promptLibrary
+        self.modelSettings = modelSettings
     }
 
     init(
@@ -214,7 +276,9 @@ struct AgentViewState: Equatable, Sendable {
         errorMessage: String? = nil,
         provider: ProviderSelectionViewState = ProviderSelectionViewState(),
         conversations: ConversationListViewState = ConversationListViewState(),
-        lastTerminalReason: RunTerminalReason? = nil
+        lastTerminalReason: RunTerminalReason? = nil,
+        promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
+        modelSettings: ModelSettingsViewState = ModelSettingsViewState()
     ) {
         self.init(
             phase: phase,
@@ -224,7 +288,9 @@ struct AgentViewState: Equatable, Sendable {
             errorMessage: errorMessage,
             provider: provider,
             conversations: conversations,
-            lastTerminalReason: lastTerminalReason
+            lastTerminalReason: lastTerminalReason,
+            promptLibrary: promptLibrary,
+            modelSettings: modelSettings
         )
     }
 

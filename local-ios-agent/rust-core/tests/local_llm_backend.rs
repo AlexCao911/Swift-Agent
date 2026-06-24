@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
     CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, ImageInput, LocalAgentStatus,
@@ -121,6 +121,7 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: vec![r#"{"name":"debug.echo"}"#.into()],
+        inference_options: InferenceOptions::default(),
         messages: vec![
             PromptMessage::User("hello".into()),
             PromptMessage::Assistant("hi".into()),
@@ -171,6 +172,7 @@ fn local_llm_provider_streams_single_image_blob_through_backend() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: vec![PromptMessage::UserWithBlobRefs {
             content: "what is in this picture?".into(),
             blob_refs: vec![
@@ -217,6 +219,7 @@ fn local_llm_provider_streams_latest_image_blob_through_backend() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: vec![
             PromptMessage::UserWithBlobRefs {
                 content: "what is in this first picture?".into(),
@@ -262,6 +265,7 @@ fn local_llm_provider_surfaces_backend_cancellation() {
         system_prompt: String::new(),
         runtime_policy: String::new(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: Vec::new(),
     };
 
@@ -284,6 +288,7 @@ fn local_llm_provider_surfaces_backend_errors() {
         system_prompt: String::new(),
         runtime_policy: String::new(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: Vec::new(),
     };
 
@@ -306,6 +311,7 @@ fn local_llm_provider_rejects_malformed_backend_token_json() {
         system_prompt: String::new(),
         runtime_policy: String::new(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: Vec::new(),
     };
 

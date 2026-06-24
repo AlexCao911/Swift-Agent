@@ -1,4 +1,6 @@
-use local_ios_agent_runtime::context::{CompactionCandidate, PromptDebugSnapshot, PromptFrame};
+use local_ios_agent_runtime::context::{
+    CompactionCandidate, InferenceOptions, PromptDebugSnapshot, PromptFrame,
+};
 
 #[test]
 fn compaction_candidate_creates_summary_text() {
@@ -13,6 +15,7 @@ fn prompt_debug_snapshot_renders_frame() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: Vec::new(),
     };
 

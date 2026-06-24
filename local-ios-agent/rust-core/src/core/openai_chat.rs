@@ -31,11 +31,20 @@ pub fn build_openai_chat_request(model: &str, frame: &PromptFrame) -> Value {
         });
     }
 
-    json!({
+    let mut request = json!({
         "model": model,
         "stream": false,
         "messages": messages,
-    })
+    });
+
+    if let Some(temperature) = frame.inference_options.temperature {
+        request["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = frame.inference_options.top_p {
+        request["top_p"] = json!(top_p);
+    }
+
+    request
 }
 
 pub fn parse_openai_chat_response(

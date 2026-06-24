@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use local_ios_agent_runtime::context::{PromptFrame, PromptMessage};
+use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     CancellationToken, DesktopMiniCPMProvider, DesktopMiniCPMTransport, ModelProvider,
     ModelProviderOutput,
@@ -38,6 +38,7 @@ fn desktop_minicpm_provider_builds_request_and_parses_text_response() {
         system_prompt: "system".into(),
         runtime_policy: "policy".into(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: vec![PromptMessage::User("hello".into())],
     };
 
@@ -75,6 +76,7 @@ fn desktop_minicpm_provider_checks_cancellation_before_transport() {
         system_prompt: String::new(),
         runtime_policy: String::new(),
         tool_schemas: Vec::new(),
+        inference_options: InferenceOptions::default(),
         messages: Vec::new(),
     };
 

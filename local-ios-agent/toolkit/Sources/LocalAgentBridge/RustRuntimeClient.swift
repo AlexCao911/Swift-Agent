@@ -169,6 +169,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         UnsafePointer<CChar>?
     ) -> StringResult
     public var archiveSession: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var renameSession: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
+    public var updateRuntimeOptions: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var deleteSession: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -218,6 +224,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             UnsafePointer<CChar>?
         ) -> StringResult,
         archiveSession: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        renameSession: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?
+        ) -> StringResult,
+        updateRuntimeOptions: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         deleteSession: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
@@ -258,6 +270,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.forkSession = forkSession
         self.activeBranch = activeBranch
         self.archiveSession = archiveSession
+        self.renameSession = renameSession
+        self.updateRuntimeOptions = updateRuntimeOptions
         self.deleteSession = deleteSession
         self.registerToolSchema = registerToolSchema
         self.setPermissionState = setPermissionState
@@ -319,6 +333,19 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                 local_agent_runtime_bridge_archive_session(
                     runtime.map { OpaquePointer($0) },
                     sessionId
+                )
+            },
+            renameSession: { runtime, sessionId, title in
+                local_agent_runtime_bridge_rename_session(
+                    runtime.map { OpaquePointer($0) },
+                    sessionId,
+                    title
+                )
+            },
+            updateRuntimeOptions: { runtime, optionsJson in
+                local_agent_runtime_bridge_update_runtime_options(
+                    runtime.map { OpaquePointer($0) },
+                    optionsJson
                 )
             },
             deleteSession: { runtime, sessionId in
@@ -402,7 +429,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, ConversationRuntimeClient, @unchecked Sendable {
+public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -472,6 +499,21 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
     public func archiveSession(sessionId: String) async throws {
         _ = try sessionId.withCString { sessionPointer in
             try consume(functions.archiveSession(handle, sessionPointer))
+        }
+    }
+
+    public func renameSession(sessionId: String, title: String) async throws {
+        _ = try sessionId.withCString { sessionPointer in
+            try title.withCString { titlePointer in
+                try consume(functions.renameSession(handle, sessionPointer, titlePointer))
+            }
+        }
+    }
+
+    public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
+        let json = try encode(options)
+        _ = try json.withCString { pointer in
+            try consume(functions.updateRuntimeOptions(handle, pointer))
         }
     }
 
