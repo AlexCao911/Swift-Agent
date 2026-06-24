@@ -40,11 +40,13 @@ struct ChatView: View {
                             Label("Settings", systemImage: "slider.horizontal.3")
                         }
                     } label: {
-                        VStack(spacing: 2) {
+                        HStack(spacing: 4) {
                             Text("Local Agent")
                                 .font(.headline)
-                            Text(phaseText)
-                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                            
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
                         .contentShape(Rectangle())
@@ -84,8 +86,6 @@ struct ChatView: View {
                         }
                         .accessibilityLabel("Stop")
                     }
-
-                    providerMenu
                 }
             }
         }
@@ -274,12 +274,12 @@ struct ChatView: View {
             }
 
             HStack(alignment: .bottom, spacing: 12) {
-                HStack(spacing: 8) {
+                HStack(spacing: 16) {
                     Button {
                         isImportingFile = true
                     } label: {
-                        Image(systemName: "paperclip.circle")
-                            .font(.system(size: 24))
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityLabel("Add File")
@@ -288,43 +288,49 @@ struct ChatView: View {
                         selection: $selectedPhotoItem,
                         matching: .images
                     ) {
-                        Image(systemName: "photo.circle")
-                            .font(.system(size: 24))
+                        Image(systemName: "photo")
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityLabel("Add Photo")
                 }
                 .disabled(viewModel.state.phase.isRunning)
+                .padding(.bottom, 11)
+                .padding(.leading, 4)
 
-                TextField("Message Local Agent", text: $viewModel.state.draftText, axis: .vertical)
-                    .font(.body)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background {
-                        Capsule()
-                            .fill(Color(.systemGray6))
-                    }
-                    .overlay {
-                        Capsule()
-                            .stroke(Color(.separator).opacity(0.5), lineWidth: 0.5)
-                    }
-                    .lineLimit(1...6)
-                    .disabled(viewModel.state.phase.isRunning)
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField("Message Local Agent", text: $viewModel.state.draftText, axis: .vertical)
+                        .font(.body)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .padding(.bottom, 10)
+                        .lineLimit(1...6)
+                        .disabled(viewModel.state.phase.isRunning)
 
-                Button {
-                    Task { await viewModel.send() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            isSendDisabled ? Color(.systemGray4) : .white,
-                            isSendDisabled ? Color(.systemGray5) : Color.accentColor
-                        )
-                        .background(Color.white.opacity(0.01))
+                    Button {
+                        Task { await viewModel.send() }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(
+                                isSendDisabled ? Color(.systemGray4) : .white,
+                                isSendDisabled ? Color(.systemGray5) : Color.accentColor
+                            )
+                    }
+                    .disabled(isSendDisabled)
+                    .animation(.easeInOut(duration: 0.2), value: isSendDisabled)
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 7)
                 }
-                .disabled(isSendDisabled)
-                .animation(.easeInOut(duration: 0.2), value: isSendDisabled)
+                .background {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color(.systemGray6))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color(.separator).opacity(0.3), lineWidth: 0.5)
+                        }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -360,26 +366,6 @@ struct ChatView: View {
         ) || viewModel.state.phase.isRunning
     }
 
-    private var providerMenu: some View {
-        Menu {
-            ForEach(viewModel.state.provider.profiles, id: \.id) { profile in
-                Button {
-                    Task { await viewModel.selectProvider(profile.id) }
-                } label: {
-                    Label(
-                        profile.displayName,
-                        systemImage: profile.id == viewModel.state.provider.active?.id ? "checkmark" : "cpu"
-                    )
-                }
-                .disabled(viewModel.state.phase.isRunning)
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-        .accessibilityLabel("Provider")
-        .disabled(viewModel.state.provider.profiles.isEmpty)
-    }
-
     private var isEditingMessagePresented: Binding<Bool> {
         Binding(
             get: { editingMessage != nil },
@@ -390,15 +376,6 @@ struct ChatView: View {
                 }
             }
         )
-    }
-
-    private var phaseText: String {
-        switch viewModel.state.phase {
-        case .booting: return "Starting"
-        case .ready: return "Online"
-        case .running: return "Thinking"
-        case .failed: return "Disconnected"
-        }
     }
 
     private func loadSelectedPhoto(_ item: PhotosPickerItem) async {

@@ -23,11 +23,6 @@ struct ConversationListView: View {
     var body: some View {
         NavigationStack {
             List {
-                Button {
-                    onNewChat()
-                } label: {
-                    Label("New Chat", systemImage: "square.and.pencil")
-                }
 
                 if let errorMessage,
                    !errorMessage.isEmpty
@@ -100,6 +95,16 @@ struct ConversationListView: View {
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: Text("Search chats")
             )
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        onNewChat()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel("New Chat")
+                }
+            }
             .sheet(item: $renamingConversation) { conversation in
                 RenameConversationSheet(
                     conversation: conversation,
@@ -122,6 +127,7 @@ private struct ConversationRowButton: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(conversation.title)
+                        .font(.headline)
                         .lineLimit(1)
                         .foregroundStyle(.primary)
 
@@ -135,10 +141,12 @@ private struct ConversationRowButton: View {
 
                 if isActive {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
