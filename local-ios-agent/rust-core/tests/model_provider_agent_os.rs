@@ -37,7 +37,8 @@ fn provider_validation_requires_egress_decision_and_approval_grant() {
         decision,
         Some(grant),
         CredentialPurpose::RemoteProvider,
-    );
+    )
+    .unwrap();
 
     let report = adapter.validate_account(request);
 
@@ -59,7 +60,8 @@ fn provider_validation_rejects_remote_request_without_matching_grant() {
         decision,
         None,
         CredentialPurpose::RemoteProvider,
-    );
+    )
+    .unwrap();
 
     let report = adapter.validate_account(request);
 
@@ -70,7 +72,7 @@ fn provider_validation_rejects_remote_request_without_matching_grant() {
 #[test]
 fn local_provider_validation_does_not_require_egress_decision() {
     let adapter = RecordingLocalProviderAdapter::default();
-    let request = ProviderAccountValidationRequest::local(local_account());
+    let request = ProviderAccountValidationRequest::local(local_account()).unwrap();
 
     let report = adapter.validate_account(request);
 
@@ -91,7 +93,8 @@ fn remote_model_list_requires_egress_decision_and_approval_grant() {
         decision,
         Some(grant),
         CredentialPurpose::RemoteProvider,
-    );
+    )
+    .unwrap();
 
     let result = adapter.list_models(request);
 
@@ -108,7 +111,7 @@ fn model_catalog_service_evaluates_provider_egress_through_security_service() {
             .allow_destination(EgressDestination::new(account.destination().unwrap())),
     );
 
-    let decision = catalog.evaluate_model_list_egress(&account);
+    let decision = catalog.evaluate_model_list_egress(&account).unwrap();
 
     assert!(decision.allowlist_result().is_allowed());
     assert_eq!(
@@ -129,7 +132,9 @@ fn model_catalog_service_evaluates_account_validation_egress_through_security_se
             .allow_destination(EgressDestination::new(account.destination().unwrap())),
     );
 
-    let decision = catalog.evaluate_account_validation_egress(&account);
+    let decision = catalog
+        .evaluate_account_validation_egress(&account)
+        .unwrap();
 
     assert!(decision.allowlist_result().is_allowed());
     assert_eq!(
@@ -144,6 +149,114 @@ fn model_catalog_service_evaluates_account_validation_egress_through_security_se
         .disclosure_id()
         .as_str()
         .contains("remote.provider.validate_account"));
+}
+
+#[test]
+fn remote_account_cannot_use_local_validation_request() {
+    let error = ProviderAccountValidationRequest::local(remote_account()).unwrap_err();
+
+    assert_eq!(error.code, "model.provider_account.kind_mismatch");
+}
+
+#[test]
+fn remote_account_cannot_use_local_model_list_request() {
+    let error = ModelListRequest::local(remote_account()).unwrap_err();
+
+    assert_eq!(error.code, "model.provider_account.kind_mismatch");
+}
+
+#[test]
+fn local_account_cannot_use_remote_validation_request() {
+    let account = local_account();
+    let service = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://api.openai.com"));
+    let decision = service.evaluate_egress(DataEgressRequest::remote_provider_validation(
+        "https://api.openai.com",
+    ));
+
+    let error = ProviderAccountValidationRequest::remote(
+        account,
+        decision,
+        None,
+        CredentialPurpose::RemoteProvider,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "model.provider_account.kind_mismatch");
+}
+
+#[test]
+fn local_account_cannot_use_remote_model_list_request() {
+    let account = local_account();
+    let service = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://api.openai.com"));
+    let decision = service.evaluate_egress(DataEgressRequest::remote_provider_list(
+        "https://api.openai.com",
+    ));
+
+    let error =
+        ModelListRequest::remote(account, decision, None, CredentialPurpose::RemoteProvider)
+            .unwrap_err();
+
+    assert_eq!(error.code, "model.provider_account.kind_mismatch");
+}
+
+#[test]
+fn local_account_does_not_fabricate_validation_egress_decision() {
+    let catalog = ModelCatalogService::new(StaticSecurityPermissionService::default());
+
+    let error = catalog
+        .evaluate_account_validation_egress(&local_account())
+        .unwrap_err();
+
+    assert_eq!(error.code, "model.egress.remote_account_required");
+}
+
+#[test]
+fn local_account_does_not_fabricate_model_list_egress_decision() {
+    let catalog = ModelCatalogService::new(StaticSecurityPermissionService::default());
+
+    let error = catalog
+        .evaluate_model_list_egress(&local_account())
+        .unwrap_err();
+
+    assert_eq!(error.code, "model.egress.remote_account_required");
+}
+
+#[test]
+fn validation_request_rejects_model_list_egress_decision() {
+    let account = remote_account();
+    let (decision, grant) = approved_egress_grant(
+        ModelListRequest::remote_operation(),
+        DataEgressRequest::remote_provider_list(account.destination().unwrap()),
+    );
+    let request = ProviderAccountValidationRequest::remote(
+        account,
+        decision,
+        Some(grant),
+        CredentialPurpose::RemoteProvider,
+    )
+    .unwrap();
+
+    assert!(!request.remote_egress_is_approved());
+}
+
+#[test]
+fn model_list_request_rejects_validation_egress_decision() {
+    let account = remote_account();
+    let (decision, grant) = approved_egress_grant(
+        ProviderAccountValidationRequest::remote_operation(),
+        DataEgressRequest::remote_provider_validation(account.destination().unwrap()),
+    );
+    let request = ModelListRequest::remote(
+        account,
+        decision,
+        Some(grant),
+        CredentialPurpose::RemoteProvider,
+    )
+    .unwrap();
+
+    assert!(!request.remote_egress_is_approved());
 }
 
 #[test]

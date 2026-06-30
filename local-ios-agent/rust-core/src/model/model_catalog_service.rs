@@ -1,6 +1,6 @@
 use crate::model::{
-    ModelDescriptor, ModelProviderIssue, ProviderAccount, ProviderAccountValidation,
-    ProviderAccountValidationRequest, ProviderDefinition,
+    ModelDescriptor, ModelProviderIssue, ModelProviderResult, ProviderAccount,
+    ProviderAccountValidation, ProviderAccountValidationRequest, ProviderDefinition,
 };
 use crate::security::{DataEgressDecision, DataEgressRequest, SecurityPermissionService};
 
@@ -56,17 +56,36 @@ impl ModelCatalogService {
     pub fn evaluate_account_validation_egress(
         &self,
         account: &ProviderAccount,
-    ) -> DataEgressDecision {
-        self.security
-            .evaluate_egress(DataEgressRequest::remote_provider_validation(
-                account.destination().unwrap_or(""),
-            ))
+    ) -> ModelProviderResult<DataEgressDecision> {
+        let destination = remote_destination(account)?;
+        Ok(self
+            .security
+            .evaluate_egress(DataEgressRequest::remote_provider_validation(destination)))
     }
 
-    pub fn evaluate_model_list_egress(&self, account: &ProviderAccount) -> DataEgressDecision {
-        self.security
-            .evaluate_egress(DataEgressRequest::remote_provider_list(
-                account.destination().unwrap_or(""),
-            ))
+    pub fn evaluate_model_list_egress(
+        &self,
+        account: &ProviderAccount,
+    ) -> ModelProviderResult<DataEgressDecision> {
+        let destination = remote_destination(account)?;
+        Ok(self
+            .security
+            .evaluate_egress(DataEgressRequest::remote_provider_list(destination)))
     }
+}
+
+fn remote_destination(account: &ProviderAccount) -> ModelProviderResult<&str> {
+    if !account.is_remote() {
+        return Err(ModelProviderIssue::new(
+            "model.egress.remote_account_required",
+            "provider egress evaluation requires a remote provider account",
+        ));
+    }
+
+    account.destination().ok_or_else(|| {
+        ModelProviderIssue::new(
+            "model.egress.remote_destination_missing",
+            "remote provider account is missing an egress destination",
+        )
+    })
 }

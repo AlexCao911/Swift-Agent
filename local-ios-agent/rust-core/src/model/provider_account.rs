@@ -13,7 +13,7 @@ pub enum ProviderAccountKind {
 pub struct ProviderAccount {
     pub id: String,
     pub provider_id: String,
-    pub kind: ProviderAccountKind,
+    kind: ProviderAccountKind,
     destination: Option<String>,
     credential_ref: Option<CredentialRef>,
 }
@@ -52,8 +52,16 @@ impl ProviderAccount {
         self.credential_ref.as_ref()
     }
 
+    pub fn kind(&self) -> &ProviderAccountKind {
+        &self.kind
+    }
+
     pub fn is_remote(&self) -> bool {
         self.kind == ProviderAccountKind::Remote
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.kind == ProviderAccountKind::Local
     }
 }
 
@@ -71,6 +79,8 @@ impl ModelProviderIssue {
         }
     }
 }
+
+pub type ModelProviderResult<T> = Result<T, ModelProviderIssue>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderAccountValidation {
@@ -123,10 +133,11 @@ struct RemoteProviderRequest {
 impl ProviderAccountValidationRequest {
     const REMOTE_OPERATION: &'static str = "remote.provider.validate_account";
 
-    pub fn local(account: ProviderAccount) -> Self {
-        Self {
+    pub fn local(account: ProviderAccount) -> ModelProviderResult<Self> {
+        ensure_local_account(&account)?;
+        Ok(Self {
             kind: ProviderAccountValidationRequestKind::Local { account },
-        }
+        })
     }
 
     pub fn remote(
@@ -134,15 +145,16 @@ impl ProviderAccountValidationRequest {
         egress_decision: DataEgressDecision,
         approval_grant: Option<ApprovalGrant>,
         credential_purpose: CredentialPurpose,
-    ) -> Self {
-        Self {
+    ) -> ModelProviderResult<Self> {
+        ensure_remote_account(&account)?;
+        Ok(Self {
             kind: ProviderAccountValidationRequestKind::Remote(RemoteProviderRequest {
                 account,
                 egress_decision,
                 approval_grant,
                 credential_purpose,
             }),
-        }
+        })
     }
 
     pub fn remote_operation() -> OperationDescriptor {
@@ -191,10 +203,11 @@ enum ModelListRequestKind {
 impl ModelListRequest {
     const REMOTE_OPERATION: &'static str = "remote.provider.list_models";
 
-    pub fn local(account: ProviderAccount) -> Self {
-        Self {
+    pub fn local(account: ProviderAccount) -> ModelProviderResult<Self> {
+        ensure_local_account(&account)?;
+        Ok(Self {
             kind: ModelListRequestKind::Local { account },
-        }
+        })
     }
 
     pub fn remote(
@@ -202,15 +215,16 @@ impl ModelListRequest {
         egress_decision: DataEgressDecision,
         approval_grant: Option<ApprovalGrant>,
         credential_purpose: CredentialPurpose,
-    ) -> Self {
-        Self {
+    ) -> ModelProviderResult<Self> {
+        ensure_remote_account(&account)?;
+        Ok(Self {
             kind: ModelListRequestKind::Remote(RemoteProviderRequest {
                 account,
                 egress_decision,
                 approval_grant,
                 credential_purpose,
             }),
-        }
+        })
     }
 
     pub fn remote_operation() -> OperationDescriptor {
@@ -257,6 +271,7 @@ fn remote_egress_is_approved(
     };
     if !account.is_remote()
         || credential_purpose != CredentialPurpose::RemoteProvider
+        || decision.operation() != operation
         || decision.policy().destination().as_str() != destination
         || !decision.allowlist_result().is_allowed()
     {
@@ -269,4 +284,27 @@ fn remote_egress_is_approved(
             .map(|grant| grant.matches_egress(operation, decision))
             .unwrap_or(false),
     }
+}
+
+fn ensure_local_account(account: &ProviderAccount) -> ModelProviderResult<()> {
+    if account.is_local() {
+        return Ok(());
+    }
+
+    Err(ModelProviderIssue::new(
+        "model.provider_account.kind_mismatch",
+        "local provider request requires a local provider account",
+    ))
+}
+
+fn ensure_remote_account(account: &ProviderAccount) -> ModelProviderResult<()> {
+    if account.is_remote() && account.destination().is_some() && account.credential_ref().is_some()
+    {
+        return Ok(());
+    }
+
+    Err(ModelProviderIssue::new(
+        "model.provider_account.kind_mismatch",
+        "remote provider request requires a remote provider account",
+    ))
 }

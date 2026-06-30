@@ -160,6 +160,7 @@ impl DataEgressRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataEgressDecision {
+    operation: OperationDescriptor,
     disclosure_id: DataEgressDisclosureId,
     allowlist_result: AllowlistResult,
     approval_requirement: ApprovalRequirement,
@@ -167,6 +168,10 @@ pub struct DataEgressDecision {
 }
 
 impl DataEgressDecision {
+    pub fn operation(&self) -> &OperationDescriptor {
+        &self.operation
+    }
+
     pub fn disclosure_id(&self) -> &DataEgressDisclosureId {
         &self.disclosure_id
     }
@@ -256,6 +261,7 @@ impl DataEgressEvaluator for StaticSecurityPermissionService {
         );
 
         DataEgressDecision {
+            operation: OperationDescriptor::new(request.operation.clone()),
             disclosure_id: DataEgressDisclosureId::new(format!(
                 "egress:{}:{}",
                 request.operation,

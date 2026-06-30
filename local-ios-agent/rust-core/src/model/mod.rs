@@ -10,7 +10,7 @@ pub use generation_profile::{
 pub use model_catalog_service::{ModelCatalogService, ModelListResult, ModelProviderAdapter};
 pub use model_descriptor::{ModelCapabilities, ModelDescriptor, ModelFormat};
 pub use provider_account::{
-    ModelListRequest, ModelProviderIssue, ProviderAccount, ProviderAccountKind,
-    ProviderAccountValidation, ProviderAccountValidationRequest,
+    ModelListRequest, ModelProviderIssue, ModelProviderResult, ProviderAccount,
+    ProviderAccountKind, ProviderAccountValidation, ProviderAccountValidationRequest,
 };
 pub use provider_definition::ProviderDefinition;
