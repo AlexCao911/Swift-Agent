@@ -11,6 +11,7 @@ crate-type = ["rlib", "staticlib"]
 
 [features]
 default = []
+builtin-openai-compatible = []
 link-mock-local-inference = []
 link-llama-cpp-local-inference = ["link-mock-local-inference"]
 link-llama-cpp-mtmd-local-inference = ["link-llama-cpp-local-inference"]
