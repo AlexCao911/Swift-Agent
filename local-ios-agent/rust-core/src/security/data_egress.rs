@@ -1,0 +1,287 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::security::{
+    ApprovalRequirement, CapabilityRequirement, OperationDescriptor, PermissionReadinessReport,
+    PermissionState,
+};
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct EgressDestination(String);
+
+impl EgressDestination {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct DataFieldClass(String);
+
+impl DataFieldClass {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SensitivityLevel {
+    Public,
+    UserData,
+    Sensitive,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataEgressDisclosureId(String);
+
+impl DataEgressDisclosureId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AllowlistResult {
+    Allowed,
+    Denied { reason: String },
+}
+
+impl AllowlistResult {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataEgressPolicy {
+    pub destination: EgressDestination,
+    pub allowed_fields: Vec<DataFieldClass>,
+    pub requires_disclosure: bool,
+    pub requires_approval: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataEgressRequest {
+    pub operation: String,
+    pub destination: EgressDestination,
+    pub data_classes: Vec<DataFieldClass>,
+    pub sensitivity: SensitivityLevel,
+}
+
+impl DataEgressRequest {
+    pub fn remote_provider_list(destination: impl Into<String>) -> Self {
+        Self::new(
+            "remote.provider.list_models",
+            destination,
+            vec!["provider.account.metadata"],
+            SensitivityLevel::UserData,
+        )
+    }
+
+    pub fn remote_provider_validation(destination: impl Into<String>) -> Self {
+        Self::new(
+            "remote.provider.validate_account",
+            destination,
+            vec!["provider.account.metadata"],
+            SensitivityLevel::UserData,
+        )
+    }
+
+    pub fn remote_inference(destination: impl Into<String>) -> Self {
+        Self::new(
+            "remote.inference.generate",
+            destination,
+            vec!["conversation.content"],
+            SensitivityLevel::Sensitive,
+        )
+    }
+
+    pub fn http_tool(destination: impl Into<String>) -> Self {
+        Self::new(
+            "http.tool.request",
+            destination,
+            vec!["tool.request.payload"],
+            SensitivityLevel::Sensitive,
+        )
+    }
+
+    pub fn external_memory_write(destination: impl Into<String>) -> Self {
+        Self::new(
+            "external.memory.write",
+            destination,
+            vec!["memory.content"],
+            SensitivityLevel::Sensitive,
+        )
+    }
+
+    fn new(
+        operation: impl Into<String>,
+        destination: impl Into<String>,
+        data_classes: Vec<&str>,
+        sensitivity: SensitivityLevel,
+    ) -> Self {
+        Self {
+            operation: operation.into(),
+            destination: EgressDestination::new(destination),
+            data_classes: data_classes.into_iter().map(DataFieldClass::new).collect(),
+            sensitivity,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataEgressDecision {
+    pub disclosure_id: DataEgressDisclosureId,
+    pub allowlist_result: AllowlistResult,
+    pub approval_requirement: ApprovalRequirement,
+    pub policy: DataEgressPolicy,
+}
+
+impl DataEgressDecision {
+    pub fn fixture_allowed(
+        disclosure_id: impl Into<String>,
+        destination: impl Into<String>,
+        data_classes: Vec<&str>,
+    ) -> Self {
+        Self {
+            disclosure_id: DataEgressDisclosureId::new(disclosure_id),
+            allowlist_result: AllowlistResult::Allowed,
+            approval_requirement: ApprovalRequirement::Required,
+            policy: DataEgressPolicy {
+                destination: EgressDestination::new(destination),
+                allowed_fields: data_classes.into_iter().map(DataFieldClass::new).collect(),
+                requires_disclosure: true,
+                requires_approval: true,
+            },
+        }
+    }
+}
+
+pub trait DataEgressEvaluator: Send + Sync {
+    fn evaluate(&self, request: DataEgressRequest) -> DataEgressDecision;
+}
+
+pub trait SecurityPermissionService: Send + Sync {
+    fn permission_state(&self, requirements: &[CapabilityRequirement]) -> PermissionState;
+    fn permission_readiness(
+        &self,
+        requirements: &[CapabilityRequirement],
+    ) -> PermissionReadinessReport;
+    fn evaluate_egress(&self, request: DataEgressRequest) -> DataEgressDecision;
+    fn required_approval(&self, operation: &OperationDescriptor) -> ApprovalRequirement;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StaticSecurityPermissionService {
+    allowed_destinations: BTreeSet<EgressDestination>,
+    permissions: BTreeMap<CapabilityRequirement, PermissionState>,
+}
+
+impl StaticSecurityPermissionService {
+    pub fn allow_destination(mut self, destination: EgressDestination) -> Self {
+        self.allowed_destinations.insert(destination);
+        self
+    }
+
+    pub fn with_permission(
+        mut self,
+        capability: impl Into<String>,
+        state: PermissionState,
+    ) -> Self {
+        self.permissions
+            .insert(CapabilityRequirement::new(capability), state);
+        self
+    }
+
+    fn allowlist_result(&self, destination: &EgressDestination) -> AllowlistResult {
+        if self.allowed_destinations.contains(destination) {
+            AllowlistResult::Allowed
+        } else {
+            AllowlistResult::Denied {
+                reason: format!("destination not allowlisted: {}", destination.as_str()),
+            }
+        }
+    }
+}
+
+impl DataEgressEvaluator for StaticSecurityPermissionService {
+    fn evaluate(&self, request: DataEgressRequest) -> DataEgressDecision {
+        let allowlist_result = self.allowlist_result(&request.destination);
+        let requires_approval = matches!(
+            request.sensitivity,
+            SensitivityLevel::UserData | SensitivityLevel::Sensitive
+        );
+
+        DataEgressDecision {
+            disclosure_id: DataEgressDisclosureId::new(format!(
+                "egress:{}:{}",
+                request.operation,
+                request.destination.as_str()
+            )),
+            allowlist_result,
+            approval_requirement: if requires_approval {
+                ApprovalRequirement::Required
+            } else {
+                ApprovalRequirement::NotRequired
+            },
+            policy: DataEgressPolicy {
+                destination: request.destination,
+                allowed_fields: request.data_classes,
+                requires_disclosure: true,
+                requires_approval,
+            },
+        }
+    }
+}
+
+impl SecurityPermissionService for StaticSecurityPermissionService {
+    fn permission_state(&self, requirements: &[CapabilityRequirement]) -> PermissionState {
+        if requirements.iter().all(|requirement| {
+            self.permissions
+                .get(requirement)
+                .is_some_and(|state| *state == PermissionState::Granted)
+        }) {
+            PermissionState::Granted
+        } else {
+            PermissionState::NotDetermined
+        }
+    }
+
+    fn permission_readiness(
+        &self,
+        requirements: &[CapabilityRequirement],
+    ) -> PermissionReadinessReport {
+        let states = requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.clone(),
+                    self.permissions
+                        .get(requirement)
+                        .cloned()
+                        .unwrap_or(PermissionState::NotDetermined),
+                )
+            })
+            .collect();
+        PermissionReadinessReport::new(states)
+    }
+
+    fn evaluate_egress(&self, request: DataEgressRequest) -> DataEgressDecision {
+        self.evaluate(request)
+    }
+
+    fn required_approval(&self, _operation: &OperationDescriptor) -> ApprovalRequirement {
+        ApprovalRequirement::NotRequired
+    }
+}

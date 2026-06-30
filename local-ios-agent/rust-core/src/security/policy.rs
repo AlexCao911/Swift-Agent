@@ -1,4 +1,4 @@
-use crate::security::permission::PermissionState;
+use crate::security::{permission::PermissionState, ApprovalRequirement, OperationDescriptor};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RiskLevel {
@@ -44,6 +44,50 @@ impl PolicyEngine {
                 "Allow tool `{tool_name}` to request permission?"
             )),
             PermissionState::Granted => self.decide(risk_level, tool_name),
+        }
+    }
+}
+
+pub trait ApprovalPolicy: Send + Sync {
+    fn required_for(&self, operation: &OperationDescriptor) -> ApprovalRequirement;
+    fn inherit(
+        &self,
+        parent: ApprovalRequirement,
+        child: ApprovalRequirement,
+    ) -> ApprovalRequirement;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StaticApprovalPolicy;
+
+impl StaticApprovalPolicy {
+    pub fn required_for(&self, operation: &OperationDescriptor) -> ApprovalRequirement {
+        <Self as ApprovalPolicy>::required_for(self, operation)
+    }
+
+    pub fn inherit(
+        &self,
+        parent: ApprovalRequirement,
+        child: ApprovalRequirement,
+    ) -> ApprovalRequirement {
+        <Self as ApprovalPolicy>::inherit(self, parent, child)
+    }
+}
+
+impl ApprovalPolicy for StaticApprovalPolicy {
+    fn required_for(&self, _operation: &OperationDescriptor) -> ApprovalRequirement {
+        ApprovalRequirement::NotRequired
+    }
+
+    fn inherit(
+        &self,
+        parent: ApprovalRequirement,
+        child: ApprovalRequirement,
+    ) -> ApprovalRequirement {
+        if parent == ApprovalRequirement::Required || child == ApprovalRequirement::Required {
+            ApprovalRequirement::Required
+        } else {
+            ApprovalRequirement::NotRequired
         }
     }
 }
