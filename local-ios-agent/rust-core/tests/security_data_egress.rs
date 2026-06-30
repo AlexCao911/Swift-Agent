@@ -157,6 +157,17 @@ fn every_remote_egress_kind_requires_disclosure_allowlist_and_approval() {
 }
 
 #[test]
+fn egress_destination_canonicalizes_https_endpoint_to_origin() {
+    let origin = EgressDestination::https_origin_from_endpoint(
+        "https://Memory.Example.com:8443/search?q=agent#section",
+    )
+    .unwrap();
+
+    assert_eq!(origin.as_str(), "https://memory.example.com:8443");
+    assert!(EgressDestination::https_origin_from_endpoint("http://memory.example.com").is_none());
+}
+
+#[test]
 fn external_memory_write_is_disabled_by_default_until_explicitly_enabled() {
     let disabled = StaticSecurityPermissionService::default()
         .allow_destination(EgressDestination::new("https://memory.example.com"));

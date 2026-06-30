@@ -213,20 +213,11 @@ impl ToolRouter {
 }
 
 fn http_connector_destination(endpoint: &str) -> Result<String, AgentError> {
-    let rest = endpoint.strip_prefix("https://").ok_or_else(|| {
-        AgentError::ToolValidation(format!("invalid http connector endpoint: {endpoint}"))
-    })?;
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    let host = authority
-        .split_once(':')
-        .map_or(authority, |(host, _port)| host);
-    if host.is_empty() {
-        return Err(AgentError::ToolValidation(format!(
-            "invalid http connector endpoint: {endpoint}"
-        )));
-    }
-    Ok(host.to_ascii_lowercase())
+    EgressDestination::https_origin_from_endpoint(endpoint)
+        .map(|destination| destination.as_str().to_string())
+        .ok_or_else(|| {
+            AgentError::ToolValidation(format!("invalid http connector endpoint: {endpoint}"))
+        })
 }
 
 #[derive(Deserialize)]

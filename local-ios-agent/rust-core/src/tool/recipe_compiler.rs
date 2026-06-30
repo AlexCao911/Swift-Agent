@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::AgentError;
-use crate::security::{ApprovalRequirement, CredentialPurpose};
+use crate::security::{ApprovalRequirement, CredentialPurpose, EgressDestination};
 use crate::tool::{CompiledToolRecipe, CompiledToolRecipeContent, ToolRecipe, ToolRecipeContent};
 
 const MAX_HTTP_TIMEOUT_MILLIS: u64 = 120_000;
@@ -67,18 +67,18 @@ impl ToolRecipeCompiler {
                     }
                     Some(_) => {}
                 }
-                let parsed_endpoint = ParsedHttpsEndpoint::parse(endpoint);
-                if parsed_endpoint.is_none() {
+                let destination = EgressDestination::https_origin_from_endpoint(endpoint);
+                if destination.is_none() {
                     report.push_issue("http.endpoint.invalid");
                 }
 
                 if policy.network_allowlist.is_empty() {
                     report.push_issue("http.network_allowlist.required");
-                } else if let Some(parsed_endpoint) = parsed_endpoint {
+                } else if let Some(destination) = destination {
                     if !policy
                         .network_allowlist
                         .iter()
-                        .any(|allowed| allowed.eq_ignore_ascii_case(parsed_endpoint.host.as_str()))
+                        .any(|allowed| allowed.eq_ignore_ascii_case(destination.as_str()))
                     {
                         report.push_issue("http.network_allowlist.destination_not_allowed");
                     }
@@ -240,49 +240,6 @@ impl ToolRecipeCompiler {
             }
         }
         false
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ParsedHttpsEndpoint {
-    host: String,
-}
-
-impl ParsedHttpsEndpoint {
-    fn parse(endpoint: &str) -> Option<Self> {
-        let rest = endpoint.strip_prefix("https://")?;
-        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let authority = &rest[..authority_end];
-        if authority.is_empty() || authority.contains('@') || authority.contains(' ') {
-            return None;
-        }
-
-        let (host, port) = authority
-            .split_once(':')
-            .map_or((authority, None), |(host, port)| (host, Some(port)));
-        if let Some(port) = port {
-            if port.is_empty() || !port.chars().all(|character| character.is_ascii_digit()) {
-                return None;
-            }
-        }
-
-        if host.is_empty()
-            || !host.contains('.')
-            || host.starts_with('.')
-            || host.ends_with('.')
-            || host.contains("..")
-            || !host.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '-' | '.')
-            })
-            || host
-                .split('.')
-                .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
-        {
-            return None;
-        }
-        Some(Self {
-            host: host.to_ascii_lowercase(),
-        })
     }
 }
 

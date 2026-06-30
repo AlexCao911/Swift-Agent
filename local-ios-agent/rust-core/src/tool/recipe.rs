@@ -226,7 +226,7 @@ impl HttpConnectorPolicy {
             rate_limit_policy: Some(HttpRateLimitPolicy {
                 requests_per_minute: 60,
             }),
-            network_allowlist: vec!["api.example.com".to_string()],
+            network_allowlist: vec!["https://api.example.com".to_string()],
             data_egress_disclosure: Some("Remote lookup sends query data".to_string()),
             credential_purpose: Some(CredentialPurpose::HttpTool),
             response_sensitivity: Some(HttpResponseSensitivity::Private),

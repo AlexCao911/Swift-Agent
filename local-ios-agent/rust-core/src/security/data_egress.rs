@@ -13,9 +13,53 @@ impl EgressDestination {
         Self(value.into())
     }
 
+    pub fn https_origin_from_endpoint(endpoint: &str) -> Option<Self> {
+        let rest = endpoint.strip_prefix("https://")?;
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        if authority.is_empty() || authority.contains('@') || authority.contains(' ') {
+            return None;
+        }
+
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if let Some(port) = port {
+            if port.is_empty() || !port.chars().all(|character| character.is_ascii_digit()) {
+                return None;
+            }
+        }
+
+        if !valid_https_host(host) {
+            return None;
+        }
+
+        let host = host.to_ascii_lowercase();
+        let origin = match port {
+            Some("443") | None => format!("https://{host}"),
+            Some(port) => format!("https://{host}:{port}"),
+        };
+
+        Some(Self(origin))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+fn valid_https_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.contains('.')
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && !host.contains("..")
+        && host
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '.'))
+        && host
+            .split('.')
+            .all(|label| !label.is_empty() && !label.starts_with('-') && !label.ends_with('-'))
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]

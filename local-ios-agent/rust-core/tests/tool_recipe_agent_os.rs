@@ -149,7 +149,7 @@ fn compiled_http_connector_preserves_runtime_definition() {
         } => {
             assert_eq!(endpoint, "https://api.example.com/search");
             assert_eq!(policy.timeout_millis, Some(30_000));
-            assert_eq!(policy.network_allowlist, vec!["api.example.com"]);
+            assert_eq!(policy.network_allowlist, vec!["https://api.example.com"]);
             assert!(policy
                 .data_egress_disclosure
                 .unwrap()
@@ -296,7 +296,7 @@ fn http_connector_compiled_recipe_requires_egress_approval_without_requested_app
             ..
         } => {
             assert_eq!(operation, "tool.remote.lookup");
-            assert_eq!(destination, "api.example.com");
+            assert_eq!(destination, "https://api.example.com");
             assert_eq!(data_classes, vec!["tool.request.payload"]);
         }
         other => panic!("expected egress approval scope, got {other:?}"),
@@ -347,7 +347,7 @@ fn http_connector_destination_must_match_network_allowlist() {
     let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com")
         .with_policy(
             HttpConnectorPolicy::complete_for_test()
-                .with_network_allowlist_for_test(vec!["other.example.com"]),
+                .with_network_allowlist_for_test(vec!["https://other.example.com"]),
         );
 
     let report = local_ios_agent_runtime::tool::ToolRecipeCompiler::default().validate(&recipe);
