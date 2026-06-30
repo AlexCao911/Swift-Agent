@@ -40,6 +40,29 @@ fn registry_lists_profiles_sorted_by_provider_id() {
 }
 
 #[test]
+fn registry_exports_agent_os_provider_definitions_without_building_runtime_bundle() {
+    let mut registry = ProviderRegistry::new();
+    registry
+        .register_factory(profile("zeta", "Zeta"), || ProviderBundle {
+            provider: Box::new(MockStreamingProvider::new()),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+        })
+        .unwrap();
+    registry
+        .register_factory(profile("alpha", "Alpha"), || ProviderBundle {
+            provider: Box::new(MockStreamingProvider::new()),
+            tokenizer: Box::new(MockTokenizer::new(100)),
+        })
+        .unwrap();
+
+    let definitions = registry.provider_definitions();
+
+    assert_eq!(definitions[0].id(), "alpha");
+    assert_eq!(definitions[0].display_name(), "Alpha");
+    assert_eq!(definitions[1].id(), "zeta");
+}
+
+#[test]
 fn registry_rejects_duplicate_provider_ids() {
     let mut registry = ProviderRegistry::new();
     registry

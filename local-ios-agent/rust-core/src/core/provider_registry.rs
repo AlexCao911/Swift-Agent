@@ -4,6 +4,7 @@ use crate::context::{MockTokenizer, TokenizerAdapter};
 use crate::core::{
     AgentError, MockStreamingProvider, ModelProvider, ProviderKind, ProviderProfile,
 };
+use crate::model::ProviderDefinition;
 
 pub struct ProviderBundle {
     pub provider: Box<dyn ModelProvider>,
@@ -78,6 +79,18 @@ impl ProviderRegistry {
         self.entries
             .values()
             .map(|entry| entry.profile.clone())
+            .collect()
+    }
+
+    pub fn provider_definitions(&self) -> Vec<ProviderDefinition> {
+        self.entries
+            .values()
+            .map(|entry| {
+                ProviderDefinition::new(
+                    entry.profile.id.clone(),
+                    entry.profile.display_name.clone(),
+                )
+            })
             .collect()
     }
 

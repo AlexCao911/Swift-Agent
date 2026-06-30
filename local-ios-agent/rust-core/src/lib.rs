@@ -3,6 +3,7 @@ pub mod context;
 pub mod core;
 pub mod ffi_bridge;
 pub mod memory;
+pub mod model;
 pub mod protocol;
 pub mod security;
 pub mod storage;
