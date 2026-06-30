@@ -1,0 +1,4 @@
+schema_version: 1
+package_id: agent.fixture
+name: Fixture Agent
+model_file: model.yaml
