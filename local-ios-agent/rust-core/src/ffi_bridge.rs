@@ -14,9 +14,13 @@ use crate::core::{
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::security::{
-    ApprovalProtocolRequest, ApprovalProtocolResponse, PermissionScope, PermissionState, RiskLevel,
+    ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
+    PermissionState, RiskLevel,
 };
-use crate::tool::{RetentionPolicy, Sensitivity, ToolExecutionRequest, ToolResult, ToolSchema};
+use crate::tool::{
+    CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
+    Sensitivity, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
+};
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
@@ -895,6 +899,7 @@ struct ToolResultJson {
     audit_text: String,
     sensitivity: String,
     retention: String,
+    provenance: Option<String>,
     is_error: bool,
 }
 
@@ -907,6 +912,9 @@ impl ToolResultJson {
             audit_text: self.audit_text,
             sensitivity: parse_sensitivity(&self.sensitivity)?,
             retention: parse_retention(&self.retention)?,
+            provenance: self
+                .provenance
+                .unwrap_or_else(|| "swift.tool_result".into()),
             is_error: self.is_error,
         })
     }
@@ -1010,6 +1018,7 @@ struct ToolExecutionRequestJson {
     tool_call_id: String,
     tool_name: String,
     arguments_json: String,
+    compiled_recipe: Option<CompiledToolRecipeJson>,
 }
 
 impl ToolExecutionRequestJson {
@@ -1021,8 +1030,129 @@ impl ToolExecutionRequestJson {
             tool_call_id: request.tool_call_id.clone(),
             tool_name: request.tool_name.clone(),
             arguments_json: request.arguments_json.clone(),
+            compiled_recipe: request
+                .compiled_recipe
+                .as_ref()
+                .map(CompiledToolRecipeJson::from_recipe),
         }
     }
+}
+
+#[derive(Serialize)]
+struct CompiledToolRecipeJson {
+    name: String,
+    kind: &'static str,
+    approval_requirement: &'static str,
+    base_tools: Vec<String>,
+    has_side_effects: bool,
+    content: CompiledToolRecipeContentJson,
+}
+
+impl CompiledToolRecipeJson {
+    fn from_recipe(recipe: &CompiledToolRecipe) -> Self {
+        Self {
+            name: recipe.name.clone(),
+            kind: tool_recipe_kind_json(recipe.kind),
+            approval_requirement: match &recipe.approval_requirement {
+                crate::security::ApprovalRequirement::Required => "required",
+                crate::security::ApprovalRequirement::NotRequired => "not_required",
+            },
+            base_tools: recipe.base_tools.clone(),
+            has_side_effects: recipe.has_side_effects,
+            content: CompiledToolRecipeContentJson::from_content(&recipe.content),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CompiledToolRecipeContentJson {
+    HttpConnector {
+        endpoint: String,
+        policy: HttpConnectorPolicyJson,
+        credential_ref: Option<String>,
+    },
+    PureTransform {
+        expression: String,
+    },
+    Alias {
+        base_tool_name: String,
+    },
+    Workflow {
+        steps: Vec<WorkflowStepJson>,
+    },
+}
+
+impl CompiledToolRecipeContentJson {
+    fn from_content(content: &CompiledToolRecipeContent) -> Self {
+        match content {
+            CompiledToolRecipeContent::HttpConnector {
+                endpoint,
+                policy,
+                credential_ref,
+            } => Self::HttpConnector {
+                endpoint: endpoint.clone(),
+                policy: HttpConnectorPolicyJson {
+                    timeout_millis: policy.timeout_millis,
+                    retry_max_attempts: policy
+                        .retry_policy
+                        .as_ref()
+                        .map(|retry| retry.max_attempts),
+                    requests_per_minute: policy
+                        .rate_limit_policy
+                        .as_ref()
+                        .map(|rate_limit| rate_limit.requests_per_minute),
+                    network_allowlist: policy.network_allowlist.clone(),
+                    data_egress_disclosure: policy.data_egress_disclosure.clone(),
+                    credential_purpose: policy.credential_purpose.map(credential_purpose_json),
+                    response_sensitivity: policy
+                        .response_sensitivity
+                        .map(http_response_sensitivity_json),
+                },
+                credential_ref: credential_ref
+                    .as_ref()
+                    .map(|reference| reference.as_str().to_string()),
+            },
+            CompiledToolRecipeContent::PureTransform { expression } => Self::PureTransform {
+                expression: expression.clone(),
+            },
+            CompiledToolRecipeContent::Alias { base_tool_name } => Self::Alias {
+                base_tool_name: base_tool_name.clone(),
+            },
+            CompiledToolRecipeContent::Workflow { steps } => Self::Workflow {
+                steps: steps
+                    .iter()
+                    .map(|step| WorkflowStepJson {
+                        id: step.id.clone(),
+                        tool_name: step.tool_name.clone(),
+                        depends_on: step.depends_on.clone(),
+                        on_failure: format!("{:?}", step.on_failure),
+                        compensation_for: step.compensation_for.clone(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct HttpConnectorPolicyJson {
+    timeout_millis: Option<u64>,
+    retry_max_attempts: Option<u8>,
+    requests_per_minute: Option<u16>,
+    network_allowlist: Vec<String>,
+    data_egress_disclosure: Option<String>,
+    credential_purpose: Option<&'static str>,
+    response_sensitivity: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct WorkflowStepJson {
+    id: String,
+    tool_name: String,
+    depends_on: Vec<String>,
+    on_failure: String,
+    compensation_for: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1195,6 +1325,32 @@ fn parse_retention(value: &str) -> Result<RetentionPolicy, AgentError> {
         other => Err(AgentError::ToolValidation(format!(
             "unknown retention: {other}"
         ))),
+    }
+}
+
+fn tool_recipe_kind_json(kind: ToolRecipeKind) -> &'static str {
+    match kind {
+        ToolRecipeKind::HttpConnector => "http_connector",
+        ToolRecipeKind::PureTransform => "pure_transform",
+        ToolRecipeKind::Alias => "alias",
+        ToolRecipeKind::Workflow => "workflow",
+    }
+}
+
+fn credential_purpose_json(purpose: CredentialPurpose) -> &'static str {
+    match purpose {
+        CredentialPurpose::RemoteProvider => "remote_provider",
+        CredentialPurpose::RemoteInference => "remote_inference",
+        CredentialPurpose::HttpTool => "http_tool",
+        CredentialPurpose::ExternalMemory => "external_memory",
+    }
+}
+
+fn http_response_sensitivity_json(sensitivity: HttpResponseSensitivity) -> &'static str {
+    match sensitivity {
+        HttpResponseSensitivity::Public => "public",
+        HttpResponseSensitivity::Private => "private",
+        HttpResponseSensitivity::Secret => "secret",
     }
 }
 

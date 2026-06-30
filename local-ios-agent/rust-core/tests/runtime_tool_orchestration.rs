@@ -11,6 +11,7 @@ use local_ios_agent_runtime::security::{ApprovalProtocolResponse, RiskLevel};
 use local_ios_agent_runtime::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolRegistry, ToolResult, ToolRouter, ToolSchema,
 };
+use serde_json::Value;
 
 #[derive(Debug)]
 struct FollowUpToolProvider {
@@ -139,6 +140,7 @@ fn tool_result(text: &str) -> ToolResult {
         audit_text: text.into(),
         sensitivity: Sensitivity::Public,
         retention: RetentionPolicy::RunOnly,
+        provenance: "tool.test".into(),
         is_error: false,
     }
 }
@@ -425,6 +427,40 @@ fn submit_tool_result_consumes_matching_pending_request() {
 }
 
 #[test]
+fn runtime_fills_swift_tool_result_provenance_from_pending_request() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: Some(ToolRouter::new(echo_registry(RiskLevel::ReadOnly))),
+    });
+    let session_id = runtime.create_session().unwrap();
+    let turn = runtime
+        .send_message_turn(SendMessageInput {
+            session_id,
+            parent_event_id: None,
+            text: "use tool debug.echo".into(),
+            blob_refs: Vec::new(),
+        })
+        .unwrap();
+    let mut result = tool_result("echoed");
+    result.provenance = "swift.tool_result".into();
+
+    let resumed = runtime.submit_tool_result(turn.run_id, result).unwrap();
+
+    let tool_result_payload = resumed
+        .events
+        .iter()
+        .find(|event| event.kind == EventKind::ToolResultMessage)
+        .map(|event| event.payload.as_str())
+        .expect("tool result event");
+    let payload: Value = serde_json::from_str(tool_result_payload).unwrap();
+    assert_eq!(payload["provenance"], "tool.debug.echo");
+}
+
+#[test]
 fn runtime_routes_follow_up_tool_call_after_tool_result() {
     let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
         system_prompt: "system".into(),
@@ -518,6 +554,7 @@ fn runtime_filters_secret_audit_only_tool_result_from_followup_context() {
                 audit_text: "audit only".into(),
                 sensitivity: Sensitivity::Secret,
                 retention: RetentionPolicy::AuditOnly,
+                provenance: "tool.test".into(),
                 is_error: false,
             },
         )

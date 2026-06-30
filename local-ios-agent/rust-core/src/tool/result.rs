@@ -23,10 +23,30 @@ pub struct ToolResult {
     pub audit_text: String,
     pub sensitivity: Sensitivity,
     pub retention: RetentionPolicy,
+    pub provenance: String,
     pub is_error: bool,
 }
 
 impl ToolResult {
+    pub fn public_with_provenance(
+        display_text: impl Into<String>,
+        model_text: impl Into<String>,
+        structured_json: impl Into<String>,
+        audit_text: impl Into<String>,
+        provenance: impl Into<String>,
+    ) -> Self {
+        Self {
+            display_text: display_text.into(),
+            model_text: model_text.into(),
+            structured_json: structured_json.into(),
+            audit_text: audit_text.into(),
+            sensitivity: Sensitivity::Public,
+            retention: RetentionPolicy::RunOnly,
+            provenance: provenance.into(),
+            is_error: false,
+        }
+    }
+
     pub fn to_event_payload(&self) -> String {
         json!({
             "type": "tool_result",
@@ -36,6 +56,7 @@ impl ToolResult {
             "audit_text": self.audit_text,
             "sensitivity": self.sensitivity.as_str(),
             "retention": self.retention.as_str(),
+            "provenance": self.provenance,
             "is_error": self.is_error,
         })
         .to_string()
@@ -54,6 +75,11 @@ impl ToolResult {
             audit_text: value.get("audit_text")?.as_str()?.to_string(),
             sensitivity: Sensitivity::from_str(value.get("sensitivity")?.as_str()?)?,
             retention: RetentionPolicy::from_str(value.get("retention")?.as_str()?)?,
+            provenance: value
+                .get("provenance")
+                .and_then(Value::as_str)
+                .unwrap_or("tool.legacy")
+                .to_string(),
             is_error: value.get("is_error")?.as_bool()?,
         })
     }

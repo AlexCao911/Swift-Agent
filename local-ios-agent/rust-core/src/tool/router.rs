@@ -5,11 +5,12 @@ use serde::Deserialize;
 use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalRequest,
-    ApprovalScope, OperationDescriptor, PermissionScope, PolicyDecision, SecurityManager,
+    ApprovalScope, DataEgressRequest, EgressDestination, OperationDescriptor, PermissionScope,
+    PolicyDecision, SecurityManager, SecurityPermissionService, StaticSecurityPermissionService,
 };
 use crate::tool::{
-    RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
-    ToolSchema,
+    CompiledToolRecipe, CompiledToolRecipeContent, RetentionPolicy, Sensitivity, ToolCall,
+    ToolExecutionRequest, ToolRegistry, ToolResult, ToolSchema,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,16 +52,24 @@ impl ToolRouter {
         call: ToolCall,
     ) -> Result<ToolRouteOutcome, AgentError> {
         call.validate_shape()?;
-        let schema = self
-            .registry
-            .schema(&call.name)
-            .ok_or_else(|| AgentError::ToolValidation(format!("unknown tool: {}", call.name)))?;
+        let schema =
+            self.registry.schema(&call.name).cloned().ok_or_else(|| {
+                AgentError::ToolValidation(format!("unknown tool: {}", call.name))
+            })?;
+        let compiled_recipe = self.registry.compiled_recipe(&call.name).cloned();
         let request = ToolExecutionRequest::new(
             run_id.clone(),
             session_id.clone(),
             tool_call_entry_id.clone(),
             call,
-        );
+        )
+        .with_compiled_recipe(compiled_recipe);
+
+        if let Some(outcome) =
+            self.route_compiled_recipe_approval(run_id, tool_call_entry_id, &schema, &request)?
+        {
+            return Ok(outcome);
+        }
 
         match self.security.decide_tool(&schema.risk_level, &schema.name) {
             PolicyDecision::Allow => Ok(ToolRouteOutcome::ExecuteInSwift(request)),
@@ -91,6 +100,7 @@ impl ToolRouter {
                 audit_text: reason,
                 sensitivity: Sensitivity::Public,
                 retention: RetentionPolicy::RunOnly,
+                provenance: "tool.router.policy".into(),
                 is_error: true,
             })),
         }
@@ -102,6 +112,13 @@ impl ToolRouter {
                 .set_tool_permission_scope(schema.name.clone(), scope_name);
         }
         self.registry.register(schema)
+    }
+
+    pub fn register_compiled_recipe(
+        &mut self,
+        recipe: CompiledToolRecipe,
+    ) -> Result<(), AgentError> {
+        self.registry.register_compiled_recipe(recipe)
     }
 
     pub fn set_permission(&mut self, permission: PermissionScope) {
@@ -136,6 +153,80 @@ impl ToolRouter {
 
         Ok((request, decision, tool_request))
     }
+
+    fn route_compiled_recipe_approval(
+        &mut self,
+        run_id: &RunId,
+        tool_call_entry_id: &EntryId,
+        schema: &ToolSchema,
+        request: &ToolExecutionRequest,
+    ) -> Result<Option<ToolRouteOutcome>, AgentError> {
+        let Some(compiled_recipe) = request.compiled_recipe.as_ref() else {
+            return Ok(None);
+        };
+        let CompiledToolRecipeContent::HttpConnector {
+            endpoint,
+            policy,
+            credential_ref,
+        } = &compiled_recipe.content
+        else {
+            return Ok(None);
+        };
+
+        let destination = http_connector_destination(endpoint)?;
+        if !policy
+            .network_allowlist
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(destination.as_str()))
+        {
+            return Err(AgentError::PolicyDenied(format!(
+                "http connector destination is not allowlisted: {destination}"
+            )));
+        }
+
+        let service = StaticSecurityPermissionService::default()
+            .allow_destination(EgressDestination::new(destination.clone()));
+        let egress_request = if credential_ref.is_some() {
+            DataEgressRequest::http_tool_with_credential(destination)
+        } else {
+            DataEgressRequest::http_tool(destination)
+        };
+        let decision = service.evaluate_egress(egress_request);
+        let operation = OperationDescriptor::new(format!("tool.{}", schema.name));
+        let approval = self.security.request_approval(
+            format!("approval_{}", tool_call_entry_id.0),
+            run_id.clone(),
+            tool_call_entry_id.clone(),
+            "Allow HTTP connector egress?",
+            true,
+            ApprovalScope::egress(operation, &decision)?,
+        )?;
+        self.suspended_tool_requests
+            .insert(approval.approval_id.clone(), request.clone());
+
+        Ok(Some(ToolRouteOutcome::ApprovalRequired {
+            request: request.clone(),
+            reason: approval.message.clone(),
+            approval,
+        }))
+    }
+}
+
+fn http_connector_destination(endpoint: &str) -> Result<String, AgentError> {
+    let rest = endpoint.strip_prefix("https://").ok_or_else(|| {
+        AgentError::ToolValidation(format!("invalid http connector endpoint: {endpoint}"))
+    })?;
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host = authority
+        .split_once(':')
+        .map_or(authority, |(host, _port)| host);
+    if host.is_empty() {
+        return Err(AgentError::ToolValidation(format!(
+            "invalid http connector endpoint: {endpoint}"
+        )));
+    }
+    Ok(host.to_ascii_lowercase())
 }
 
 #[derive(Deserialize)]

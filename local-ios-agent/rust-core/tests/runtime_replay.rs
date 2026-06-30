@@ -88,6 +88,7 @@ fn tool_result(text: &str) -> ToolResult {
         audit_text: text.into(),
         sensitivity: Sensitivity::Public,
         retention: RetentionPolicy::RunOnly,
+        provenance: "tool.test".into(),
         is_error: false,
     }
 }

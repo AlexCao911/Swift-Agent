@@ -75,6 +75,7 @@ fn runtime_resumes_from_tool_result_and_completes() {
                 audit_text: "audit".into(),
                 sensitivity: Sensitivity::Public,
                 retention: RetentionPolicy::RunOnly,
+                provenance: "tool.test".into(),
                 is_error: false,
             },
         )

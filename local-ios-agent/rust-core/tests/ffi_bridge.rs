@@ -10,7 +10,9 @@ use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
     local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
 };
-use local_ios_agent_runtime::tool::ToolCall;
+use local_ios_agent_runtime::tool::{
+    ToolCall, ToolRecipe, ToolRecipeCompiler, ToolRegistry, ToolRouter,
+};
 use serde_json::{json, Value};
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
@@ -678,15 +680,61 @@ fn bridge_registers_tool_schema_and_completes_tool_lifecycle() {
         &bridge
             .submit_tool_result_json(
                 run_id,
-                r#"{"display_text":"echoed","model_text":"tool said hello","structured_json":"{}","audit_text":"audit","sensitivity":"public","retention":"run_only","is_error":false}"#,
+                r#"{"display_text":"echoed","model_text":"tool said hello","structured_json":"{}","audit_text":"audit","sensitivity":"public","retention":"run_only","provenance":"tool.debug.echo.swift","is_error":false}"#,
             )
             .unwrap(),
     );
 
     assert_eq!(resumed["state"], "completed");
+    let tool_result_event = resumed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "tool_result_message")
+        .expect("tool result event");
+    let tool_result_payload: Value =
+        serde_json::from_str(tool_result_event["payload"].as_str().unwrap()).unwrap();
+    assert_eq!(tool_result_payload["provenance"], "tool.debug.echo.swift");
     assert_eq!(
         decode(&bridge.pending_tool_requests_json().unwrap()),
         json!([])
+    );
+}
+
+#[test]
+fn bridge_pending_tool_request_includes_compiled_recipe_payload() {
+    let compiled = ToolRecipeCompiler::default()
+        .compile(ToolRecipe::pure_transform("debug.echo", ".text"))
+        .unwrap();
+    let mut registry = ToolRegistry::new();
+    registry.register_compiled_recipe(compiled).unwrap();
+    let bridge = RuntimeJsonBridge::new(AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: Some(ToolRouter::new(registry)),
+    }));
+    let session = decode(&bridge.create_session_json().unwrap());
+    let session_id = session.as_str().unwrap();
+
+    let turn = decode(
+        &bridge
+            .send_message_json(&format!(
+                r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"use tool debug.echo"}}"#
+            ))
+            .unwrap(),
+    );
+    assert_eq!(turn["state"], "waiting_tool");
+
+    let pending = decode(&bridge.pending_tool_requests_json().unwrap());
+
+    assert_eq!(pending[0]["tool_name"], "debug.echo");
+    assert_eq!(pending[0]["compiled_recipe"]["kind"], "pure_transform");
+    assert_eq!(
+        pending[0]["compiled_recipe"]["content"],
+        json!({"kind":"pure_transform","expression":".text"})
     );
 }
 

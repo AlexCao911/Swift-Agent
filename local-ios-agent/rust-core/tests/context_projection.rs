@@ -46,6 +46,7 @@ fn projector_excludes_audit_only_and_secret_tool_results_from_context() {
         audit_text: "audit".into(),
         sensitivity: Sensitivity::Secret,
         retention: RetentionPolicy::AuditOnly,
+        provenance: "tool.test".into(),
         is_error: false,
     };
 
@@ -159,6 +160,7 @@ fn injection_policy_excludes_audit_only_and_secret_tool_results() {
         audit_text: "audit".into(),
         sensitivity: Sensitivity::Secret,
         retention: RetentionPolicy::AuditOnly,
+        provenance: "tool.test".into(),
         is_error: false,
     };
 

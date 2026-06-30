@@ -341,6 +341,7 @@ impl<S: EventStore> AgentRuntime<S> {
                     audit_text: format!("approval rejected: {}", approval.approval_id),
                     sensitivity: Sensitivity::Public,
                     retention: RetentionPolicy::RunOnly,
+                    provenance: "tool.approval".into(),
                     is_error: true,
                 };
                 let resumed = self.submit_tool_result(run_id, result)?;
@@ -646,7 +647,7 @@ impl<S: EventStore> AgentRuntime<S> {
     pub fn submit_tool_result_streaming(
         &mut self,
         run_id: String,
-        result: ToolResult,
+        mut result: ToolResult,
         on_event: RuntimeEventSink<'_>,
     ) -> Result<AgentTurnResult, AgentError> {
         let run_key = RunId(run_id.clone());
@@ -664,6 +665,16 @@ impl<S: EventStore> AgentRuntime<S> {
         };
         if let Some(run) = self.runs.get_mut(&run_key) {
             run.mark_running()?;
+        }
+        let pending_tool_name = self
+            .pending_tool_requests
+            .iter()
+            .find(|request| request.run_id == run_key)
+            .map(|request| request.tool_name.clone());
+        if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
+            if let Some(tool_name) = pending_tool_name {
+                result.provenance = format!("tool.{tool_name}");
+            }
         }
         self.consume_pending_tool_requests(&run_key);
 

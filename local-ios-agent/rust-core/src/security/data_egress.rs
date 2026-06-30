@@ -134,6 +134,15 @@ impl DataEgressRequest {
         )
     }
 
+    pub fn http_tool_with_credential(destination: impl Into<String>) -> Self {
+        Self::new(
+            "http.tool.request",
+            destination,
+            vec!["tool.request.payload", "credential.http_tool"],
+            SensitivityLevel::Sensitive,
+        )
+    }
+
     pub fn external_memory_write(destination: impl Into<String>) -> Self {
         Self::new(
             "external.memory.write",
