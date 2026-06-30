@@ -58,6 +58,7 @@ impl AgentPackageLock {
         manifest: AgentPackageManifest,
         local_binding_hashes: BTreeMap<String, String>,
     ) -> Self {
+        let manifest = manifest.scrubbed_for_lock();
         Self {
             schema_version: manifest.schema_version,
             package_id: manifest.package_id.clone(),

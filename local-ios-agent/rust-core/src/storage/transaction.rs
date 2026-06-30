@@ -66,11 +66,20 @@ pub trait TransactionOperation {
 pub struct UnitOfWork {
     pub(crate) archives: Vec<PendingArchiveRecord>,
     pub(crate) events: Vec<EventRecord>,
+    store_writes: Vec<Box<dyn PendingStoreWrite>>,
     event_sequence_cursors: std::collections::BTreeMap<String, u64>,
     next_archive_id: Option<u64>,
 }
 
 impl UnitOfWork {
+    pub fn push_store_write(&mut self, write: Box<dyn PendingStoreWrite>) {
+        self.store_writes.push(write);
+    }
+
+    pub(crate) fn drain_store_writes(&mut self) -> Vec<Box<dyn PendingStoreWrite>> {
+        self.store_writes.drain(..).collect()
+    }
+
     pub(crate) fn drain_events(&mut self) -> Vec<EventRecord> {
         self.events.drain(..).collect()
     }
@@ -110,6 +119,11 @@ impl UnitOfWork {
     }
 }
 
+pub trait PendingStoreWrite: Send {
+    fn validate(&self) -> StorageResult<()>;
+    fn apply(self: Box<Self>) -> StorageResult<()>;
+}
+
 #[derive(Default)]
 pub struct InMemoryTransactionRunner {
     archive_store: InMemoryArchiveStore,
@@ -141,9 +155,17 @@ impl TransactionRunner for InMemoryTransactionRunner {
         operation.execute(&mut tx)?;
         let archives = tx.drain_archives();
         let mut events = tx.drain_events();
+        let store_writes = tx.drain_store_writes();
 
         self.archive_store.validate_pending(&archives)?;
         self.event_store.validate_pending(&mut events)?;
+        for write in &store_writes {
+            write.validate()?;
+        }
+
+        for write in store_writes {
+            write.apply()?;
+        }
         self.archive_store.apply_pending(archives);
         self.event_store.apply_pending(events);
 

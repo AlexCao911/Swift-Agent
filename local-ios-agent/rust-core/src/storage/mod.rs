@@ -11,6 +11,6 @@ pub use event_store::{
 pub use migration::{MigrationPlan, MigrationStep, SchemaVersion};
 pub use repository::{RepositoryName, StorageRepository};
 pub use transaction::{
-    InMemoryTransactionRunner, StorageError, StorageResult, TransactionName, TransactionOperation,
-    TransactionRunner, UnitOfWork,
+    InMemoryTransactionRunner, PendingStoreWrite, StorageError, StorageResult, TransactionName,
+    TransactionOperation, TransactionRunner, UnitOfWork,
 };

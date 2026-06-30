@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::agent_package::{AgentPackageLock, AgentPackageManifest};
+use crate::agent_package::{AgentPackageLock, AgentPackageManifest, AgentPackageValidator};
 use crate::storage::{
-    StorageResult, TransactionName, TransactionOperation, TransactionRunner, UnitOfWork,
+    EventRecord, PendingStoreWrite, StorageError, StorageResult, TransactionName,
+    TransactionOperation, TransactionRunner, UnitOfWork,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -39,14 +40,71 @@ pub struct InMemoryPackageInstallStore {
 }
 
 impl InMemoryPackageInstallStore {
-    pub fn apply(&self, commit: PackageInstallCommit) {
+    pub fn fixture_rejecting_commits() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(PackageInstallRecords {
+                reject_commits: true,
+                ..PackageInstallRecords::default()
+            })),
+        }
+    }
+
+    pub fn fixture_failing_apply() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(PackageInstallRecords {
+                fail_apply: true,
+                ..PackageInstallRecords::default()
+            })),
+        }
+    }
+
+    pub fn stage(&self, tx: &mut UnitOfWork, commit: PackageInstallCommit) -> StorageResult<()> {
+        tx.push_store_write(Box::new(PendingPackageInstallWrite {
+            store: self.clone(),
+            commit,
+        }));
+        Ok(())
+    }
+
+    fn validate_commit(&self, commit: &PackageInstallCommit) -> StorageResult<()> {
+        let inner = self
+            .inner
+            .lock()
+            .expect("package install store mutex poisoned");
+        if inner.reject_commits {
+            return Err(StorageError::new(
+                "package.install_store.rejected",
+                "package install store rejected commit",
+            ));
+        }
+        if inner
+            .installations
+            .iter()
+            .any(|record| record.package_id == commit.installation.package_id)
+        {
+            return Err(StorageError::new(
+                "package.install.duplicate",
+                "package installation already exists",
+            ));
+        }
+        Ok(())
+    }
+
+    fn apply_commit(&self, commit: PackageInstallCommit) -> StorageResult<()> {
         let mut inner = self
             .inner
             .lock()
             .expect("package install store mutex poisoned");
+        if inner.fail_apply {
+            return Err(StorageError::new(
+                "package.install_store.apply_failed",
+                "package install store failed while applying commit",
+            ));
+        }
         inner.installations.push(commit.installation);
         inner.agent_profiles.push(commit.profile);
         inner.package_locks.push(commit.lock);
+        Ok(())
     }
 
     pub fn installations(&self) -> Vec<PackageInstallationRecord> {
@@ -74,11 +132,28 @@ impl InMemoryPackageInstallStore {
     }
 }
 
+struct PendingPackageInstallWrite {
+    store: InMemoryPackageInstallStore,
+    commit: PackageInstallCommit,
+}
+
+impl PendingStoreWrite for PendingPackageInstallWrite {
+    fn validate(&self) -> StorageResult<()> {
+        self.store.validate_commit(&self.commit)
+    }
+
+    fn apply(self: Box<Self>) -> StorageResult<()> {
+        self.store.apply_commit(self.commit)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct PackageInstallRecords {
     installations: Vec<PackageInstallationRecord>,
     agent_profiles: Vec<InstalledAgentProfile>,
     package_locks: Vec<AgentPackageLock>,
+    reject_commits: bool,
+    fail_apply: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -103,9 +178,18 @@ impl AgentPackageInstaller {
         manifest: AgentPackageManifest,
         bindings: LocalBindings,
     ) -> StorageResult<InstalledAgentProfile> {
+        let validation = AgentPackageValidator::default().validate(&manifest);
+        if !validation.is_valid() {
+            return Err(StorageError::new(
+                "package.validation_failed",
+                "package manifest failed validation",
+            ));
+        }
+
         let mut operation = PackageInstallOperation {
             manifest,
             bindings,
+            store: self.store.clone(),
             result: None,
         };
 
@@ -117,9 +201,7 @@ impl AgentPackageInstaller {
         let commit = operation
             .result
             .expect("package install operation must set typed result on success");
-        let profile = commit.profile.clone();
-        self.store.apply(commit);
-        Ok(profile)
+        Ok(commit.profile)
     }
 
     pub fn preview(&self, manifest: &AgentPackageManifest) -> PackageInstallPreview {
@@ -154,16 +236,17 @@ pub struct PackageInstallPreviewOperation {
 struct PackageInstallOperation {
     manifest: AgentPackageManifest,
     bindings: LocalBindings,
+    store: InMemoryPackageInstallStore,
     result: Option<PackageInstallCommit>,
 }
 
 impl TransactionOperation for PackageInstallOperation {
-    fn execute(&mut self, _tx: &mut UnitOfWork) -> StorageResult<()> {
+    fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
         let profile = InstalledAgentProfile {
             profile_id: format!("profile:{}", self.manifest.package_id),
             package_id: self.manifest.package_id.clone(),
         };
-        self.result = Some(PackageInstallCommit {
+        let commit = PackageInstallCommit {
             installation: PackageInstallationRecord {
                 package_id: self.manifest.package_id.clone(),
                 schema_version: self.manifest.schema_version,
@@ -173,7 +256,13 @@ impl TransactionOperation for PackageInstallOperation {
                 self.manifest.clone(),
                 self.bindings.binding_hashes().clone(),
             ),
-        });
+        };
+        tx.events().append(EventRecord::new(
+            &self.manifest.package_id,
+            "package.installed",
+        ))?;
+        self.store.stage(tx, commit.clone())?;
+        self.result = Some(commit);
         Ok(())
     }
 }

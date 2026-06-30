@@ -1,4 +1,4 @@
-use crate::agent_package::AgentPackageManifest;
+use crate::agent_package::{reader::normalize_package_path, AgentPackageManifest};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageValidationIssue {
@@ -41,8 +41,84 @@ impl AgentPackageValidator {
                 "schema_version must be greater than zero",
             );
         }
+        if manifest.package_id.trim().is_empty() {
+            report.add_issue("package.package_id.missing", "package_id is required");
+        }
+        if manifest.name.trim().is_empty() {
+            report.add_issue("package.name.missing", "name is required");
+        }
+        if !manifest.unknown_fields.is_empty() {
+            report.add_issue(
+                "package.unknown_field.forbidden",
+                "package manifest contains unknown fields",
+            );
+        }
+        if contains_secret_like_value(&manifest.package_id)
+            || contains_secret_like_value(&manifest.name)
+        {
+            report.add_issue(
+                "package.secret_value.forbidden",
+                "portable package manifests cannot store secret-like values",
+            );
+        }
+        if let Some(package_hash) = &manifest.package_hash {
+            if !package_hash.starts_with("sha256:") {
+                report.add_issue(
+                    "package.hash.invalid",
+                    "package hash metadata must use sha256",
+                );
+            }
+        }
+        if let Some(model_file) = &manifest.model_file {
+            if normalize_package_path(model_file).is_err() {
+                report.add_issue(
+                    "package.model_file.path_invalid",
+                    "model_file must be a normalized package-relative path",
+                );
+            }
+            if manifest.model.is_none() {
+                report.add_issue(
+                    "package.model_file.model_missing",
+                    "model_file requires a model manifest",
+                );
+            }
+        }
+        if manifest.signature.is_some() {
+            report.add_issue(
+                "package.signature.unsupported",
+                "signature verification is not available in this v1 package installer",
+            );
+        }
+        if manifest.signature.is_some() && manifest.package_hash.is_none() {
+            report.add_issue(
+                "package.signature.hash_required",
+                "signature metadata requires package hash metadata",
+            );
+        }
 
         if let Some(model) = &manifest.model {
+            if !model.unknown_fields.is_empty() {
+                report.add_issue(
+                    "package.unknown_field.forbidden",
+                    "model manifest contains unknown fields",
+                );
+            }
+            if contains_secret_like_value(&model.provider_id)
+                || contains_secret_like_value(&model.model_id)
+                || model
+                    .credential_ref
+                    .as_deref()
+                    .is_some_and(contains_secret_like_value)
+                || model
+                    .local_path
+                    .as_deref()
+                    .is_some_and(contains_secret_like_value)
+            {
+                report.add_issue(
+                    "package.secret_value.forbidden",
+                    "portable package manifests cannot store secret-like values",
+                );
+            }
             if model.credential_ref.is_some() {
                 report.add_issue(
                     "package.credential_ref.forbidden",
@@ -59,4 +135,13 @@ impl AgentPackageValidator {
 
         report
     }
+}
+
+fn contains_secret_like_value(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("credentialref")
+        || value.contains("secret")
+        || value.starts_with("sk-")
+        || value.contains("api_key")
+        || value.contains("token=")
 }
