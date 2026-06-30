@@ -52,6 +52,11 @@ impl UnitOfWorkEvents<'_> {
     }
 }
 
+pub trait EventStore: Send + Sync {
+    fn append(&self, tx: &mut UnitOfWork, record: EventRecord) -> StorageResult<EventSequence>;
+    fn stream(&self, stream_id: &str) -> StorageResult<Vec<EventRecord>>;
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryEventStore {
     inner: Arc<Mutex<InMemoryEventStoreInner>>,
@@ -59,21 +64,22 @@ pub struct InMemoryEventStore {
 
 #[derive(Debug, Default)]
 struct InMemoryEventStoreInner {
+    next_sequences: BTreeMap<String, u64>,
     streams: BTreeMap<String, Vec<EventRecord>>,
 }
 
 impl InMemoryEventStore {
-    pub fn append(&self, record: EventRecord) -> StorageResult<EventSequence> {
+    pub fn append_immediate(&self, record: EventRecord) -> StorageResult<EventSequence> {
         let mut inner = self.inner.lock().expect("event store mutex poisoned");
-        let stream = inner
-            .streams
-            .entry(record.stream_id().to_string())
-            .or_default();
-        let sequence = EventSequence::new(stream.len() as u64 + 1);
+        let sequence = inner.next_sequence(record.stream_id());
 
         let mut stored = record;
         stored.sequence = sequence;
-        stream.push(stored);
+        inner
+            .streams
+            .entry(stored.stream_id().to_string())
+            .or_default()
+            .push(stored);
 
         Ok(sequence)
     }
@@ -84,14 +90,76 @@ impl InMemoryEventStore {
     }
 
     pub(crate) fn commit(&self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        for record in tx.drain_events() {
-            self.append(record)?;
+        let mut records = tx.drain_events();
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let mut inner = self.inner.lock().expect("event store mutex poisoned");
+        for record in &mut records {
+            if record.sequence.as_u64() == 0 {
+                record.sequence = inner.next_sequence(record.stream_id());
+            } else {
+                inner.advance_next_sequence(record.stream_id(), record.sequence);
+            }
+        }
+
+        for record in records {
+            inner
+                .streams
+                .entry(record.stream_id().to_string())
+                .or_default()
+                .push(record);
         }
         Ok(())
     }
 }
 
+impl EventStore for InMemoryEventStore {
+    fn append(&self, tx: &mut UnitOfWork, mut record: EventRecord) -> StorageResult<EventSequence> {
+        let mut inner = self.inner.lock().expect("event store mutex poisoned");
+        let sequence = inner.next_sequence(record.stream_id());
+        record.sequence = sequence;
+        tx.push_event(record);
+        Ok(sequence)
+    }
+
+    fn stream(&self, stream_id: &str) -> StorageResult<Vec<EventRecord>> {
+        InMemoryEventStore::stream(self, stream_id)
+    }
+}
+
+impl InMemoryEventStoreInner {
+    fn next_sequence(&mut self, stream_id: &str) -> EventSequence {
+        let default_next = self
+            .streams
+            .get(stream_id)
+            .and_then(|stream| stream.last())
+            .map(|record| record.sequence.as_u64() + 1)
+            .unwrap_or(1);
+        let next = self
+            .next_sequences
+            .entry(stream_id.to_string())
+            .or_insert(default_next);
+        let sequence = EventSequence::new(*next);
+        *next += 1;
+        sequence
+    }
+
+    fn advance_next_sequence(&mut self, stream_id: &str, used_sequence: EventSequence) {
+        let next = self
+            .next_sequences
+            .entry(stream_id.to_string())
+            .or_insert(used_sequence.as_u64() + 1);
+        *next = (*next).max(used_sequence.as_u64() + 1);
+    }
+}
+
 impl UnitOfWork {
+    pub(crate) fn push_event(&mut self, record: EventRecord) {
+        self.events.push(record);
+    }
+
     pub fn events(&mut self) -> UnitOfWorkEvents<'_> {
         UnitOfWorkEvents {
             records: &mut self.events,

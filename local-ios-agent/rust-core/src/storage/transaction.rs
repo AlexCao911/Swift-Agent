@@ -1,6 +1,7 @@
 use std::fmt;
 
-use super::{EventRecord, InMemoryEventStore};
+use super::archive_store::PendingArchiveRecord;
+use super::{EventRecord, InMemoryArchiveStore, InMemoryEventStore};
 
 pub type StorageResult<T> = Result<T, StorageError>;
 
@@ -62,6 +63,7 @@ pub trait TransactionOperation {
 
 #[derive(Default)]
 pub struct UnitOfWork {
+    pub(crate) archives: Vec<PendingArchiveRecord>,
     pub(crate) events: Vec<EventRecord>,
 }
 
@@ -73,10 +75,15 @@ impl UnitOfWork {
 
 #[derive(Default)]
 pub struct InMemoryTransactionRunner {
+    archive_store: InMemoryArchiveStore,
     event_store: InMemoryEventStore,
 }
 
 impl InMemoryTransactionRunner {
+    pub fn archive_store(&self) -> InMemoryArchiveStore {
+        self.archive_store.clone()
+    }
+
     pub fn event_store(&self) -> InMemoryEventStore {
         self.event_store.clone()
     }
@@ -90,6 +97,7 @@ impl TransactionRunner for InMemoryTransactionRunner {
     ) -> StorageResult<()> {
         let mut tx = UnitOfWork::default();
         operation.execute(&mut tx)?;
+        self.archive_store.commit(&mut tx)?;
         self.event_store.commit(&mut tx)
     }
 }

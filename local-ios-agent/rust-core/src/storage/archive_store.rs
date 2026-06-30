@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::{StorageError, StorageResult};
+use super::{StorageError, StorageResult, UnitOfWork};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ArchiveId(u64);
 
 impl ArchiveId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     pub const fn as_u64(self) -> u64 {
         self.0
     }
@@ -35,6 +39,28 @@ impl ArchiveRecord {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingArchiveRecord {
+    id: ArchiveId,
+    record: ArchiveRecord,
+}
+
+impl PendingArchiveRecord {
+    fn new(id: ArchiveId, record: ArchiveRecord) -> Self {
+        Self { id, record }
+    }
+}
+
+pub trait ArchiveStore: Send + Sync {
+    fn append_immutable(
+        &self,
+        tx: &mut UnitOfWork,
+        record: ArchiveRecord,
+    ) -> StorageResult<ArchiveId>;
+    fn get(&self, id: ArchiveId) -> StorageResult<ArchiveRecord>;
+    fn replace(&self, id: ArchiveId, record: ArchiveRecord) -> StorageResult<()>;
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryArchiveStore {
     inner: Arc<Mutex<InMemoryArchiveStoreInner>>,
@@ -49,8 +75,7 @@ struct InMemoryArchiveStoreInner {
 impl InMemoryArchiveStore {
     pub fn append(&self, record: ArchiveRecord) -> StorageResult<ArchiveId> {
         let mut inner = self.inner.lock().expect("archive store mutex poisoned");
-        inner.next_id += 1;
-        let id = ArchiveId(inner.next_id);
+        let id = inner.next_id();
         inner.records.insert(id, record);
         Ok(id)
     }
@@ -69,5 +94,67 @@ impl InMemoryArchiveStore {
             "storage.archive_append_only",
             "archive records are append-only",
         ))
+    }
+
+    pub(crate) fn commit(&self, tx: &mut UnitOfWork) -> StorageResult<()> {
+        let records = tx.drain_archives();
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
+        if records
+            .iter()
+            .any(|pending| inner.records.contains_key(&pending.id))
+        {
+            return Err(StorageError::new(
+                "storage.archive_conflict",
+                "archive id already exists",
+            ));
+        }
+
+        for pending in records {
+            inner.records.insert(pending.id, pending.record);
+        }
+
+        Ok(())
+    }
+}
+
+impl ArchiveStore for InMemoryArchiveStore {
+    fn append_immutable(
+        &self,
+        tx: &mut UnitOfWork,
+        record: ArchiveRecord,
+    ) -> StorageResult<ArchiveId> {
+        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
+        let id = inner.next_id();
+        tx.push_archive(PendingArchiveRecord::new(id, record));
+        Ok(id)
+    }
+
+    fn get(&self, id: ArchiveId) -> StorageResult<ArchiveRecord> {
+        InMemoryArchiveStore::get(self, id)
+    }
+
+    fn replace(&self, id: ArchiveId, record: ArchiveRecord) -> StorageResult<()> {
+        InMemoryArchiveStore::replace(self, id, record)
+    }
+}
+
+impl InMemoryArchiveStoreInner {
+    fn next_id(&mut self) -> ArchiveId {
+        self.next_id += 1;
+        ArchiveId(self.next_id)
+    }
+}
+
+impl UnitOfWork {
+    pub(crate) fn push_archive(&mut self, record: PendingArchiveRecord) {
+        self.archives.push(record);
+    }
+
+    pub(crate) fn drain_archives(&mut self) -> Vec<PendingArchiveRecord> {
+        self.archives.drain(..).collect()
     }
 }
