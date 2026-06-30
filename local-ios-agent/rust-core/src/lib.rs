@@ -4,5 +4,6 @@ pub mod ffi_bridge;
 pub mod memory;
 pub mod protocol;
 pub mod security;
+pub mod storage;
 pub mod tool;
 pub mod utils;
