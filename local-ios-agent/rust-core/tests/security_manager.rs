@@ -12,22 +12,101 @@ fn permission_scope_models_ios_permission_state() {
 }
 
 use local_ios_agent_runtime::core::{EntryId, RunId};
-use local_ios_agent_runtime::security::{ApprovalQueue, ApprovalRequest};
+use local_ios_agent_runtime::security::{ApprovalQueue, ApprovalRequest, ApprovalScope};
 
 #[test]
 fn approval_queue_tracks_pending_requests() {
     let mut queue = ApprovalQueue::new();
-    queue.push(ApprovalRequest {
-        approval_id: "approval_1".into(),
-        run_id: RunId("run_1".into()),
-        tool_call_entry_id: EntryId("entry_1".into()),
-        message: "Allow?".into(),
-        requires_local_authentication: false,
-    });
+    queue
+        .push(ApprovalRequest {
+            approval_id: "approval_1".into(),
+            run_id: RunId("run_1".into()),
+            tool_call_entry_id: EntryId("entry_1".into()),
+            message: "Allow?".into(),
+            requires_local_authentication: false,
+            scope: ApprovalScope::operation(
+                local_ios_agent_runtime::security::OperationDescriptor::new("tool.calendar"),
+            ),
+        })
+        .unwrap();
 
     assert_eq!(queue.pending().len(), 1);
     assert!(queue.take("approval_1").is_some());
     assert!(queue.pending().is_empty());
+}
+
+#[test]
+fn approval_queue_rejects_duplicate_pending_ids() {
+    let mut queue = ApprovalQueue::new();
+    queue
+        .push(ApprovalRequest {
+            approval_id: "approval_1".into(),
+            run_id: RunId("run_1".into()),
+            tool_call_entry_id: EntryId("entry_1".into()),
+            message: "Allow first?".into(),
+            requires_local_authentication: false,
+            scope: ApprovalScope::operation(
+                local_ios_agent_runtime::security::OperationDescriptor::new("tool.calendar"),
+            ),
+        })
+        .unwrap();
+
+    let error = queue
+        .push(ApprovalRequest {
+            approval_id: "approval_1".into(),
+            run_id: RunId("run_1".into()),
+            tool_call_entry_id: EntryId("entry_2".into()),
+            message: "Allow replacement?".into(),
+            requires_local_authentication: false,
+            scope: ApprovalScope::operation(
+                local_ios_agent_runtime::security::OperationDescriptor::new("tool.reminders"),
+            ),
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("duplicate approval id"));
+    assert_eq!(queue.pending().len(), 1);
+    assert_eq!(
+        queue.pending()[0].tool_call_entry_id,
+        EntryId("entry_1".into())
+    );
+}
+
+#[test]
+fn security_manager_rejects_duplicate_pending_approval_ids() {
+    let mut manager = SecurityManager::new();
+    manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".into()),
+            EntryId("entry_1".into()),
+            "Allow first?",
+            false,
+            ApprovalScope::operation(local_ios_agent_runtime::security::OperationDescriptor::new(
+                "tool.calendar",
+            )),
+        )
+        .unwrap();
+
+    let error = manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".into()),
+            EntryId("entry_2".into()),
+            "Allow replacement?",
+            false,
+            ApprovalScope::operation(local_ios_agent_runtime::security::OperationDescriptor::new(
+                "tool.reminders",
+            )),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("duplicate approval id"));
+    assert_eq!(manager.pending_approvals().len(), 1);
+    assert_eq!(
+        manager.pending_approvals()[0].tool_call_entry_id,
+        EntryId("entry_1".into())
+    );
 }
 
 use local_ios_agent_runtime::security::{PolicyDecision, PolicyEngine, RiskLevel};
@@ -104,13 +183,18 @@ use local_ios_agent_runtime::security::SecurityManager;
 #[test]
 fn security_manager_queues_local_auth_approval() {
     let mut manager = SecurityManager::new();
-    let request = manager.request_approval(
-        "approval_1",
-        RunId("run_1".into()),
-        EntryId("entry_1".into()),
-        "Allow write?",
-        true,
-    );
+    let request = manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".into()),
+            EntryId("entry_1".into()),
+            "Allow write?",
+            true,
+            ApprovalScope::operation(local_ios_agent_runtime::security::OperationDescriptor::new(
+                "tool.write",
+            )),
+        )
+        .unwrap();
 
     assert!(request.requires_local_authentication);
     assert_eq!(manager.pending_approvals().len(), 1);

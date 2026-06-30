@@ -115,6 +115,7 @@ fn approval_grant_and_data_egress_decision_cannot_be_minted_by_callers() {
     assert!(!approval_source.contains("pub fn new(approval_id: ApprovalId"));
     assert!(!approval_id_source.contains("pub fn new("));
     assert!(!approval_source.contains("pub fn for_egress("));
+    assert!(!approval_source.contains("pub enum ApprovalScope"));
     assert!(!egress_source.contains("pub disclosure_id:"));
     assert!(!egress_source.contains("pub allowlist_result:"));
     assert!(!egress_source.contains("pub approval_requirement:"));
@@ -257,22 +258,24 @@ fn permission_readiness_reports_missing_capabilities() {
 #[test]
 fn approved_response_issues_operation_scoped_grant() {
     let mut manager = SecurityManager::new();
-    manager.request_approval(
-        "approval_1",
-        RunId("run_1".to_string()),
-        EntryId("entry_1".to_string()),
-        "Allow remote inference?",
-        false,
-    );
-    let grant = manager
-        .issue_grant(
-            ApprovalProtocolResponse {
-                approval_id: "approval_1".to_string(),
-                approved: true,
-                reason: None,
-            },
-            OperationDescriptor::new("remote.inference"),
+    manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".to_string()),
+            EntryId("entry_1".to_string()),
+            "Allow remote inference?",
+            false,
+            local_ios_agent_runtime::security::ApprovalScope::operation(OperationDescriptor::new(
+                "remote.inference",
+            )),
         )
+        .unwrap();
+    let grant = manager
+        .issue_grant(ApprovalProtocolResponse {
+            approval_id: "approval_1".to_string(),
+            approved: true,
+            reason: None,
+        })
         .unwrap();
 
     assert!(grant.matches(&OperationDescriptor::new("remote.inference")));
@@ -299,23 +302,25 @@ fn approval_grant_does_not_match_different_egress_decision() {
         local_ios_agent_runtime::security::DataEgressRequest::http_tool("https://tool.example.com"),
     );
     let mut manager = SecurityManager::new();
-    manager.request_approval(
-        "approval_1",
-        RunId("run_1".to_string()),
-        EntryId("entry_1".to_string()),
-        "Allow remote inference?",
-        false,
-    );
-    let grant = manager
-        .issue_egress_grant(
-            ApprovalProtocolResponse {
-                approval_id: "approval_1".to_string(),
-                approved: true,
-                reason: None,
-            },
-            OperationDescriptor::new("remote.inference"),
-            &original,
+    manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".to_string()),
+            EntryId("entry_1".to_string()),
+            "Allow remote inference?",
+            false,
+            local_ios_agent_runtime::security::ApprovalScope::egress(
+                OperationDescriptor::new("remote.inference"),
+                &original,
+            ),
         )
+        .unwrap();
+    let grant = manager
+        .issue_egress_grant(ApprovalProtocolResponse {
+            approval_id: "approval_1".to_string(),
+            approved: true,
+            reason: None,
+        })
         .unwrap();
 
     assert!(grant.matches_egress(&OperationDescriptor::new("remote.inference"), &original));
@@ -327,6 +332,49 @@ fn approval_grant_does_not_match_different_egress_decision() {
         &OperationDescriptor::new("remote.inference"),
         &different_data_class
     ));
+}
+
+#[test]
+fn approval_response_cannot_be_redeemed_for_caller_supplied_egress_scope() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/manager.rs"),
+    )
+    .unwrap();
+    let issue_egress_signature = source
+        .split("pub fn issue_egress_grant(")
+        .nth(1)
+        .and_then(|tail| tail.split(") -> Result<ApprovalGrant, AgentError>").next())
+        .expect("issue_egress_grant signature");
+
+    assert!(!issue_egress_signature.contains("operation: OperationDescriptor"));
+    assert!(!issue_egress_signature.contains("decision: &DataEgressDecision"));
+}
+
+#[test]
+fn operation_approval_response_cannot_issue_egress_grant() {
+    let mut manager = SecurityManager::new();
+    manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".to_string()),
+            EntryId("entry_1".to_string()),
+            "Allow remote inference?",
+            false,
+            local_ios_agent_runtime::security::ApprovalScope::operation(OperationDescriptor::new(
+                "remote.inference",
+            )),
+        )
+        .unwrap();
+
+    let error = manager
+        .issue_egress_grant(ApprovalProtocolResponse {
+            approval_id: "approval_1".to_string(),
+            approved: true,
+            reason: None,
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("approval scope is not egress"));
 }
 
 #[test]
@@ -381,6 +429,17 @@ fn security_audit_event_stores_redacted_values_only() {
 
 #[test]
 fn runtime_secret_prompt_drops_secret_after_operation() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/security/runtime_secret_prompt.rs"),
+    )
+    .unwrap();
+    let prompt_source = source
+        .split("pub struct RuntimeSecretPrompt")
+        .next()
+        .expect("RuntimeSecretPrompt source prefix");
+    assert!(!prompt_source.contains("#[derive(Clone"));
+
     let mut prompt = RuntimeSecretPrompt::new(
         OperationDescriptor::new("remote.provider.validate_account"),
         CredentialPurpose::RemoteProvider,

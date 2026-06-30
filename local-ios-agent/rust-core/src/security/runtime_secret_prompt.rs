@@ -2,7 +2,6 @@ use std::fmt;
 
 use crate::security::{CredentialPurpose, OperationDescriptor, ResolvedSecret};
 
-#[derive(Clone)]
 pub struct RuntimeSecretPrompt {
     operation: OperationDescriptor,
     purpose: CredentialPurpose,

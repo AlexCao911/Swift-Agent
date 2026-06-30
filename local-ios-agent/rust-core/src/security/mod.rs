@@ -12,7 +12,7 @@ pub mod runtime_secret_prompt;
 
 pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalId, ApprovalRequest, ApprovalRequirement,
-    OperationDescriptor, SuspendedRun,
+    ApprovalScope, OperationDescriptor, SuspendedRun,
 };
 pub use approval_protocol::{ApprovalProtocolRequest, ApprovalProtocolResponse};
 pub use approval_queue::ApprovalQueue;

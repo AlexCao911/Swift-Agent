@@ -1,5 +1,7 @@
 use local_ios_agent_runtime::core::{EntryId, RunId};
-use local_ios_agent_runtime::security::{ApprovalDecision, ApprovalRequest, SuspendedRun};
+use local_ios_agent_runtime::security::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, OperationDescriptor, SuspendedRun,
+};
 
 #[test]
 fn suspended_run_resumes_with_matching_approval_id() {
@@ -9,6 +11,7 @@ fn suspended_run_resumes_with_matching_approval_id() {
         tool_call_entry_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
         requires_local_authentication: false,
+        scope: ApprovalScope::operation(OperationDescriptor::new("tool.reminders.create")),
     };
     let mut suspended = SuspendedRun::new(request);
 
@@ -28,6 +31,7 @@ fn suspended_run_rejects_wrong_approval_id() {
         tool_call_entry_id: EntryId("tool_1".to_string()),
         message: "Allow reminder creation?".to_string(),
         requires_local_authentication: false,
+        scope: ApprovalScope::operation(OperationDescriptor::new("tool.reminders.create")),
     };
     let mut suspended = SuspendedRun::new(request);
 

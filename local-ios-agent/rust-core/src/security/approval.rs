@@ -55,18 +55,22 @@ impl ApprovalGrant {
         }
     }
 
-    pub(super) fn for_egress(
-        approval_id: ApprovalId,
-        granted_for: OperationDescriptor,
-        decision: &DataEgressDecision,
-    ) -> Self {
-        Self {
-            approval_id,
-            granted_for,
-            disclosure_id: Some(decision.disclosure_id().as_str().to_string()),
-            destination: Some(decision.policy().destination().clone()),
-            data_classes: decision.policy().allowed_fields().to_vec(),
-            expires_at_millis: None,
+    pub(super) fn from_scope(approval_id: ApprovalId, scope: &ApprovalScope) -> Self {
+        match &scope.kind {
+            ApprovalScopeKind::Operation { operation } => Self::new(approval_id, operation.clone()),
+            ApprovalScopeKind::Egress {
+                operation,
+                disclosure_id,
+                destination,
+                data_classes,
+            } => Self {
+                approval_id,
+                granted_for: operation.clone(),
+                disclosure_id: Some(disclosure_id.clone()),
+                destination: Some(destination.clone()),
+                data_classes: data_classes.clone(),
+                expires_at_millis: None,
+            },
         }
     }
 
@@ -102,12 +106,54 @@ pub enum ApprovalDecision {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalScope {
+    kind: ApprovalScopeKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ApprovalScopeKind {
+    Operation {
+        operation: OperationDescriptor,
+    },
+    Egress {
+        operation: OperationDescriptor,
+        disclosure_id: String,
+        destination: EgressDestination,
+        data_classes: Vec<DataFieldClass>,
+    },
+}
+
+impl ApprovalScope {
+    pub fn operation(operation: OperationDescriptor) -> Self {
+        Self {
+            kind: ApprovalScopeKind::Operation { operation },
+        }
+    }
+
+    pub fn egress(operation: OperationDescriptor, decision: &DataEgressDecision) -> Self {
+        Self {
+            kind: ApprovalScopeKind::Egress {
+                operation,
+                disclosure_id: decision.disclosure_id().as_str().to_string(),
+                destination: decision.policy().destination().clone(),
+                data_classes: decision.policy().allowed_fields().to_vec(),
+            },
+        }
+    }
+
+    pub fn is_egress(&self) -> bool {
+        matches!(self.kind, ApprovalScopeKind::Egress { .. })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalRequest {
     pub approval_id: String,
     pub run_id: RunId,
     pub tool_call_entry_id: EntryId,
     pub message: String,
     pub requires_local_authentication: bool,
+    pub scope: ApprovalScope,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

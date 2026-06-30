@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalRequest,
-    PermissionScope, PolicyDecision, SecurityManager,
+    ApprovalScope, OperationDescriptor, PermissionScope, PolicyDecision, SecurityManager,
 };
 use crate::tool::{
     RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
@@ -71,7 +71,11 @@ impl ToolRouter {
                     tool_call_entry_id.clone(),
                     reason.clone(),
                     true,
-                );
+                    ApprovalScope::operation(OperationDescriptor::new(format!(
+                        "tool.{}",
+                        schema.name
+                    ))),
+                )?;
                 self.suspended_tool_requests
                     .insert(approval.approval_id.clone(), request.clone());
                 Ok(ToolRouteOutcome::ApprovalRequired {
