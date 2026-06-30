@@ -1,6 +1,7 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelFormat {
     RemoteChat,
+    Gguf,
     LocalWeights,
 }
 

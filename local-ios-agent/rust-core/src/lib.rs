@@ -2,6 +2,7 @@ pub mod agent_package;
 pub mod context;
 pub mod core;
 pub mod ffi_bridge;
+pub mod inference;
 pub mod memory;
 pub mod model;
 pub mod protocol;
