@@ -20,6 +20,7 @@ impl ArchiveId {
 pub struct ArchiveRecord {
     run_id: String,
     kind: String,
+    payload: String,
 }
 
 impl ArchiveRecord {
@@ -27,6 +28,19 @@ impl ArchiveRecord {
         Self {
             run_id: run_id.into(),
             kind: kind.into(),
+            payload: String::new(),
+        }
+    }
+
+    pub fn with_payload(
+        run_id: impl Into<String>,
+        kind: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            kind: kind.into(),
+            payload: payload.into(),
         }
     }
 
@@ -36,6 +50,10 @@ impl ArchiveRecord {
 
     pub fn kind(&self) -> &str {
         &self.kind
+    }
+
+    pub fn payload(&self) -> &str {
+        &self.payload
     }
 }
 

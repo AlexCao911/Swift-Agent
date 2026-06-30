@@ -5,6 +5,7 @@ pub mod ffi_bridge;
 pub mod inference;
 pub mod memory;
 pub mod model;
+pub mod prompt;
 pub mod protocol;
 pub mod security;
 pub mod storage;
