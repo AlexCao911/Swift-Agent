@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
 use super::{
-    BuiltinProviderPlugin, ContextPolicyDefinition, HostCapabilityManifest,
-    InferenceBackendDefinition, LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition,
-    PluginModule, PromptCompilerDefinition, ProviderDefinition, RegistryError, RegistryResult,
-    ToolDefinition, TypedRegistry, VoiceDefinition,
+    ContextPolicyDefinition, HostCapabilityManifest, InferenceBackendDefinition,
+    LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition, PluginModule,
+    PromptCompilerDefinition, ProviderDefinition, RegistryError, RegistryResult, ToolDefinition,
+    TypedRegistry, VoiceDefinition,
 };
+
+#[cfg(feature = "builtin-openai-compatible")]
+use super::BuiltinProviderPlugin;
 
 #[derive(Clone, Debug)]
 pub struct RuntimePluginRegistry {
@@ -157,10 +160,23 @@ impl PluginRegistryBuilder {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CargoFeature {
+    BuiltinOpenAICompatible,
+}
+
+impl CargoFeature {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltinOpenAICompatible => "builtin-openai-compatible",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StaticPluginModule {
     pub module_id: super::ModuleId,
-    pub cargo_feature: Option<String>,
+    pub cargo_feature: Option<CargoFeature>,
     pub required_host_capabilities: Vec<String>,
 }
 
@@ -173,8 +189,8 @@ impl StaticPluginModule {
         }
     }
 
-    pub fn with_cargo_feature(mut self, cargo_feature: impl Into<String>) -> Self {
-        self.cargo_feature = Some(cargo_feature.into());
+    pub fn with_cargo_feature(mut self, cargo_feature: CargoFeature) -> Self {
+        self.cargo_feature = Some(cargo_feature);
         self
     }
 
@@ -209,14 +225,13 @@ impl StaticPluginList {
     pub fn compiled() -> Self {
         let mut entries = Vec::new();
 
-        if cfg!(feature = "builtin-openai-compatible") {
-            entries.push(StaticPluginRegistration::new(
-                StaticPluginModule::new("builtin.provider.openai_compatible")
-                    .with_cargo_feature("builtin-openai-compatible")
-                    .requires_host_capability("network"),
-                Box::new(BuiltinProviderPlugin::openai_compatible()),
-            ));
-        }
+        #[cfg(feature = "builtin-openai-compatible")]
+        entries.push(StaticPluginRegistration::new(
+            StaticPluginModule::new("builtin.provider.openai_compatible")
+                .with_cargo_feature(CargoFeature::BuiltinOpenAICompatible)
+                .requires_host_capability("network"),
+            Box::new(BuiltinProviderPlugin::openai_compatible()),
+        ));
 
         entries.push(StaticPluginRegistration::new(
             StaticPluginModule::new("legacy.runtime_adapter"),
@@ -252,18 +267,31 @@ impl StaticPluginList {
                 });
             }
 
-            for capability in entry.plugin.required_host_capabilities() {
-                if !entry
-                    .metadata
-                    .required_host_capabilities
-                    .iter()
-                    .any(|metadata_capability| metadata_capability == capability)
-                {
-                    return Err(RegistryError::StaticPluginCapabilityMismatch {
-                        module_id: actual_module_id.as_str().to_string(),
-                        capability: (*capability).to_string(),
-                    });
-                }
+            let plugin_capabilities: BTreeSet<&str> = entry
+                .plugin
+                .required_host_capabilities()
+                .iter()
+                .copied()
+                .collect();
+            let metadata_capabilities: BTreeSet<&str> = entry
+                .metadata
+                .required_host_capabilities
+                .iter()
+                .map(String::as_str)
+                .collect();
+
+            for capability in plugin_capabilities.difference(&metadata_capabilities) {
+                return Err(RegistryError::StaticPluginCapabilityMismatch {
+                    module_id: actual_module_id.as_str().to_string(),
+                    capability: (*capability).to_string(),
+                });
+            }
+
+            for capability in metadata_capabilities.difference(&plugin_capabilities) {
+                return Err(RegistryError::StaticPluginCapabilityMismatch {
+                    module_id: actual_module_id.as_str().to_string(),
+                    capability: (*capability).to_string(),
+                });
             }
 
             for capability in &entry.metadata.required_host_capabilities {

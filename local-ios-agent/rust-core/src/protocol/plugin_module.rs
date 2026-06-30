@@ -77,11 +77,13 @@ protocol_definition!(MemoryDefinition);
 protocol_definition!(ContextPolicyDefinition);
 protocol_definition!(VoiceDefinition);
 
+#[cfg(feature = "builtin-openai-compatible")]
 #[derive(Clone, Debug)]
 pub struct BuiltinProviderPlugin {
     module_id: ModuleId,
 }
 
+#[cfg(feature = "builtin-openai-compatible")]
 impl BuiltinProviderPlugin {
     pub fn openai_compatible() -> Self {
         Self {
@@ -94,6 +96,7 @@ impl BuiltinProviderPlugin {
     }
 }
 
+#[cfg(feature = "builtin-openai-compatible")]
 impl PluginModule for BuiltinProviderPlugin {
     fn module_id(&self) -> ModuleId {
         self.module_id.clone()

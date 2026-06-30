@@ -347,18 +347,18 @@ Expected: lifecycle shell tests pass.
 
 ```rust
 use local_ios_agent_runtime::protocol::{
-    BuiltinProviderPlugin, HostCapabilityManifest, PluginRegistryBuilder,
+    BuiltinInferencePlugin, HostCapabilityManifest, PluginRegistryBuilder,
 };
 
 #[test]
-fn plugin_module_registers_provider_and_freezes_runtime_registry() {
+fn plugin_module_registers_inference_backend_and_freezes_runtime_registry() {
     let host = HostCapabilityManifest::all_supported();
     let mut builder = PluginRegistryBuilder::new(host);
-    BuiltinProviderPlugin::openai_compatible().register(&mut builder).unwrap();
+    BuiltinInferencePlugin::llama_cpp().register(&mut builder).unwrap();
 
     let registry = builder.freeze().unwrap();
 
-    assert!(registry.providers().contains("provider.openai_compatible"));
+    assert!(registry.inference_backends().contains("inference.llama_cpp"));
     assert!(registry.providers().is_frozen());
     assert!(registry.models().is_frozen());
     assert!(registry.inference_backends().is_frozen());
@@ -375,7 +375,7 @@ fn plugin_module_registers_provider_and_freezes_runtime_registry() {
 Run:
 
 ```bash
-cargo test --test protocol_plugin_module plugin_module_registers_provider_and_freezes_runtime_registry
+cargo test --test protocol_plugin_module plugin_module_registers_inference_backend_and_freezes_runtime_registry
 ```
 
 Expected: unresolved `PluginRegistryBuilder`.
@@ -424,10 +424,13 @@ Expected: plugin registration test passes.
 
 ```rust
 use local_ios_agent_runtime::protocol::{
-    BuiltinInferencePlugin, BuiltinProviderPlugin, HostCapabilityManifest,
-    LegacyRuntimeAdapterPlugin, PluginRegistryBuilder, RegistryError, StaticPluginList,
-    StaticPluginModule, StaticPluginRegistration,
+    BuiltinInferencePlugin, CargoFeature, HostCapabilityManifest, LegacyRuntimeAdapterPlugin,
+    PluginRegistryBuilder, RegistryError, StaticPluginList, StaticPluginModule,
+    StaticPluginRegistration,
 };
+
+#[cfg(feature = "builtin-openai-compatible")]
+use local_ios_agent_runtime::protocol::BuiltinProviderPlugin;
 
 #[test]
 fn host_capability_manifest_blocks_unsupported_plugin() {
@@ -440,12 +443,21 @@ fn host_capability_manifest_blocks_unsupported_plugin() {
 }
 
 #[test]
+fn cargo_feature_metadata_uses_canonical_feature_names() {
+    assert_eq!(
+        CargoFeature::BuiltinOpenAICompatible.as_str(),
+        "builtin-openai-compatible"
+    );
+}
+
+#[cfg(feature = "builtin-openai-compatible")]
+#[test]
 fn static_plugin_list_records_feature_and_registers_in_order() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![
         StaticPluginRegistration::new(
             StaticPluginModule::new("builtin.provider.openai_compatible")
-                .with_cargo_feature("builtin-openai-compatible")
+                .with_cargo_feature(CargoFeature::BuiltinOpenAICompatible)
                 .requires_host_capability("network"),
             Box::new(BuiltinProviderPlugin::openai_compatible()),
         ),
@@ -458,7 +470,10 @@ fn static_plugin_list_records_feature_and_registers_in_order() {
     let registry = list.build_registry(host).unwrap();
 
     assert_eq!(list.modules()[0].module_id.as_str(), "builtin.provider.openai_compatible");
-    assert_eq!(list.modules()[0].cargo_feature.as_deref(), Some("builtin-openai-compatible"));
+    assert_eq!(
+        list.modules()[0].cargo_feature,
+        Some(CargoFeature::BuiltinOpenAICompatible)
+    );
     assert!(registry.providers().contains("provider.openai_compatible"));
     assert!(registry.inference_backends().contains("inference.legacy_runtime_adapter"));
 }
@@ -467,8 +482,8 @@ fn static_plugin_list_records_feature_and_registers_in_order() {
 fn static_plugin_list_rejects_mismatched_module_metadata() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![StaticPluginRegistration::new(
-        StaticPluginModule::new("wrong.module.id").requires_host_capability("network"),
-        Box::new(BuiltinProviderPlugin::openai_compatible()),
+        StaticPluginModule::new("wrong.module.id").requires_host_capability("native_inference"),
+        Box::new(BuiltinInferencePlugin::llama_cpp()),
     )]);
 
     let error = list.build_registry(host).unwrap_err();
@@ -481,14 +496,14 @@ fn static_plugin_list_rejects_duplicate_module_id_before_registration() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![
         StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.provider.openai_compatible")
-                .requires_host_capability("network"),
-            Box::new(BuiltinProviderPlugin::openai_compatible()),
+            StaticPluginModule::new("builtin.inference.llama_cpp")
+                .requires_host_capability("native_inference"),
+            Box::new(BuiltinInferencePlugin::llama_cpp()),
         ),
         StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.provider.openai_compatible")
-                .requires_host_capability("network"),
-            Box::new(BuiltinProviderPlugin::openai_compatible()),
+            StaticPluginModule::new("builtin.inference.llama_cpp")
+                .requires_host_capability("native_inference"),
+            Box::new(BuiltinInferencePlugin::llama_cpp()),
         ),
     ]);
 
@@ -498,24 +513,64 @@ fn static_plugin_list_rejects_duplicate_module_id_before_registration() {
 }
 
 #[test]
+fn static_plugin_list_rejects_missing_required_capability_metadata() {
+    let host = HostCapabilityManifest::all_supported();
+    let list = StaticPluginList::new(vec![StaticPluginRegistration::new(
+        StaticPluginModule::new("builtin.inference.llama_cpp"),
+        Box::new(BuiltinInferencePlugin::llama_cpp()),
+    )]);
+
+    let error = list.build_registry(host).unwrap_err();
+
+    assert!(matches!(
+        error,
+        RegistryError::StaticPluginCapabilityMismatch { .. }
+    ));
+}
+
+#[test]
+fn static_plugin_list_rejects_extra_capability_metadata() {
+    let host = HostCapabilityManifest::all_supported();
+    let list = StaticPluginList::new(vec![StaticPluginRegistration::new(
+        StaticPluginModule::new("legacy.runtime_adapter").requires_host_capability("network"),
+        Box::new(LegacyRuntimeAdapterPlugin::runtime_adapter()),
+    )]);
+
+    let error = list.build_registry(host).unwrap_err();
+
+    assert!(matches!(
+        error,
+        RegistryError::StaticPluginCapabilityMismatch { .. }
+    ));
+}
+
+#[test]
 fn static_plugin_feature_metadata_names_declared_cargo_features() {
     let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .unwrap();
     let list = StaticPluginList::compiled();
 
     for module in list.modules() {
-        if let Some(feature) = module.cargo_feature.as_deref() {
-            assert!(manifest.contains(&format!("{feature} =")));
+        if let Some(feature) = module.cargo_feature {
+            assert!(manifest.contains(&format!("{} =", feature.as_str())));
         }
     }
 }
 
+#[cfg(not(feature = "builtin-openai-compatible"))]
+#[test]
+fn compiled_list_omits_openai_provider_when_feature_is_disabled() {
+    let list = StaticPluginList::compiled();
+
+    assert!(!list
+        .modules()
+        .iter()
+        .any(|module| module.module_id.as_str() == "builtin.provider.openai_compatible"));
+}
+
+#[cfg(feature = "builtin-openai-compatible")]
 #[test]
 fn compiled_list_includes_openai_provider_when_feature_is_enabled() {
-    if !cfg!(feature = "builtin-openai-compatible") {
-        return;
-    }
-
     let list = StaticPluginList::compiled();
     let registry = list
         .build_registry(HostCapabilityManifest::all_supported())
@@ -531,7 +586,7 @@ fn compiled_list_includes_openai_provider_when_feature_is_enabled() {
 
 - [ ] **Step 2: Implement manifest**
 
-Add `HostCapabilityManifest` with named capabilities such as `native_inference`, `keychain`, and `network`. `PluginModule::register` must check the manifest before inserting definitions. Add `StaticPluginList`, `StaticPluginModule`, and `StaticPluginRegistration` so each compiled plugin can be traced to an actual Cargo feature declared in `Cargo.toml`, static module list order, and host capability checks. `StaticPluginList::build_registry` must reject duplicate module IDs and metadata whose `module_id` or required capabilities do not match the actual `PluginModule`. Include a legacy adapter module that registers through `PluginModule`; do not expose fixture-named constructors as the production API.
+Add `HostCapabilityManifest` with named capabilities such as `native_inference`, `keychain`, and `network`. `PluginModule::register` must check the manifest before inserting definitions. Add `CargoFeature`, `StaticPluginList`, `StaticPluginModule`, and `StaticPluginRegistration` so each compiled plugin can be traced to a controlled Cargo feature enum, static module list order, and host capability checks. `StaticPluginList::build_registry` must reject duplicate module IDs and metadata whose `module_id` or required capability set does not exactly match the actual `PluginModule`; both missing and extra metadata capabilities are errors. Built-in provider plugin constructors and re-exports must be gated by the same Cargo feature that adds them to `StaticPluginList::compiled()`, so feature-disabled plugins cannot be manually registered from default builds. Include a legacy adapter module that registers through `PluginModule`; do not expose fixture-named constructors as the production API.
 
 - [ ] **Step 3: Run manifest test**
 

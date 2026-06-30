@@ -17,14 +17,16 @@ pub use definition::DefinitionCompatibility;
 pub use host_capability::{HostCapability, HostCapabilityManifest};
 pub use ids::{ArchiveId, BindingId, DefinitionId, InstanceId, ModuleId, SnapshotId};
 pub use instance::ComponentInstance;
+#[cfg(feature = "builtin-openai-compatible")]
+pub use plugin_module::BuiltinProviderPlugin;
 pub use plugin_module::{
-    BuiltinInferencePlugin, BuiltinProviderPlugin, ContextPolicyDefinition,
-    InferenceBackendDefinition, LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition,
-    PluginModule, PromptCompilerDefinition, ProviderDefinition, ToolDefinition, VoiceDefinition,
+    BuiltinInferencePlugin, ContextPolicyDefinition, InferenceBackendDefinition,
+    LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition, PluginModule,
+    PromptCompilerDefinition, ProviderDefinition, ToolDefinition, VoiceDefinition,
 };
 pub use runtime_plugin_registry::{
-    PluginRegistryBuilder, RuntimePluginRegistry, StaticPluginList, StaticPluginModule,
-    StaticPluginRegistration,
+    CargoFeature, PluginRegistryBuilder, RuntimePluginRegistry, StaticPluginList,
+    StaticPluginModule, StaticPluginRegistration,
 };
 pub use schema_version::SchemaVersion;
 pub use snapshot::{SnapshotRecord, SnapshotSource};
