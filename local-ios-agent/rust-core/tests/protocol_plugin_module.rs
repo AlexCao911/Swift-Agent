@@ -1,25 +1,40 @@
 use local_ios_agent_runtime::protocol::{
-    BuiltinInferencePlugin, CargoFeature, HostCapabilityManifest, LegacyRuntimeAdapterPlugin,
-    PluginRegistryBuilder, RegistryError, StaticPluginList, StaticPluginModule,
-    StaticPluginRegistration,
+    CargoFeature, HostCapabilityManifest, InferenceBackendDefinition, LegacyRuntimeAdapterPlugin,
+    ModuleId, PluginModule, PluginRegistryBuilder, RegistryError, RegistryResult, StaticPluginList,
+    StaticPluginModule, StaticPluginRegistration,
 };
 
 #[cfg(feature = "builtin-openai-compatible")]
 use local_ios_agent_runtime::protocol::BuiltinProviderPlugin;
 
+struct TestNativeInferencePlugin;
+
+impl PluginModule for TestNativeInferencePlugin {
+    fn module_id(&self) -> ModuleId {
+        ModuleId::new("test.inference.native")
+    }
+
+    fn required_host_capabilities(&self) -> &'static [&'static str] {
+        &["native_inference"]
+    }
+
+    fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
+        builder.require_host_capability("native_inference")?;
+        builder.register_inference_backend(InferenceBackendDefinition::new("inference.test_native"))
+    }
+}
+
 #[test]
 fn plugin_module_registers_inference_backend_and_freezes_runtime_registry() {
     let host = HostCapabilityManifest::all_supported();
     let mut builder = PluginRegistryBuilder::new(host);
-    BuiltinInferencePlugin::llama_cpp()
-        .register(&mut builder)
-        .unwrap();
+    TestNativeInferencePlugin.register(&mut builder).unwrap();
 
     let registry = builder.freeze().unwrap();
 
     assert!(registry
         .inference_backends()
-        .contains("inference.llama_cpp"));
+        .contains("inference.test_native"));
     assert!(registry.providers().is_frozen());
     assert!(registry.models().is_frozen());
     assert!(registry.inference_backends().is_frozen());
@@ -35,7 +50,7 @@ fn host_capability_manifest_blocks_unsupported_plugin() {
     let host = HostCapabilityManifest::new(["keychain", "network"]);
     let mut builder = PluginRegistryBuilder::new(host);
 
-    let error = BuiltinInferencePlugin::llama_cpp()
+    let error = TestNativeInferencePlugin
         .register(&mut builder)
         .unwrap_err();
 
@@ -47,6 +62,10 @@ fn cargo_feature_metadata_uses_canonical_feature_names() {
     assert_eq!(
         CargoFeature::BuiltinOpenAICompatible.as_str(),
         "builtin-openai-compatible"
+    );
+    assert_eq!(
+        CargoFeature::LinkLlamaCppLocalInference.as_str(),
+        "link-llama-cpp-local-inference"
     );
 }
 
@@ -88,7 +107,7 @@ fn static_plugin_list_rejects_mismatched_module_metadata() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![StaticPluginRegistration::new(
         StaticPluginModule::new("wrong.module.id").requires_host_capability("native_inference"),
-        Box::new(BuiltinInferencePlugin::llama_cpp()),
+        Box::new(TestNativeInferencePlugin),
     )]);
 
     let error = list.build_registry(host).unwrap_err();
@@ -104,14 +123,14 @@ fn static_plugin_list_rejects_duplicate_module_id_before_registration() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![
         StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.inference.llama_cpp")
+            StaticPluginModule::new("test.inference.native")
                 .requires_host_capability("native_inference"),
-            Box::new(BuiltinInferencePlugin::llama_cpp()),
+            Box::new(TestNativeInferencePlugin),
         ),
         StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.inference.llama_cpp")
+            StaticPluginModule::new("test.inference.native")
                 .requires_host_capability("native_inference"),
-            Box::new(BuiltinInferencePlugin::llama_cpp()),
+            Box::new(TestNativeInferencePlugin),
         ),
     ]);
 
@@ -124,8 +143,8 @@ fn static_plugin_list_rejects_duplicate_module_id_before_registration() {
 fn static_plugin_list_rejects_missing_required_capability_metadata() {
     let host = HostCapabilityManifest::all_supported();
     let list = StaticPluginList::new(vec![StaticPluginRegistration::new(
-        StaticPluginModule::new("builtin.inference.llama_cpp"),
-        Box::new(BuiltinInferencePlugin::llama_cpp()),
+        StaticPluginModule::new("test.inference.native"),
+        Box::new(TestNativeInferencePlugin),
     )]);
 
     let error = list.build_registry(host).unwrap_err();
@@ -180,6 +199,17 @@ fn compiled_list_omits_openai_provider_when_feature_is_disabled() {
         .any(|module| module.module_id.as_str() == "builtin.provider.openai_compatible"));
 }
 
+#[cfg(not(feature = "link-llama-cpp-local-inference"))]
+#[test]
+fn compiled_list_omits_llama_cpp_when_link_feature_is_disabled() {
+    let list = StaticPluginList::compiled();
+
+    assert!(!list
+        .modules()
+        .iter()
+        .any(|module| module.module_id.as_str() == "builtin.inference.llama_cpp"));
+}
+
 #[cfg(feature = "builtin-openai-compatible")]
 #[test]
 fn compiled_list_includes_openai_provider_when_feature_is_enabled() {
@@ -193,4 +223,27 @@ fn compiled_list_includes_openai_provider_when_feature_is_enabled() {
         .iter()
         .any(|module| module.module_id.as_str() == "builtin.provider.openai_compatible"));
     assert!(registry.providers().contains("provider.openai_compatible"));
+}
+
+#[cfg(feature = "link-llama-cpp-local-inference")]
+#[test]
+fn compiled_list_includes_llama_cpp_when_link_feature_is_enabled() {
+    let list = StaticPluginList::compiled();
+    let registry = list
+        .build_registry(HostCapabilityManifest::all_supported())
+        .unwrap();
+
+    let module = list
+        .modules()
+        .iter()
+        .find(|module| module.module_id.as_str() == "builtin.inference.llama_cpp")
+        .unwrap();
+
+    assert_eq!(
+        module.cargo_feature,
+        Some(CargoFeature::LinkLlamaCppLocalInference)
+    );
+    assert!(registry
+        .inference_backends()
+        .contains("inference.llama_cpp"));
 }

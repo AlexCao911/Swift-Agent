@@ -10,6 +10,9 @@ use super::{
 #[cfg(feature = "builtin-openai-compatible")]
 use super::BuiltinProviderPlugin;
 
+#[cfg(feature = "link-llama-cpp-local-inference")]
+use super::BuiltinInferencePlugin;
+
 #[derive(Clone, Debug)]
 pub struct RuntimePluginRegistry {
     providers: TypedRegistry<ProviderDefinition>,
@@ -163,12 +166,14 @@ impl PluginRegistryBuilder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CargoFeature {
     BuiltinOpenAICompatible,
+    LinkLlamaCppLocalInference,
 }
 
 impl CargoFeature {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BuiltinOpenAICompatible => "builtin-openai-compatible",
+            Self::LinkLlamaCppLocalInference => "link-llama-cpp-local-inference",
         }
     }
 }
@@ -231,6 +236,14 @@ impl StaticPluginList {
                 .with_cargo_feature(CargoFeature::BuiltinOpenAICompatible)
                 .requires_host_capability("network"),
             Box::new(BuiltinProviderPlugin::openai_compatible()),
+        ));
+
+        #[cfg(feature = "link-llama-cpp-local-inference")]
+        entries.push(StaticPluginRegistration::new(
+            StaticPluginModule::new("builtin.inference.llama_cpp")
+                .with_cargo_feature(CargoFeature::LinkLlamaCppLocalInference)
+                .requires_host_capability("native_inference"),
+            Box::new(BuiltinInferencePlugin::llama_cpp()),
         ));
 
         entries.push(StaticPluginRegistration::new(

@@ -17,12 +17,14 @@ pub use definition::DefinitionCompatibility;
 pub use host_capability::{HostCapability, HostCapabilityManifest};
 pub use ids::{ArchiveId, BindingId, DefinitionId, InstanceId, ModuleId, SnapshotId};
 pub use instance::ComponentInstance;
+#[cfg(feature = "link-llama-cpp-local-inference")]
+pub use plugin_module::BuiltinInferencePlugin;
 #[cfg(feature = "builtin-openai-compatible")]
 pub use plugin_module::BuiltinProviderPlugin;
 pub use plugin_module::{
-    BuiltinInferencePlugin, ContextPolicyDefinition, InferenceBackendDefinition,
-    LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition, PluginModule,
-    PromptCompilerDefinition, ProviderDefinition, ToolDefinition, VoiceDefinition,
+    ContextPolicyDefinition, InferenceBackendDefinition, LegacyRuntimeAdapterPlugin,
+    MemoryDefinition, ModelDefinition, PluginModule, PromptCompilerDefinition, ProviderDefinition,
+    ToolDefinition, VoiceDefinition,
 };
 pub use runtime_plugin_registry::{
     CargoFeature, PluginRegistryBuilder, RuntimePluginRegistry, StaticPluginList,

@@ -1,7 +1,10 @@
 use super::{
     ComponentDefinition, DefinitionCompatibility, DefinitionId, ModuleId, PluginRegistryBuilder,
-    RegistryError, RegistryResult, SchemaVersion,
+    RegistryResult, SchemaVersion,
 };
+
+#[cfg(feature = "link-llama-cpp-local-inference")]
+use super::RegistryError;
 
 pub trait PluginModule: Send + Sync {
     fn module_id(&self) -> ModuleId;
@@ -112,12 +115,14 @@ impl PluginModule for BuiltinProviderPlugin {
     }
 }
 
+#[cfg(feature = "link-llama-cpp-local-inference")]
 #[derive(Clone, Debug)]
 pub struct BuiltinInferencePlugin {
     module_id: ModuleId,
     required_capability: &'static str,
 }
 
+#[cfg(feature = "link-llama-cpp-local-inference")]
 impl BuiltinInferencePlugin {
     pub fn llama_cpp() -> Self {
         Self {
@@ -131,6 +136,7 @@ impl BuiltinInferencePlugin {
     }
 }
 
+#[cfg(feature = "link-llama-cpp-local-inference")]
 impl PluginModule for BuiltinInferencePlugin {
     fn module_id(&self) -> ModuleId {
         self.module_id.clone()
