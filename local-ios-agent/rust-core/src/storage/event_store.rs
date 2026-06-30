@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::{StorageResult, UnitOfWork};
+use super::{StorageError, StorageResult, UnitOfWork};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct EventSequence(u64);
@@ -64,46 +64,45 @@ pub struct InMemoryEventStore {
 
 #[derive(Debug, Default)]
 struct InMemoryEventStoreInner {
-    next_sequences: BTreeMap<String, u64>,
     streams: BTreeMap<String, Vec<EventRecord>>,
 }
 
 impl InMemoryEventStore {
-    pub fn append_immediate(&self, record: EventRecord) -> StorageResult<EventSequence> {
-        let mut inner = self.inner.lock().expect("event store mutex poisoned");
-        let sequence = inner.next_sequence(record.stream_id());
-
-        let mut stored = record;
-        stored.sequence = sequence;
-        inner
-            .streams
-            .entry(stored.stream_id().to_string())
-            .or_default()
-            .push(stored);
-
-        Ok(sequence)
-    }
-
     pub fn stream(&self, stream_id: &str) -> StorageResult<Vec<EventRecord>> {
         let inner = self.inner.lock().expect("event store mutex poisoned");
         Ok(inner.streams.get(stream_id).cloned().unwrap_or_default())
     }
 
-    pub(crate) fn commit(&self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        let mut records = tx.drain_events();
+    pub(crate) fn validate_pending(&self, records: &mut [EventRecord]) -> StorageResult<()> {
         if records.is_empty() {
             return Ok(());
         }
 
-        let mut inner = self.inner.lock().expect("event store mutex poisoned");
-        for record in &mut records {
+        let inner = self.inner.lock().expect("event store mutex poisoned");
+        let mut cursors = BTreeMap::new();
+
+        for record in records {
+            let expected = cursors
+                .entry(record.stream_id().to_string())
+                .or_insert_with(|| inner.next_sequence_value(record.stream_id()));
+
             if record.sequence.as_u64() == 0 {
-                record.sequence = inner.next_sequence(record.stream_id());
-            } else {
-                inner.advance_next_sequence(record.stream_id(), record.sequence);
+                record.sequence = EventSequence::new(*expected);
+            } else if record.sequence.as_u64() != *expected {
+                return Err(StorageError::new(
+                    "storage.event_sequence_conflict",
+                    "event sequence must match stream order",
+                ));
             }
+
+            *expected += 1;
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn apply_pending(&self, records: Vec<EventRecord>) {
+        let mut inner = self.inner.lock().expect("event store mutex poisoned");
         for record in records {
             inner
                 .streams
@@ -111,14 +110,16 @@ impl InMemoryEventStore {
                 .or_default()
                 .push(record);
         }
-        Ok(())
     }
 }
 
 impl EventStore for InMemoryEventStore {
     fn append(&self, tx: &mut UnitOfWork, mut record: EventRecord) -> StorageResult<EventSequence> {
-        let mut inner = self.inner.lock().expect("event store mutex poisoned");
-        let sequence = inner.next_sequence(record.stream_id());
+        let inner = self.inner.lock().expect("event store mutex poisoned");
+        let sequence = tx.reserve_event_sequence(
+            record.stream_id(),
+            inner.next_sequence_value(record.stream_id()),
+        );
         record.sequence = sequence;
         tx.push_event(record);
         Ok(sequence)
@@ -130,28 +131,12 @@ impl EventStore for InMemoryEventStore {
 }
 
 impl InMemoryEventStoreInner {
-    fn next_sequence(&mut self, stream_id: &str) -> EventSequence {
-        let default_next = self
-            .streams
+    fn next_sequence_value(&self, stream_id: &str) -> u64 {
+        self.streams
             .get(stream_id)
             .and_then(|stream| stream.last())
             .map(|record| record.sequence.as_u64() + 1)
-            .unwrap_or(1);
-        let next = self
-            .next_sequences
-            .entry(stream_id.to_string())
-            .or_insert(default_next);
-        let sequence = EventSequence::new(*next);
-        *next += 1;
-        sequence
-    }
-
-    fn advance_next_sequence(&mut self, stream_id: &str, used_sequence: EventSequence) {
-        let next = self
-            .next_sequences
-            .entry(stream_id.to_string())
-            .or_insert(used_sequence.as_u64() + 1);
-        *next = (*next).max(used_sequence.as_u64() + 1);
+            .unwrap_or(1)
     }
 }
 

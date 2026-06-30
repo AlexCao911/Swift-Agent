@@ -73,13 +73,6 @@ struct InMemoryArchiveStoreInner {
 }
 
 impl InMemoryArchiveStore {
-    pub fn append(&self, record: ArchiveRecord) -> StorageResult<ArchiveId> {
-        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
-        let id = inner.next_id();
-        inner.records.insert(id, record);
-        Ok(id)
-    }
-
     pub fn get(&self, id: ArchiveId) -> StorageResult<ArchiveRecord> {
         let inner = self.inner.lock().expect("archive store mutex poisoned");
         inner
@@ -96,28 +89,33 @@ impl InMemoryArchiveStore {
         ))
     }
 
-    pub(crate) fn commit(&self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        let records = tx.drain_archives();
+    pub(crate) fn validate_pending(&self, records: &[PendingArchiveRecord]) -> StorageResult<()> {
         if records.is_empty() {
             return Ok(());
         }
 
-        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
-        if records
-            .iter()
-            .any(|pending| inner.records.contains_key(&pending.id))
-        {
-            return Err(StorageError::new(
-                "storage.archive_conflict",
-                "archive id already exists",
-            ));
-        }
+        let inner = self.inner.lock().expect("archive store mutex poisoned");
+        let mut next_id = inner.next_id_value();
 
         for pending in records {
-            inner.records.insert(pending.id, pending.record);
+            if pending.id.as_u64() != next_id || inner.records.contains_key(&pending.id) {
+                return Err(StorageError::new(
+                    "storage.archive_conflict",
+                    "archive id already exists or is out of order",
+                ));
+            }
+            next_id += 1;
         }
 
         Ok(())
+    }
+
+    pub(crate) fn apply_pending(&self, records: Vec<PendingArchiveRecord>) {
+        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
+        for pending in records {
+            inner.advance_next_id(pending.id);
+            inner.records.insert(pending.id, pending.record);
+        }
     }
 }
 
@@ -127,8 +125,8 @@ impl ArchiveStore for InMemoryArchiveStore {
         tx: &mut UnitOfWork,
         record: ArchiveRecord,
     ) -> StorageResult<ArchiveId> {
-        let mut inner = self.inner.lock().expect("archive store mutex poisoned");
-        let id = inner.next_id();
+        let inner = self.inner.lock().expect("archive store mutex poisoned");
+        let id = tx.reserve_archive_id(inner.next_id_value());
         tx.push_archive(PendingArchiveRecord::new(id, record));
         Ok(id)
     }
@@ -143,9 +141,12 @@ impl ArchiveStore for InMemoryArchiveStore {
 }
 
 impl InMemoryArchiveStoreInner {
-    fn next_id(&mut self) -> ArchiveId {
-        self.next_id += 1;
-        ArchiveId(self.next_id)
+    fn next_id_value(&self) -> u64 {
+        self.next_id + 1
+    }
+
+    fn advance_next_id(&mut self, id: ArchiveId) {
+        self.next_id = self.next_id.max(id.as_u64());
     }
 }
 

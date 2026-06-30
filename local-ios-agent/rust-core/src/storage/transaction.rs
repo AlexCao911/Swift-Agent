@@ -1,7 +1,8 @@
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use super::archive_store::PendingArchiveRecord;
-use super::{EventRecord, InMemoryArchiveStore, InMemoryEventStore};
+use super::{ArchiveId, EventRecord, EventSequence, InMemoryArchiveStore, InMemoryEventStore};
 
 pub type StorageResult<T> = Result<T, StorageError>;
 
@@ -65,11 +66,47 @@ pub trait TransactionOperation {
 pub struct UnitOfWork {
     pub(crate) archives: Vec<PendingArchiveRecord>,
     pub(crate) events: Vec<EventRecord>,
+    event_sequence_cursors: std::collections::BTreeMap<String, u64>,
+    next_archive_id: Option<u64>,
 }
 
 impl UnitOfWork {
     pub(crate) fn drain_events(&mut self) -> Vec<EventRecord> {
         self.events.drain(..).collect()
+    }
+
+    pub(crate) fn reserve_event_sequence(
+        &mut self,
+        stream_id: &str,
+        committed_next: u64,
+    ) -> EventSequence {
+        let next = self
+            .event_sequence_cursors
+            .get(stream_id)
+            .copied()
+            .unwrap_or_else(|| self.next_event_sequence_from_pending(stream_id, committed_next));
+        self.event_sequence_cursors
+            .insert(stream_id.to_string(), next + 1);
+        EventSequence::new(next)
+    }
+
+    fn next_event_sequence_from_pending(&self, stream_id: &str, committed_next: u64) -> u64 {
+        self.events
+            .iter()
+            .filter(|record| record.stream_id() == stream_id)
+            .fold(committed_next, |next, record| {
+                if record.sequence.as_u64() == 0 {
+                    next + 1
+                } else {
+                    next.max(record.sequence.as_u64() + 1)
+                }
+            })
+    }
+
+    pub(crate) fn reserve_archive_id(&mut self, committed_next: u64) -> ArchiveId {
+        let id = self.next_archive_id.unwrap_or(committed_next);
+        self.next_archive_id = Some(id + 1);
+        ArchiveId::new(id)
     }
 }
 
@@ -77,6 +114,7 @@ impl UnitOfWork {
 pub struct InMemoryTransactionRunner {
     archive_store: InMemoryArchiveStore,
     event_store: InMemoryEventStore,
+    transaction_lock: Arc<Mutex<()>>,
 }
 
 impl InMemoryTransactionRunner {
@@ -95,9 +133,20 @@ impl TransactionRunner for InMemoryTransactionRunner {
         _name: TransactionName,
         operation: &mut dyn TransactionOperation,
     ) -> StorageResult<()> {
+        let _guard = self
+            .transaction_lock
+            .lock()
+            .expect("transaction runner mutex poisoned");
         let mut tx = UnitOfWork::default();
         operation.execute(&mut tx)?;
-        self.archive_store.commit(&mut tx)?;
-        self.event_store.commit(&mut tx)
+        let archives = tx.drain_archives();
+        let mut events = tx.drain_events();
+
+        self.archive_store.validate_pending(&archives)?;
+        self.event_store.validate_pending(&mut events)?;
+        self.archive_store.apply_pending(archives);
+        self.event_store.apply_pending(events);
+
+        Ok(())
     }
 }
