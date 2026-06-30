@@ -58,10 +58,6 @@ impl ResolvedSecret {
     pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
-
-    pub fn expose_for_test(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Debug for ResolvedSecret {

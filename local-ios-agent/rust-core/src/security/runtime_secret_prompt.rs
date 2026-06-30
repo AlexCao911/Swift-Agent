@@ -22,8 +22,16 @@ impl RuntimeSecretPrompt {
         self.active_secret = Some(ResolvedSecret::new(value));
     }
 
-    pub fn secret_for_active_operation(&self) -> Option<&ResolvedSecret> {
-        self.active_secret.as_ref()
+    pub fn secret_for(
+        &self,
+        operation: &OperationDescriptor,
+        purpose: CredentialPurpose,
+    ) -> Option<&ResolvedSecret> {
+        if &self.operation == operation && self.purpose == purpose {
+            self.active_secret.as_ref()
+        } else {
+            None
+        }
     }
 
     pub fn finish_operation(&mut self) {

@@ -65,10 +65,28 @@ impl AllowlistResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataEgressPolicy {
-    pub destination: EgressDestination,
-    pub allowed_fields: Vec<DataFieldClass>,
-    pub requires_disclosure: bool,
-    pub requires_approval: bool,
+    destination: EgressDestination,
+    allowed_fields: Vec<DataFieldClass>,
+    requires_disclosure: bool,
+    requires_approval: bool,
+}
+
+impl DataEgressPolicy {
+    pub fn destination(&self) -> &EgressDestination {
+        &self.destination
+    }
+
+    pub fn allowed_fields(&self) -> &[DataFieldClass] {
+        &self.allowed_fields
+    }
+
+    pub fn requires_disclosure(&self) -> bool {
+        self.requires_disclosure
+    }
+
+    pub fn requires_approval(&self) -> bool {
+        self.requires_approval
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,29 +160,27 @@ impl DataEgressRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataEgressDecision {
-    pub disclosure_id: DataEgressDisclosureId,
-    pub allowlist_result: AllowlistResult,
-    pub approval_requirement: ApprovalRequirement,
-    pub policy: DataEgressPolicy,
+    disclosure_id: DataEgressDisclosureId,
+    allowlist_result: AllowlistResult,
+    approval_requirement: ApprovalRequirement,
+    policy: DataEgressPolicy,
 }
 
 impl DataEgressDecision {
-    pub fn fixture_allowed(
-        disclosure_id: impl Into<String>,
-        destination: impl Into<String>,
-        data_classes: Vec<&str>,
-    ) -> Self {
-        Self {
-            disclosure_id: DataEgressDisclosureId::new(disclosure_id),
-            allowlist_result: AllowlistResult::Allowed,
-            approval_requirement: ApprovalRequirement::Required,
-            policy: DataEgressPolicy {
-                destination: EgressDestination::new(destination),
-                allowed_fields: data_classes.into_iter().map(DataFieldClass::new).collect(),
-                requires_disclosure: true,
-                requires_approval: true,
-            },
-        }
+    pub fn disclosure_id(&self) -> &DataEgressDisclosureId {
+        &self.disclosure_id
+    }
+
+    pub fn allowlist_result(&self) -> &AllowlistResult {
+        &self.allowlist_result
+    }
+
+    pub fn approval_requirement(&self) -> ApprovalRequirement {
+        self.approval_requirement.clone()
+    }
+
+    pub fn policy(&self) -> &DataEgressPolicy {
+        &self.policy
     }
 }
 

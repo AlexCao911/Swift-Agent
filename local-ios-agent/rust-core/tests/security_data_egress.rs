@@ -1,8 +1,12 @@
 use local_ios_agent_runtime::security::{
-    ApprovalGrant, ApprovalId, ApprovalRequirement, CapabilityRequirement, CredentialPurpose,
-    CredentialRef, DataEgressDecision, EgressDestination, InMemoryCredentialResolver,
-    OperationDescriptor, PermissionState, RuntimeSecretPrompt, SecurityAuditEvent,
-    SecurityPermissionService, StaticApprovalPolicy, StaticSecurityPermissionService,
+    ApprovalRequirement, CapabilityRequirement, CredentialPurpose, CredentialRef,
+    EgressDestination, InMemoryCredentialResolver, OperationDescriptor, PermissionState,
+    RuntimeSecretPrompt, SecurityAuditEvent, SecurityManager, SecurityPermissionService,
+    StaticApprovalPolicy, StaticSecurityPermissionService,
+};
+use local_ios_agent_runtime::{
+    core::{EntryId, RunId},
+    security::ApprovalProtocolResponse,
 };
 
 #[test]
@@ -16,7 +20,6 @@ fn credential_resolver_redacts_secret_values() {
         )
         .unwrap();
 
-    assert_eq!(secret.expose_for_test(), "sk-live-value");
     assert_eq!(resolver.redact("sk-live-value").as_str(), "[redacted]");
     assert!(!format!("{resolver:?}").contains("sk-live-value"));
     assert!(!format!("{secret:?}").contains("sk-live-value"));
@@ -51,9 +54,12 @@ fn remote_provider_requires_disclosure_and_allowlist_pass() {
         ),
     );
 
-    assert!(decision.allowlist_result.is_allowed());
-    assert_eq!(decision.approval_requirement, ApprovalRequirement::Required);
-    assert!(!decision.disclosure_id.as_str().is_empty());
+    assert!(decision.allowlist_result().is_allowed());
+    assert_eq!(
+        decision.approval_requirement(),
+        ApprovalRequirement::Required
+    );
+    assert!(!decision.disclosure_id().as_str().is_empty());
 }
 
 #[test]
@@ -82,6 +88,42 @@ fn data_egress_request_does_not_expose_caller_controlled_policy_fields() {
 }
 
 #[test]
+fn approval_grant_and_data_egress_decision_cannot_be_minted_by_callers() {
+    let approval_source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/approval.rs"),
+    )
+    .unwrap();
+    let egress_source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/data_egress.rs"),
+    )
+    .unwrap();
+    let credential_source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/credential.rs"),
+    )
+    .unwrap();
+    let approval_id_source = approval_source
+        .split("impl ApprovalId {")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split(
+                "}\n\n#[derive(Clone, Debug, Eq, PartialEq)]\npub struct OperationDescriptor",
+            )
+            .next()
+        })
+        .expect("ApprovalId source block");
+
+    assert!(!approval_source.contains("pub fn new(approval_id: ApprovalId"));
+    assert!(!approval_id_source.contains("pub fn new("));
+    assert!(!approval_source.contains("pub fn for_egress("));
+    assert!(!egress_source.contains("pub disclosure_id:"));
+    assert!(!egress_source.contains("pub allowlist_result:"));
+    assert!(!egress_source.contains("pub approval_requirement:"));
+    assert!(!egress_source.contains("pub policy:"));
+    assert!(!egress_source.contains("pub fn fixture_allowed"));
+    assert!(!credential_source.contains("pub fn expose_for_test"));
+}
+
+#[test]
 fn every_remote_egress_kind_requires_disclosure_allowlist_and_approval() {
     let service = StaticSecurityPermissionService::default()
         .allow_destination(EgressDestination::new("https://api.openai.com"))
@@ -104,9 +146,12 @@ fn every_remote_egress_kind_requires_disclosure_allowlist_and_approval() {
     for request in requests {
         let decision = service.evaluate_egress(request);
 
-        assert!(decision.policy.requires_disclosure);
-        assert!(decision.allowlist_result.is_allowed());
-        assert_eq!(decision.approval_requirement, ApprovalRequirement::Required);
+        assert!(decision.policy().requires_disclosure());
+        assert!(decision.allowlist_result().is_allowed());
+        assert_eq!(
+            decision.approval_requirement(),
+            ApprovalRequirement::Required
+        );
     }
 }
 
@@ -120,9 +165,9 @@ fn external_memory_write_is_disabled_by_default_until_explicitly_enabled() {
         ),
     );
 
-    assert!(!disabled_decision.allowlist_result.is_allowed());
+    assert!(!disabled_decision.allowlist_result().is_allowed());
     assert_eq!(
-        disabled_decision.approval_requirement,
+        disabled_decision.approval_requirement(),
         ApprovalRequirement::Required
     );
 
@@ -135,9 +180,9 @@ fn external_memory_write_is_disabled_by_default_until_explicitly_enabled() {
         ),
     );
 
-    assert!(enabled_decision.allowlist_result.is_allowed());
+    assert!(enabled_decision.allowlist_result().is_allowed());
     assert_eq!(
-        enabled_decision.approval_requirement,
+        enabled_decision.approval_requirement(),
         ApprovalRequirement::Required
     );
 }
@@ -151,8 +196,11 @@ fn network_allowlist_denies_unlisted_egress_destination() {
         ),
     );
 
-    assert!(!decision.allowlist_result.is_allowed());
-    assert_eq!(decision.approval_requirement, ApprovalRequirement::Required);
+    assert!(!decision.allowlist_result().is_allowed());
+    assert_eq!(
+        decision.approval_requirement(),
+        ApprovalRequirement::Required
+    );
 }
 
 #[test]
@@ -207,11 +255,25 @@ fn permission_readiness_reports_missing_capabilities() {
 }
 
 #[test]
-fn approval_grant_is_scoped_to_operation() {
-    let grant = ApprovalGrant::new(
-        ApprovalId::new("approval_1"),
-        OperationDescriptor::new("remote.inference"),
+fn approved_response_issues_operation_scoped_grant() {
+    let mut manager = SecurityManager::new();
+    manager.request_approval(
+        "approval_1",
+        RunId("run_1".to_string()),
+        EntryId("entry_1".to_string()),
+        "Allow remote inference?",
+        false,
     );
+    let grant = manager
+        .issue_grant(
+            ApprovalProtocolResponse {
+                approval_id: "approval_1".to_string(),
+                approved: true,
+                reason: None,
+            },
+            OperationDescriptor::new("remote.inference"),
+        )
+        .unwrap();
 
     assert!(grant.matches(&OperationDescriptor::new("remote.inference")));
     assert!(!grant.matches(&OperationDescriptor::new("http.tool")));
@@ -219,26 +281,42 @@ fn approval_grant_is_scoped_to_operation() {
 
 #[test]
 fn approval_grant_does_not_match_different_egress_decision() {
-    let original = DataEgressDecision::fixture_allowed(
-        "disclosure_1",
-        "https://api.openai.com",
-        vec!["conversation.content"],
+    let service = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://api.openai.com"))
+        .allow_destination(EgressDestination::new("https://api.other-model.com"))
+        .allow_destination(EgressDestination::new("https://tool.example.com"));
+    let original = service.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::remote_inference(
+            "https://api.openai.com",
+        ),
     );
-    let different_destination = DataEgressDecision::fixture_allowed(
-        "disclosure_2",
-        "https://api.other-model.com",
-        vec!["conversation.content"],
+    let different_destination = service.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::remote_inference(
+            "https://api.other-model.com",
+        ),
     );
-    let different_data_class = DataEgressDecision::fixture_allowed(
-        "disclosure_1",
-        "https://api.openai.com",
-        vec!["calendar.events"],
+    let different_data_class = service.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::http_tool("https://tool.example.com"),
     );
-    let grant = ApprovalGrant::for_egress(
-        ApprovalId::new("approval_1"),
-        OperationDescriptor::new("remote.inference"),
-        &original,
+    let mut manager = SecurityManager::new();
+    manager.request_approval(
+        "approval_1",
+        RunId("run_1".to_string()),
+        EntryId("entry_1".to_string()),
+        "Allow remote inference?",
+        false,
     );
+    let grant = manager
+        .issue_egress_grant(
+            ApprovalProtocolResponse {
+                approval_id: "approval_1".to_string(),
+                approved: true,
+                reason: None,
+            },
+            OperationDescriptor::new("remote.inference"),
+            &original,
+        )
+        .unwrap();
 
     assert!(grant.matches_egress(&OperationDescriptor::new("remote.inference"), &original));
     assert!(!grant.matches_egress(
@@ -309,17 +387,27 @@ fn runtime_secret_prompt_drops_secret_after_operation() {
     );
     prompt.submit_secret("sk-live-value");
 
-    assert_eq!(
-        prompt
-            .secret_for_active_operation()
-            .unwrap()
-            .expose_for_test(),
-        "sk-live-value"
-    );
+    assert!(prompt
+        .secret_for(
+            &OperationDescriptor::new("remote.provider.validate_account"),
+            CredentialPurpose::RemoteProvider,
+        )
+        .is_some());
+    assert!(prompt
+        .secret_for(
+            &OperationDescriptor::new("http.tool.request"),
+            CredentialPurpose::HttpTool,
+        )
+        .is_none());
     assert!(!format!("{prompt:?}").contains("sk-live-value"));
 
     prompt.finish_operation();
 
-    assert!(prompt.secret_for_active_operation().is_none());
+    assert!(prompt
+        .secret_for(
+            &OperationDescriptor::new("remote.provider.validate_account"),
+            CredentialPurpose::RemoteProvider,
+        )
+        .is_none());
     assert!(!format!("{prompt:?}").contains("sk-live-value"));
 }

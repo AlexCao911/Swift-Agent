@@ -5,7 +5,7 @@ use crate::security::data_egress::{DataEgressDecision, DataFieldClass, EgressDes
 pub struct ApprovalId(String);
 
 impl ApprovalId {
-    pub fn new(value: impl Into<String>) -> Self {
+    pub(super) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
@@ -44,7 +44,7 @@ pub struct ApprovalGrant {
 }
 
 impl ApprovalGrant {
-    pub fn new(approval_id: ApprovalId, granted_for: OperationDescriptor) -> Self {
+    pub(super) fn new(approval_id: ApprovalId, granted_for: OperationDescriptor) -> Self {
         Self {
             approval_id,
             granted_for,
@@ -55,7 +55,7 @@ impl ApprovalGrant {
         }
     }
 
-    pub fn for_egress(
+    pub(super) fn for_egress(
         approval_id: ApprovalId,
         granted_for: OperationDescriptor,
         decision: &DataEgressDecision,
@@ -63,9 +63,9 @@ impl ApprovalGrant {
         Self {
             approval_id,
             granted_for,
-            disclosure_id: Some(decision.disclosure_id.as_str().to_string()),
-            destination: Some(decision.policy.destination.clone()),
-            data_classes: decision.policy.allowed_fields.clone(),
+            disclosure_id: Some(decision.disclosure_id().as_str().to_string()),
+            destination: Some(decision.policy().destination().clone()),
+            data_classes: decision.policy().allowed_fields().to_vec(),
             expires_at_millis: None,
         }
     }
@@ -80,9 +80,9 @@ impl ApprovalGrant {
         decision: &DataEgressDecision,
     ) -> bool {
         self.matches(operation)
-            && self.disclosure_id.as_deref() == Some(decision.disclosure_id.as_str())
-            && self.destination.as_ref() == Some(&decision.policy.destination)
-            && self.data_classes == decision.policy.allowed_fields
+            && self.disclosure_id.as_deref() == Some(decision.disclosure_id().as_str())
+            && self.destination.as_ref() == Some(decision.policy().destination())
+            && self.data_classes == decision.policy().allowed_fields()
     }
 
     pub fn approval_id(&self) -> &ApprovalId {

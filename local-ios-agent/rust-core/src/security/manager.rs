@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::core::{AgentError, EntryId, RunId};
 use crate::security::{
-    ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalQueue,
-    ApprovalRequest, AuditPolicy, PermissionScope, PermissionState, PolicyDecision, PolicyEngine,
-    RiskLevel,
+    ApprovalDecision, ApprovalGrant, ApprovalId, ApprovalProtocolRequest, ApprovalProtocolResponse,
+    ApprovalQueue, ApprovalRequest, AuditPolicy, DataEgressDecision, OperationDescriptor,
+    PermissionScope, PermissionState, PolicyDecision, PolicyEngine, RiskLevel,
 };
 
 #[derive(Clone, Debug)]
@@ -122,5 +122,45 @@ impl SecurityManager {
         };
 
         Ok((request, decision))
+    }
+
+    pub fn issue_grant(
+        &mut self,
+        response: ApprovalProtocolResponse,
+        operation: OperationDescriptor,
+    ) -> Result<ApprovalGrant, AgentError> {
+        let (request, decision) = self.resolve_approval(response)?;
+        if decision != ApprovalDecision::Approved {
+            return Err(AgentError::PolicyDenied(format!(
+                "approval rejected: {}",
+                request.approval_id
+            )));
+        }
+
+        Ok(ApprovalGrant::new(
+            ApprovalId::new(request.approval_id),
+            operation,
+        ))
+    }
+
+    pub fn issue_egress_grant(
+        &mut self,
+        response: ApprovalProtocolResponse,
+        operation: OperationDescriptor,
+        decision: &DataEgressDecision,
+    ) -> Result<ApprovalGrant, AgentError> {
+        let (request, approval_decision) = self.resolve_approval(response)?;
+        if approval_decision != ApprovalDecision::Approved {
+            return Err(AgentError::PolicyDenied(format!(
+                "approval rejected: {}",
+                request.approval_id
+            )));
+        }
+
+        Ok(ApprovalGrant::for_egress(
+            ApprovalId::new(request.approval_id),
+            operation,
+            decision,
+        ))
     }
 }
