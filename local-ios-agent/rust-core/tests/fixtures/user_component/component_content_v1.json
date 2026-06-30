@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "prompt",
+    "text": "Be concise"
+  },
+  {
+    "kind": "persona",
+    "name": "Researcher"
+  },
+  {
+    "kind": "instruction",
+    "text": "Cite sources"
+  },
+  {
+    "kind": "skill",
+    "markdown": "# Research"
+  },
+  {
+    "kind": "tool_recipe",
+    "name": "search"
+  },
+  {
+    "kind": "memory_profile",
+    "policy": "session_only"
+  },
+  {
+    "kind": "voice_profile",
+    "display_style": "compact",
+    "speaking_tone": "calm",
+    "preferred_modality": "text"
+  },
+  {
+    "kind": "brain_preset",
+    "name": "balanced"
+  }
+]

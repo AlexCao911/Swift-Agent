@@ -1,4 +1,7 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
     Prompt,
     Persona,
@@ -10,7 +13,73 @@ pub enum ComponentKind {
     BrainPreset,
 }
 
+impl ComponentKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Persona => "persona",
+            Self::Instruction => "instruction",
+            Self::Skill => "skill",
+            Self::ToolRecipe => "tool_recipe",
+            Self::MemoryProfile => "memory_profile",
+            Self::VoiceProfile => "voice_profile",
+            Self::BrainPreset => "brain_preset",
+        }
+    }
+
+    fn from_stable_str(value: &str) -> Option<Self> {
+        match value {
+            "prompt" => Some(Self::Prompt),
+            "persona" => Some(Self::Persona),
+            "instruction" => Some(Self::Instruction),
+            "skill" => Some(Self::Skill),
+            "tool_recipe" => Some(Self::ToolRecipe),
+            "memory_profile" => Some(Self::MemoryProfile),
+            "voice_profile" => Some(Self::VoiceProfile),
+            "brain_preset" => Some(Self::BrainPreset),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ComponentKindDTO {
+    Known(ComponentKind),
+    Unknown(String),
+}
+
+impl From<ComponentKind> for ComponentKindDTO {
+    fn from(kind: ComponentKind) -> Self {
+        Self::Known(kind)
+    }
+}
+
+impl Serialize for ComponentKindDTO {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Known(kind) => serializer.serialize_str(kind.as_str()),
+            Self::Unknown(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentKindDTO {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(ComponentKind::from_stable_str(&value)
+            .map(Self::Known)
+            .unwrap_or(Self::Unknown(value)))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComponentContent {
     Prompt(PromptComponentContent),
     Persona(PersonaComponentContent),
@@ -94,44 +163,44 @@ impl ComponentContent {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PromptComponentContent {
     pub text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PersonaComponentContent {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstructionComponentContent {
     pub text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SkillComponentContent {
     pub markdown: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolRecipeComponentContent {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MemoryProfileComponentContent {
     pub policy: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VoiceProfileComponentContent {
     pub display_style: String,
     pub speaking_tone: String,
     pub preferred_modality: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BrainPresetComponentContent {
     pub name: String,
 }
