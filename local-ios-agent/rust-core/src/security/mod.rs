@@ -14,7 +14,9 @@ pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalId, ApprovalRequest, ApprovalRequirement,
     ApprovalScope, OperationDescriptor, SuspendedRun,
 };
-pub use approval_protocol::{ApprovalProtocolRequest, ApprovalProtocolResponse};
+pub use approval_protocol::{
+    ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalProtocolScope,
+};
 pub use approval_queue::ApprovalQueue;
 pub use audit_event::SecurityAuditEvent;
 pub use audit_policy::AuditPolicy;

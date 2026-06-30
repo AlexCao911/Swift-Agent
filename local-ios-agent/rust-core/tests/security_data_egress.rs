@@ -1,8 +1,8 @@
 use local_ios_agent_runtime::security::{
-    ApprovalRequirement, CapabilityRequirement, CredentialPurpose, CredentialRef,
-    EgressDestination, InMemoryCredentialResolver, OperationDescriptor, PermissionState,
-    RuntimeSecretPrompt, SecurityAuditEvent, SecurityManager, SecurityPermissionService,
-    StaticApprovalPolicy, StaticSecurityPermissionService,
+    ApprovalProtocolScope, ApprovalRequirement, CapabilityRequirement, CredentialPurpose,
+    CredentialRef, EgressDestination, InMemoryCredentialResolver, OperationDescriptor,
+    PermissionState, RuntimeSecretPrompt, SecurityAuditEvent, SecurityManager,
+    SecurityPermissionService, StaticApprovalPolicy, StaticSecurityPermissionService,
 };
 use local_ios_agent_runtime::{
     core::{EntryId, RunId},
@@ -312,7 +312,8 @@ fn approval_grant_does_not_match_different_egress_decision() {
             local_ios_agent_runtime::security::ApprovalScope::egress(
                 OperationDescriptor::new("remote.inference"),
                 &original,
-            ),
+            )
+            .unwrap(),
         )
         .unwrap();
     let grant = manager
@@ -332,6 +333,66 @@ fn approval_grant_does_not_match_different_egress_decision() {
         &OperationDescriptor::new("remote.inference"),
         &different_data_class
     ));
+}
+
+#[test]
+fn egress_approval_protocol_request_contains_security_generated_disclosure() {
+    let service = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://api.openai.com"));
+    let decision = service.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::remote_inference(
+            "https://api.openai.com",
+        ),
+    );
+    let mut manager = SecurityManager::new();
+
+    let request = manager
+        .request_approval(
+            "approval_1",
+            RunId("run_1".to_string()),
+            EntryId("entry_1".to_string()),
+            "Approve this?",
+            false,
+            local_ios_agent_runtime::security::ApprovalScope::egress(
+                OperationDescriptor::new("remote.inference"),
+                &decision,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_ne!(request.message, "Approve this?");
+    assert!(request.message.contains("https://api.openai.com"));
+    assert!(request.message.contains("conversation.content"));
+    assert_eq!(
+        request.scope,
+        ApprovalProtocolScope::Egress {
+            operation: "remote.inference".to_string(),
+            disclosure_id: decision.disclosure_id().as_str().to_string(),
+            destination: "https://api.openai.com".to_string(),
+            data_classes: vec!["conversation.content".to_string()],
+        }
+    );
+}
+
+#[test]
+fn denied_egress_decision_cannot_issue_grant() {
+    let service = StaticSecurityPermissionService::default();
+    let decision = service.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::remote_inference(
+            "https://api.openai.com",
+        ),
+    );
+
+    let error = local_ios_agent_runtime::security::ApprovalScope::egress(
+        OperationDescriptor::new("remote.inference"),
+        &decision,
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("egress destination is not allowlisted"));
 }
 
 #[test]

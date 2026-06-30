@@ -72,7 +72,9 @@ impl SecurityManager {
         scope: ApprovalScope,
     ) -> Result<ApprovalProtocolRequest, AgentError> {
         let approval_id = approval_id.into();
-        let message = message.into();
+        let caller_message = message.into();
+        let message = scope.approval_message(&caller_message);
+        let protocol_scope = scope.protocol_scope();
         self.approvals.push(ApprovalRequest {
             approval_id: approval_id.clone(),
             run_id: run_id.clone(),
@@ -87,6 +89,7 @@ impl SecurityManager {
             tool_call_entry_id,
             message,
             requires_local_authentication,
+            scope: protocol_scope,
         })
     }
 
@@ -103,6 +106,7 @@ impl SecurityManager {
                 tool_call_entry_id: request.tool_call_entry_id,
                 message: request.message,
                 requires_local_authentication: request.requires_local_authentication,
+                scope: request.scope.protocol_scope(),
             })
             .collect()
     }

@@ -1322,6 +1322,7 @@ fn approval_payload(
         "tool_call_entry_id": &tool_call_entry_id.0,
         "message": &approval.message,
         "requires_local_authentication": approval.requires_local_authentication,
+        "scope": &approval.scope,
     })
     .to_string()
 }

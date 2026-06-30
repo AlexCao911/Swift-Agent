@@ -501,7 +501,11 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
           "run_id": "run_3",
           "tool_call_entry_id": "entry_6",
           "message": "Approve?",
-          "requires_local_authentication": true
+          "requires_local_authentication": true,
+          "scope": {
+            "kind": "operation",
+            "operation": "tool.debug.confirm"
+          }
         }]
         """)
     }

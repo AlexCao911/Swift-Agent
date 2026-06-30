@@ -1,5 +1,6 @@
 use crate::core::{AgentError, EntryId, RunId};
 use crate::security::data_egress::{DataEgressDecision, DataFieldClass, EgressDestination};
+use crate::security::ApprovalProtocolScope;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalId(String);
@@ -130,19 +131,75 @@ impl ApprovalScope {
         }
     }
 
-    pub fn egress(operation: OperationDescriptor, decision: &DataEgressDecision) -> Self {
-        Self {
+    pub fn egress(
+        operation: OperationDescriptor,
+        decision: &DataEgressDecision,
+    ) -> Result<Self, AgentError> {
+        if !decision.allowlist_result().is_allowed() {
+            return Err(AgentError::PolicyDenied(format!(
+                "egress destination is not allowlisted: {}",
+                decision.policy().destination().as_str()
+            )));
+        }
+
+        Ok(Self {
             kind: ApprovalScopeKind::Egress {
                 operation,
                 disclosure_id: decision.disclosure_id().as_str().to_string(),
                 destination: decision.policy().destination().clone(),
                 data_classes: decision.policy().allowed_fields().to_vec(),
             },
-        }
+        })
     }
 
     pub fn is_egress(&self) -> bool {
         matches!(self.kind, ApprovalScopeKind::Egress { .. })
+    }
+
+    pub fn protocol_scope(&self) -> ApprovalProtocolScope {
+        match &self.kind {
+            ApprovalScopeKind::Operation { operation } => ApprovalProtocolScope::Operation {
+                operation: operation.as_str().to_string(),
+            },
+            ApprovalScopeKind::Egress {
+                operation,
+                disclosure_id,
+                destination,
+                data_classes,
+            } => ApprovalProtocolScope::Egress {
+                operation: operation.as_str().to_string(),
+                disclosure_id: disclosure_id.clone(),
+                destination: destination.as_str().to_string(),
+                data_classes: data_classes
+                    .iter()
+                    .map(|data_class| data_class.as_str().to_string())
+                    .collect(),
+            },
+        }
+    }
+
+    pub fn approval_message(&self, fallback_message: &str) -> String {
+        match &self.kind {
+            ApprovalScopeKind::Operation { .. } => fallback_message.to_string(),
+            ApprovalScopeKind::Egress {
+                operation,
+                destination,
+                data_classes,
+                ..
+            } => {
+                let data_classes = data_classes
+                    .iter()
+                    .map(DataFieldClass::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "Allow {} to send {} to {}?",
+                    operation.as_str(),
+                    data_classes,
+                    destination.as_str()
+                )
+            }
+        }
     }
 }
 

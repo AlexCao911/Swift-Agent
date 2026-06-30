@@ -1032,6 +1032,7 @@ struct ApprovalProtocolRequestJson {
     tool_call_entry_id: String,
     message: String,
     requires_local_authentication: bool,
+    scope: crate::security::ApprovalProtocolScope,
 }
 
 impl ApprovalProtocolRequestJson {
@@ -1042,6 +1043,7 @@ impl ApprovalProtocolRequestJson {
             tool_call_entry_id: request.tool_call_entry_id.0.clone(),
             message: request.message.clone(),
             requires_local_authentication: request.requires_local_authentication,
+            scope: request.scope.clone(),
         }
     }
 }

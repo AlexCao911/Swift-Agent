@@ -275,25 +275,82 @@ public struct ToolResultDTO: Codable, Equatable, Sendable {
     }
 }
 
+public enum ApprovalProtocolScopeDTO: Codable, Equatable, Sendable {
+    case operation(operation: String)
+    case egress(
+        operation: String,
+        disclosureId: String,
+        destination: String,
+        dataClasses: [String]
+    )
+    case unknown(kind: String)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "operation":
+            self = .operation(operation: try container.decode(String.self, forKey: .operation))
+        case "egress":
+            self = .egress(
+                operation: try container.decode(String.self, forKey: .operation),
+                disclosureId: try container.decode(String.self, forKey: .disclosureId),
+                destination: try container.decode(String.self, forKey: .destination),
+                dataClasses: try container.decode([String].self, forKey: .dataClasses)
+            )
+        default:
+            self = .unknown(kind: kind)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .operation(let operation):
+            try container.encode("operation", forKey: .kind)
+            try container.encode(operation, forKey: .operation)
+        case .egress(let operation, let disclosureId, let destination, let dataClasses):
+            try container.encode("egress", forKey: .kind)
+            try container.encode(operation, forKey: .operation)
+            try container.encode(disclosureId, forKey: .disclosureId)
+            try container.encode(destination, forKey: .destination)
+            try container.encode(dataClasses, forKey: .dataClasses)
+        case .unknown(let kind):
+            try container.encode(kind, forKey: .kind)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case operation
+        case disclosureId = "disclosure_id"
+        case destination
+        case dataClasses = "data_classes"
+    }
+}
+
 public struct ApprovalProtocolRequestDTO: Codable, Equatable, Sendable {
     public var approvalId: String
     public var runId: String
     public var toolCallEntryId: String
     public var message: String
     public var requiresLocalAuthentication: Bool
+    public var scope: ApprovalProtocolScopeDTO
 
     public init(
         approvalId: String,
         runId: String,
         toolCallEntryId: String,
         message: String,
-        requiresLocalAuthentication: Bool
+        requiresLocalAuthentication: Bool,
+        scope: ApprovalProtocolScopeDTO
     ) {
         self.approvalId = approvalId
         self.runId = runId
         self.toolCallEntryId = toolCallEntryId
         self.message = message
         self.requiresLocalAuthentication = requiresLocalAuthentication
+        self.scope = scope
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -302,6 +359,7 @@ public struct ApprovalProtocolRequestDTO: Codable, Equatable, Sendable {
         case toolCallEntryId = "tool_call_entry_id"
         case message
         case requiresLocalAuthentication = "requires_local_authentication"
+        case scope
     }
 }
 

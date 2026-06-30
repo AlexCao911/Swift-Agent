@@ -90,7 +90,14 @@ struct RuntimeDTOTests {
           "run_id": "run_7",
           "tool_call_entry_id": "entry_tool",
           "message": "Allow tool `debug.echo` to run?",
-          "requires_local_authentication": true
+          "requires_local_authentication": true,
+          "scope": {
+            "kind": "egress",
+            "operation": "remote.inference",
+            "disclosure_id": "egress:remote.inference.generate:https://api.openai.com",
+            "destination": "https://api.openai.com",
+            "data_classes": ["conversation.content"]
+          }
         }
         """.data(using: .utf8)!
 
@@ -115,7 +122,33 @@ struct RuntimeDTOTests {
         #expect(approval.toolCallEntryId == "entry_tool")
         #expect(approval.message == "Allow tool `debug.echo` to run?")
         #expect(approval.requiresLocalAuthentication)
+        #expect(approval.scope == .egress(
+            operation: "remote.inference",
+            disclosureId: "egress:remote.inference.generate:https://api.openai.com",
+            destination: "https://api.openai.com",
+            dataClasses: ["conversation.content"]
+        ))
         #expect(prompt.renderedText == "system\nruntime\ntool")
+    }
+
+    @Test
+    func approvalProtocolScopeDecodesUnknownKindWithoutCrashing() throws {
+        let json = """
+        {
+          "approval_id": "approval_entry_tool",
+          "run_id": "run_7",
+          "tool_call_entry_id": "entry_tool",
+          "message": "Allow future thing?",
+          "requires_local_authentication": true,
+          "scope": {
+            "kind": "future_scope"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let approval = try JSONDecoder().decode(ApprovalProtocolRequestDTO.self, from: json)
+
+        #expect(approval.scope == .unknown(kind: "future_scope"))
     }
 
     @Test

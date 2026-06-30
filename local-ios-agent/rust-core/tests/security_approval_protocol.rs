@@ -1,5 +1,7 @@
 use local_ios_agent_runtime::core::{EntryId, RunId};
-use local_ios_agent_runtime::security::{ApprovalProtocolRequest, ApprovalProtocolResponse};
+use local_ios_agent_runtime::security::{
+    ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalProtocolScope,
+};
 
 #[test]
 fn approval_protocol_carries_local_authentication_requirement() {
@@ -9,6 +11,9 @@ fn approval_protocol_carries_local_authentication_requirement() {
         tool_call_entry_id: EntryId("entry_1".into()),
         message: "Allow reminder?".into(),
         requires_local_authentication: true,
+        scope: ApprovalProtocolScope::Operation {
+            operation: "tool.reminders.create".into(),
+        },
     };
 
     let response = ApprovalProtocolResponse {

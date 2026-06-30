@@ -759,6 +759,8 @@ fn bridge_exposes_and_resolves_approval_requests_json() {
     assert_eq!(approvals[0]["run_id"], run_id);
     assert_eq!(approvals[0]["tool_call_entry_id"], tool_call_entry_id);
     assert_eq!(approvals[0]["requires_local_authentication"], true);
+    assert_eq!(approvals[0]["scope"]["kind"], "operation");
+    assert_eq!(approvals[0]["scope"]["operation"], "tool.debug.echo");
 
     let resumed = decode(
         &bridge
