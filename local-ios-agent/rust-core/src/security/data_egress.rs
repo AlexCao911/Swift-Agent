@@ -73,10 +73,10 @@ pub struct DataEgressPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataEgressRequest {
-    pub operation: String,
-    pub destination: EgressDestination,
-    pub data_classes: Vec<DataFieldClass>,
-    pub sensitivity: SensitivityLevel,
+    operation: String,
+    destination: EgressDestination,
+    data_classes: Vec<DataFieldClass>,
+    sensitivity: SensitivityLevel,
 }
 
 impl DataEgressRequest {
@@ -186,6 +186,7 @@ pub trait SecurityPermissionService: Send + Sync {
 pub struct StaticSecurityPermissionService {
     allowed_destinations: BTreeSet<EgressDestination>,
     permissions: BTreeMap<CapabilityRequirement, PermissionState>,
+    external_memory_write_enabled: bool,
 }
 
 impl StaticSecurityPermissionService {
@@ -204,6 +205,11 @@ impl StaticSecurityPermissionService {
         self
     }
 
+    pub fn with_external_memory_write_enabled(mut self, enabled: bool) -> Self {
+        self.external_memory_write_enabled = enabled;
+        self
+    }
+
     fn allowlist_result(&self, destination: &EgressDestination) -> AllowlistResult {
         if self.allowed_destinations.contains(destination) {
             AllowlistResult::Allowed
@@ -213,11 +219,21 @@ impl StaticSecurityPermissionService {
             }
         }
     }
+
+    fn egress_gate_result(&self, request: &DataEgressRequest) -> AllowlistResult {
+        if request.operation == "external.memory.write" && !self.external_memory_write_enabled {
+            return AllowlistResult::Denied {
+                reason: "external memory writes are disabled".to_string(),
+            };
+        }
+
+        self.allowlist_result(&request.destination)
+    }
 }
 
 impl DataEgressEvaluator for StaticSecurityPermissionService {
     fn evaluate(&self, request: DataEgressRequest) -> DataEgressDecision {
-        let allowlist_result = self.allowlist_result(&request.destination);
+        let allowlist_result = self.egress_gate_result(&request);
         let requires_approval = matches!(
             request.sensitivity,
             SensitivityLevel::UserData | SensitivityLevel::Sensitive
@@ -247,15 +263,27 @@ impl DataEgressEvaluator for StaticSecurityPermissionService {
 
 impl SecurityPermissionService for StaticSecurityPermissionService {
     fn permission_state(&self, requirements: &[CapabilityRequirement]) -> PermissionState {
-        if requirements.iter().all(|requirement| {
-            self.permissions
+        let mut aggregate = PermissionState::Granted;
+
+        for requirement in requirements {
+            match self
+                .permissions
                 .get(requirement)
-                .is_some_and(|state| *state == PermissionState::Granted)
-        }) {
-            PermissionState::Granted
-        } else {
-            PermissionState::NotDetermined
+                .cloned()
+                .unwrap_or(PermissionState::NotDetermined)
+            {
+                PermissionState::Denied => return PermissionState::Denied,
+                PermissionState::Restricted => aggregate = PermissionState::Restricted,
+                PermissionState::NotDetermined => {
+                    if aggregate == PermissionState::Granted {
+                        aggregate = PermissionState::NotDetermined;
+                    }
+                }
+                PermissionState::Granted => {}
+            }
         }
+
+        aggregate
     }
 
     fn permission_readiness(
@@ -281,7 +309,13 @@ impl SecurityPermissionService for StaticSecurityPermissionService {
         self.evaluate(request)
     }
 
-    fn required_approval(&self, _operation: &OperationDescriptor) -> ApprovalRequirement {
-        ApprovalRequirement::NotRequired
+    fn required_approval(&self, operation: &OperationDescriptor) -> ApprovalRequirement {
+        approval_requirement_for_operation(operation)
     }
+}
+
+pub(crate) fn approval_requirement_for_operation(
+    _operation: &OperationDescriptor,
+) -> ApprovalRequirement {
+    ApprovalRequirement::Required
 }

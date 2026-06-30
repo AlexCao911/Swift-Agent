@@ -1,4 +1,7 @@
-use crate::security::{permission::PermissionState, ApprovalRequirement, OperationDescriptor};
+use crate::security::{
+    data_egress::approval_requirement_for_operation, permission::PermissionState,
+    ApprovalRequirement, OperationDescriptor,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RiskLevel {
@@ -75,8 +78,8 @@ impl StaticApprovalPolicy {
 }
 
 impl ApprovalPolicy for StaticApprovalPolicy {
-    fn required_for(&self, _operation: &OperationDescriptor) -> ApprovalRequirement {
-        ApprovalRequirement::NotRequired
+    fn required_for(&self, operation: &OperationDescriptor) -> ApprovalRequirement {
+        approval_requirement_for_operation(operation)
     }
 
     fn inherit(

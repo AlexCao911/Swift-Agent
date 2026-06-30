@@ -1,8 +1,8 @@
 use local_ios_agent_runtime::security::{
     ApprovalGrant, ApprovalId, ApprovalRequirement, CapabilityRequirement, CredentialPurpose,
     CredentialRef, DataEgressDecision, EgressDestination, InMemoryCredentialResolver,
-    OperationDescriptor, PermissionState, SecurityAuditEvent, SecurityPermissionService,
-    StaticApprovalPolicy, StaticSecurityPermissionService,
+    OperationDescriptor, PermissionState, RuntimeSecretPrompt, SecurityAuditEvent,
+    SecurityPermissionService, StaticApprovalPolicy, StaticSecurityPermissionService,
 };
 
 #[test]
@@ -23,6 +23,24 @@ fn credential_resolver_redacts_secret_values() {
 }
 
 #[test]
+fn credential_resolver_rejects_wrong_purpose() {
+    let resolver = InMemoryCredentialResolver::default().with_secret_for(
+        "openai-main",
+        "sk-live-value",
+        [CredentialPurpose::RemoteProvider],
+    );
+
+    let error = resolver
+        .resolve(
+            &CredentialRef::new("openai-main"),
+            CredentialPurpose::HttpTool,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code(), "security.credential_purpose_mismatch");
+}
+
+#[test]
 fn remote_provider_requires_disclosure_and_allowlist_pass() {
     let service = StaticSecurityPermissionService::default()
         .allow_destination(EgressDestination::new("https://api.openai.com"));
@@ -39,11 +57,37 @@ fn remote_provider_requires_disclosure_and_allowlist_pass() {
 }
 
 #[test]
+fn data_egress_request_does_not_expose_caller_controlled_policy_fields() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/data_egress.rs"),
+    )
+    .unwrap();
+    let request_source = source
+        .split("pub struct DataEgressRequest {")
+        .nth(1)
+        .and_then(|tail| tail.split("}\n\nimpl DataEgressRequest").next())
+        .expect("DataEgressRequest source block");
+
+    for forbidden in [
+        "pub operation:",
+        "pub destination:",
+        "pub data_classes:",
+        "pub sensitivity:",
+    ] {
+        assert!(
+            !request_source.contains(forbidden),
+            "DataEgressRequest must derive policy from typed constructors, not expose {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn every_remote_egress_kind_requires_disclosure_allowlist_and_approval() {
     let service = StaticSecurityPermissionService::default()
         .allow_destination(EgressDestination::new("https://api.openai.com"))
         .allow_destination(EgressDestination::new("https://tool.example.com"))
-        .allow_destination(EgressDestination::new("https://memory.example.com"));
+        .allow_destination(EgressDestination::new("https://memory.example.com"))
+        .with_external_memory_write_enabled(true);
     let requests = [
         local_ios_agent_runtime::security::DataEgressRequest::remote_provider_validation(
             "https://api.openai.com",
@@ -67,6 +111,38 @@ fn every_remote_egress_kind_requires_disclosure_allowlist_and_approval() {
 }
 
 #[test]
+fn external_memory_write_is_disabled_by_default_until_explicitly_enabled() {
+    let disabled = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://memory.example.com"));
+    let disabled_decision = disabled.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::external_memory_write(
+            "https://memory.example.com",
+        ),
+    );
+
+    assert!(!disabled_decision.allowlist_result.is_allowed());
+    assert_eq!(
+        disabled_decision.approval_requirement,
+        ApprovalRequirement::Required
+    );
+
+    let enabled = StaticSecurityPermissionService::default()
+        .allow_destination(EgressDestination::new("https://memory.example.com"))
+        .with_external_memory_write_enabled(true);
+    let enabled_decision = enabled.evaluate_egress(
+        local_ios_agent_runtime::security::DataEgressRequest::external_memory_write(
+            "https://memory.example.com",
+        ),
+    );
+
+    assert!(enabled_decision.allowlist_result.is_allowed());
+    assert_eq!(
+        enabled_decision.approval_requirement,
+        ApprovalRequirement::Required
+    );
+}
+
+#[test]
 fn network_allowlist_denies_unlisted_egress_destination() {
     let service = StaticSecurityPermissionService::default();
     let decision = service.evaluate_egress(
@@ -77,6 +153,36 @@ fn network_allowlist_denies_unlisted_egress_destination() {
 
     assert!(!decision.allowlist_result.is_allowed());
     assert_eq!(decision.approval_requirement, ApprovalRequirement::Required);
+}
+
+#[test]
+fn permission_state_aggregates_denied_and_restricted_fail_closed() {
+    let service = StaticSecurityPermissionService::default()
+        .with_permission("calendar.read", PermissionState::Granted)
+        .with_permission("contacts.read", PermissionState::Denied)
+        .with_permission("photos.read", PermissionState::Restricted);
+
+    assert_eq!(
+        service.permission_state(&[
+            CapabilityRequirement::new("calendar.read"),
+            CapabilityRequirement::new("contacts.read"),
+        ]),
+        PermissionState::Denied
+    );
+    assert_eq!(
+        service.permission_state(&[
+            CapabilityRequirement::new("calendar.read"),
+            CapabilityRequirement::new("photos.read"),
+        ]),
+        PermissionState::Restricted
+    );
+    assert_eq!(
+        service.permission_state(&[
+            CapabilityRequirement::new("calendar.read"),
+            CapabilityRequirement::new("unknown.read"),
+        ]),
+        PermissionState::NotDetermined
+    );
 }
 
 #[test]
@@ -166,6 +272,25 @@ fn approval_policy_inheritance_cannot_reduce_parent_requirement() {
 }
 
 #[test]
+fn required_approval_fails_closed_for_sensitive_and_unknown_operations() {
+    let service = StaticSecurityPermissionService::default();
+    let policy = StaticApprovalPolicy;
+
+    assert_eq!(
+        service.required_approval(&OperationDescriptor::new("remote.inference.generate")),
+        ApprovalRequirement::Required
+    );
+    assert_eq!(
+        policy.required_for(&OperationDescriptor::new("http.tool.request")),
+        ApprovalRequirement::Required
+    );
+    assert_eq!(
+        service.required_approval(&OperationDescriptor::new("unknown.future.operation")),
+        ApprovalRequirement::Required
+    );
+}
+
+#[test]
 fn security_audit_event_stores_redacted_values_only() {
     let resolver =
         InMemoryCredentialResolver::default().with_secret("openai-main", "sk-live-value");
@@ -174,4 +299,27 @@ fn security_audit_event_stores_redacted_values_only() {
 
     assert_eq!(event.field("api_key"), Some("[redacted]"));
     assert!(!format!("{event:?}").contains("sk-live-value"));
+}
+
+#[test]
+fn runtime_secret_prompt_drops_secret_after_operation() {
+    let mut prompt = RuntimeSecretPrompt::new(
+        OperationDescriptor::new("remote.provider.validate_account"),
+        CredentialPurpose::RemoteProvider,
+    );
+    prompt.submit_secret("sk-live-value");
+
+    assert_eq!(
+        prompt
+            .secret_for_active_operation()
+            .unwrap()
+            .expose_for_test(),
+        "sk-live-value"
+    );
+    assert!(!format!("{prompt:?}").contains("sk-live-value"));
+
+    prompt.finish_operation();
+
+    assert!(prompt.secret_for_active_operation().is_none());
+    assert!(!format!("{prompt:?}").contains("sk-live-value"));
 }

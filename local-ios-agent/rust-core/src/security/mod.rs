@@ -8,6 +8,7 @@ pub mod data_egress;
 pub mod manager;
 pub mod permission;
 pub mod policy;
+pub mod runtime_secret_prompt;
 
 pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalId, ApprovalRequest, ApprovalRequirement,
@@ -31,3 +32,4 @@ pub use permission::{
     CapabilityRequirement, PermissionReadinessReport, PermissionScope, PermissionState,
 };
 pub use policy::{ApprovalPolicy, PolicyDecision, PolicyEngine, RiskLevel, StaticApprovalPolicy};
+pub use runtime_secret_prompt::RuntimeSecretPrompt;

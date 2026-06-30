@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -14,7 +14,7 @@ impl CredentialRef {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CredentialPurpose {
     RemoteProvider,
     RemoteInference,
@@ -55,7 +55,7 @@ pub type CredentialResolveResult<T> = Result<T, CredentialResolveError>;
 pub struct ResolvedSecret(String);
 
 impl ResolvedSecret {
-    fn new(value: impl Into<String>) -> Self {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
@@ -94,13 +94,37 @@ pub trait CredentialRefResolver: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct InMemoryCredentialResolver {
-    secrets: BTreeMap<CredentialRef, String>,
+    secrets: BTreeMap<CredentialRef, CredentialEntry>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct CredentialEntry {
+    secret: String,
+    allowed_purposes: BTreeSet<CredentialPurpose>,
 }
 
 impl InMemoryCredentialResolver {
     pub fn with_secret(mut self, reference: impl Into<String>, secret: impl Into<String>) -> Self {
-        self.secrets
-            .insert(CredentialRef::new(reference), secret.into());
+        self = self.with_secret_for(reference, secret, [CredentialPurpose::RemoteProvider]);
+        self
+    }
+
+    pub fn with_secret_for<I>(
+        mut self,
+        reference: impl Into<String>,
+        secret: impl Into<String>,
+        allowed_purposes: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = CredentialPurpose>,
+    {
+        self.secrets.insert(
+            CredentialRef::new(reference),
+            CredentialEntry {
+                secret: secret.into(),
+                allowed_purposes: allowed_purposes.into_iter().collect(),
+            },
+        );
         self
     }
 
@@ -121,18 +145,27 @@ impl CredentialRefResolver for InMemoryCredentialResolver {
     fn resolve(
         &self,
         reference: &CredentialRef,
-        _purpose: CredentialPurpose,
+        purpose: CredentialPurpose,
     ) -> CredentialResolveResult<ResolvedSecret> {
-        self.secrets
-            .get(reference)
-            .cloned()
-            .map(ResolvedSecret::new)
-            .ok_or_else(|| {
-                CredentialResolveError::new(
-                    "security.credential_not_found",
-                    format!("credential ref not found: {}", reference.as_str()),
-                )
-            })
+        let entry = self.secrets.get(reference).ok_or_else(|| {
+            CredentialResolveError::new(
+                "security.credential_not_found",
+                format!("credential ref not found: {}", reference.as_str()),
+            )
+        })?;
+
+        if !entry.allowed_purposes.contains(&purpose) {
+            return Err(CredentialResolveError::new(
+                "security.credential_purpose_mismatch",
+                format!(
+                    "credential ref {} is not allowed for {:?}",
+                    reference.as_str(),
+                    purpose
+                ),
+            ));
+        }
+
+        Ok(ResolvedSecret::new(entry.secret.clone()))
     }
 
     fn redact(&self, _value: &str) -> RedactedSecret {
