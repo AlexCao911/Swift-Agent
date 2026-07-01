@@ -83,6 +83,12 @@ impl AgentPackageValidator {
                 );
             }
         }
+        if manifest.model_file.is_none() || manifest.model.is_none() {
+            report.add_issue(
+                "package.model.required",
+                "installable agent packages must include a model file and model manifest",
+            );
+        }
         if manifest.signature.is_some() {
             report.add_issue(
                 "package.signature.unsupported",
@@ -97,6 +103,15 @@ impl AgentPackageValidator {
         }
 
         if let Some(model) = &manifest.model {
+            if model.provider_id.trim().is_empty() {
+                report.add_issue(
+                    "package.model.provider_id.missing",
+                    "model provider_id is required",
+                );
+            }
+            if model.model_id.trim().is_empty() {
+                report.add_issue("package.model.model_id.missing", "model_id is required");
+            }
             if !model.unknown_fields.is_empty() {
                 report.add_issue(
                     "package.unknown_field.forbidden",

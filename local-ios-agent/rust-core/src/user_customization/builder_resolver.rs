@@ -1,5 +1,5 @@
 use crate::user_customization::{
-    AgentReadinessIssue, AgentReadinessReport, AgentSlotKind, AgentTemplate,
+    AgentProfileDraft, AgentReadinessIssue, AgentReadinessReport, AgentSlotKind, AgentTemplate,
 };
 
 #[derive(Clone, Debug)]
@@ -41,6 +41,54 @@ impl AgentBuilderResolver {
                 "model.missing",
                 "required model binding is missing",
             ));
+        }
+
+        if !self.calendar_permission_ready {
+            report.push_issue(AgentReadinessIssue::new(
+                "permission.calendar.missing",
+                "calendar permission is missing",
+            ));
+        }
+
+        report
+    }
+
+    pub fn readiness_for_draft(
+        &self,
+        draft: &AgentProfileDraft,
+        template: &AgentTemplate,
+    ) -> AgentReadinessReport {
+        let mut report = AgentReadinessReport::ready();
+
+        for slot in template.slots().iter().filter(|slot| slot.is_required()) {
+            let satisfied = match slot.kind() {
+                AgentSlotKind::Model => draft
+                    .model_binding()
+                    .map(|binding| binding.slot_id() == slot.id())
+                    .unwrap_or(false),
+                _ => draft
+                    .bindings()
+                    .iter()
+                    .any(|binding| binding.slot_id() == slot.id()),
+            };
+            if satisfied {
+                continue;
+            }
+
+            match slot.kind() {
+                AgentSlotKind::Persona => report.push_issue(AgentReadinessIssue::new(
+                    "component.persona.missing",
+                    "required persona component is missing",
+                )),
+                AgentSlotKind::Model => report.push_issue(AgentReadinessIssue::new(
+                    "model.missing",
+                    "required model binding is missing",
+                )),
+                _ => report.push_issue(AgentReadinessIssue::new(
+                    format!("slot.{}.missing", slot.id().as_str()),
+                    format!("required slot {} is missing", slot.id().as_str()),
+                )),
+            }
         }
 
         if !self.calendar_permission_ready {

@@ -31,6 +31,14 @@ fn transaction_runner_is_object_safe_and_returns_unit() {
     assert!(op.ran);
 }
 
+#[test]
+fn pending_store_write_commit_phase_is_infallible_contract() {
+    let transaction_source = include_str!("../src/storage/transaction.rs");
+
+    assert!(transaction_source.contains("fn commit(self: Box<Self>);"));
+    assert!(!transaction_source.contains("fn apply(self: Box<Self>) -> StorageResult<()>;"));
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct RunStartCommit {
     run_id: String,

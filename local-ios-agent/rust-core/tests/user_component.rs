@@ -1,6 +1,21 @@
+use local_ios_agent_runtime::storage::{
+    StorageError, StorageResult, TransactionName, TransactionOperation, TransactionRunner,
+};
 use local_ios_agent_runtime::user_customization::{
     ComponentContent, ComponentKind, ComponentKindDTO, UserComponentVersionId,
 };
+
+struct FailingComponentPublishRunner;
+
+impl TransactionRunner for FailingComponentPublishRunner {
+    fn run(
+        &self,
+        _name: TransactionName,
+        _operation: &mut dyn TransactionOperation,
+    ) -> StorageResult<()> {
+        Err(StorageError::forced("component publish failed"))
+    }
+}
 
 #[test]
 fn v1_component_content_has_closed_taxonomy() {
@@ -20,8 +35,7 @@ fn v1_component_content_has_closed_taxonomy() {
 
 #[test]
 fn publishing_component_pins_immutable_version() {
-    let mut catalog =
-        local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
+    let catalog = local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
     let id = catalog.create_draft(ComponentContent::prompt("v1"));
     let version = catalog.publish(id).unwrap();
     catalog
@@ -33,8 +47,7 @@ fn publishing_component_pins_immutable_version() {
 
 #[test]
 fn component_kind_is_pinned_for_component_identity() {
-    let mut catalog =
-        local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
+    let catalog = local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
     let id = catalog.create_draft(ComponentContent::prompt("v1"));
 
     let result = catalog.update_draft(id, ComponentContent::tool_recipe("search"));
@@ -62,13 +75,30 @@ fn empty_prompt_component_is_invalid() {
 
 #[test]
 fn invalid_prompt_cannot_be_published() {
-    let mut catalog =
-        local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
+    let catalog = local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
     let id = catalog.create_draft(ComponentContent::prompt(""));
 
     let result = catalog.publish(id);
 
     assert!(result.is_err());
+    assert!(catalog.version(UserComponentVersionId(1)).is_none());
+    assert!(catalog
+        .component(id)
+        .unwrap()
+        .published_versions()
+        .is_empty());
+}
+
+#[test]
+fn component_publish_rolls_back_when_transaction_runner_fails() {
+    let catalog = local_ios_agent_runtime::user_customization::ComponentCatalogService::default();
+    let id = catalog.create_draft(ComponentContent::prompt("v1"));
+
+    let error = catalog
+        .publish_with_runner(&FailingComponentPublishRunner, id)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "storage.forced");
     assert!(catalog.version(UserComponentVersionId(1)).is_none());
     assert!(catalog
         .component(id)

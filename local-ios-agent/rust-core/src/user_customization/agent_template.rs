@@ -37,6 +37,16 @@ impl AgentTemplate {
         }
     }
 
+    pub fn package_installed_v1() -> Self {
+        Self {
+            id: AgentTemplateId::new("template.package.installed.v1"),
+            slots: vec![AgentSlot::required(
+                AgentSlotId::new("slot.model.primary"),
+                AgentSlotKind::Model,
+            )],
+        }
+    }
+
     pub fn id(&self) -> &AgentTemplateId {
         &self.id
     }
@@ -60,6 +70,10 @@ impl AgentTemplate {
             .iter()
             .find(|slot| slot.kind() == kind)
             .map(AgentSlot::id)
+    }
+
+    pub fn slot_for_id(&self, slot_id: &AgentSlotId) -> Option<&AgentSlot> {
+        self.slots.iter().find(|slot| slot.id() == slot_id)
     }
 
     pub fn supports_slot_id(&self, slot_id: &AgentSlotId) -> bool {

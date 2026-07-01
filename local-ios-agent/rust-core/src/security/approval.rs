@@ -38,6 +38,7 @@ pub enum ApprovalRequirement {
 pub struct ApprovalGrant {
     approval_id: ApprovalId,
     granted_for: OperationDescriptor,
+    egress_operation: Option<OperationDescriptor>,
     disclosure_id: Option<String>,
     destination: Option<EgressDestination>,
     data_classes: Vec<DataFieldClass>,
@@ -49,6 +50,7 @@ impl ApprovalGrant {
         Self {
             approval_id,
             granted_for,
+            egress_operation: None,
             disclosure_id: None,
             destination: None,
             data_classes: Vec::new(),
@@ -60,13 +62,15 @@ impl ApprovalGrant {
         match &scope.kind {
             ApprovalScopeKind::Operation { operation } => Self::new(approval_id, operation.clone()),
             ApprovalScopeKind::Egress {
-                operation,
+                logical_operation,
+                egress_operation,
                 disclosure_id,
                 destination,
                 data_classes,
             } => Self {
                 approval_id,
-                granted_for: operation.clone(),
+                granted_for: logical_operation.clone(),
+                egress_operation: Some(egress_operation.clone()),
                 disclosure_id: Some(disclosure_id.clone()),
                 destination: Some(destination.clone()),
                 data_classes: data_classes.clone(),
@@ -85,6 +89,7 @@ impl ApprovalGrant {
         decision: &DataEgressDecision,
     ) -> bool {
         self.matches(operation)
+            && self.egress_operation.as_ref() == Some(decision.operation())
             && self.disclosure_id.as_deref() == Some(decision.disclosure_id().as_str())
             && self.destination.as_ref() == Some(decision.policy().destination())
             && self.data_classes == decision.policy().allowed_fields()
@@ -96,6 +101,10 @@ impl ApprovalGrant {
 
     pub fn expires_at_millis(&self) -> Option<u64> {
         self.expires_at_millis
+    }
+
+    pub fn egress_operation(&self) -> Option<&OperationDescriptor> {
+        self.egress_operation.as_ref()
     }
 }
 
@@ -117,7 +126,8 @@ enum ApprovalScopeKind {
         operation: OperationDescriptor,
     },
     Egress {
-        operation: OperationDescriptor,
+        logical_operation: OperationDescriptor,
+        egress_operation: OperationDescriptor,
         disclosure_id: String,
         destination: EgressDestination,
         data_classes: Vec<DataFieldClass>,
@@ -144,7 +154,8 @@ impl ApprovalScope {
 
         Ok(Self {
             kind: ApprovalScopeKind::Egress {
-                operation,
+                logical_operation: operation,
+                egress_operation: decision.operation().clone(),
                 disclosure_id: decision.disclosure_id().as_str().to_string(),
                 destination: decision.policy().destination().clone(),
                 data_classes: decision.policy().allowed_fields().to_vec(),
@@ -162,12 +173,13 @@ impl ApprovalScope {
                 operation: operation.as_str().to_string(),
             },
             ApprovalScopeKind::Egress {
-                operation,
+                logical_operation,
                 disclosure_id,
                 destination,
                 data_classes,
+                ..
             } => ApprovalProtocolScope::Egress {
-                operation: operation.as_str().to_string(),
+                operation: logical_operation.as_str().to_string(),
                 disclosure_id: disclosure_id.clone(),
                 destination: destination.as_str().to_string(),
                 data_classes: data_classes
@@ -182,7 +194,7 @@ impl ApprovalScope {
         match &self.kind {
             ApprovalScopeKind::Operation { .. } => fallback_message.to_string(),
             ApprovalScopeKind::Egress {
-                operation,
+                logical_operation,
                 destination,
                 data_classes,
                 ..
@@ -194,7 +206,7 @@ impl ApprovalScope {
                     .join(", ");
                 format!(
                     "Allow {} to send {} to {}?",
-                    operation.as_str(),
+                    logical_operation.as_str(),
                     data_classes,
                     destination.as_str()
                 )

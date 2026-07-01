@@ -170,7 +170,7 @@ fn runtime_exposes_pending_swift_tool_request() {
     assert!(runtime
         .pending_tool_requests()
         .iter()
-        .any(|request| request.tool_name == "debug.echo"));
+        .any(|request| request.tool_name() == "debug.echo"));
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn approval_response_resumes_suspended_tool_execution() {
     assert_eq!(resumed.state, RunState::WaitingTool);
     assert!(runtime.pending_approval_requests().is_empty());
     assert_eq!(runtime.pending_tool_requests().len(), 1);
-    assert_eq!(runtime.pending_tool_requests()[0].tool_name, "debug.echo");
+    assert_eq!(runtime.pending_tool_requests()[0].tool_name(), "debug.echo");
     assert!(resumed
         .events
         .iter()
@@ -482,7 +482,7 @@ fn runtime_routes_follow_up_tool_call_after_tool_result() {
 
     assert_eq!(turn.state, RunState::WaitingTool);
     assert_eq!(runtime.pending_tool_requests().len(), 1);
-    assert_eq!(runtime.pending_tool_requests()[0].tool_call_id, "call_1");
+    assert_eq!(runtime.pending_tool_requests()[0].tool_call_id(), "call_1");
 
     let resumed = runtime
         .submit_tool_result(turn.run_id, tool_result("first result"))
@@ -491,7 +491,7 @@ fn runtime_routes_follow_up_tool_call_after_tool_result() {
     assert_eq!(resumed.state, RunState::WaitingTool);
     assert_eq!(resumed.pending_tool_call_id, Some("call_2".into()));
     assert_eq!(runtime.pending_tool_requests().len(), 1);
-    assert_eq!(runtime.pending_tool_requests()[0].tool_call_id, "call_2");
+    assert_eq!(runtime.pending_tool_requests()[0].tool_call_id(), "call_2");
 }
 
 #[test]

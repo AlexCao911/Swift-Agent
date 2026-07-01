@@ -7,7 +7,7 @@ use crate::inference::{
     BackendRuntimeEvent, GenerationRequest, GenerationSession, InferenceBackend, InferenceResult,
     LoadedModel, LoadedModelKey, RouterGenerationPermit,
 };
-use crate::model::ModelDescriptor;
+use crate::model::{ModelDescriptor, ResolvedModelBinding};
 use crate::security::OperationDescriptor;
 
 pub struct InferenceRouter {
@@ -97,7 +97,7 @@ impl InferenceRouter {
         Ok(loaded)
     }
 
-    pub fn start_session(
+    fn start_session(
         &self,
         model: &ModelDescriptor,
         request: GenerationRequest,
@@ -116,6 +116,16 @@ impl InferenceRouter {
             self.record_runtime_event(event);
         }
         Ok(session)
+    }
+
+    pub fn start_session_from_binding(
+        &self,
+        binding: &ResolvedModelBinding,
+    ) -> InferenceResult<GenerationSession> {
+        self.start_session(
+            binding.model(),
+            GenerationRequest::from_resolved_model_binding(binding),
+        )
     }
 
     pub fn loaded_model(&self, key: &LoadedModelKey) -> Option<LoadedModel> {

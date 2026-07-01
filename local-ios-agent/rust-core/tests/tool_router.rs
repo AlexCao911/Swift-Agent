@@ -19,8 +19,8 @@ fn execution_request_carries_swift_boundary_payload() {
         },
     );
 
-    assert_eq!(request.tool_name, "calendar.search_events");
-    assert_eq!(request.arguments_json, "{}");
+    assert_eq!(request.tool_name(), "calendar.search_events");
+    assert_eq!(request.arguments_json(), "{}");
 }
 
 fn schema(name: &str, risk_level: RiskLevel) -> ToolSchema {
@@ -106,7 +106,7 @@ fn router_routes_confirm_tool_to_approval_required_with_reason() {
         ToolRouteOutcome::ApprovalRequired {
             request, reason, ..
         } => {
-            assert_eq!(request.tool_name, "calendar.create_event");
+            assert_eq!(request.tool_name(), "calendar.create_event");
             assert!(reason.contains("calendar.create_event"));
         }
         _ => panic!("expected approval required route"),

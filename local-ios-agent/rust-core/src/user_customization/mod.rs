@@ -12,7 +12,8 @@ pub mod user_component;
 
 pub use agent_profile::{
     AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
-    AgentProfileReference, AgentProfileVersion, ComponentBinding, ComponentSettings,
+    AgentProfileModelBinding, AgentProfilePublisher, AgentProfileReference, AgentProfileVersion,
+    ComponentBinding, ComponentSettings, InMemoryAgentProfileRepository,
 };
 pub use agent_slot::{AgentSlot, AgentSlotId, AgentSlotKind};
 pub use agent_template::{AgentTemplate, AgentTemplateId};

@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
 use local_ios_agent_runtime::core::{EntryId, RunId, SessionId};
 use local_ios_agent_runtime::security::{
-    ApprovalProtocolScope, ApprovalRequirement, CredentialRef, RiskLevel,
+    ApprovalDecision, ApprovalProtocolResponse, ApprovalProtocolScope, ApprovalRequirement,
+    CapabilityRequirement, CredentialRef, DataEgressDecision, DataEgressRequest, EgressDestination,
+    OperationDescriptor, PermissionReadinessReport, PermissionState, RiskLevel, SecurityManager,
+    SecurityPermissionService, StaticSecurityPermissionService,
 };
 use local_ios_agent_runtime::tool::{
     CompiledToolRecipeContent, HttpConnectorPolicy, HttpRateLimitPolicy, HttpRetryPolicy, ToolCall,
@@ -8,12 +13,69 @@ use local_ios_agent_runtime::tool::{
     WorkflowFailureStrategy, WorkflowStep,
 };
 
+struct InjectedEgressSecurityService {
+    delegate: StaticSecurityPermissionService,
+}
+
+impl InjectedEgressSecurityService {
+    fn allowing(destination: impl Into<String>) -> Self {
+        Self {
+            delegate: StaticSecurityPermissionService::default()
+                .allow_destination(EgressDestination::new(destination)),
+        }
+    }
+}
+
+impl SecurityPermissionService for InjectedEgressSecurityService {
+    fn permission_state(&self, requirements: &[CapabilityRequirement]) -> PermissionState {
+        self.delegate.permission_state(requirements)
+    }
+
+    fn permission_readiness(
+        &self,
+        requirements: &[CapabilityRequirement],
+    ) -> PermissionReadinessReport {
+        self.delegate.permission_readiness(requirements)
+    }
+
+    fn evaluate_egress(&self, request: DataEgressRequest) -> DataEgressDecision {
+        self.delegate.evaluate_egress(request)
+    }
+
+    fn required_approval(&self, operation: &OperationDescriptor) -> ApprovalRequirement {
+        self.delegate.required_approval(operation)
+    }
+}
+
+fn security_allowing(destination: impl Into<String>) -> SecurityManager {
+    SecurityManager::with_permission_service(Arc::new(
+        StaticSecurityPermissionService::default()
+            .allow_destination(EgressDestination::new(destination)),
+    ))
+}
+
 #[test]
 fn tool_recipe_records_kind_and_name() {
     let recipe = ToolRecipe::http_connector("web.search", "https://api.example.com/search");
 
     assert_eq!(recipe.kind(), ToolRecipeKind::HttpConnector);
     assert_eq!(recipe.name(), "web.search");
+}
+
+#[test]
+fn security_manager_does_not_expose_fixture_egress_mutator() {
+    let manager_source = include_str!("../src/security/manager.rs");
+
+    assert!(!manager_source.contains("pub fn allow_egress_destination"));
+}
+
+#[test]
+fn tool_execution_request_does_not_expose_mutable_security_envelope_fields() {
+    let request_source = include_str!("../src/tool/execution_request.rs");
+
+    assert!(!request_source.contains("pub compiled_recipe"));
+    assert!(!request_source.contains("pub egress_decision"));
+    assert!(!request_source.contains("pub approval_grant"));
 }
 
 #[test]
@@ -204,7 +266,8 @@ fn compiled_recipe_registers_runtime_schema_for_existing_router_substrate() {
         .unwrap()
         .contains(r#""compiled_tool_recipe":true"#));
 
-    let mut router = ToolRouter::new(registry);
+    let security = security_allowing("https://api.example.com");
+    let mut router = ToolRouter::with_security_manager(registry, security);
     let outcome = router
         .route(
             &RunId("run_recipe".into()),
@@ -247,9 +310,9 @@ fn compiled_recipe_execution_request_carries_runtime_content() {
     let ToolRouteOutcome::ExecuteInSwift(request) = outcome else {
         panic!("expected compiled recipe request to execute");
     };
-    let compiled = request.compiled_recipe.expect("compiled recipe payload");
+    let compiled = request.compiled_recipe().expect("compiled recipe payload");
     assert!(matches!(
-        compiled.content,
+        &compiled.content,
         CompiledToolRecipeContent::PureTransform { expression } if expression == ".title"
     ));
 }
@@ -263,7 +326,8 @@ fn http_connector_compiled_recipe_requires_egress_approval_without_requested_app
         .unwrap();
     let mut registry = ToolRegistry::new();
     registry.register_compiled_recipe(compiled).unwrap();
-    let mut router = ToolRouter::new(registry);
+    let security = security_allowing("https://api.example.com");
+    let mut router = ToolRouter::with_security_manager(registry, security);
 
     let outcome = router
         .route(
@@ -285,7 +349,7 @@ fn http_connector_compiled_recipe_requires_egress_approval_without_requested_app
         panic!("expected HTTP connector to require egress approval");
     };
     assert!(matches!(
-        request.compiled_recipe.unwrap().content,
+        &request.compiled_recipe().unwrap().content,
         CompiledToolRecipeContent::HttpConnector { .. }
     ));
     match approval.scope {
@@ -313,7 +377,8 @@ fn http_connector_egress_approval_includes_credential_purpose_when_credential_us
         .unwrap();
     let mut registry = ToolRegistry::new();
     registry.register_compiled_recipe(compiled).unwrap();
-    let mut router = ToolRouter::new(registry);
+    let security = security_allowing("https://api.example.com");
+    let mut router = ToolRouter::with_security_manager(registry, security);
 
     let outcome = router
         .route(
@@ -340,6 +405,109 @@ fn http_connector_egress_approval_includes_credential_purpose_when_credential_us
         }
         other => panic!("expected egress approval scope, got {other:?}"),
     }
+}
+
+#[test]
+fn http_connector_recipe_allowlist_does_not_bypass_global_egress_policy() {
+    let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com/search")
+        .with_policy(HttpConnectorPolicy::complete_for_test());
+    let compiled = local_ios_agent_runtime::tool::ToolRecipeCompiler::default()
+        .compile(recipe)
+        .unwrap();
+    let mut registry = ToolRegistry::new();
+    registry.register_compiled_recipe(compiled).unwrap();
+    let mut router = ToolRouter::new(registry);
+
+    let error = router
+        .route(
+            &RunId("run_recipe".into()),
+            &SessionId("session_recipe".into()),
+            &EntryId("entry_recipe".into()),
+            ToolCall {
+                id: "call_recipe".into(),
+                name: "remote.lookup".into(),
+                arguments_json: r#"{"query":"agent"}"#.into(),
+            },
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("not allowlisted"));
+}
+
+#[test]
+fn tool_router_uses_injected_security_permission_service_for_http_egress() {
+    let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com/search")
+        .with_policy(HttpConnectorPolicy::complete_for_test());
+    let compiled = local_ios_agent_runtime::tool::ToolRecipeCompiler::default()
+        .compile(recipe)
+        .unwrap();
+    let mut registry = ToolRegistry::new();
+    registry.register_compiled_recipe(compiled).unwrap();
+    let security = SecurityManager::with_permission_service(Arc::new(
+        InjectedEgressSecurityService::allowing("https://api.example.com"),
+    ));
+    let mut router = ToolRouter::with_security_manager(registry, security);
+
+    let outcome = router
+        .route(
+            &RunId("run_recipe".into()),
+            &SessionId("session_recipe".into()),
+            &EntryId("entry_recipe".into()),
+            ToolCall {
+                id: "call_recipe".into(),
+                name: "remote.lookup".into(),
+                arguments_json: r#"{"query":"agent"}"#.into(),
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, ToolRouteOutcome::ApprovalRequired { .. }));
+}
+
+#[test]
+fn http_connector_execution_request_carries_egress_decision_and_grant_after_approval() {
+    let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com/search")
+        .with_policy(HttpConnectorPolicy::complete_for_test());
+    let compiled = local_ios_agent_runtime::tool::ToolRecipeCompiler::default()
+        .compile(recipe)
+        .unwrap();
+    let mut registry = ToolRegistry::new();
+    registry.register_compiled_recipe(compiled).unwrap();
+    let security = security_allowing("https://api.example.com");
+    let mut router = ToolRouter::with_security_manager(registry, security);
+
+    let outcome = router
+        .route(
+            &RunId("run_recipe".into()),
+            &SessionId("session_recipe".into()),
+            &EntryId("entry_recipe".into()),
+            ToolCall {
+                id: "call_recipe".into(),
+                name: "remote.lookup".into(),
+                arguments_json: r#"{"query":"agent"}"#.into(),
+            },
+        )
+        .unwrap();
+
+    let ToolRouteOutcome::ApprovalRequired { approval, .. } = outcome else {
+        panic!("expected HTTP connector to require egress approval");
+    };
+    let (_request, decision, resumed) = router
+        .resolve_approval(ApprovalProtocolResponse {
+            approval_id: approval.approval_id,
+            approved: true,
+            reason: None,
+        })
+        .unwrap();
+
+    assert_eq!(decision, ApprovalDecision::Approved);
+    let resumed = resumed.expect("approved tool request should resume");
+    let egress_decision = resumed.egress_decision().unwrap();
+    let grant = resumed.approval_grant().unwrap();
+    assert!(grant.matches_egress(
+        &OperationDescriptor::new("tool.remote.lookup"),
+        egress_decision
+    ));
 }
 
 #[test]

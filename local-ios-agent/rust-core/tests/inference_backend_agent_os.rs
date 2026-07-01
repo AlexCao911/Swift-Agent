@@ -3,7 +3,9 @@ use local_ios_agent_runtime::inference::{
     FakeInferenceBackend, GenerationRequest, GenerationSession, InferenceBackend, InferenceResult,
     InferenceRouter, LoadedModel, LoadedModelKey, RouterGenerationPermit, UsageReport,
 };
-use local_ios_agent_runtime::model::{ModelDescriptor, ModelFormat, ProviderDefinition};
+use local_ios_agent_runtime::model::{
+    ModelDescriptor, ModelFormat, ProviderDefinition, ResolvedModelBinding,
+};
 use local_ios_agent_runtime::{
     core::{EntryId, RunId},
     security::{
@@ -20,6 +22,15 @@ fn backend_failure_has_stable_kind_codes() {
     let failure = BackendFailure::new(BackendFailureKind::GenerationTimeout, "timed out");
 
     assert_eq!(failure.kind().code(), "generation.timeout");
+}
+
+#[test]
+fn router_public_session_api_requires_resolved_model_binding() {
+    let router_source = include_str!("../src/inference/router.rs");
+
+    assert!(router_source.contains("pub fn start_session_from_binding"));
+    assert!(!router_source
+        .contains("pub fn start_session(\n        &self,\n        model: &ModelDescriptor"));
 }
 
 #[test]
@@ -40,9 +51,9 @@ fn router_rejects_remote_generation_without_egress_decision_before_backend_start
     let router = InferenceRouter::new(vec![Box::new(backend)]);
     let provider = ProviderDefinition::new("provider.remote", "Remote");
     let model = ModelDescriptor::new("remote-model", provider.id(), ModelFormat::RemoteChat);
-    let request = GenerationRequest::fixture_remote_without_egress();
+    let binding = ResolvedModelBinding::local(model);
 
-    let error = router.start_session(&model, request).unwrap_err();
+    let error = router.start_session_from_binding(&binding).unwrap_err();
 
     assert_eq!(error.kind().code(), "remote.egress_required");
     assert_eq!(started.load(Ordering::SeqCst), 0);
@@ -51,7 +62,7 @@ fn router_rejects_remote_generation_without_egress_decision_before_backend_start
 #[test]
 fn router_rejects_remote_generation_without_required_approval_grant() {
     let backend = FakeInferenceBackend::remote_http("https://api.openai.com");
-    let router = InferenceRouter::new(vec![Box::new(backend)]);
+    let _router = InferenceRouter::new(vec![Box::new(backend)]);
     let provider = ProviderDefinition::new("provider.remote", "Remote");
     let model = ModelDescriptor::new("gpt-4.1-mini", provider.id(), ModelFormat::RemoteChat);
     let service = StaticSecurityPermissionService::default()
@@ -59,11 +70,10 @@ fn router_rejects_remote_generation_without_required_approval_grant() {
     let decision = service.evaluate_egress(DataEgressRequest::remote_inference(
         "https://api.openai.com",
     ));
-    let request = GenerationRequest::remote("gpt-4.1-mini", decision, None);
+    let error =
+        ResolvedModelBinding::remote(model, "https://api.openai.com", decision, None).unwrap_err();
 
-    let error = router.start_session(&model, request).unwrap_err();
-
-    assert_eq!(error.kind().code(), "remote.egress_required");
+    assert_eq!(error.code(), "model_binding.approval_required");
 }
 
 #[test]
@@ -72,9 +82,9 @@ fn router_starts_local_generation_without_egress_decision() {
     let router = InferenceRouter::new(vec![Box::new(backend)]);
     let provider = ProviderDefinition::new("provider.local", "Local");
     let model = ModelDescriptor::new("llama-3.2", provider.id(), ModelFormat::Gguf);
-    let request = GenerationRequest::local("llama-3.2");
+    let binding = ResolvedModelBinding::local(model);
 
-    let session = router.start_session(&model, request).unwrap();
+    let session = router.start_session_from_binding(&binding).unwrap();
 
     assert_eq!(session.model_id(), "llama-3.2");
 }
@@ -85,13 +95,10 @@ fn start_session_loads_model_once_and_reuses_loaded_model() {
     let router = InferenceRouter::new(vec![Box::new(backend.clone())]);
     let provider = ProviderDefinition::new("provider.local", "Local");
     let model = ModelDescriptor::new("llama-3.2", provider.id(), ModelFormat::Gguf);
+    let binding = ResolvedModelBinding::local(model.clone());
 
-    router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap();
-    router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap();
+    router.start_session_from_binding(&binding).unwrap();
+    router.start_session_from_binding(&binding).unwrap();
 
     assert_eq!(backend.load_count("llama-3.2"), 1);
     assert!(router
@@ -100,17 +107,14 @@ fn start_session_loads_model_once_and_reuses_loaded_model() {
 }
 
 #[test]
-fn router_rejects_generation_request_for_different_model_id() {
-    let backend = FakeInferenceBackend::local_gguf();
-    let router = InferenceRouter::new(vec![Box::new(backend)]);
+fn generation_request_from_resolved_model_binding_uses_bound_model_id() {
     let provider = ProviderDefinition::new("provider.local", "Local");
     let model = ModelDescriptor::new("llama-3.2", provider.id(), ModelFormat::Gguf);
+    let binding = ResolvedModelBinding::local(model);
 
-    let error = router
-        .start_session(&model, GenerationRequest::local("other-model"))
-        .unwrap_err();
+    let request = GenerationRequest::from_resolved_model_binding(&binding);
 
-    assert_eq!(error.kind().code(), "generation.rejected");
+    assert_eq!(request.model_id, "llama-3.2");
 }
 
 #[test]
@@ -120,11 +124,42 @@ fn router_starts_remote_generation_with_matching_egress_approval() {
     let provider = ProviderDefinition::new("provider.remote", "Remote");
     let model = ModelDescriptor::new("gpt-4.1-mini", provider.id(), ModelFormat::RemoteChat);
     let (decision, grant) = approved_remote_inference_egress("https://api.openai.com");
-    let request = GenerationRequest::remote("gpt-4.1-mini", decision, Some(grant));
+    let binding =
+        ResolvedModelBinding::remote(model, "https://api.openai.com", decision, Some(grant))
+            .unwrap();
 
-    let session = router.start_session(&model, request).unwrap();
+    let session = router.start_session_from_binding(&binding).unwrap();
 
     assert_eq!(session.model_id(), "gpt-4.1-mini");
+}
+
+#[test]
+fn router_starts_generation_from_resolved_model_binding_without_caller_model_id() {
+    let backend = FakeInferenceBackend::remote_http("https://api.openai.com");
+    let router = InferenceRouter::new(vec![Box::new(backend)]);
+    let provider = ProviderDefinition::new("provider.remote", "Remote");
+    let model = ModelDescriptor::new("gpt-4.1-mini", provider.id(), ModelFormat::RemoteChat);
+    let (decision, grant) = approved_remote_inference_egress("https://api.openai.com");
+    let binding =
+        ResolvedModelBinding::remote(model, "https://api.openai.com", decision, Some(grant))
+            .unwrap();
+
+    let session = router.start_session_from_binding(&binding).unwrap();
+
+    assert_eq!(session.model_id(), "gpt-4.1-mini");
+}
+
+#[test]
+fn resolved_model_binding_rejects_remote_egress_destination_mismatch() {
+    let provider = ProviderDefinition::new("provider.remote", "Remote");
+    let model = ModelDescriptor::new("gpt-4.1-mini", provider.id(), ModelFormat::RemoteChat);
+    let (decision, grant) = approved_remote_inference_egress("https://api.openai.com");
+
+    let error =
+        ResolvedModelBinding::remote(model, "https://api.anthropic.com", decision, Some(grant))
+            .unwrap_err();
+
+    assert_eq!(error.code(), "model_binding.egress_mismatch");
 }
 
 #[test]
@@ -146,10 +181,9 @@ fn fake_backend_streams_fixture_tokens() {
     let router = InferenceRouter::new(vec![Box::new(backend)]);
     let provider = ProviderDefinition::new("provider.local", "Local");
     let model = ModelDescriptor::new("llama-3.2", provider.id(), ModelFormat::Gguf);
+    let binding = ResolvedModelBinding::local(model);
 
-    let mut session = router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap();
+    let mut session = router.start_session_from_binding(&binding).unwrap();
 
     assert_eq!(session.next_token().unwrap(), Some("hello".to_string()));
     assert_eq!(session.next_token().unwrap(), Some(" world".to_string()));
@@ -172,15 +206,20 @@ fn usage_report_normalizes_local_and_remote_sessions() {
         ModelFormat::RemoteChat,
     );
     let (decision, grant) = approved_remote_inference_egress("https://api.openai.com");
+    let local_binding = ResolvedModelBinding::local(local_model);
+    let remote_binding = ResolvedModelBinding::remote(
+        remote_model,
+        "https://api.openai.com",
+        decision,
+        Some(grant),
+    )
+    .unwrap();
 
     let local_session = local_router
-        .start_session(&local_model, GenerationRequest::local("llama-3.2"))
+        .start_session_from_binding(&local_binding)
         .unwrap();
     let remote_session = remote_router
-        .start_session(
-            &remote_model,
-            GenerationRequest::remote("gpt-4.1-mini", decision, Some(grant)),
-        )
+        .start_session_from_binding(&remote_binding)
         .unwrap();
 
     assert_eq!(local_session.usage().unwrap().total_tokens(), 16);
@@ -286,13 +325,11 @@ fn remote_generation_event_records_redacted_egress_metadata() {
     let model = ModelDescriptor::new("gpt-4.1-mini", provider.id(), ModelFormat::RemoteChat);
     let (decision, grant) = approved_remote_inference_egress("https://api.openai.com");
     let disclosure_id = decision.disclosure_id().as_str().to_string();
+    let binding =
+        ResolvedModelBinding::remote(model, "https://api.openai.com", decision, Some(grant))
+            .unwrap();
 
-    router
-        .start_session(
-            &model,
-            GenerationRequest::remote("gpt-4.1-mini", decision, Some(grant)),
-        )
-        .unwrap();
+    router.start_session_from_binding(&binding).unwrap();
 
     let events = router.runtime_events();
     let started = events
@@ -377,19 +414,14 @@ fn backend_enforces_max_sessions_per_model() {
     let router = InferenceRouter::new(vec![Box::new(backend)]);
     let provider = ProviderDefinition::new("provider.local", "Local");
     let model = ModelDescriptor::new("llama-3.2", provider.id(), ModelFormat::Gguf);
-    let first = router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap();
+    let binding = ResolvedModelBinding::local(model);
+    let first = router.start_session_from_binding(&binding).unwrap();
 
-    let error = router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap_err();
+    let error = router.start_session_from_binding(&binding).unwrap_err();
     assert_eq!(error.kind().code(), "generation.rejected");
 
     drop(first);
-    router
-        .start_session(&model, GenerationRequest::local("llama-3.2"))
-        .unwrap();
+    router.start_session_from_binding(&binding).unwrap();
 }
 
 #[test]

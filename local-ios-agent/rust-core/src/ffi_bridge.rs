@@ -1024,15 +1024,14 @@ struct ToolExecutionRequestJson {
 impl ToolExecutionRequestJson {
     fn from_request(request: &ToolExecutionRequest) -> Self {
         Self {
-            run_id: request.run_id.0.clone(),
-            session_id: request.session_id.0.clone(),
-            tool_call_entry_id: request.tool_call_entry_id.0.clone(),
-            tool_call_id: request.tool_call_id.clone(),
-            tool_name: request.tool_name.clone(),
-            arguments_json: request.arguments_json.clone(),
+            run_id: request.run_id().0.clone(),
+            session_id: request.session_id().0.clone(),
+            tool_call_entry_id: request.tool_call_entry_id().0.clone(),
+            tool_call_id: request.tool_call_id().to_string(),
+            tool_name: request.tool_name().to_string(),
+            arguments_json: request.arguments_json().to_string(),
             compiled_recipe: request
-                .compiled_recipe
-                .as_ref()
+                .compiled_recipe()
                 .map(CompiledToolRecipeJson::from_recipe),
         }
     }

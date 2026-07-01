@@ -320,7 +320,7 @@ impl<S: EventStore> AgentRuntime<S> {
                 if let Some(run) = self.runs.get_mut(&run_key) {
                     run.mark_waiting_tool()?;
                 }
-                let pending_tool_call_id = request.tool_call_id.clone();
+                let pending_tool_call_id = request.tool_call_id().to_string();
                 self.pending_tool_requests.push(request);
 
                 Ok(AgentTurnResult {
@@ -453,7 +453,7 @@ impl<S: EventStore> AgentRuntime<S> {
         self.store.delete_session(session_id)?;
         self.sessions.remove(session_id);
         self.pending_tool_requests
-            .retain(|request| request.session_id != *session_id);
+            .retain(|request| request.session_id() != session_id);
         self.runs.retain(|_, run| run.session_id != *session_id);
         Ok(())
     }
@@ -669,8 +669,8 @@ impl<S: EventStore> AgentRuntime<S> {
         let pending_tool_name = self
             .pending_tool_requests
             .iter()
-            .find(|request| request.run_id == run_key)
-            .map(|request| request.tool_name.clone());
+            .find(|request| request.run_id() == &run_key)
+            .map(|request| request.tool_name().to_string());
         if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
             if let Some(tool_name) = pending_tool_name {
                 result.provenance = format!("tool.{tool_name}");
@@ -1218,7 +1218,7 @@ impl<S: EventStore> AgentRuntime<S> {
 
     fn consume_pending_tool_requests(&mut self, run_id: &RunId) {
         self.pending_tool_requests
-            .retain(|request| &request.run_id != run_id);
+            .retain(|request| request.run_id() != run_id);
     }
 
     fn append_event(

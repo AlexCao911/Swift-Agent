@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use crate::inference::{BackendFailure, BackendFailureKind, InferenceResult, UsageReport};
+use crate::model::ResolvedModelBinding;
 use crate::security::{ApprovalGrant, ApprovalRequirement, DataEgressDecision};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +43,24 @@ impl GenerationRequest {
             egress_decision: None,
             approval_grant: None,
         }
+    }
+
+    pub fn from_resolved_model_binding(binding: &ResolvedModelBinding) -> Self {
+        Self {
+            model_id: binding.model().id.clone(),
+            input_messages: Vec::new(),
+            egress_decision: binding.egress_decision().cloned(),
+            approval_grant: binding.approval_grant().cloned(),
+        }
+    }
+
+    pub fn with_input_messages<I, S>(mut self, input_messages: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.input_messages = input_messages.into_iter().map(Into::into).collect();
+        self
     }
 }
 

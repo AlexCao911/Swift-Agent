@@ -120,8 +120,14 @@ impl UnitOfWork {
 }
 
 pub trait PendingStoreWrite: Send {
+    /// Performs every fallible pre-commit check for this staged in-memory write.
+    ///
+    /// `commit` is intentionally infallible so `InMemoryTransactionRunner` cannot model a
+    /// partially applied transaction by returning an error after earlier staged writes have
+    /// mutated state. Real SQLite/file-backed stores should perform durable writes inside their
+    /// concrete database transaction runner rather than using this in-memory staging hook.
     fn validate(&self) -> StorageResult<()>;
-    fn apply(self: Box<Self>) -> StorageResult<()>;
+    fn commit(self: Box<Self>);
 }
 
 #[derive(Default)]
@@ -164,7 +170,7 @@ impl TransactionRunner for InMemoryTransactionRunner {
         }
 
         for write in store_writes {
-            write.apply()?;
+            write.commit();
         }
         self.archive_store.apply_pending(archives);
         self.event_store.apply_pending(events);

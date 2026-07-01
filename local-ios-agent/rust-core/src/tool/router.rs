@@ -6,7 +6,7 @@ use crate::core::{AgentError, EntryId, RunId, SessionId};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, ApprovalRequest,
     ApprovalScope, DataEgressRequest, EgressDestination, OperationDescriptor, PermissionScope,
-    PolicyDecision, SecurityManager, SecurityPermissionService, StaticSecurityPermissionService,
+    PolicyDecision, SecurityManager,
 };
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, RetentionPolicy, Sensitivity, ToolCall,
@@ -148,8 +148,17 @@ impl ToolRouter {
         ),
         AgentError,
     > {
-        let (request, decision) = self.security.resolve_approval(response)?;
-        let tool_request = self.suspended_tool_requests.remove(&request.approval_id);
+        let (request, decision, grant) = self.security.resolve_approval_with_grant(response)?;
+        let tool_request = self
+            .suspended_tool_requests
+            .remove(&request.approval_id)
+            .map(|tool_request| {
+                if let Some(grant) = grant {
+                    tool_request.with_approval_grant(grant)
+                } else {
+                    tool_request
+                }
+            });
 
         Ok((request, decision, tool_request))
     }
@@ -161,7 +170,7 @@ impl ToolRouter {
         schema: &ToolSchema,
         request: &ToolExecutionRequest,
     ) -> Result<Option<ToolRouteOutcome>, AgentError> {
-        let Some(compiled_recipe) = request.compiled_recipe.as_ref() else {
+        let Some(compiled_recipe) = request.compiled_recipe() else {
             return Ok(None);
         };
         let CompiledToolRecipeContent::HttpConnector {
@@ -184,15 +193,14 @@ impl ToolRouter {
             )));
         }
 
-        let service = StaticSecurityPermissionService::default()
-            .allow_destination(EgressDestination::new(destination.clone()));
         let egress_request = if credential_ref.is_some() {
-            DataEgressRequest::http_tool_with_credential(destination)
+            DataEgressRequest::http_tool_with_credential(destination.clone())
         } else {
-            DataEgressRequest::http_tool(destination)
+            DataEgressRequest::http_tool(destination.clone())
         };
-        let decision = service.evaluate_egress(egress_request);
+        let decision = self.security.evaluate_egress(egress_request);
         let operation = OperationDescriptor::new(format!("tool.{}", schema.name));
+        let request = request.clone().with_egress_decision(decision.clone());
         let approval = self.security.request_approval(
             format!("approval_{}", tool_call_entry_id.0),
             run_id.clone(),
@@ -205,7 +213,7 @@ impl ToolRouter {
             .insert(approval.approval_id.clone(), request.clone());
 
         Ok(Some(ToolRouteOutcome::ApprovalRequired {
-            request: request.clone(),
+            request,
             reason: approval.message.clone(),
             approval,
         }))

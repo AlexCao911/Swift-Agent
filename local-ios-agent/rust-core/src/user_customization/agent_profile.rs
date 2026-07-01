@@ -1,8 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use crate::{
-    core::AgentError,
-    user_customization::{AgentSlotId, AgentSlotKind, AgentTemplateId, UserComponentVersionId},
+    model::{ModelBindingCatalog, ModelSelection},
+    protocol::{BindingId, ComponentBinding as ProtocolComponentBinding, InstanceId, SlotKey},
+    storage::{
+        PendingStoreWrite, StorageError, StorageResult, TransactionName, TransactionOperation,
+        TransactionRunner, UnitOfWork,
+    },
+    user_customization::{
+        AgentSlotId, AgentSlotKind, AgentTemplate, AgentTemplateId, ComponentCatalogService,
+        ComponentKind, UserComponentVersionId,
+    },
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -30,11 +39,19 @@ pub struct ComponentBinding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentProfileModelBinding {
+    slot_id: AgentSlotId,
+    selection: ModelSelection,
+    settings: ComponentSettings,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentProfileDraft {
     id: AgentProfileId,
     template_id: AgentTemplateId,
     name: String,
     bindings: Vec<ComponentBinding>,
+    model_binding: Option<AgentProfileModelBinding>,
     local_bindings: AgentProfileLocalBindings,
 }
 
@@ -45,6 +62,7 @@ pub struct AgentProfile {
     template_id: AgentTemplateId,
     name: String,
     bindings: Vec<ComponentBinding>,
+    model_binding: Option<AgentProfileModelBinding>,
     local_bindings: AgentProfileLocalBindings,
 }
 
@@ -52,6 +70,35 @@ pub struct AgentProfile {
 pub struct AgentProfileReference {
     profile_id: AgentProfileId,
     profile_version: Option<AgentProfileVersion>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct InMemoryAgentProfileRepository {
+    inner: Arc<Mutex<AgentProfileRecords>>,
+}
+
+pub struct AgentProfilePublisher {
+    runner: Box<dyn TransactionRunner>,
+    repository: InMemoryAgentProfileRepository,
+}
+
+#[derive(Default, Debug)]
+struct AgentProfileRecords {
+    profiles: BTreeMap<(AgentProfileId, AgentProfileVersion), AgentProfile>,
+}
+
+struct PendingAgentProfileWrite {
+    repository: InMemoryAgentProfileRepository,
+    profile: AgentProfile,
+}
+
+struct AgentProfilePublishOperation<'a> {
+    draft: Option<AgentProfileDraft>,
+    template: &'a AgentTemplate,
+    catalog: &'a ComponentCatalogService,
+    model_catalog: &'a ModelBindingCatalog,
+    repository: InMemoryAgentProfileRepository,
+    result: Option<AgentProfileReference>,
 }
 
 impl AgentProfileId {
@@ -156,6 +203,50 @@ impl ComponentBinding {
     pub fn settings(&self) -> &ComponentSettings {
         &self.settings
     }
+
+    pub fn to_protocol_binding(&self) -> ProtocolComponentBinding {
+        let component_version_key = self.component_version_id.stable_key();
+        ProtocolComponentBinding::new(
+            BindingId::new(format!(
+                "binding.{}.{}",
+                self.slot_id.as_str(),
+                component_version_key
+            )),
+            SlotKey::new(self.slot_id.as_str()),
+            InstanceId::new(component_version_key),
+        )
+    }
+}
+
+impl AgentProfileModelBinding {
+    pub fn new(slot_id: AgentSlotId, selection: ModelSelection) -> Self {
+        Self {
+            slot_id,
+            selection,
+            settings: ComponentSettings::default(),
+        }
+    }
+
+    pub fn with_settings(mut self, settings: ComponentSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    pub fn slot_id(&self) -> &AgentSlotId {
+        &self.slot_id
+    }
+
+    pub fn slot_kind(&self) -> AgentSlotKind {
+        AgentSlotKind::Model
+    }
+
+    pub fn selection(&self) -> &ModelSelection {
+        &self.selection
+    }
+
+    pub fn settings(&self) -> &ComponentSettings {
+        &self.settings
+    }
 }
 
 impl AgentProfileDraft {
@@ -165,6 +256,7 @@ impl AgentProfileDraft {
             template_id,
             name: name.into(),
             bindings: Vec::new(),
+            model_binding: None,
             local_bindings: AgentProfileLocalBindings::default(),
         }
     }
@@ -174,33 +266,343 @@ impl AgentProfileDraft {
         self
     }
 
+    pub fn with_model_binding(mut self, binding: AgentProfileModelBinding) -> Self {
+        self.model_binding = Some(binding);
+        self
+    }
+
     pub fn with_local_bindings(mut self, local_bindings: AgentProfileLocalBindings) -> Self {
         self.local_bindings = local_bindings;
         self
     }
 
-    pub fn publish(self) -> Result<AgentProfile, AgentError> {
-        for binding in &self.bindings {
-            if !binding.component_version_id.is_published() {
-                return Err(AgentError::Unknown(format!(
-                    "agent profile binding must reference published component version: {}",
-                    binding.component_version_id.stable_key()
-                )));
-            }
-        }
-
-        Ok(AgentProfile {
+    pub(crate) fn into_published(self) -> AgentProfile {
+        AgentProfile {
             id: self.id,
             version: AgentProfileVersion::initial(),
             template_id: self.template_id,
             name: self.name,
             bindings: self.bindings,
+            model_binding: self.model_binding,
             local_bindings: self.local_bindings,
+        }
+    }
+
+    pub fn template_id(&self) -> &AgentTemplateId {
+        &self.template_id
+    }
+
+    pub fn bindings(&self) -> &[ComponentBinding] {
+        &self.bindings
+    }
+
+    pub fn model_binding(&self) -> Option<&AgentProfileModelBinding> {
+        self.model_binding.as_ref()
+    }
+}
+
+impl InMemoryAgentProfileRepository {
+    pub fn stage(&self, tx: &mut UnitOfWork, profile: AgentProfile) -> StorageResult<()> {
+        tx.push_store_write(Box::new(PendingAgentProfileWrite {
+            repository: self.clone(),
+            profile,
+        }));
+        Ok(())
+    }
+
+    pub fn profile(&self, reference: &AgentProfileReference) -> Option<AgentProfile> {
+        let inner = self
+            .inner
+            .lock()
+            .expect("agent profile repository mutex poisoned");
+        let profile_version = reference.profile_version().or_else(|| {
+            inner
+                .profiles
+                .keys()
+                .filter(|(profile_id, _)| profile_id == reference.profile_id())
+                .map(|(_, version)| *version)
+                .max()
+        })?;
+
+        inner
+            .profiles
+            .get(&(reference.profile_id().clone(), profile_version))
+            .cloned()
+    }
+
+    fn validate_profile(&self, profile: &AgentProfile) -> StorageResult<()> {
+        let inner = self
+            .inner
+            .lock()
+            .expect("agent profile repository mutex poisoned");
+        if inner
+            .profiles
+            .contains_key(&(profile.id().clone(), profile.version()))
+        {
+            return Err(StorageError::new(
+                "agent_profile.duplicate",
+                "agent profile version already exists",
+            ));
+        }
+        Ok(())
+    }
+
+    fn commit_profile(&self, profile: AgentProfile) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("agent profile repository mutex poisoned");
+        inner
+            .profiles
+            .insert((profile.id().clone(), profile.version()), profile);
+    }
+}
+
+impl PendingStoreWrite for PendingAgentProfileWrite {
+    fn validate(&self) -> StorageResult<()> {
+        self.repository.validate_profile(&self.profile)
+    }
+
+    fn commit(self: Box<Self>) {
+        self.repository.commit_profile(self.profile);
+    }
+}
+
+impl AgentProfilePublisher {
+    pub fn new(
+        runner: Box<dyn TransactionRunner>,
+        repository: InMemoryAgentProfileRepository,
+    ) -> Self {
+        Self { runner, repository }
+    }
+
+    pub fn publish(
+        &self,
+        draft: AgentProfileDraft,
+        template: &AgentTemplate,
+        catalog: &ComponentCatalogService,
+        model_catalog: &ModelBindingCatalog,
+    ) -> StorageResult<AgentProfileReference> {
+        let mut operation = AgentProfilePublishOperation {
+            draft: Some(draft),
+            template,
+            catalog,
+            model_catalog,
+            repository: self.repository.clone(),
+            result: None,
+        };
+
+        self.runner.run(
+            TransactionName::new("agent_profile.publish"),
+            &mut operation,
+        )?;
+
+        operation.result.ok_or_else(|| {
+            StorageError::new(
+                "agent_profile.publish_failed",
+                "agent profile publish operation did not produce a reference",
+            )
         })
     }
 }
 
+impl TransactionOperation for AgentProfilePublishOperation<'_> {
+    fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
+        let draft = self.draft.take().ok_or_else(|| {
+            StorageError::new(
+                "agent_profile.publish_reused",
+                "agent profile publish operation was reused",
+            )
+        })?;
+
+        validate_profile_draft(&draft, self.template, self.catalog, self.model_catalog)?;
+        let profile = draft.into_published();
+        let reference = profile.reference();
+        self.repository.stage(tx, profile)?;
+        self.result = Some(reference.clone());
+        Ok(())
+    }
+}
+
+fn validate_profile_draft(
+    draft: &AgentProfileDraft,
+    template: &AgentTemplate,
+    catalog: &ComponentCatalogService,
+    model_catalog: &ModelBindingCatalog,
+) -> StorageResult<()> {
+    if draft.template_id() != template.id() {
+        return Err(StorageError::new(
+            "agent_profile.template_mismatch",
+            "agent profile draft does not match template",
+        ));
+    }
+
+    let mut bound_component_slots = BTreeSet::new();
+    for binding in draft.bindings() {
+        if !bound_component_slots.insert(binding.slot_id().clone()) {
+            return Err(StorageError::new(
+                "agent_profile.duplicate_slot_binding",
+                "agent profile binds the same component slot more than once",
+            ));
+        }
+
+        let Some(slot) = template.slot_for_id(binding.slot_id()) else {
+            return Err(StorageError::new(
+                "agent_profile.slot_unsupported",
+                "agent profile binding references a slot outside the template",
+            ));
+        };
+        if slot.kind() != binding.slot_kind() {
+            return Err(StorageError::new(
+                "agent_profile.slot_kind_mismatch",
+                "agent profile binding slot kind does not match template slot",
+            ));
+        }
+        validate_component_version(binding, catalog)?;
+    }
+
+    if let Some(model_binding) = draft.model_binding() {
+        validate_model_binding(model_binding, template, model_catalog)?;
+    }
+
+    validate_required_slots(draft, template)?;
+
+    Ok(())
+}
+
+fn validate_model_binding(
+    binding: &AgentProfileModelBinding,
+    template: &AgentTemplate,
+    model_catalog: &ModelBindingCatalog,
+) -> StorageResult<()> {
+    let Some(slot) = template.slot_for_id(binding.slot_id()) else {
+        return Err(StorageError::new(
+            "agent_profile.model_slot_unsupported",
+            "agent profile model binding references a slot outside the template",
+        ));
+    };
+
+    if slot.kind() != AgentSlotKind::Model {
+        return Err(StorageError::new(
+            "agent_profile.model_slot_kind_mismatch",
+            "agent profile model binding must target a model slot",
+        ));
+    }
+
+    if !binding.selection().is_pinnable() {
+        return Err(StorageError::new(
+            "agent_profile.model_binding_invalid",
+            "agent profile model binding must include a binding id, provider account, provider, model id, and catalog version",
+        ));
+    }
+
+    if !model_catalog.contains_exact_selection(binding.selection()) {
+        return Err(StorageError::new(
+            "agent_profile.model_binding_missing",
+            "agent profile model binding must reference a known model selection and catalog version",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_required_slots(
+    draft: &AgentProfileDraft,
+    template: &AgentTemplate,
+) -> StorageResult<()> {
+    for slot in template.slots().iter().filter(|slot| slot.is_required()) {
+        let satisfied = match slot.kind() {
+            AgentSlotKind::Model => draft
+                .model_binding()
+                .map(|binding| binding.slot_id() == slot.id())
+                .unwrap_or(false),
+            _ => draft
+                .bindings()
+                .iter()
+                .any(|binding| binding.slot_id() == slot.id()),
+        };
+
+        if !satisfied {
+            return Err(StorageError::new(
+                "agent_profile.required_slot_missing",
+                format!(
+                    "agent profile is missing required slot {}",
+                    slot.id().as_str()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_component_version(
+    binding: &ComponentBinding,
+    catalog: &ComponentCatalogService,
+) -> StorageResult<()> {
+    if !binding.component_version_id().is_published() {
+        return Err(StorageError::new(
+            "agent_profile.component_version_unpublished",
+            "agent profile binding must reference a published component version",
+        ));
+    }
+
+    let version = catalog
+        .version(binding.component_version_id())
+        .ok_or_else(|| {
+            StorageError::new(
+                "agent_profile.component_version_missing",
+                "agent profile binding references an unknown component version",
+            )
+        })?;
+
+    let Some(expected_kind) = expected_component_kind_for_slot(binding.slot_kind()) else {
+        return Err(StorageError::new(
+            "agent_profile.slot_not_component",
+            "agent profile binding references a non-component slot",
+        ));
+    };
+    if version.content().kind() != expected_kind {
+        return Err(StorageError::new(
+            "agent_profile.component_kind_mismatch",
+            "agent profile binding component kind does not match slot kind",
+        ));
+    }
+
+    Ok(())
+}
+
+fn expected_component_kind_for_slot(slot_kind: AgentSlotKind) -> Option<ComponentKind> {
+    match slot_kind {
+        AgentSlotKind::Brain => Some(ComponentKind::BrainPreset),
+        AgentSlotKind::Persona => Some(ComponentKind::Persona),
+        AgentSlotKind::Instruction => Some(ComponentKind::Instruction),
+        AgentSlotKind::Model => None,
+        AgentSlotKind::Toolset => Some(ComponentKind::ToolRecipe),
+        AgentSlotKind::Memory => Some(ComponentKind::MemoryProfile),
+        AgentSlotKind::Voice => Some(ComponentKind::VoiceProfile),
+    }
+}
+
 impl AgentProfile {
+    pub(crate) fn installed_package_profile(
+        id: AgentProfileId,
+        template: &AgentTemplate,
+        name: impl Into<String>,
+        model_binding: Option<AgentProfileModelBinding>,
+        local_bindings: AgentProfileLocalBindings,
+    ) -> Self {
+        Self {
+            id,
+            version: AgentProfileVersion::initial(),
+            template_id: template.id().clone(),
+            name: name.into(),
+            bindings: Vec::new(),
+            model_binding,
+            local_bindings,
+        }
+    }
+
     pub fn id(&self) -> &AgentProfileId {
         &self.id
     }
@@ -221,6 +623,10 @@ impl AgentProfile {
         &self.bindings
     }
 
+    pub fn model_binding(&self) -> Option<&AgentProfileModelBinding> {
+        self.model_binding.as_ref()
+    }
+
     pub fn local_bindings(&self) -> &AgentProfileLocalBindings {
         &self.local_bindings
     }
@@ -239,12 +645,23 @@ impl AgentProfile {
     }
 
     pub fn reference(&self) -> AgentProfileReference {
-        AgentProfileReference::new(self.id.clone()).with_version(self.version)
+        AgentProfileReference::pinned(self.id.clone(), self.version)
     }
 }
 
 impl AgentProfileReference {
-    pub fn new(profile_id: AgentProfileId) -> Self {
+    pub fn latest(profile_id: AgentProfileId) -> Self {
+        Self::new(profile_id)
+    }
+
+    pub fn pinned(profile_id: AgentProfileId, profile_version: AgentProfileVersion) -> Self {
+        Self {
+            profile_id,
+            profile_version: Some(profile_version),
+        }
+    }
+
+    pub(crate) fn new(profile_id: AgentProfileId) -> Self {
         Self {
             profile_id,
             profile_version: None,

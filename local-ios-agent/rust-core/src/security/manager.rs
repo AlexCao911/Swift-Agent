@@ -1,16 +1,20 @@
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
 use crate::core::{AgentError, EntryId, RunId};
 use crate::security::{
     ApprovalDecision, ApprovalGrant, ApprovalId, ApprovalProtocolRequest, ApprovalProtocolResponse,
-    ApprovalQueue, ApprovalRequest, ApprovalScope, AuditPolicy, PermissionScope, PermissionState,
-    PolicyDecision, PolicyEngine, RiskLevel,
+    ApprovalQueue, ApprovalRequest, ApprovalScope, AuditPolicy, DataEgressDecision,
+    DataEgressRequest, PermissionScope, PermissionState, PolicyDecision, PolicyEngine, RiskLevel,
+    SecurityPermissionService, StaticSecurityPermissionService,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SecurityManager {
     pub policy: PolicyEngine,
     pub audit_policy: AuditPolicy,
+    egress_service: Arc<dyn SecurityPermissionService>,
     approvals: ApprovalQueue,
     permissions: Vec<PermissionScope>,
     tool_permission_scopes: HashMap<String, String>,
@@ -21,16 +25,27 @@ impl SecurityManager {
         Self {
             policy: PolicyEngine::default(),
             audit_policy: AuditPolicy,
+            egress_service: Arc::new(StaticSecurityPermissionService::default()),
             approvals: ApprovalQueue::new(),
             permissions: Vec::new(),
             tool_permission_scopes: HashMap::new(),
         }
     }
 
+    pub fn with_permission_service(permission_service: Arc<dyn SecurityPermissionService>) -> Self {
+        let mut manager = Self::new();
+        manager.egress_service = permission_service;
+        manager
+    }
+
     pub fn set_permission(&mut self, scope: PermissionScope) {
         self.permissions
             .retain(|existing| existing.name != scope.name);
         self.permissions.push(scope);
+    }
+
+    pub fn evaluate_egress(&self, request: DataEgressRequest) -> DataEgressDecision {
+        self.egress_service.evaluate_egress(request)
     }
 
     pub fn permission_state(&self, name: &str) -> PermissionState {
@@ -130,11 +145,23 @@ impl SecurityManager {
         Ok((request, decision))
     }
 
+    pub fn resolve_approval_with_grant(
+        &mut self,
+        response: ApprovalProtocolResponse,
+    ) -> Result<(ApprovalRequest, ApprovalDecision, Option<ApprovalGrant>), AgentError> {
+        let (request, decision) = self.resolve_approval(response)?;
+        let grant = (decision == ApprovalDecision::Approved).then(|| {
+            ApprovalGrant::from_scope(ApprovalId::new(request.approval_id.clone()), &request.scope)
+        });
+
+        Ok((request, decision, grant))
+    }
+
     pub fn issue_grant(
         &mut self,
         response: ApprovalProtocolResponse,
     ) -> Result<ApprovalGrant, AgentError> {
-        let (request, decision) = self.resolve_approval(response)?;
+        let (request, decision, grant) = self.resolve_approval_with_grant(response)?;
         if decision != ApprovalDecision::Approved {
             return Err(AgentError::PolicyDenied(format!(
                 "approval rejected: {}",
@@ -142,17 +169,14 @@ impl SecurityManager {
             )));
         }
 
-        Ok(ApprovalGrant::from_scope(
-            ApprovalId::new(request.approval_id),
-            &request.scope,
-        ))
+        grant.ok_or_else(|| AgentError::PolicyDenied("approval did not issue grant".to_string()))
     }
 
     pub fn issue_egress_grant(
         &mut self,
         response: ApprovalProtocolResponse,
     ) -> Result<ApprovalGrant, AgentError> {
-        let (request, approval_decision) = self.resolve_approval(response)?;
+        let (request, approval_decision, grant) = self.resolve_approval_with_grant(response)?;
         if approval_decision != ApprovalDecision::Approved {
             return Err(AgentError::PolicyDenied(format!(
                 "approval rejected: {}",
@@ -166,9 +190,21 @@ impl SecurityManager {
             )));
         }
 
-        Ok(ApprovalGrant::from_scope(
-            ApprovalId::new(request.approval_id),
-            &request.scope,
-        ))
+        grant.ok_or_else(|| {
+            AgentError::PolicyDenied("egress approval did not issue grant".to_string())
+        })
+    }
+}
+
+impl fmt::Debug for SecurityManager {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SecurityManager")
+            .field("policy", &self.policy)
+            .field("audit_policy", &self.audit_policy)
+            .field("approvals", &self.approvals)
+            .field("permissions", &self.permissions)
+            .field("tool_permission_scopes", &self.tool_permission_scopes)
+            .finish_non_exhaustive()
     }
 }

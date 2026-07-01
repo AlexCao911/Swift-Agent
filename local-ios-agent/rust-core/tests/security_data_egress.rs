@@ -336,6 +336,7 @@ fn approval_grant_does_not_match_different_egress_decision() {
         .unwrap();
 
     assert!(grant.matches_egress(&OperationDescriptor::new("remote.inference"), &original));
+    assert_eq!(grant.egress_operation().unwrap(), original.operation());
     assert!(!grant.matches_egress(
         &OperationDescriptor::new("remote.inference"),
         &different_destination

@@ -184,8 +184,8 @@ fn runtime_replays_waiting_tool_run_and_pending_request_from_sqlite() {
 
     assert!(runtime.session_ids().unwrap().contains(&session_id));
     assert_eq!(runtime.pending_tool_requests().len(), 1);
-    assert_eq!(runtime.pending_tool_requests()[0].run_id.0, run_id);
-    assert_eq!(runtime.pending_tool_requests()[0].tool_name, "debug.echo");
+    assert_eq!(runtime.pending_tool_requests()[0].run_id().0, run_id);
+    assert_eq!(runtime.pending_tool_requests()[0].tool_name(), "debug.echo");
 
     let resumed = runtime
         .submit_tool_result(run_id, tool_result("echoed after restart"))
