@@ -147,17 +147,22 @@ impl AgentBuilderResolver {
         }
 
         if self.has_model || self.has_persona_component {
-            plan = plan.with_profile_draft(
-                profile_draft_for_template(
-                    input.template(),
-                    self.has_persona_component,
-                    self.has_model,
-                    self.persona_version_id,
-                    self.model_selection.clone(),
-                ),
-                input.template().clone(),
+            let profile_draft = profile_draft_for_template(
+                input.template(),
+                self.has_persona_component,
+                self.has_model,
+                self.persona_version_id,
+                self.model_selection.clone(),
             );
+            plan = self.add_profile_validation_readiness(
+                plan,
+                profile_draft.clone(),
+                input.template(),
+            );
+            plan = plan.with_profile_draft(profile_draft, input.template().clone());
         }
+
+        plan = self.add_template_readiness(plan, input.template());
 
         Ok(plan)
     }
@@ -325,6 +330,44 @@ impl AgentBuilderResolver {
         }
 
         report
+    }
+
+    fn add_template_readiness(
+        &self,
+        mut plan: AgentAssemblyPlan,
+        template: &AgentTemplate,
+    ) -> AgentAssemblyPlan {
+        for issue in self.readiness_for_template(template).issues() {
+            if !plan.readiness_report().has_issue(issue.code()) {
+                plan = plan.with_readiness_issue(issue.clone());
+            }
+        }
+        plan
+    }
+
+    fn add_profile_validation_readiness(
+        &self,
+        plan: AgentAssemblyPlan,
+        draft: AgentProfileDraft,
+        template: &AgentTemplate,
+    ) -> AgentAssemblyPlan {
+        let publisher = AgentProfilePublisher::new(
+            Box::new(InMemoryTransactionRunner::default()),
+            InMemoryAgentProfileRepository::default(),
+        );
+
+        match publisher.publish(
+            draft,
+            template,
+            &self.component_catalog,
+            &self.model_catalog,
+        ) {
+            Ok(_) => plan,
+            Err(error) => plan.with_readiness_issue(AgentReadinessIssue::new(
+                error.code().to_string(),
+                error.to_string(),
+            )),
+        }
     }
 }
 

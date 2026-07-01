@@ -97,6 +97,45 @@ fn create_plan_flags_remote_model_for_safety_review() {
 }
 
 #[test]
+fn create_plan_reports_unknown_component_version_before_finalize() {
+    let resolver = AgentBuilderResolver::fixture_with_missing_component_catalog_entry();
+    let input = AgentBuilderInput::from_template(AgentTemplate::assistant_default());
+    let plan = resolver
+        .create_plan(input, &UserEnvironment::fixture_ready())
+        .unwrap();
+
+    assert!(plan
+        .readiness_report()
+        .has_issue("agent_profile.component_version_missing"));
+}
+
+#[test]
+fn create_plan_reports_unknown_model_selection_before_finalize() {
+    let resolver = AgentBuilderResolver::fixture_with_missing_model_catalog_entry();
+    let input = AgentBuilderInput::from_template(AgentTemplate::assistant_default());
+    let plan = resolver
+        .create_plan(input, &UserEnvironment::fixture_ready())
+        .unwrap();
+
+    assert!(plan
+        .readiness_report()
+        .has_issue("agent_profile.model_binding_missing"));
+}
+
+#[test]
+fn create_plan_reports_calendar_permission_readiness_like_template_readiness() {
+    let resolver = AgentBuilderResolver::fixture_missing_model_and_calendar_permission();
+    let input = AgentBuilderInput::from_template(AgentTemplate::assistant_default());
+    let plan = resolver
+        .create_plan(input, &UserEnvironment::fixture_ready())
+        .unwrap();
+
+    assert!(plan
+        .readiness_report()
+        .has_issue("permission.calendar.missing"));
+}
+
+#[test]
 fn settings_schema_exposes_safe_renderer_descriptors() {
     let schema = UserSettingsSchema::fixture_generation_controls();
 
