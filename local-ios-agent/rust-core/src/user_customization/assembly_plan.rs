@@ -1,21 +1,23 @@
 use crate::user_customization::{
-    AgentProfileDraft, AgentReadinessIssue, AgentReadinessReport, ComponentGraph, SafetyReview,
+    AgentProfileDraft, AgentReadinessIssue, AgentReadinessReport, AgentTemplate, ComponentGraph,
+    SafetyReview,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentAssemblyPlan {
-    pub component_graph: ComponentGraph,
-    pub missing_requirements: Vec<MissingRequirement>,
-    pub required_bindings: Vec<BindingRequest>,
-    pub warnings: Vec<AssemblyWarning>,
-    pub safety_review: SafetyReview,
-    pub readiness_report: AgentReadinessReport,
+    component_graph: ComponentGraph,
+    missing_requirements: Vec<MissingRequirement>,
+    required_bindings: Vec<BindingRequest>,
+    warnings: Vec<AssemblyWarning>,
+    safety_review: SafetyReview,
+    readiness_report: AgentReadinessReport,
     profile_draft: Option<AgentProfileDraft>,
+    profile_template: Option<AgentTemplate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MissingRequirement {
-    pub code: String,
+    code: String,
     slot_id: String,
     message: String,
 }
@@ -51,6 +53,7 @@ impl AgentAssemblyPlan {
             safety_review: SafetyReview::ready(),
             readiness_report: AgentReadinessReport::ready(),
             profile_draft: None,
+            profile_template: None,
         }
     }
 
@@ -71,7 +74,7 @@ impl AgentAssemblyPlan {
         self
     }
 
-    pub fn safety_review(mut self, safety_review: SafetyReview) -> Self {
+    pub fn with_safety_review(mut self, safety_review: SafetyReview) -> Self {
         self.safety_review = safety_review;
         self
     }
@@ -81,13 +84,44 @@ impl AgentAssemblyPlan {
         self
     }
 
-    pub fn with_profile_draft(mut self, draft: AgentProfileDraft) -> Self {
+    pub(crate) fn with_profile_draft(
+        mut self,
+        draft: AgentProfileDraft,
+        template: AgentTemplate,
+    ) -> Self {
         self.profile_draft = Some(draft);
+        self.profile_template = Some(template);
         self
     }
 
-    pub(crate) fn into_profile_draft(self) -> Option<AgentProfileDraft> {
-        self.profile_draft
+    pub(crate) fn into_profile_draft_and_template(
+        self,
+    ) -> Option<(AgentProfileDraft, AgentTemplate)> {
+        Some((self.profile_draft?, self.profile_template?))
+    }
+
+    pub fn component_graph(&self) -> &ComponentGraph {
+        &self.component_graph
+    }
+
+    pub fn missing_requirements(&self) -> &[MissingRequirement] {
+        &self.missing_requirements
+    }
+
+    pub fn required_bindings(&self) -> &[BindingRequest] {
+        &self.required_bindings
+    }
+
+    pub fn warnings(&self) -> &[AssemblyWarning] {
+        &self.warnings
+    }
+
+    pub fn safety_review(&self) -> &SafetyReview {
+        &self.safety_review
+    }
+
+    pub fn readiness_report(&self) -> &AgentReadinessReport {
+        &self.readiness_report
     }
 }
 

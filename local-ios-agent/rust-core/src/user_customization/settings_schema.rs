@@ -105,7 +105,10 @@ impl SettingsFieldDescriptor {
     }
 
     pub fn with_default(mut self, value: impl Into<String>) -> Self {
-        self.default_value = Some(value.into());
+        let value = value.into();
+        if is_safe_default_value(&value) {
+            self.default_value = Some(value);
+        }
         self
     }
 
@@ -132,6 +135,17 @@ impl SettingsFieldDescriptor {
     pub fn default_value(&self) -> Option<&str> {
         self.default_value.as_deref()
     }
+}
+
+fn is_safe_default_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    !lower.contains("api_key")
+        && !lower.contains("secret")
+        && !lower.contains("token")
+        && !lower.starts_with("sk-")
+        && !trimmed.starts_with('/')
+        && !trimmed.starts_with("~/")
 }
 
 impl SettingsValueRange {

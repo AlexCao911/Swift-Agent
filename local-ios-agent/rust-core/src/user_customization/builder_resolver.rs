@@ -1,11 +1,13 @@
 use crate::{
-    model::{ModelBindingId, ModelCatalogVersion, ModelSelection},
+    model::{ModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection},
+    storage::{InMemoryTransactionRunner, StorageError},
     user_customization::{
         AgentAssemblyPlan, AgentProfile, AgentProfileDraft, AgentProfileId,
-        AgentProfileModelBinding, AgentReadinessIssue, AgentReadinessReport, AgentSlotId,
-        AgentSlotKind, AgentTemplate, BindingRequest, ComponentBinding, ComponentGraphBuilder,
-        ComponentNode, MissingRequirement, UserComponentVersionId, UserFacingCapabilityId,
-        UserProvidedBindings,
+        AgentProfileModelBinding, AgentProfilePublisher, AgentReadinessIssue, AgentReadinessReport,
+        AgentSlotId, AgentSlotKind, AgentTemplate, BindingRequest, ComponentBinding,
+        ComponentCatalogService, ComponentContent, ComponentGraphBuilder, ComponentNode,
+        InMemoryAgentProfileRepository, MissingRequirement, UserComponentVersionId,
+        UserFacingCapabilityId, UserProvidedBindings,
     },
 };
 
@@ -15,6 +17,11 @@ pub struct AgentBuilderResolver {
     has_model: bool,
     calendar_permission_ready: bool,
     has_web_search_tool: bool,
+    component_catalog: ComponentCatalogService,
+    persona_version_id: Option<UserComponentVersionId>,
+    model_catalog: ModelBindingCatalog,
+    model_selection: Option<ModelSelection>,
+    profile_repository: InMemoryAgentProfileRepository,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,38 +36,59 @@ pub struct UserEnvironment {
 
 impl AgentBuilderResolver {
     pub fn fixture_missing_model_and_calendar_permission() -> Self {
-        Self {
-            has_persona_component: true,
-            has_model: false,
-            calendar_permission_ready: false,
-            has_web_search_tool: true,
-        }
+        Self::fixture(true, false, false, true, CatalogFixtureMode::Registered)
     }
 
     pub fn fixture_missing_persona_component() -> Self {
-        Self {
-            has_persona_component: false,
-            has_model: true,
-            calendar_permission_ready: true,
-            has_web_search_tool: true,
-        }
+        Self::fixture(false, true, true, true, CatalogFixtureMode::Registered)
     }
 
     pub fn fixture_catalog_without_web_search_tool() -> Self {
-        Self {
-            has_persona_component: true,
-            has_model: true,
-            calendar_permission_ready: true,
-            has_web_search_tool: false,
-        }
+        Self::fixture(true, true, true, false, CatalogFixtureMode::Registered)
     }
 
     pub fn fixture_with_openai_binding_request() -> Self {
+        Self::fixture(true, true, true, true, CatalogFixtureMode::Registered)
+    }
+
+    pub fn fixture_with_missing_component_catalog_entry() -> Self {
+        Self::fixture(
+            true,
+            true,
+            true,
+            true,
+            CatalogFixtureMode::MissingComponentVersion,
+        )
+    }
+
+    pub fn fixture_with_missing_model_catalog_entry() -> Self {
+        Self::fixture(
+            true,
+            true,
+            true,
+            true,
+            CatalogFixtureMode::MissingModelSelection,
+        )
+    }
+
+    fn fixture(
+        has_persona_component: bool,
+        has_model: bool,
+        calendar_permission_ready: bool,
+        has_web_search_tool: bool,
+        catalog_mode: CatalogFixtureMode,
+    ) -> Self {
+        let catalog_fixture = CatalogFixture::new(catalog_mode);
         Self {
-            has_persona_component: true,
-            has_model: true,
-            calendar_permission_ready: true,
-            has_web_search_tool: true,
+            has_persona_component,
+            has_model,
+            calendar_permission_ready,
+            has_web_search_tool,
+            component_catalog: catalog_fixture.component_catalog,
+            persona_version_id: catalog_fixture.persona_version_id,
+            model_catalog: catalog_fixture.model_catalog,
+            model_selection: catalog_fixture.model_selection,
+            profile_repository: InMemoryAgentProfileRepository::default(),
         }
     }
 
@@ -70,9 +98,13 @@ impl AgentBuilderResolver {
         environment: &UserEnvironment,
     ) -> Result<AgentAssemblyPlan, AgentBuilderError> {
         let web_search = UserFacingCapabilityId::new("capability.web_search");
-        let mut graph_builder = ComponentGraphBuilder::default()
-            .add_node(ComponentNode::skill("skill.research", 1).requires(web_search.clone()));
-        if self.has_web_search_tool && environment.tool_bindings_ready {
+        let is_research_template = input.template().id().as_str() == "template.research.assistant";
+        let mut graph_builder = ComponentGraphBuilder::default();
+        if is_research_template {
+            graph_builder = graph_builder
+                .add_node(ComponentNode::skill("skill.research", 1).requires(web_search.clone()));
+        }
+        if is_research_template && self.has_web_search_tool && environment.tool_bindings_ready {
             graph_builder = graph_builder.add_node(
                 ComponentNode::tool_recipe("tool.web_search", 2).provides(web_search.clone()),
             );
@@ -81,7 +113,7 @@ impl AgentBuilderResolver {
         let graph = graph_builder.build();
         let capability_report = graph.validate_capabilities();
         let mut plan = AgentAssemblyPlan::new(graph);
-        if !capability_report.is_ready() {
+        if is_research_template && !capability_report.is_ready() {
             plan = plan
                 .missing(MissingRequirement::capability(
                     "skill.research",
@@ -109,14 +141,22 @@ impl AgentBuilderResolver {
                 "provider.openai",
                 "credential.openai.api_key",
             ));
+            plan = plan.with_safety_review(
+                crate::user_customization::SafetyReview::fixture_high_egress_risk(),
+            );
         }
 
         if self.has_model || self.has_persona_component {
-            plan = plan.with_profile_draft(profile_draft_for_template(
-                input.template(),
-                self.has_persona_component,
-                self.has_model,
-            ));
+            plan = plan.with_profile_draft(
+                profile_draft_for_template(
+                    input.template(),
+                    self.has_persona_component,
+                    self.has_model,
+                    self.persona_version_id,
+                    self.model_selection.clone(),
+                ),
+                input.template().clone(),
+            );
         }
 
         Ok(plan)
@@ -136,7 +176,16 @@ impl AgentBuilderResolver {
                 "provider.openai",
                 "credential.openai.api_key",
             ))
-            .with_profile_draft(profile_draft_for_template(&template, true, true))
+            .with_profile_draft(
+                profile_draft_for_template(
+                    &template,
+                    true,
+                    true,
+                    self.persona_version_id,
+                    self.model_selection.clone(),
+                ),
+                template,
+            )
     }
 
     pub fn finalize(
@@ -144,14 +193,14 @@ impl AgentBuilderResolver {
         plan: AgentAssemblyPlan,
         bindings: UserProvidedBindings,
     ) -> Result<AgentProfile, AgentBuilderError> {
-        if !plan.readiness_report.is_ready() {
+        if !plan.readiness_report().is_ready() {
             return Err(AgentBuilderError::new(
                 "assembly_plan.not_ready",
                 "agent assembly plan still has blocking readiness issues",
             ));
         }
 
-        for request in &plan.required_bindings {
+        for request in plan.required_bindings() {
             if request.is_required() && bindings.credential_ref(request.binding_key()).is_none() {
                 return Err(AgentBuilderError::new(
                     "binding.required.unresolved",
@@ -163,7 +212,7 @@ impl AgentBuilderResolver {
             }
         }
 
-        let draft = plan.into_profile_draft().ok_or_else(|| {
+        let (draft, template) = plan.into_profile_draft_and_template().ok_or_else(|| {
             AgentBuilderError::new(
                 "assembly_plan.profile_draft_missing",
                 "agent assembly plan does not contain a profile draft",
@@ -181,9 +230,26 @@ impl AgentBuilderResolver {
             ));
         }
 
-        Ok(draft
-            .with_local_bindings(bindings.into_local_bindings())
-            .into_published())
+        let draft = draft.with_local_bindings(bindings.into_local_bindings());
+        let publisher = AgentProfilePublisher::new(
+            Box::new(InMemoryTransactionRunner::default()),
+            self.profile_repository.clone(),
+        );
+        let reference = publisher
+            .publish(
+                draft,
+                &template,
+                &self.component_catalog,
+                &self.model_catalog,
+            )
+            .map_err(AgentBuilderError::from)?;
+
+        self.profile_repository.profile(&reference).ok_or_else(|| {
+            AgentBuilderError::new(
+                "agent_profile.finalize_missing_published_profile",
+                "agent profile publisher did not persist finalized profile",
+            )
+        })
     }
 
     pub fn readiness_for_template(&self, template: &AgentTemplate) -> AgentReadinessReport {
@@ -276,6 +342,8 @@ fn profile_draft_for_template(
     template: &AgentTemplate,
     include_persona: bool,
     include_model: bool,
+    persona_version_id: Option<UserComponentVersionId>,
+    model_selection: Option<ModelSelection>,
 ) -> AgentProfileDraft {
     let mut draft = AgentProfileDraft::new(
         AgentProfileId::new("profile.fixture.openai"),
@@ -286,18 +354,65 @@ fn profile_draft_for_template(
     if include_persona && template.supports_slot(AgentSlotKind::Persona) {
         draft = draft.bind(ComponentBinding::persona(
             AgentSlotId::new("slot.persona.primary"),
-            UserComponentVersionId::new(1),
+            persona_version_id.unwrap_or_else(|| UserComponentVersionId::new(1)),
         ));
     }
 
     if include_model && template.supports_slot(AgentSlotKind::Model) {
-        draft = draft.with_model_binding(AgentProfileModelBinding::new(
-            AgentSlotId::new("slot.model.primary"),
-            openai_fixture_model_selection(),
-        ));
+        if let Some(selection) = model_selection {
+            draft = draft.with_model_binding(AgentProfileModelBinding::new(
+                AgentSlotId::new("slot.model.primary"),
+                selection,
+            ));
+        }
     }
 
     draft
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CatalogFixtureMode {
+    Registered,
+    MissingComponentVersion,
+    MissingModelSelection,
+}
+
+struct CatalogFixture {
+    component_catalog: ComponentCatalogService,
+    persona_version_id: Option<UserComponentVersionId>,
+    model_catalog: ModelBindingCatalog,
+    model_selection: Option<ModelSelection>,
+}
+
+impl CatalogFixture {
+    fn new(mode: CatalogFixtureMode) -> Self {
+        let component_catalog = ComponentCatalogService::default();
+        let persona_version_id = if mode == CatalogFixtureMode::MissingComponentVersion {
+            Some(UserComponentVersionId::new(99))
+        } else {
+            let component_id =
+                component_catalog.create_draft(ComponentContent::persona("Researcher"));
+            Some(
+                component_catalog
+                    .publish(component_id)
+                    .expect("fixture persona component should publish"),
+            )
+        };
+
+        let model_selection = openai_fixture_model_selection();
+        let model_catalog = if mode == CatalogFixtureMode::MissingModelSelection {
+            ModelBindingCatalog::default()
+        } else {
+            ModelBindingCatalog::default().with_selection(model_selection.clone())
+        };
+
+        Self {
+            component_catalog,
+            persona_version_id,
+            model_catalog,
+            model_selection: Some(model_selection),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -344,5 +459,11 @@ impl AgentBuilderError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+impl From<StorageError> for AgentBuilderError {
+    fn from(error: StorageError) -> Self {
+        Self::new(error.code().to_string(), error.to_string())
     }
 }

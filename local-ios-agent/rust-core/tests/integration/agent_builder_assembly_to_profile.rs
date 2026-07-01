@@ -10,9 +10,9 @@ fn builder_create_plan_finalize_produces_snapshot_consumable_profile() {
         .create_plan(input, &UserEnvironment::fixture_ready())
         .unwrap();
 
-    assert!(plan.readiness_report.is_ready());
+    assert!(plan.readiness_report().is_ready());
     assert!(plan
-        .required_bindings
+        .required_bindings()
         .iter()
         .any(|binding| binding.binding_key() == "credential.openai.api_key"));
 

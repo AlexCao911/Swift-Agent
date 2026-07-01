@@ -97,6 +97,26 @@ fn builder_assembly_dependency_lint_detects_forbidden_imports_and_ignores_commen
     assert_eq!(findings.len(), 3);
 }
 
+#[test]
+fn agent_assembly_plan_does_not_expose_mutable_invariant_fields_or_profile_draft_setter() {
+    let source = include_str!("../../src/user_customization/assembly_plan.rs");
+
+    for forbidden in [
+        "pub component_graph:",
+        "pub missing_requirements:",
+        "pub required_bindings:",
+        "pub warnings:",
+        "pub safety_review:",
+        "pub readiness_report:",
+        "pub fn with_profile_draft",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "AgentAssemblyPlan must not expose mutable invariant API: {forbidden}"
+        );
+    }
+}
+
 fn forbidden_runtime_dependency_findings(source: &str) -> Vec<String> {
     let stripped = strip_comments_and_strings(source);
     let compact: String = stripped.chars().filter(|ch| !ch.is_whitespace()).collect();
