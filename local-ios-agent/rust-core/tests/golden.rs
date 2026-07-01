@@ -3,6 +3,8 @@ mod support;
 
 #[path = "golden/agent_package_export.rs"]
 mod agent_package_export;
+#[path = "golden/context_archive.rs"]
+mod context_archive;
 #[path = "golden/dto_unknown.rs"]
 mod dto_unknown;
 #[path = "golden/lifecycle_debug_artifacts.rs"]

@@ -580,7 +580,10 @@ impl<S: EventStore> AgentRuntime<S> {
         )?;
         self.emit_event_by_id(&input.session_id, &user_id, &mut emitted, on_event)?;
         let branch = self.store.active_branch(&input.session_id, &user_id)?;
-        let frame = self.context_controller().build_prompt_frame(branch)?;
+        let frame = self
+            .context_controller()
+            .build_prompt_frame_from_context_assembly(branch)?
+            .frame;
 
         let assistant_start = self.append_event(
             &input.session_id,
@@ -705,7 +708,10 @@ impl<S: EventStore> AgentRuntime<S> {
         )?;
         self.emit_event_by_id(&session_id, &tool_result_id, &mut emitted, on_event)?;
         let branch = self.store.active_branch(&session_id, &tool_result_id)?;
-        let frame = self.context_controller().build_prompt_frame(branch)?;
+        let frame = self
+            .context_controller()
+            .build_prompt_frame_from_context_assembly(branch)?
+            .frame;
         self.capture_prompt_debug_snapshot(&frame);
         let cancellation = self.start_provider_call(&run_key);
         let mut batcher = StreamBatcher::new(24);

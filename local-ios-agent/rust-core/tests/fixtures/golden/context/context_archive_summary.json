@@ -1,0 +1,53 @@
+{
+  "archive_id": "context_archive:run.golden:7622c79adbe92540",
+  "run_id": "run.golden",
+  "segment_ids": [
+    "prompt.compiled",
+    "memory.local.preference"
+  ],
+  "segments": [
+    {
+      "id": "prompt.compiled",
+      "source": "prompt",
+      "redacted_content": "Use ******************.",
+      "provenance": "prompt.compiled",
+      "sensitivity": "normal",
+      "tokens": 2,
+      "source_links": [
+        {
+          "kind": "prompt_document",
+          "id": "identity:identity@1"
+        }
+      ]
+    },
+    {
+      "id": "memory.local.preference",
+      "source": "memory",
+      "redacted_content": "likes quiet mornings",
+      "provenance": "memory.local:profile-memory",
+      "sensitivity": "normal",
+      "tokens": 3,
+      "source_links": [
+        {
+          "kind": "memory_contribution",
+          "id": "memory.local.preference"
+        }
+      ]
+    }
+  ],
+  "trace": {
+    "dropped_segment_ids": [],
+    "dropped_segments": [],
+    "kept_tokens": [
+      {
+        "source": "memory",
+        "tokens": 3
+      },
+      {
+        "source": "prompt",
+        "tokens": 2
+      }
+    ],
+    "tokenizer_source": "context_budget.whitespace"
+  }
+}

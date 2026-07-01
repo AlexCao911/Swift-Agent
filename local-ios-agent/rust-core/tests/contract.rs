@@ -9,6 +9,8 @@ mod agent_builder_assembly_graph_agent_os;
 mod agent_package_agent_os;
 #[path = "contract/agent_profile_contract.rs"]
 mod agent_profile_contract;
+#[path = "contract/context_agent_os.rs"]
+mod context_agent_os;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
 #[path = "contract/memory_agent_os.rs"]

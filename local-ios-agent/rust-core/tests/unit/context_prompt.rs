@@ -134,6 +134,99 @@ fn prompt_frame_fits_messages_using_tokenizer_counts() {
 }
 
 #[test]
+fn prompt_frame_budget_trace_records_messages_dropped_by_context_assembly() {
+    let controller = ContextController::new(
+        "",
+        "",
+        Vec::new(),
+        Box::new(CharacterTokenizer {
+            max_context_tokens: 10,
+        }),
+    );
+
+    let result = controller
+        .build_prompt_frame_from_context_assembly(vec![
+            message(EventKind::UserMessage, "abcdef"),
+            message(EventKind::AssistantMessageCompleted, "ghijkl"),
+        ])
+        .unwrap();
+    let archive_summary = result.assembly.archive("run.trace").debug_summary();
+
+    assert_eq!(
+        result.frame.messages,
+        vec![PromptMessage::Assistant("ghijkl".to_string())]
+    );
+    assert_eq!(
+        archive_summary.trace.tokenizer_source,
+        "tokenizer.character"
+    );
+    assert_eq!(archive_summary.trace.dropped_segments.len(), 1);
+    assert_eq!(
+        archive_summary.trace.dropped_segments[0].id,
+        "conversation.0000"
+    );
+    assert_eq!(
+        archive_summary.trace.dropped_segments[0].reason,
+        "budget.exceeded"
+    );
+    assert_eq!(archive_summary.trace.dropped_segments[0].tokens, 6);
+}
+
+#[test]
+fn prompt_frame_fails_when_required_guardrails_exceed_context_budget() {
+    let controller = ContextController::new(
+        "required-system-guardrail",
+        "",
+        Vec::new(),
+        Box::new(CharacterTokenizer {
+            max_context_tokens: 8,
+        }),
+    );
+
+    let error = match controller.build_prompt_frame_from_context_assembly(Vec::new()) {
+        Ok(_) => panic!("expected required guardrail budget failure"),
+        Err(error) => error,
+    };
+
+    assert!(error
+        .to_string()
+        .contains("context.required_segment_exceeds_budget"));
+}
+
+#[test]
+fn prompt_frame_trimming_keeps_contiguous_recent_conversation_window() {
+    let controller = ContextController::new(
+        "",
+        "",
+        Vec::new(),
+        Box::new(CharacterTokenizer {
+            max_context_tokens: 9,
+        }),
+    );
+
+    let result = controller
+        .build_prompt_frame_with_compaction(vec![
+            message(EventKind::UserMessage, "aa"),
+            message(EventKind::AssistantMessageCompleted, "bbbbbbbb"),
+            message(EventKind::UserMessage, "cc"),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        result.frame.messages,
+        vec![PromptMessage::User("cc".to_string())]
+    );
+    assert_eq!(result.compaction_summary, Some("aa\nbbbbbbbb".into()));
+    assert_eq!(
+        result.assembly.trace().dropped_segment_ids(),
+        vec![
+            "conversation.0001".to_string(),
+            "conversation.0000".to_string()
+        ]
+    );
+}
+
+#[test]
 fn prompt_frame_compacts_dropped_messages_after_existing_summary() {
     let controller = ContextController::new(
         "system",
