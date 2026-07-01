@@ -6,6 +6,7 @@ use crate::storage::{
     EventRecord, PendingStoreWrite, StorageError, StorageResult, TransactionName,
     TransactionOperation, TransactionRunner, UnitOfWork,
 };
+use crate::user_customization::{AgentProfileId, AgentProfileReference};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LocalBindings {
@@ -29,9 +30,26 @@ pub struct PackageInstallationRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InstalledAgentProfile {
-    pub profile_id: String,
-    pub package_id: String,
+pub struct InstalledAgentProfileReference {
+    profile: AgentProfileReference,
+    package_id: String,
+}
+
+impl InstalledAgentProfileReference {
+    pub fn new(profile: AgentProfileReference, package_id: impl Into<String>) -> Self {
+        Self {
+            profile,
+            package_id: package_id.into(),
+        }
+    }
+
+    pub fn profile(&self) -> &AgentProfileReference {
+        &self.profile
+    }
+
+    pub fn package_id(&self) -> &str {
+        &self.package_id
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -102,7 +120,7 @@ impl InMemoryPackageInstallStore {
             ));
         }
         inner.installations.push(commit.installation);
-        inner.agent_profiles.push(commit.profile);
+        inner.agent_profile_references.push(commit.profile);
         inner.package_locks.push(commit.lock);
         Ok(())
     }
@@ -115,11 +133,11 @@ impl InMemoryPackageInstallStore {
             .clone()
     }
 
-    pub fn agent_profiles(&self) -> Vec<InstalledAgentProfile> {
+    pub fn agent_profile_references(&self) -> Vec<InstalledAgentProfileReference> {
         self.inner
             .lock()
             .expect("package install store mutex poisoned")
-            .agent_profiles
+            .agent_profile_references
             .clone()
     }
 
@@ -150,7 +168,7 @@ impl PendingStoreWrite for PendingPackageInstallWrite {
 #[derive(Clone, Debug, Default)]
 struct PackageInstallRecords {
     installations: Vec<PackageInstallationRecord>,
-    agent_profiles: Vec<InstalledAgentProfile>,
+    agent_profile_references: Vec<InstalledAgentProfileReference>,
     package_locks: Vec<AgentPackageLock>,
     reject_commits: bool,
     fail_apply: bool,
@@ -159,7 +177,7 @@ struct PackageInstallRecords {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageInstallCommit {
     installation: PackageInstallationRecord,
-    profile: InstalledAgentProfile,
+    profile: InstalledAgentProfileReference,
     lock: AgentPackageLock,
 }
 
@@ -177,7 +195,7 @@ impl AgentPackageInstaller {
         &self,
         manifest: AgentPackageManifest,
         bindings: LocalBindings,
-    ) -> StorageResult<InstalledAgentProfile> {
+    ) -> StorageResult<InstalledAgentProfileReference> {
         let validation = AgentPackageValidator::default().validate(&manifest);
         if !validation.is_valid() {
             return Err(StorageError::new(
@@ -242,10 +260,13 @@ struct PackageInstallOperation {
 
 impl TransactionOperation for PackageInstallOperation {
     fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        let profile = InstalledAgentProfile {
-            profile_id: format!("profile:{}", self.manifest.package_id),
-            package_id: self.manifest.package_id.clone(),
-        };
+        let profile = InstalledAgentProfileReference::new(
+            AgentProfileReference::new(AgentProfileId::new(format!(
+                "profile:{}",
+                self.manifest.package_id
+            ))),
+            self.manifest.package_id.clone(),
+        );
         let commit = PackageInstallCommit {
             installation: PackageInstallationRecord {
                 package_id: self.manifest.package_id.clone(),

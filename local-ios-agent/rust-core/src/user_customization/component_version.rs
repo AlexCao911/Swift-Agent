@@ -31,3 +31,21 @@ impl PublishedUserComponentVersion {
         self.content.content_text()
     }
 }
+
+impl UserComponentVersionId {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    pub fn is_published(&self) -> bool {
+        self.0 != 0
+    }
+
+    pub fn stable_key(&self) -> String {
+        format!("component_version.{}", self.0)
+    }
+}

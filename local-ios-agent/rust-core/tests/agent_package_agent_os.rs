@@ -162,7 +162,7 @@ fn package_install_rejects_invalid_manifest_before_writing_lock() {
 
     assert_eq!(error.code(), "package.validation_failed");
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
 }
 
@@ -182,7 +182,7 @@ fn package_install_rejects_signed_manifest_before_transaction() {
 
     assert_eq!(error.code(), "package.validation_failed");
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
 }
 
@@ -212,7 +212,7 @@ fn package_install_rolls_back_local_records_when_transaction_fails() {
 
     assert_eq!(error.code(), "storage.forced");
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
 }
 
@@ -232,7 +232,7 @@ fn installer_preview_reports_records_without_writing_store() {
         .iter()
         .any(|operation| operation.code == "package.install.profile.create"));
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
 }
 
@@ -251,7 +251,18 @@ fn package_install_commits_records_and_event_in_single_transaction() {
         .unwrap();
 
     assert_eq!(store.installations().len(), 1);
-    assert_eq!(store.agent_profiles().len(), 1);
+    assert_eq!(store.agent_profile_references().len(), 1);
+    assert_eq!(
+        store.agent_profile_references()[0]
+            .profile()
+            .profile_id()
+            .as_str(),
+        "profile:agent.fixture"
+    );
+    assert_eq!(
+        store.agent_profile_references()[0].package_id(),
+        "agent.fixture"
+    );
     assert_eq!(store.package_locks().len(), 1);
     let events = event_store.stream("agent.fixture").unwrap();
     assert_eq!(events.len(), 1);
@@ -274,7 +285,7 @@ fn package_install_store_validation_failure_rolls_back_package_event() {
 
     assert_eq!(error.code(), "package.install_store.rejected");
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
     assert!(event_store.stream("agent.fixture").unwrap().is_empty());
 }
@@ -295,7 +306,7 @@ fn package_install_store_apply_failure_rolls_back_package_event() {
 
     assert_eq!(error.code(), "package.install_store.apply_failed");
     assert!(store.installations().is_empty());
-    assert!(store.agent_profiles().is_empty());
+    assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
     assert!(event_store.stream("agent.fixture").unwrap().is_empty());
 }

@@ -8,8 +8,9 @@ pub mod validator;
 
 pub use exporter::{AgentPackageExporter, ExportedAgentPackage};
 pub use installer::{
-    AgentPackageInstaller, InMemoryPackageInstallStore, InstalledAgentProfile, LocalBindings,
-    PackageInstallPreview, PackageInstallPreviewOperation, PackageInstallationRecord,
+    AgentPackageInstaller, InMemoryPackageInstallStore, InstalledAgentProfileReference,
+    LocalBindings, PackageInstallPreview, PackageInstallPreviewOperation,
+    PackageInstallationRecord,
 };
 pub use lockfile::{AgentPackageLock, LockedPackageComponent};
 pub use manifest::{AgentPackageManifest, PackageModelBinding};
