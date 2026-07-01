@@ -1,4 +1,7 @@
-use crate::run_snapshot::{ResolvedComponentBinding, ResolvedModelBinding, TrustedHostRunState};
+use crate::run_snapshot::{
+    ResolvedComponentBinding, ResolvedMemoryBinding, ResolvedModelBinding, ResolvedToolBinding,
+    ResolvedVoiceBinding, TrustedHostRunState,
+};
 use crate::user_customization::{AgentProfileId, AgentProfileVersion};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -27,7 +30,11 @@ pub struct ResolvedRunSnapshot {
     profile_version: AgentProfileVersion,
     component_versions: Vec<ResolvedComponentBinding>,
     model_binding: ResolvedModelBinding,
+    tool_bindings: Vec<ResolvedToolBinding>,
+    memory_binding: Option<ResolvedMemoryBinding>,
+    voice_binding: Option<ResolvedVoiceBinding>,
     trusted_host_state: TrustedHostRunState,
+    readiness_report: RunSnapshotReadinessReport,
     created_at_millis: u64,
 }
 
@@ -37,9 +44,24 @@ pub struct RunSnapshotPreview {
     snapshot: ResolvedRunSnapshot,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunSnapshotReadinessReport {
+    issues: Vec<RunSnapshotReadinessIssue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunSnapshotReadinessIssue {
+    code: String,
+    message: String,
+}
+
 impl RunSnapshotId {
     pub fn new(value: u64) -> Self {
         Self(value)
+    }
+
+    pub(in crate::run_snapshot) fn unpersisted() -> Self {
+        Self(0)
     }
 
     pub fn as_u64(&self) -> u64 {
@@ -105,7 +127,11 @@ impl ResolvedRunSnapshot {
         profile_version: AgentProfileVersion,
         component_versions: Vec<ResolvedComponentBinding>,
         model_binding: ResolvedModelBinding,
+        tool_bindings: Vec<ResolvedToolBinding>,
+        memory_binding: Option<ResolvedMemoryBinding>,
+        voice_binding: Option<ResolvedVoiceBinding>,
         trusted_host_state: TrustedHostRunState,
+        readiness_report: RunSnapshotReadinessReport,
         created_at_millis: u64,
     ) -> Self {
         Self {
@@ -115,9 +141,18 @@ impl ResolvedRunSnapshot {
             profile_version,
             component_versions,
             model_binding,
+            tool_bindings,
+            memory_binding,
+            voice_binding,
             trusted_host_state,
+            readiness_report,
             created_at_millis,
         }
+    }
+
+    pub(in crate::run_snapshot) fn with_snapshot_id(mut self, snapshot_id: RunSnapshotId) -> Self {
+        self.snapshot_id = snapshot_id;
+        self
     }
 
     pub fn snapshot_id(&self) -> RunSnapshotId {
@@ -144,8 +179,24 @@ impl ResolvedRunSnapshot {
         &self.model_binding
     }
 
+    pub fn tool_bindings(&self) -> &[ResolvedToolBinding] {
+        &self.tool_bindings
+    }
+
+    pub fn memory_binding(&self) -> Option<&ResolvedMemoryBinding> {
+        self.memory_binding.as_ref()
+    }
+
+    pub fn voice_binding(&self) -> Option<&ResolvedVoiceBinding> {
+        self.voice_binding.as_ref()
+    }
+
     pub fn trusted_host_state(&self) -> &TrustedHostRunState {
         &self.trusted_host_state
+    }
+
+    pub fn readiness_report(&self) -> &RunSnapshotReadinessReport {
+        &self.readiness_report
     }
 
     pub fn created_at_millis(&self) -> u64 {
@@ -164,5 +215,48 @@ impl RunSnapshotPreview {
 
     pub fn snapshot(&self) -> &ResolvedRunSnapshot {
         &self.snapshot
+    }
+}
+
+impl RunSnapshotReadinessReport {
+    pub(in crate::run_snapshot) fn ready() -> Self {
+        Self { issues: Vec::new() }
+    }
+
+    pub(in crate::run_snapshot) fn with_issue(mut self, issue: RunSnapshotReadinessIssue) -> Self {
+        self.issues.push(issue);
+        self
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.issues.is_empty()
+    }
+
+    pub fn has_issue(&self, code: &str) -> bool {
+        self.issues.iter().any(|issue| issue.code() == code)
+    }
+
+    pub fn issues(&self) -> &[RunSnapshotReadinessIssue] {
+        &self.issues
+    }
+}
+
+impl RunSnapshotReadinessIssue {
+    pub(in crate::run_snapshot) fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }

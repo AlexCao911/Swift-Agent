@@ -639,6 +639,11 @@ impl AgentProfile {
         }
     }
 
+    pub(crate) fn with_version(mut self, version: AgentProfileVersion) -> Self {
+        self.version = version;
+        self
+    }
+
     pub fn id(&self) -> &AgentProfileId {
         &self.id
     }

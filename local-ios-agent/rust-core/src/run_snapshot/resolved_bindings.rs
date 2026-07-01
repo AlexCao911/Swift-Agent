@@ -28,6 +28,24 @@ pub struct ResolvedModelBinding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedToolBinding {
+    slot_id: AgentSlotId,
+    component_version: ResolvedComponentBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedMemoryBinding {
+    slot_id: AgentSlotId,
+    component_version: ResolvedComponentBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedVoiceBinding {
+    slot_id: AgentSlotId,
+    component_version: ResolvedComponentBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotModelId(String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,12 +148,11 @@ impl SnapshotModelId {
 }
 
 impl TrustedHostRunState {
-    pub(in crate::run_snapshot) fn capture(
+    pub(in crate::run_snapshot) fn new(
         permission_state: PermissionState,
-        local_bindings: &AgentProfileLocalBindings,
+        local_bindings: LocalBindingState,
+        credential_availability: CredentialAvailability,
     ) -> Self {
-        let local_bindings = LocalBindingState::from_profile(local_bindings);
-        let credential_availability = CredentialAvailability::from_local_bindings(&local_bindings);
         Self {
             permission_state,
             local_bindings,
@@ -157,7 +174,9 @@ impl TrustedHostRunState {
 }
 
 impl LocalBindingState {
-    fn from_profile(local_bindings: &AgentProfileLocalBindings) -> Self {
+    pub(in crate::run_snapshot) fn from_profile(
+        local_bindings: &AgentProfileLocalBindings,
+    ) -> Self {
         Self {
             credential_refs: local_bindings.credential_refs().clone(),
         }
@@ -169,13 +188,77 @@ impl LocalBindingState {
 }
 
 impl CredentialAvailability {
-    fn from_local_bindings(local_bindings: &LocalBindingState) -> Self {
-        Self {
-            credential_refs: local_bindings.credential_refs.clone(),
-        }
+    pub(in crate::run_snapshot) fn with_available_ref(
+        mut self,
+        binding_key: impl Into<String>,
+        credential_ref: impl Into<String>,
+    ) -> Self {
+        self.credential_refs
+            .insert(binding_key.into(), credential_ref.into());
+        self
     }
 
     pub fn credential_ref_for(&self, binding_key: &str) -> Option<&str> {
         self.credential_refs.get(binding_key).map(String::as_str)
+    }
+}
+
+impl ResolvedToolBinding {
+    pub(in crate::run_snapshot) fn new(
+        slot_id: AgentSlotId,
+        component_version: ResolvedComponentBinding,
+    ) -> Self {
+        Self {
+            slot_id,
+            component_version,
+        }
+    }
+
+    pub fn slot_id(&self) -> &AgentSlotId {
+        &self.slot_id
+    }
+
+    pub fn component_version(&self) -> &ResolvedComponentBinding {
+        &self.component_version
+    }
+}
+
+impl ResolvedMemoryBinding {
+    pub(in crate::run_snapshot) fn new(
+        slot_id: AgentSlotId,
+        component_version: ResolvedComponentBinding,
+    ) -> Self {
+        Self {
+            slot_id,
+            component_version,
+        }
+    }
+
+    pub fn slot_id(&self) -> &AgentSlotId {
+        &self.slot_id
+    }
+
+    pub fn component_version(&self) -> &ResolvedComponentBinding {
+        &self.component_version
+    }
+}
+
+impl ResolvedVoiceBinding {
+    pub(in crate::run_snapshot) fn new(
+        slot_id: AgentSlotId,
+        component_version: ResolvedComponentBinding,
+    ) -> Self {
+        Self {
+            slot_id,
+            component_version,
+        }
+    }
+
+    pub fn slot_id(&self) -> &AgentSlotId {
+        &self.slot_id
+    }
+
+    pub fn component_version(&self) -> &ResolvedComponentBinding {
+        &self.component_version
     }
 }

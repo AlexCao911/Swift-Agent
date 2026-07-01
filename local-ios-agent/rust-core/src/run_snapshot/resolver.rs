@@ -1,23 +1,34 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::model::{ModelBindingId, ModelCatalogVersion, ModelSelection};
-use crate::run_snapshot::{
-    ResolvedComponentBinding, ResolvedModelBinding, ResolvedRunSnapshot, RunSnapshotError,
-    RunSnapshotId, RunSnapshotResolveInput, RunSnapshotResult, StartRunRequest,
-    TrustedHostRunState,
+use crate::model::{
+    InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
-use crate::security::PermissionState;
-use crate::storage::{PendingStoreWrite, StorageError, StorageResult, UnitOfWork};
+use crate::run_snapshot::{
+    CredentialAvailability, LocalBindingState, ResolvedComponentBinding, ResolvedMemoryBinding,
+    ResolvedModelBinding, ResolvedRunSnapshot, ResolvedToolBinding, ResolvedVoiceBinding,
+    RunSnapshotError, RunSnapshotId, RunSnapshotReadinessIssue, RunSnapshotReadinessReport,
+    RunSnapshotResolveInput, RunSnapshotResult, StartRunRequest, TrustedHostRunState,
+};
+use crate::security::{
+    CapabilityRequirement, CredentialPurpose, CredentialRef, CredentialRefResolver,
+    InMemoryCredentialResolver, PermissionState, SecurityPermissionService,
+    StaticSecurityPermissionService,
+};
+use crate::storage::{
+    InMemoryTransactionRunner, PendingStoreWrite, StorageError, StorageResult, TransactionName,
+    TransactionOperation, TransactionRunner, UnitOfWork,
+};
 use crate::user_customization::{
     AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
-    AgentProfileModelBinding, AgentProfileVersion, AgentSlotKind, AgentTemplate, ComponentBinding,
-    ComponentKind, UserComponentVersionId,
+    AgentProfileModelBinding, AgentProfileReference, AgentProfileVersion, AgentSlotKind,
+    AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent, ComponentKind,
+    InMemoryAgentProfileRepository, UserComponentVersionId,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RunSnapshotResolver {
-    repository: RunSnapshotRepository,
+    sources: RunSnapshotSourceCatalog,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -25,19 +36,20 @@ pub struct RunSnapshotRepository {
     inner: Arc<Mutex<RunSnapshotRepositoryRecords>>,
 }
 
-#[derive(Debug)]
-struct RunSnapshotRepositoryRecords {
-    profiles: BTreeMap<AgentProfileId, ProfileSnapshotSource>,
-    components: BTreeMap<UserComponentVersionId, ComponentSnapshotSource>,
-    models: BTreeMap<ModelBindingId, ModelSelection>,
-    snapshots: BTreeMap<RunSnapshotId, ResolvedRunSnapshot>,
-    next_snapshot_id: u64,
+#[derive(Clone)]
+pub struct RunSnapshotSourceCatalog {
+    profile_repository: InMemoryAgentProfileRepository,
+    component_catalog: ComponentCatalogService,
+    model_catalog: InMemoryModelBindingCatalog,
+    security: Arc<dyn SecurityPermissionService>,
+    credential_resolver: Arc<dyn CredentialRefResolver>,
+    component_entity_versions: Arc<Mutex<BTreeMap<UserComponentVersionId, u64>>>,
 }
 
-#[derive(Clone, Debug)]
-struct ProfileSnapshotSource {
-    profile: AgentProfile,
-    profile_version: AgentProfileVersion,
+#[derive(Debug)]
+struct RunSnapshotRepositoryRecords {
+    snapshots: BTreeMap<RunSnapshotId, ResolvedRunSnapshot>,
+    next_snapshot_id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -49,14 +61,22 @@ struct ComponentSnapshotSource {
 struct PendingRunSnapshotWrite {
     repository: RunSnapshotRepository,
     snapshot: ResolvedRunSnapshot,
+    committed_snapshot: Arc<Mutex<Option<ResolvedRunSnapshot>>>,
+}
+
+struct AgentProfileStageOperation {
+    repository: InMemoryAgentProfileRepository,
+    profile: Option<AgentProfile>,
+}
+
+struct ModelSelectionStageOperation {
+    catalog: InMemoryModelBindingCatalog,
+    selection: ModelSelection,
 }
 
 impl Default for RunSnapshotRepositoryRecords {
     fn default() -> Self {
         Self {
-            profiles: BTreeMap::new(),
-            components: BTreeMap::new(),
-            models: BTreeMap::new(),
             snapshots: BTreeMap::new(),
             next_snapshot_id: 1,
         }
@@ -64,16 +84,8 @@ impl Default for RunSnapshotRepositoryRecords {
 }
 
 impl RunSnapshotResolver {
-    pub fn new(repository: RunSnapshotRepository) -> Self {
-        Self { repository }
-    }
-
-    pub fn fixture_profile_with_persona_and_model() -> Self {
-        Self::new(RunSnapshotRepository::fixture_profile_with_persona_and_model())
-    }
-
-    pub fn repository(&self) -> RunSnapshotRepository {
-        self.repository.clone()
+    pub fn new(sources: RunSnapshotSourceCatalog) -> Self {
+        Self { sources }
     }
 
     pub fn resolve(
@@ -81,18 +93,25 @@ impl RunSnapshotResolver {
         input: RunSnapshotResolveInput,
     ) -> RunSnapshotResult<ResolvedRunSnapshot> {
         let (request, trusted_host_state) = input.into_parts();
-        let profile = self.repository.profile_source(request.agent_profile_id())?;
-        let component_versions = self.resolve_components(profile.profile.bindings())?;
-        let model_binding = self.resolve_model_binding(&profile.profile)?;
-        let snapshot_id = self.repository.next_snapshot_id();
+        let profile = self.sources.profile(request.agent_profile_id())?;
+        let component_versions = self.resolve_components(profile.bindings())?;
+        let model_binding = self.resolve_model_binding(&profile)?;
+        let tool_bindings = self.resolve_tool_bindings(&component_versions);
+        let memory_binding = self.resolve_memory_binding(&component_versions);
+        let voice_binding = self.resolve_voice_binding(&component_versions);
+        let readiness_report = readiness_from_trusted_host_state(&trusted_host_state);
 
         Ok(ResolvedRunSnapshot::new(
-            snapshot_id,
+            RunSnapshotId::unpersisted(),
             request,
-            profile.profile_version,
+            profile.version(),
             component_versions,
             model_binding,
+            tool_bindings,
+            memory_binding,
+            voice_binding,
             trusted_host_state,
+            readiness_report,
             0,
         ))
     }
@@ -105,7 +124,7 @@ impl RunSnapshotResolver {
             .iter()
             .map(|binding| {
                 let source = self
-                    .repository
+                    .sources
                     .component_source(binding.component_version_id())?;
                 Ok(ResolvedComponentBinding::new(
                     binding.slot_id().clone(),
@@ -128,23 +147,126 @@ impl RunSnapshotResolver {
             )
         })?;
         let current_selection = self
-            .repository
+            .sources
             .model_selection(profile_model.selection().binding_id())?;
         Ok(ResolvedModelBinding::from_selection(&current_selection))
     }
-}
 
-impl RunSnapshotRepository {
-    pub fn fixture_profile_with_persona_and_model() -> Self {
-        let repository = Self::default();
-        repository.seed_fixture_profile();
-        repository
+    fn resolve_tool_bindings(
+        &self,
+        component_versions: &[ResolvedComponentBinding],
+    ) -> Vec<ResolvedToolBinding> {
+        component_versions
+            .iter()
+            .filter(|binding| binding.slot_kind() == AgentSlotKind::Toolset)
+            .cloned()
+            .map(|binding| ResolvedToolBinding::new(binding.slot_id().clone(), binding))
+            .collect()
     }
 
-    fn seed_fixture_profile(&self) {
+    fn resolve_memory_binding(
+        &self,
+        component_versions: &[ResolvedComponentBinding],
+    ) -> Option<ResolvedMemoryBinding> {
+        component_versions
+            .iter()
+            .find(|binding| binding.slot_kind() == AgentSlotKind::Memory)
+            .cloned()
+            .map(|binding| ResolvedMemoryBinding::new(binding.slot_id().clone(), binding))
+    }
+
+    fn resolve_voice_binding(
+        &self,
+        component_versions: &[ResolvedComponentBinding],
+    ) -> Option<ResolvedVoiceBinding> {
+        component_versions
+            .iter()
+            .find(|binding| binding.slot_kind() == AgentSlotKind::Voice)
+            .cloned()
+            .map(|binding| ResolvedVoiceBinding::new(binding.slot_id().clone(), binding))
+    }
+}
+
+impl RunSnapshotSourceCatalog {
+    pub fn new(
+        profile_repository: InMemoryAgentProfileRepository,
+        component_catalog: ComponentCatalogService,
+        model_catalog: InMemoryModelBindingCatalog,
+        security: Arc<dyn SecurityPermissionService>,
+        credential_resolver: Arc<dyn CredentialRefResolver>,
+    ) -> Self {
+        Self {
+            profile_repository,
+            component_catalog,
+            model_catalog,
+            security,
+            credential_resolver,
+            component_entity_versions: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn fixture_profile_with_persona_and_model() -> Self {
+        Self::fixture_with_options(FixtureOptions::default())
+    }
+
+    pub fn fixture_with_profile_version(profile_version: u64) -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            profile_version,
+            ..FixtureOptions::default()
+        })
+    }
+
+    pub fn fixture_with_component_entity_version(entity_version: u64) -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            component_entity_version: entity_version,
+            ..FixtureOptions::default()
+        })
+    }
+
+    pub fn fixture_with_model_catalog_version(catalog_version: u64) -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            model_catalog_version: catalog_version,
+            ..FixtureOptions::default()
+        })
+    }
+
+    pub fn fixture_with_model_id_at_same_catalog_version(model_id: impl Into<String>) -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            model_id: model_id.into(),
+            ..FixtureOptions::default()
+        })
+    }
+
+    pub fn fixture_with_permission_state(permission_state: PermissionState) -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            permission_state,
+            ..FixtureOptions::default()
+        })
+    }
+
+    pub fn fixture_without_credentials() -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            include_credentials: false,
+            ..FixtureOptions::default()
+        })
+    }
+
+    fn fixture_with_options(options: FixtureOptions) -> Self {
         let template = AgentTemplate::assistant_default();
-        let persona_version_id = UserComponentVersionId::new(1);
-        let model_selection = fixture_model_selection(ModelCatalogVersion::new(7));
+        let component_catalog = ComponentCatalogService::default();
+        let persona_component_id =
+            component_catalog.create_draft(ComponentContent::persona("Researcher"));
+        let persona_version = component_catalog
+            .publish(persona_component_id)
+            .expect("fixture persona should publish");
+        let model_catalog = InMemoryModelBindingCatalog::default();
+        let model_selection = fixture_model_selection(
+            ModelCatalogVersion::new(options.model_catalog_version),
+            options.model_id,
+        );
+        stage_model_selection(&model_catalog, model_selection.clone());
+
+        let profile_repository = InMemoryAgentProfileRepository::default();
         let profile = AgentProfileDraft::new(
             AgentProfileId::new("profile_1"),
             template.id().clone(),
@@ -155,68 +277,91 @@ impl RunSnapshotRepository {
                 .slot_id_for_kind(AgentSlotKind::Persona)
                 .expect("fixture template has persona slot")
                 .clone(),
-            persona_version_id,
+            persona_version,
         ))
         .with_model_binding(AgentProfileModelBinding::new(
             template
                 .slot_id_for_kind(AgentSlotKind::Model)
                 .expect("fixture template has model slot")
                 .clone(),
-            model_selection.clone(),
+            model_selection,
         ))
         .with_local_bindings(
             AgentProfileLocalBindings::default()
                 .with_credential_ref("account.openai.default", "credential.openai.default"),
         )
-        .into_published();
+        .into_published()
+        .with_version(AgentProfileVersion::new(options.profile_version));
+        stage_profile(&profile_repository, profile);
 
-        let mut inner = self
-            .inner
+        let security = Arc::new(
+            StaticSecurityPermissionService::default()
+                .with_permission("run.start", options.permission_state),
+        );
+        let credential_resolver: Arc<dyn CredentialRefResolver> = if options.include_credentials {
+            Arc::new(InMemoryCredentialResolver::default().with_secret_for(
+                "credential.openai.default",
+                "secret",
+                [CredentialPurpose::RemoteProvider],
+            ))
+        } else {
+            Arc::new(InMemoryCredentialResolver::default())
+        };
+
+        let sources = Self::new(
+            profile_repository,
+            component_catalog,
+            model_catalog,
+            security,
+            credential_resolver,
+        );
+        sources
+            .component_entity_versions
             .lock()
-            .expect("run snapshot repository mutex poisoned");
-        inner.profiles.insert(
-            profile.id().clone(),
-            ProfileSnapshotSource {
-                profile,
-                profile_version: AgentProfileVersion::initial(),
-            },
-        );
-        inner.components.insert(
-            persona_version_id,
-            ComponentSnapshotSource {
-                version_id: component_snapshot_version_id(
-                    ComponentKind::Persona,
-                    persona_version_id,
-                ),
-                entity_version: 1,
-            },
-        );
-        inner
-            .models
-            .insert(model_selection.binding_id().clone(), model_selection);
+            .expect("component entity versions mutex poisoned")
+            .insert(persona_version, options.component_entity_version);
+        sources
     }
 
     pub(in crate::run_snapshot) fn capture_trusted_host_state(
         &self,
         request: &StartRunRequest,
     ) -> RunSnapshotResult<TrustedHostRunState> {
-        let profile = self.profile_source(request.agent_profile_id())?;
-        Ok(TrustedHostRunState::capture(
-            PermissionState::Granted,
-            profile.profile.local_bindings(),
+        let profile = self.profile(request.agent_profile_id())?;
+        let permission_state = self
+            .security
+            .permission_state(&[CapabilityRequirement::new("run.start")]);
+        let local_bindings = LocalBindingState::from_profile(profile.local_bindings());
+        let mut credential_availability = CredentialAvailability::default();
+        for (binding_key, credential_ref) in profile.local_bindings().credential_refs() {
+            self.credential_resolver
+                .resolve(
+                    &CredentialRef::new(credential_ref),
+                    CredentialPurpose::RemoteProvider,
+                )
+                .map_err(|error| {
+                    RunSnapshotError::new(
+                        "snapshot.credential_unavailable",
+                        format!(
+                            "credential {} is unavailable for run snapshot resolution: {}",
+                            credential_ref, error
+                        ),
+                    )
+                })?;
+            credential_availability =
+                credential_availability.with_available_ref(binding_key, credential_ref);
+        }
+
+        Ok(TrustedHostRunState::new(
+            permission_state,
+            local_bindings,
+            credential_availability,
         ))
     }
 
-    fn profile_source(
-        &self,
-        profile_id: &AgentProfileId,
-    ) -> RunSnapshotResult<ProfileSnapshotSource> {
-        self.inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned")
-            .profiles
-            .get(profile_id)
-            .cloned()
+    fn profile(&self, profile_id: &AgentProfileId) -> RunSnapshotResult<AgentProfile> {
+        self.profile_repository
+            .profile(&AgentProfileReference::latest(profile_id.clone()))
             .ok_or_else(|| {
                 RunSnapshotError::new(
                     "snapshot.profile_missing",
@@ -229,51 +374,48 @@ impl RunSnapshotRepository {
         &self,
         version_id: UserComponentVersionId,
     ) -> RunSnapshotResult<ComponentSnapshotSource> {
-        self.inner
+        let version = self.component_catalog.version(version_id).ok_or_else(|| {
+            RunSnapshotError::new(
+                "snapshot.component_version_missing",
+                "component version could not be found for run snapshot resolution",
+            )
+        })?;
+        let kind = version.content().kind();
+        let entity_version = self
+            .component_entity_versions
             .lock()
-            .expect("run snapshot repository mutex poisoned")
-            .components
+            .expect("component entity versions mutex poisoned")
             .get(&version_id)
-            .cloned()
-            .ok_or_else(|| {
-                RunSnapshotError::new(
-                    "snapshot.component_version_missing",
-                    "component version could not be found for run snapshot resolution",
-                )
-            })
+            .copied()
+            .unwrap_or_else(|| version_id.as_u64());
+
+        Ok(ComponentSnapshotSource {
+            version_id: component_snapshot_version_id(kind, version_id),
+            entity_version,
+        })
     }
 
     fn model_selection(&self, binding_id: &ModelBindingId) -> RunSnapshotResult<ModelSelection> {
-        self.inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned")
-            .models
-            .get(binding_id)
-            .cloned()
-            .ok_or_else(|| {
-                RunSnapshotError::new(
-                    "snapshot.model_binding_missing",
-                    "model binding could not be found for run snapshot resolution",
-                )
-            })
+        self.model_catalog.selection(binding_id).ok_or_else(|| {
+            RunSnapshotError::new(
+                "snapshot.model_binding_missing",
+                "model binding could not be found for run snapshot resolution",
+            )
+        })
     }
+}
 
-    fn next_snapshot_id(&self) -> RunSnapshotId {
-        let inner = self
-            .inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned");
-        RunSnapshotId::new(inner.next_snapshot_id)
-    }
-
+impl RunSnapshotRepository {
     pub(in crate::run_snapshot) fn stage_snapshot(
         &self,
         tx: &mut UnitOfWork,
         snapshot: ResolvedRunSnapshot,
+        committed_snapshot: Arc<Mutex<Option<ResolvedRunSnapshot>>>,
     ) -> StorageResult<()> {
         tx.push_store_write(Box::new(PendingRunSnapshotWrite {
             repository: self.clone(),
             snapshot,
+            committed_snapshot,
         }));
         Ok(())
     }
@@ -296,87 +438,109 @@ impl RunSnapshotRepository {
             .unwrap_or(0)
     }
 
-    pub fn mutate_profile_version_for_test(&self, profile_id: &str) {
+    fn commit_snapshot(&self, snapshot: ResolvedRunSnapshot) -> ResolvedRunSnapshot {
         let mut inner = self
             .inner
             .lock()
             .expect("run snapshot repository mutex poisoned");
-        if let Some(profile) = inner.profiles.get_mut(&AgentProfileId::new(profile_id)) {
-            profile.profile_version =
-                AgentProfileVersion::new(profile.profile_version.as_u64() + 1);
-        }
-    }
-
-    pub fn mutate_component_entity_version_for_test(&self, version_id: &str) {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned");
-        if let Some(component) = inner
-            .components
-            .values_mut()
-            .find(|component| component.version_id == version_id)
-        {
-            component.entity_version += 1;
-        }
-    }
-
-    pub fn mutate_model_catalog_version_for_test(&self, binding_id: &str) {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned");
-        let binding_id = ModelBindingId::new(binding_id);
-        if let Some(selection) = inner.models.get_mut(&binding_id) {
-            let next_version = ModelCatalogVersion::new(selection.catalog_version().as_u64() + 1);
-            *selection = ModelSelection::new(
-                selection.binding_id().clone(),
-                selection.provider_account_id(),
-                selection.provider_id(),
-                selection.model_id(),
-                next_version,
-            );
-        }
-    }
-
-    fn validate_snapshot_absent(&self, snapshot_id: RunSnapshotId) -> StorageResult<()> {
-        if self.contains(snapshot_id) {
-            return Err(StorageError::new(
-                "snapshot.duplicate",
-                "run snapshot id already exists",
-            ));
-        }
-        Ok(())
-    }
-
-    fn commit_snapshot(&self, snapshot: ResolvedRunSnapshot) {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned");
-        let snapshot_id = snapshot.snapshot_id();
-        inner.next_snapshot_id = inner.next_snapshot_id.max(snapshot_id.as_u64() + 1);
-        inner.snapshots.insert(snapshot_id, snapshot);
+        let snapshot_id = RunSnapshotId::new(inner.next_snapshot_id);
+        inner.next_snapshot_id += 1;
+        let snapshot = snapshot.with_snapshot_id(snapshot_id);
+        inner.snapshots.insert(snapshot_id, snapshot.clone());
+        snapshot
     }
 }
 
 impl PendingStoreWrite for PendingRunSnapshotWrite {
     fn validate(&self) -> StorageResult<()> {
-        self.repository
-            .validate_snapshot_absent(self.snapshot.snapshot_id())
+        Ok(())
     }
 
     fn commit(self: Box<Self>) {
-        self.repository.commit_snapshot(self.snapshot);
+        let snapshot = self.repository.commit_snapshot(self.snapshot);
+        *self
+            .committed_snapshot
+            .lock()
+            .expect("committed snapshot mutex poisoned") = Some(snapshot);
     }
 }
 
-fn fixture_model_selection(catalog_version: ModelCatalogVersion) -> ModelSelection {
+impl TransactionOperation for AgentProfileStageOperation {
+    fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
+        let profile = self.profile.take().ok_or_else(|| {
+            StorageError::new(
+                "snapshot.fixture_profile_stage_reused",
+                "profile stage operation was reused",
+            )
+        })?;
+        self.repository.stage(tx, profile)
+    }
+}
+
+impl TransactionOperation for ModelSelectionStageOperation {
+    fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
+        self.catalog.stage(tx, self.selection.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FixtureOptions {
+    profile_version: u64,
+    component_entity_version: u64,
+    model_catalog_version: u64,
+    model_id: String,
+    permission_state: PermissionState,
+    include_credentials: bool,
+}
+
+impl Default for FixtureOptions {
+    fn default() -> Self {
+        Self {
+            profile_version: 1,
+            component_entity_version: 1,
+            model_catalog_version: 7,
+            model_id: "gpt-4.1-mini".to_string(),
+            permission_state: PermissionState::Granted,
+            include_credentials: true,
+        }
+    }
+}
+
+fn stage_profile(repository: &InMemoryAgentProfileRepository, profile: AgentProfile) {
+    let mut operation = AgentProfileStageOperation {
+        repository: repository.clone(),
+        profile: Some(profile),
+    };
+    InMemoryTransactionRunner::default()
+        .run(
+            TransactionName::new("run_snapshot.fixture.profile"),
+            &mut operation,
+        )
+        .expect("fixture profile should stage");
+}
+
+fn stage_model_selection(catalog: &InMemoryModelBindingCatalog, selection: ModelSelection) {
+    let mut operation = ModelSelectionStageOperation {
+        catalog: catalog.clone(),
+        selection,
+    };
+    InMemoryTransactionRunner::default()
+        .run(
+            TransactionName::new("run_snapshot.fixture.model_binding"),
+            &mut operation,
+        )
+        .expect("fixture model selection should stage");
+}
+
+fn fixture_model_selection(
+    catalog_version: ModelCatalogVersion,
+    model_id: impl Into<String>,
+) -> ModelSelection {
     ModelSelection::new(
         ModelBindingId::new("model_binding.primary"),
         "account.openai.default",
         "provider.openai",
-        "gpt-4.1-mini",
+        model_id,
         catalog_version,
     )
 }
@@ -403,4 +567,17 @@ fn component_kind_snapshot_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Prompt => "prompt",
         ComponentKind::Skill => "skill",
     }
+}
+
+fn readiness_from_trusted_host_state(
+    trusted_host_state: &TrustedHostRunState,
+) -> RunSnapshotReadinessReport {
+    let mut report = RunSnapshotReadinessReport::ready();
+    if trusted_host_state.permission_state() != &PermissionState::Granted {
+        report = report.with_issue(RunSnapshotReadinessIssue::new(
+            "snapshot.permission_not_granted",
+            "required run permissions are not granted",
+        ));
+    }
+    report
 }
