@@ -10,6 +10,13 @@ pub struct AgentTemplate {
 pub struct AgentTemplateId(String);
 
 impl AgentTemplate {
+    pub fn research_assistant() -> Self {
+        Self {
+            id: AgentTemplateId::new("template.research.assistant"),
+            slots: Self::assistant_default().slots,
+        }
+    }
+
     pub fn assistant_default() -> Self {
         Self {
             id: AgentTemplateId::new("template.assistant.default"),

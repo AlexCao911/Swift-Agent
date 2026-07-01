@@ -3,6 +3,8 @@ mod support;
 
 #[path = "contract/agent_builder_agent_os.rs"]
 mod agent_builder_agent_os;
+#[path = "contract/agent_builder_assembly_graph_agent_os.rs"]
+mod agent_builder_assembly_graph_agent_os;
 #[path = "contract/agent_package_agent_os.rs"]
 mod agent_package_agent_os;
 #[path = "contract/agent_profile_contract.rs"]

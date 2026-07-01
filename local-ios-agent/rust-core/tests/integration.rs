@@ -1,6 +1,8 @@
 #[path = "support/mod.rs"]
 mod support;
 
+#[path = "integration/agent_builder_assembly_to_profile.rs"]
+mod agent_builder_assembly_to_profile;
 #[path = "integration/agent_lifecycle_failure_paths.rs"]
 mod agent_lifecycle_failure_paths;
 #[path = "integration/agent_lifecycle_profile_to_runtime.rs"]
