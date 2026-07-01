@@ -29,6 +29,8 @@ mod protocol_lifecycle;
 mod protocol_plugin_module;
 #[path = "contract/protocol_registry.rs"]
 mod protocol_registry;
+#[path = "contract/run_snapshot_resolution_agent_os.rs"]
+mod run_snapshot_resolution_agent_os;
 #[path = "contract/security_approval_protocol.rs"]
 mod security_approval_protocol;
 #[path = "contract/security_data_egress.rs"]

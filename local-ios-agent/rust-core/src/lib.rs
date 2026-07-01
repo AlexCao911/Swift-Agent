@@ -7,6 +7,7 @@ pub mod memory;
 pub mod model;
 pub mod prompt;
 pub mod protocol;
+pub mod run_snapshot;
 pub mod security;
 pub mod storage;
 pub mod tool;
