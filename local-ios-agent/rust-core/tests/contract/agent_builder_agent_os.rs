@@ -505,11 +505,11 @@ fn readiness_for_draft_uses_actual_bindings_instead_of_fixture_booleans() {
 #[test]
 fn agent_builder_boundary_does_not_reference_run_snapshot_or_runtime_execution() {
     let builder_sources = [
-        include_str!("../src/user_customization/agent_template.rs"),
-        include_str!("../src/user_customization/agent_profile.rs"),
-        include_str!("../src/user_customization/agent_slot.rs"),
-        include_str!("../src/user_customization/builder_resolver.rs"),
-        include_str!("../src/user_customization/readiness.rs"),
+        include_str!("../../src/user_customization/agent_template.rs"),
+        include_str!("../../src/user_customization/agent_profile.rs"),
+        include_str!("../../src/user_customization/agent_slot.rs"),
+        include_str!("../../src/user_customization/builder_resolver.rs"),
+        include_str!("../../src/user_customization/readiness.rs"),
     ]
     .join("\n");
 

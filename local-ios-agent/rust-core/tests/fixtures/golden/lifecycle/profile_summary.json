@@ -1,0 +1,21 @@
+{
+  "profile_id": "profile:agent.fixture",
+  "profile_version": 1,
+  "template_id": "template.package.installed.v1",
+  "name": "Fixture Agent",
+  "component_bindings": [],
+  "model_binding": {
+    "slot_id": "slot.model.primary",
+    "binding_id": "model_binding:agent.fixture:primary",
+    "provider_account_id": "package.provider_account:agent.fixture:model.account",
+    "provider_id": "provider.openai_compatible",
+    "model_id": "gpt-fixture",
+    "catalog_version": 1
+  },
+  "local_bindings": [
+    {
+      "binding_key": "package.provider_account:agent.fixture:model.account",
+      "credential_ref": "[redacted]"
+    }
+  ]
+}

@@ -33,10 +33,32 @@ fn transaction_runner_is_object_safe_and_returns_unit() {
 
 #[test]
 fn pending_store_write_commit_phase_is_infallible_contract() {
-    let transaction_source = include_str!("../src/storage/transaction.rs");
+    let transaction_source = include_str!("../../src/storage/transaction.rs");
 
     assert!(transaction_source.contains("fn commit(self: Box<Self>);"));
     assert!(!transaction_source.contains("fn apply(self: Box<Self>) -> StorageResult<()>;"));
+}
+
+#[test]
+fn domain_publish_and_install_paths_stage_writes_through_unit_of_work() {
+    let component_source =
+        include_str!("../../src/user_customization/component_catalog_service.rs");
+    let profile_source = include_str!("../../src/user_customization/agent_profile.rs");
+    let package_source = include_str!("../../src/agent_package/installer.rs");
+
+    assert!(
+        component_source.contains("fn stage_publish(\n        &self,\n        tx: &mut UnitOfWork")
+    );
+    assert!(component_source.contains("tx.push_store_write"));
+    assert!(profile_source.contains("pub fn stage(&self, tx: &mut UnitOfWork"));
+    assert!(profile_source.contains("self.repository.stage(tx, profile)?"));
+    assert!(package_source.contains("self.model_catalog.stage(tx, plan.model_selection)?"));
+    assert!(package_source.contains("self.profile_repository.stage(tx, plan.profile)?"));
+    assert!(package_source.contains("self.store.stage(tx, commit.clone())?"));
+    assert!(
+        !package_source.contains(".apply("),
+        "package install must not commit domain records outside UnitOfWork"
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]

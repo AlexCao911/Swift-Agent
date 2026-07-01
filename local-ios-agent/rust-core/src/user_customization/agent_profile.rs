@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
+
 use crate::{
     model::{ModelBindingCatalog, ModelSelection},
     protocol::{BindingId, ComponentBinding as ProtocolComponentBinding, InstanceId, SlotKey},
@@ -9,8 +11,8 @@ use crate::{
         TransactionRunner, UnitOfWork,
     },
     user_customization::{
-        AgentSlotId, AgentSlotKind, AgentTemplate, AgentTemplateId, ComponentCatalogService,
-        ComponentKind, UserComponentVersionId,
+        AgentReadinessIssue, AgentReadinessReport, AgentSlotId, AgentSlotKind, AgentTemplate,
+        AgentTemplateId, ComponentCatalogService, ComponentKind, UserComponentVersionId,
     },
 };
 
@@ -64,6 +66,40 @@ pub struct AgentProfile {
     bindings: Vec<ComponentBinding>,
     model_binding: Option<AgentProfileModelBinding>,
     local_bindings: AgentProfileLocalBindings,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AgentProfileDebugSummary {
+    pub profile_id: String,
+    pub profile_version: u64,
+    pub template_id: String,
+    pub name: String,
+    pub component_bindings: Vec<ComponentBindingDebugSummary>,
+    pub model_binding: Option<ModelBindingDebugSummary>,
+    pub local_bindings: Vec<LocalBindingDebugSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ComponentBindingDebugSummary {
+    pub slot_id: String,
+    pub slot_kind: String,
+    pub component_version_id: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ModelBindingDebugSummary {
+    pub slot_id: String,
+    pub binding_id: String,
+    pub provider_account_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub catalog_version: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LocalBindingDebugSummary {
+    pub binding_key: String,
+    pub credential_ref: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -646,6 +682,80 @@ impl AgentProfile {
 
     pub fn reference(&self) -> AgentProfileReference {
         AgentProfileReference::pinned(self.id.clone(), self.version)
+    }
+
+    pub fn readiness(&self) -> AgentReadinessReport {
+        let mut report = AgentReadinessReport::ready();
+        let Some(model_binding) = self.model_binding() else {
+            report.push_issue(AgentReadinessIssue::new(
+                "model.missing",
+                "profile is missing model binding",
+            ));
+            return report;
+        };
+
+        if self
+            .local_bindings()
+            .credential_ref(model_binding.selection().provider_account_id())
+            .is_none()
+        {
+            report.push_issue(AgentReadinessIssue::new(
+                "local_binding.model_account.missing",
+                "profile model binding is missing a local credential binding",
+            ));
+        }
+
+        report
+    }
+
+    pub fn debug_summary(&self) -> AgentProfileDebugSummary {
+        AgentProfileDebugSummary {
+            profile_id: self.id.as_str().to_string(),
+            profile_version: self.version.as_u64(),
+            template_id: self.template_id.as_str().to_string(),
+            name: self.name.clone(),
+            component_bindings: self
+                .bindings
+                .iter()
+                .map(|binding| ComponentBindingDebugSummary {
+                    slot_id: binding.slot_id().as_str().to_string(),
+                    slot_kind: agent_slot_kind_debug_name(binding.slot_kind()).to_string(),
+                    component_version_id: binding.component_version_id().as_u64(),
+                })
+                .collect(),
+            model_binding: self
+                .model_binding
+                .as_ref()
+                .map(|binding| ModelBindingDebugSummary {
+                    slot_id: binding.slot_id().as_str().to_string(),
+                    binding_id: binding.selection().binding_id().as_str().to_string(),
+                    provider_account_id: binding.selection().provider_account_id().to_string(),
+                    provider_id: binding.selection().provider_id().to_string(),
+                    model_id: binding.selection().model_id().to_string(),
+                    catalog_version: binding.selection().catalog_version().as_u64(),
+                }),
+            local_bindings: self
+                .local_bindings
+                .credential_refs()
+                .keys()
+                .map(|binding_key| LocalBindingDebugSummary {
+                    binding_key: binding_key.clone(),
+                    credential_ref: "[redacted]".to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+fn agent_slot_kind_debug_name(kind: AgentSlotKind) -> &'static str {
+    match kind {
+        AgentSlotKind::Brain => "brain",
+        AgentSlotKind::Persona => "persona",
+        AgentSlotKind::Instruction => "instruction",
+        AgentSlotKind::Model => "model",
+        AgentSlotKind::Toolset => "toolset",
+        AgentSlotKind::Memory => "memory",
+        AgentSlotKind::Voice => "voice",
     }
 }
 

@@ -64,14 +64,14 @@ fn tool_recipe_records_kind_and_name() {
 
 #[test]
 fn security_manager_does_not_expose_fixture_egress_mutator() {
-    let manager_source = include_str!("../src/security/manager.rs");
+    let manager_source = include_str!("../../src/security/manager.rs");
 
     assert!(!manager_source.contains("pub fn allow_egress_destination"));
 }
 
 #[test]
 fn tool_execution_request_does_not_expose_mutable_security_envelope_fields() {
-    let request_source = include_str!("../src/tool/execution_request.rs");
+    let request_source = include_str!("../../src/tool/execution_request.rs");
 
     assert!(!request_source.contains("pub compiled_recipe"));
     assert!(!request_source.contains("pub egress_decision"));

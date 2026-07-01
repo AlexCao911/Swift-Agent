@@ -26,7 +26,7 @@ fn backend_failure_has_stable_kind_codes() {
 
 #[test]
 fn router_public_session_api_requires_resolved_model_binding() {
-    let router_source = include_str!("../src/inference/router.rs");
+    let router_source = include_str!("../../src/inference/router.rs");
 
     assert!(router_source.contains("pub fn start_session_from_binding"));
     assert!(!router_source

@@ -1,0 +1,23 @@
+{
+  "package_id": "agent.fixture",
+  "operations": [
+    {
+      "code": "package.install.record.create"
+    },
+    {
+      "code": "package.install.profile.create"
+    },
+    {
+      "code": "package.install.model_binding.create"
+    },
+    {
+      "code": "package.install.lock.create"
+    }
+  ],
+  "required_local_bindings": [
+    {
+      "key": "model.account",
+      "purpose": "remote_provider_account"
+    }
+  ]
+}

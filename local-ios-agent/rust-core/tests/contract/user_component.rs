@@ -120,7 +120,7 @@ fn voice_profile_dry_run_is_schema_only() {
 #[test]
 fn component_content_has_tagged_serde_fixture_for_each_v1_kind() {
     let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(
-        "fixtures/user_component/component_content_v1.json"
+        "../fixtures/user_component/component_content_v1.json"
     ))
     .unwrap();
     let expected_kinds = [
@@ -148,7 +148,7 @@ fn component_content_has_tagged_serde_fixture_for_each_v1_kind() {
 #[test]
 fn component_kind_dto_preserves_unknown_kind_values() {
     let decoded = serde_json::from_str::<ComponentKindDTO>(include_str!(
-        "fixtures/user_component/unknown_component_kind.json"
+        "../fixtures/user_component/unknown_component_kind.json"
     ))
     .unwrap();
 

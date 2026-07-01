@@ -29,6 +29,7 @@ Temporary Items
 .kiro/
 
 # Build artifacts
+.ci-home/
 build/
 dist/
 *.o

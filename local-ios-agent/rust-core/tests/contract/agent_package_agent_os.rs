@@ -45,11 +45,11 @@ fn package_reader_reads_valid_agent_manifest_fixture() {
     let reader = AgentPackageReader::fixture_with_files([
         (
             "agent.yaml",
-            include_str!("fixtures/agent_package/valid/agent.yaml"),
+            include_str!("../fixtures/agent_package/valid/agent.yaml"),
         ),
         (
             "model.yaml",
-            include_str!("fixtures/agent_package/valid/model.yaml"),
+            include_str!("../fixtures/agent_package/valid/model.yaml"),
         ),
     ]);
 

@@ -1,6 +1,6 @@
 #[test]
 fn runtime_layer_does_not_depend_on_builder_package_or_profile_repositories() {
-    let runtime_source = include_str!("../src/core/runtime.rs");
+    let runtime_source = include_str!("../../src/core/runtime.rs");
 
     for forbidden in [
         "agent_package",
@@ -19,7 +19,7 @@ fn runtime_layer_does_not_depend_on_builder_package_or_profile_repositories() {
 
 #[test]
 fn agent_profile_reference_public_api_makes_latest_resolution_explicit() {
-    let source = include_str!("../src/user_customization/agent_profile.rs");
+    let source = include_str!("../../src/user_customization/agent_profile.rs");
 
     assert!(
         !source.contains("pub fn new(profile_id: AgentProfileId) -> Self"),

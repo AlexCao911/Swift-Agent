@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
+
 use crate::agent_package::{AgentPackageLock, AgentPackageManifest, AgentPackageValidator};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
@@ -268,19 +270,19 @@ impl AgentPackageInstaller {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PackageInstallPreview {
     pub package_id: String,
     pub operations: Vec<PackageInstallPreviewOperation>,
     pub required_local_bindings: Vec<PackageInstallLocalBindingRequirement>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PackageInstallPreviewOperation {
     pub code: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PackageInstallLocalBindingRequirement {
     pub key: String,
     pub purpose: String,
