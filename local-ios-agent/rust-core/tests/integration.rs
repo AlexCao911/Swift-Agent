@@ -17,6 +17,8 @@ mod ffi_bridge;
 mod ffi_streaming_events;
 #[path = "integration/openai_chat_adapter.rs"]
 mod openai_chat_adapter;
+#[path = "integration/runtime_execution_lifecycle.rs"]
+mod runtime_execution_lifecycle;
 #[path = "integration/runtime_mock.rs"]
 mod runtime_mock;
 #[path = "integration/runtime_provider_selection.rs"]

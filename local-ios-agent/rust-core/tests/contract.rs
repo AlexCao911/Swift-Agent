@@ -33,6 +33,8 @@ mod protocol_plugin_module;
 mod protocol_registry;
 #[path = "contract/run_snapshot_resolution_agent_os.rs"]
 mod run_snapshot_resolution_agent_os;
+#[path = "contract/runtime_execution_agent_os.rs"]
+mod runtime_execution_agent_os;
 #[path = "contract/security_approval_protocol.rs"]
 mod security_approval_protocol;
 #[path = "contract/security_data_egress.rs"]

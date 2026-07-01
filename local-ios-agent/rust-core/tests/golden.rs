@@ -9,6 +9,8 @@ mod context_archive;
 mod dto_unknown;
 #[path = "golden/lifecycle_debug_artifacts.rs"]
 mod lifecycle_debug_artifacts;
+#[path = "golden/runtime_execution_trace.rs"]
+mod runtime_execution_trace;
 #[path = "golden/sqlite_schema.rs"]
 mod sqlite_schema;
 #[path = "golden/user_component_dto.rs"]

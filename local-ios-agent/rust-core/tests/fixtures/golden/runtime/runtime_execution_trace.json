@@ -1,0 +1,73 @@
+{
+  "run_id": "run_1",
+  "source_snapshot_id": 1,
+  "state": "completed",
+  "events": [
+    {
+      "sequence": 1,
+      "code": "run.started"
+    },
+    {
+      "sequence": 2,
+      "code": "context.assembled"
+    },
+    {
+      "sequence": 3,
+      "code": "prompt_archive.appended"
+    },
+    {
+      "sequence": 4,
+      "code": "context_archive.appended"
+    },
+    {
+      "sequence": 5,
+      "code": "model_call.started"
+    },
+    {
+      "sequence": 6,
+      "code": "model_call.completed"
+    },
+    {
+      "sequence": 7,
+      "code": "checkpoint.committed"
+    }
+  ],
+  "transactions": [
+    {
+      "name": "run.start",
+      "event_codes": [
+        "run.started"
+      ]
+    },
+    {
+      "name": "context.assemble",
+      "event_codes": [
+        "context.assembled"
+      ]
+    },
+    {
+      "name": "model_call.pre_call",
+      "event_codes": [
+        "prompt_archive.appended",
+        "context_archive.appended",
+        "model_call.started"
+      ]
+    },
+    {
+      "name": "model_call.post_call",
+      "event_codes": [
+        "model_call.completed"
+      ]
+    },
+    {
+      "name": "checkpoint.commit",
+      "event_codes": [
+        "checkpoint.committed"
+      ]
+    }
+  ],
+  "last_checkpoint": {
+    "checkpoint_id": "checkpoint_1",
+    "can_resume": true
+  }
+}

@@ -130,7 +130,7 @@ pub trait PendingStoreWrite: Send {
     fn commit(self: Box<Self>);
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct InMemoryTransactionRunner {
     archive_store: InMemoryArchiveStore,
     event_store: InMemoryEventStore,

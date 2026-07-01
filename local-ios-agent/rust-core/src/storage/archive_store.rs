@@ -107,6 +107,11 @@ impl InMemoryArchiveStore {
         ))
     }
 
+    pub fn records(&self) -> Vec<ArchiveRecord> {
+        let inner = self.inner.lock().expect("archive store mutex poisoned");
+        inner.records.values().cloned().collect()
+    }
+
     pub(crate) fn validate_pending(&self, records: &[PendingArchiveRecord]) -> StorageResult<()> {
         if records.is_empty() {
             return Ok(());

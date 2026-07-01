@@ -1,6 +1,7 @@
 pub mod agent_package;
 pub mod context;
 pub mod core;
+pub mod execution;
 pub mod ffi_bridge;
 pub mod inference;
 pub mod memory;
@@ -8,6 +9,7 @@ pub mod model;
 pub mod prompt;
 pub mod protocol;
 pub mod run_snapshot;
+pub mod runtime;
 pub mod security;
 pub mod storage;
 pub mod tool;

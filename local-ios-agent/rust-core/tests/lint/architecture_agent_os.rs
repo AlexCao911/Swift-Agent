@@ -12,6 +12,22 @@ fn runtime_layer_does_not_depend_on_builder_package_or_profile_repositories() {
 }
 
 #[test]
+fn agent_os_runtime_execution_modules_do_not_read_builder_package_or_profile_state() {
+    let mut findings = Vec::new();
+    for (file, source) in runtime_execution_module_sources() {
+        for finding in forbidden_runtime_dependency_findings(source) {
+            findings.push(format!("{file}: {finding}"));
+        }
+    }
+
+    assert!(
+        findings.is_empty(),
+        "agent os runtime/execution modules must consume ExecutionPlan/ResolvedRunSnapshot, not builder/package/profile state:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
 fn runtime_model_calls_flow_through_context_assembly_result_boundary() {
     let runtime_source = include_str!("../../src/core/runtime.rs");
 
@@ -22,6 +38,38 @@ fn runtime_model_calls_flow_through_context_assembly_result_boundary() {
     assert!(
         !runtime_source.contains(".build_prompt_frame(branch)?"),
         "runtime must not build provider prompt frames directly from ContextController"
+    );
+}
+
+#[test]
+fn core_runtime_does_not_construct_fake_agent_os_execution_trace() {
+    let runtime_source = include_str!("../../src/core/runtime.rs");
+
+    assert!(
+        !runtime_source.contains("compatibility_for_provider_call"),
+        "legacy core runtime must not create fake Agent OS RunMachine traces without a persisted ResolvedRunSnapshot"
+    );
+    assert!(
+        !runtime_source.contains("RunSnapshotId::new(0)"),
+        "core runtime must not fabricate unpersisted snapshot ids for Agent OS execution"
+    );
+}
+
+#[test]
+fn core_runtime_exposes_resolved_execution_plan_entrypoint() {
+    let runtime_source = include_str!("../../src/core/runtime.rs");
+
+    assert!(
+        runtime_source.contains("pub fn execute_plan"),
+        "core runtime must expose a public resolved ExecutionPlan entrypoint for Agent OS execution"
+    );
+    assert!(
+        runtime_source.contains("RunMachine::from_plan_with_effect_driver"),
+        "core runtime plan entrypoint must delegate execution to RunMachine"
+    );
+    assert!(
+        runtime_source.contains("latest_runtime_execution_trace = Some"),
+        "core runtime must publish the RunMachine execution trace after a resolved plan runs"
     );
 }
 
@@ -240,9 +288,11 @@ fn forbidden_runtime_dependency_findings(source: &str) -> Vec<String> {
         "AgentPackage",
         "AgentPackageInstaller",
         "PackageInstall",
+        "AgentProfile",
         "AgentProfilePublisher",
         "InMemoryAgentProfileRepository",
         "ComponentCatalogService",
+        "RunSnapshotService",
     ] {
         if contains_identifier(&stripped, forbidden_type) {
             findings.push(forbidden_type.to_string());
@@ -395,12 +445,26 @@ fn forbidden_context_dependency_findings(source: &str) -> Vec<String> {
 }
 
 fn context_module_sources() -> Vec<(String, &'static str)> {
-    let context_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/context");
+    rust_sources_under(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/context"))
+}
+
+fn runtime_execution_module_sources() -> Vec<(String, &'static str)> {
+    ["src/runtime", "src/execution"]
+        .into_iter()
+        .flat_map(|relative_dir| {
+            rust_sources_under(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_dir))
+                .into_iter()
+                .map(move |(file, source)| (format!("{relative_dir}/{file}"), source))
+        })
+        .collect()
+}
+
+fn rust_sources_under(dir: std::path::PathBuf) -> Vec<(String, &'static str)> {
     let mut sources = Vec::new();
-    for entry in fs::read_dir(&context_dir)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", context_dir.display()))
+    for entry in
+        fs::read_dir(&dir).unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
     {
-        let entry = entry.expect("context source entry is readable");
+        let entry = entry.expect("source entry is readable");
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
             continue;

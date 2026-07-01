@@ -11,7 +11,9 @@ use crate::core::{
     ProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
     StreamBatcher,
 };
+use crate::execution::ExecutionPlan;
 use crate::memory::{EventStore, InMemoryEventStore, ProviderSetting};
+use crate::runtime::{EffectDriver, RunMachine, RuntimeExecutionDebugTrace};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
     PermissionScope,
@@ -102,6 +104,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     runs: HashMap<RunId, RunRecord>,
     provider_cancellations: ProviderCancellationRegistry,
     latest_prompt_debug_snapshot: Option<PromptDebugSnapshot>,
+    latest_runtime_execution_trace: Option<RuntimeExecutionDebugTrace>,
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
@@ -152,6 +155,7 @@ impl<S: EventStore> AgentRuntime<S> {
             runs: HashMap::new(),
             provider_cancellations: ProviderCancellationRegistry::default(),
             latest_prompt_debug_snapshot: None,
+            latest_runtime_execution_trace: None,
             pending_tool_requests: Vec::new(),
         };
         runtime.replay_waiting_runs()?;
@@ -172,6 +176,30 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn latest_prompt_debug_snapshot(&self) -> Option<PromptDebugSnapshot> {
         self.latest_prompt_debug_snapshot.clone()
+    }
+
+    pub fn latest_runtime_execution_trace(&self) -> Option<RuntimeExecutionDebugTrace> {
+        self.latest_runtime_execution_trace.clone()
+    }
+
+    pub fn execute_plan<D>(
+        &mut self,
+        plan: ExecutionPlan,
+        effect_driver: D,
+    ) -> Result<RuntimeExecutionDebugTrace, AgentError>
+    where
+        D: EffectDriver + 'static,
+    {
+        let mut machine = RunMachine::from_plan_with_effect_driver(plan, effect_driver);
+        machine.run_to_completion().map_err(|error| {
+            AgentError::Storage(format!(
+                "runtime execution failed ({}): {error}",
+                error.code()
+            ))
+        })?;
+        let trace = machine.debug_trace();
+        self.latest_runtime_execution_trace = Some(trace.clone());
+        Ok(trace)
     }
 
     pub fn provider_cancellation_registry(&self) -> ProviderCancellationRegistry {
