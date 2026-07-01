@@ -322,6 +322,36 @@ fn installer_preview_reports_records_without_writing_store() {
 }
 
 #[test]
+fn installer_preview_reports_validation_issues_without_happy_path_writes() {
+    let store = InMemoryPackageInstallStore::default();
+    let profile_repository = InMemoryAgentProfileRepository::default();
+    let model_catalog = InMemoryModelBindingCatalog::default();
+    let installer = AgentPackageInstaller::new(
+        Box::new(InMemoryTransactionRunner::default()),
+        store.clone(),
+        profile_repository.clone(),
+        model_catalog,
+    );
+    let mut manifest = AgentPackageManifest::fixture_valid();
+    manifest.model = None;
+
+    let preview = installer.preview(&manifest);
+
+    assert!(preview
+        .validation_issues
+        .iter()
+        .any(|issue| issue.code == "package.model_file.model_missing"));
+    assert!(preview.operations.is_empty());
+    assert!(preview.required_local_bindings.is_empty());
+    assert!(store.installations().is_empty());
+    assert!(store.agent_profile_references().is_empty());
+    assert!(store.package_locks().is_empty());
+    assert!(profile_repository
+        .profile(&fixture_profile_reference())
+        .is_none());
+}
+
+#[test]
 fn package_install_commits_records_and_event_in_single_transaction() {
     let runner = InMemoryTransactionRunner::default();
     let event_store = runner.event_store();

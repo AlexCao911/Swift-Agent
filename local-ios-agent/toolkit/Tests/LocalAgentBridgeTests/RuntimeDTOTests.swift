@@ -210,7 +210,44 @@ struct RuntimeDTOTests {
         )
 
         #expect(profile.id == "future_provider")
-        #expect(profile.kind == .unknown(kind: "future_quantum_provider"))
+        #expect(profile.kind == .unknown(raw: "future_quantum_provider"))
+    }
+
+    @Test
+    func bridgeFacingEnumsDecodeRustUnknownGoldenFixtureWithoutCrashing() throws {
+        struct UnknownBridgeFixture: Decodable {
+            let event: RuntimeEventDTO
+            let turn: AgentTurnResultDTO
+            let toolSchema: ToolSchemaDTO
+            let toolResult: ToolResultDTO
+            let permissionState: PermissionStateDTO
+
+            private enum CodingKeys: String, CodingKey {
+                case event
+                case turn
+                case toolSchema = "tool_schema"
+                case toolResult = "tool_result"
+                case permissionState = "permission_state"
+            }
+        }
+
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rust-core/tests/fixtures/golden/bridge/dto_unknown_values.json")
+        let fixture = try JSONDecoder().decode(
+            UnknownBridgeFixture.self,
+            from: try Data(contentsOf: fixtureURL)
+        )
+
+        #expect(fixture.event.kind == .unknown(raw: "future_runtime_event"))
+        #expect(fixture.turn.state == .unknown(raw: "future_run_state"))
+        #expect(fixture.toolSchema.riskLevel == .unknown(raw: "future_risk"))
+        #expect(fixture.toolResult.sensitivity == .unknown(raw: "future_sensitivity"))
+        #expect(fixture.toolResult.retention == .unknown(raw: "future_retention"))
+        #expect(fixture.permissionState == .unknown(raw: "future_permission"))
     }
 
     @Test

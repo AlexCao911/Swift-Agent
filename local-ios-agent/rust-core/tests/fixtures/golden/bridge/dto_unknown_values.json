@@ -1,0 +1,36 @@
+{
+  "event": {
+    "id": "entry_future",
+    "session_id": "session_future",
+    "parent_id": null,
+    "run_id": "run_future",
+    "sequence": 1,
+    "created_at_millis": 0,
+    "depth": 0,
+    "kind": "future_runtime_event",
+    "payload": "future",
+    "blob_refs": []
+  },
+  "turn": {
+    "run_id": "run_future",
+    "state": "future_run_state",
+    "events": [],
+    "pending_tool_call_id": null
+  },
+  "tool_schema": {
+    "name": "future.tool",
+    "description": "Future tool",
+    "parameters_json_schema": "{}",
+    "risk_level": "future_risk"
+  },
+  "tool_result": {
+    "display_text": "display",
+    "model_text": "model",
+    "structured_json": "{}",
+    "audit_text": "audit",
+    "sensitivity": "future_sensitivity",
+    "retention": "future_retention",
+    "is_error": false
+  },
+  "permission_state": "future_permission"
+}

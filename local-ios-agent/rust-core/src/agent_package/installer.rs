@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::agent_package::{AgentPackageLock, AgentPackageManifest, AgentPackageValidator};
+use crate::agent_package::{
+    AgentPackageLock, AgentPackageManifest, AgentPackageValidator, PackageValidationIssue,
+};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
@@ -15,6 +17,8 @@ use crate::user_customization::{
     AgentProfile, AgentProfileId, AgentProfileLocalBindings, AgentProfileModelBinding,
     AgentProfileReference, AgentSlotKind, AgentTemplate, InMemoryAgentProfileRepository,
 };
+
+const MODEL_ACCOUNT_BINDING_KEY: &str = "model.account";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LocalBindings {
@@ -217,8 +221,8 @@ impl AgentPackageInstaller {
         manifest: AgentPackageManifest,
         bindings: LocalBindings,
     ) -> StorageResult<InstalledAgentProfileReference> {
-        let validation = AgentPackageValidator::default().validate(&manifest);
-        if !validation.is_valid() {
+        let plan = PackageInstallPlan::from_manifest(&manifest);
+        if !plan.validation_issues.is_empty() {
             return Err(StorageError::new(
                 "package.validation_failed",
                 "package manifest failed validation",
@@ -246,8 +250,63 @@ impl AgentPackageInstaller {
     }
 
     pub fn preview(&self, manifest: &AgentPackageManifest) -> PackageInstallPreview {
-        PackageInstallPreview {
+        PackageInstallPlan::from_manifest(manifest).into_preview()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PackageInstallPreview {
+    pub package_id: String,
+    pub validation_issues: Vec<PackageInstallPreviewIssue>,
+    pub operations: Vec<PackageInstallPreviewOperation>,
+    pub required_local_bindings: Vec<PackageInstallLocalBindingRequirement>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PackageInstallPreviewIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PackageInstallPreviewOperation {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PackageInstallLocalBindingRequirement {
+    pub key: String,
+    pub purpose: String,
+}
+
+struct PackageInstallPlan {
+    package_id: String,
+    validation_issues: Vec<PackageInstallPreviewIssue>,
+    operations: Vec<PackageInstallPreviewOperation>,
+    required_local_bindings: Vec<PackageInstallLocalBindingRequirement>,
+}
+
+impl PackageInstallPlan {
+    fn from_manifest(manifest: &AgentPackageManifest) -> Self {
+        let validation = AgentPackageValidator.validate(manifest);
+        let validation_issues = validation
+            .issues
+            .iter()
+            .map(PackageInstallPreviewIssue::from_validation_issue)
+            .collect::<Vec<_>>();
+
+        if !validation_issues.is_empty() {
+            return Self {
+                package_id: manifest.package_id.clone(),
+                validation_issues,
+                operations: Vec::new(),
+                required_local_bindings: Vec::new(),
+            };
+        }
+
+        Self {
             package_id: manifest.package_id.clone(),
+            validation_issues,
             operations: vec![
                 PackageInstallPreviewOperation {
                     code: "package.install.record.create".to_string(),
@@ -263,29 +322,29 @@ impl AgentPackageInstaller {
                 },
             ],
             required_local_bindings: vec![PackageInstallLocalBindingRequirement {
-                key: "model.account".to_string(),
+                key: MODEL_ACCOUNT_BINDING_KEY.to_string(),
                 purpose: "remote_provider_account".to_string(),
             }],
         }
     }
+
+    fn into_preview(self) -> PackageInstallPreview {
+        PackageInstallPreview {
+            package_id: self.package_id,
+            validation_issues: self.validation_issues,
+            operations: self.operations,
+            required_local_bindings: self.required_local_bindings,
+        }
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PackageInstallPreview {
-    pub package_id: String,
-    pub operations: Vec<PackageInstallPreviewOperation>,
-    pub required_local_bindings: Vec<PackageInstallLocalBindingRequirement>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PackageInstallPreviewOperation {
-    pub code: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PackageInstallLocalBindingRequirement {
-    pub key: String,
-    pub purpose: String,
+impl PackageInstallPreviewIssue {
+    fn from_validation_issue(issue: &PackageValidationIssue) -> Self {
+        Self {
+            code: issue.code.clone(),
+            message: issue.message.clone(),
+        }
+    }
 }
 
 struct PackageInstallOperation {
@@ -336,8 +395,6 @@ fn installed_profile_from_manifest(
     manifest: &AgentPackageManifest,
     bindings: &LocalBindings,
 ) -> StorageResult<InstalledProfilePlan> {
-    const MODEL_ACCOUNT_BINDING_KEY: &str = "model.account";
-
     let template = AgentTemplate::package_installed_v1();
     let model = manifest.model.as_ref().ok_or_else(|| {
         StorageError::new(

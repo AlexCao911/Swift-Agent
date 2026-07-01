@@ -1,62 +1,182 @@
 import Foundation
 
-public enum RuntimeEventKindDTO: String, Codable, Sendable {
-    case sessionCreated = "session_created"
-    case providerChanged = "provider_changed"
-    case toolRegistered = "tool_registered"
-    case userMessage = "user_message"
-    case assistantMessageStarted = "assistant_message_started"
-    case assistantTextDelta = "assistant_text_delta"
-    case assistantMessageCompleted = "assistant_message_completed"
-    case toolCallRequested = "tool_call_requested"
-    case toolCallApproved = "tool_call_approved"
-    case toolCallRejected = "tool_call_rejected"
-    case toolExecutionStarted = "tool_execution_started"
-    case toolExecutionUpdate = "tool_execution_update"
-    case toolExecutionCompleted = "tool_execution_completed"
-    case toolExecutionFailed = "tool_execution_failed"
-    case toolResultMessage = "tool_result_message"
-    case runSuspended = "run_suspended"
-    case runResumed = "run_resumed"
-    case compactionCreated = "compaction_created"
-    case branchSummaryCreated = "branch_summary_created"
-    case runCancelled = "run_cancelled"
-    case runFailed = "run_failed"
+public struct RuntimeEventKindDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let sessionCreated = Self(rawValue: "session_created")
+    public static let providerChanged = Self(rawValue: "provider_changed")
+    public static let toolRegistered = Self(rawValue: "tool_registered")
+    public static let userMessage = Self(rawValue: "user_message")
+    public static let assistantMessageStarted = Self(rawValue: "assistant_message_started")
+    public static let assistantTextDelta = Self(rawValue: "assistant_text_delta")
+    public static let assistantMessageCompleted = Self(rawValue: "assistant_message_completed")
+    public static let toolCallRequested = Self(rawValue: "tool_call_requested")
+    public static let toolCallApproved = Self(rawValue: "tool_call_approved")
+    public static let toolCallRejected = Self(rawValue: "tool_call_rejected")
+    public static let toolExecutionStarted = Self(rawValue: "tool_execution_started")
+    public static let toolExecutionUpdate = Self(rawValue: "tool_execution_update")
+    public static let toolExecutionCompleted = Self(rawValue: "tool_execution_completed")
+    public static let toolExecutionFailed = Self(rawValue: "tool_execution_failed")
+    public static let toolResultMessage = Self(rawValue: "tool_result_message")
+    public static let runSuspended = Self(rawValue: "run_suspended")
+    public static let runResumed = Self(rawValue: "run_resumed")
+    public static let compactionCreated = Self(rawValue: "compaction_created")
+    public static let branchSummaryCreated = Self(rawValue: "branch_summary_created")
+    public static let runCancelled = Self(rawValue: "run_cancelled")
+    public static let runFailed = Self(rawValue: "run_failed")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
-public enum RunStateDTO: String, Codable, Sendable {
-    case running
-    case waitingTool = "waiting_tool"
-    case suspended
-    case failed
-    case cancelled
-    case completed
+public struct RunStateDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let running = Self(rawValue: "running")
+    public static let waitingTool = Self(rawValue: "waiting_tool")
+    public static let suspended = Self(rawValue: "suspended")
+    public static let failed = Self(rawValue: "failed")
+    public static let cancelled = Self(rawValue: "cancelled")
+    public static let completed = Self(rawValue: "completed")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
-public enum SensitivityDTO: String, Codable, Sendable {
-    case `public` = "public"
-    case `private` = "private"
-    case secret
+public struct SensitivityDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let `public` = Self(rawValue: "public")
+    public static let `private` = Self(rawValue: "private")
+    public static let secret = Self(rawValue: "secret")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
-public enum RetentionPolicyDTO: String, Codable, Sendable {
-    case runOnly = "run_only"
-    case session
-    case memoryCandidate = "memory_candidate"
-    case auditOnly = "audit_only"
+public struct RetentionPolicyDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let runOnly = Self(rawValue: "run_only")
+    public static let session = Self(rawValue: "session")
+    public static let memoryCandidate = Self(rawValue: "memory_candidate")
+    public static let auditOnly = Self(rawValue: "audit_only")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
-public enum RiskLevelDTO: String, Codable, Sendable {
-    case readOnly = "read_only"
-    case confirm
-    case destructive
+public struct RiskLevelDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let readOnly = Self(rawValue: "read_only")
+    public static let confirm = Self(rawValue: "confirm")
+    public static let destructive = Self(rawValue: "destructive")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
-public enum PermissionStateDTO: String, Codable, Sendable {
-    case notDetermined = "not_determined"
-    case granted
-    case denied
-    case restricted
+public struct PermissionStateDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let notDetermined = Self(rawValue: "not_determined")
+    public static let granted = Self(rawValue: "granted")
+    public static let denied = Self(rawValue: "denied")
+    public static let restricted = Self(rawValue: "restricted")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public struct RuntimeEventDTO: Codable, Equatable, Sendable {
@@ -408,49 +528,31 @@ public struct PromptDebugSnapshotDTO: Codable, Equatable, Sendable {
     }
 }
 
-public enum ProviderKindDTO: Codable, Equatable, Sendable {
-    case mock
-    case desktopMiniCpm
-    case onDeviceMiniCpm
-    case openAiCompatibleLocal
-    case localLLM
-    case unknown(kind: String)
+public struct ProviderKindDTO: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let mock = Self(rawValue: "mock")
+    public static let desktopMiniCpm = Self(rawValue: "desktop_mini_cpm")
+    public static let onDeviceMiniCpm = Self(rawValue: "on_device_mini_cpm")
+    public static let openAiCompatibleLocal = Self(rawValue: "open_ai_compatible_local")
+    public static let localLLM = Self(rawValue: "local_llm")
+
+    public static func unknown(raw: String) -> Self {
+        Self(rawValue: raw)
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let kind = try container.decode(String.self)
-        switch kind {
-        case "mock":
-            self = .mock
-        case "desktop_mini_cpm":
-            self = .desktopMiniCpm
-        case "on_device_mini_cpm":
-            self = .onDeviceMiniCpm
-        case "open_ai_compatible_local":
-            self = .openAiCompatibleLocal
-        case "local_llm":
-            self = .localLLM
-        default:
-            self = .unknown(kind: kind)
-        }
+        self.init(rawValue: try container.decode(String.self))
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        switch self {
-        case .mock:
-            try container.encode("mock")
-        case .desktopMiniCpm:
-            try container.encode("desktop_mini_cpm")
-        case .onDeviceMiniCpm:
-            try container.encode("on_device_mini_cpm")
-        case .openAiCompatibleLocal:
-            try container.encode("open_ai_compatible_local")
-        case .localLLM:
-            try container.encode("local_llm")
-        case .unknown(let kind):
-            try container.encode(kind)
-        }
+        try container.encode(rawValue)
     }
 }
 
