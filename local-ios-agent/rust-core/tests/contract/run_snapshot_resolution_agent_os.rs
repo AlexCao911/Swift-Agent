@@ -3,7 +3,7 @@ use std::sync::Arc;
 use local_ios_agent_runtime::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
-use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
+use local_ios_agent_runtime::run_snapshot::{RunSnapshotId, RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
@@ -264,6 +264,103 @@ fn snapshot_service_rejects_unresolvable_model_credential() {
 }
 
 #[test]
+fn snapshot_service_rejects_missing_model_credential_binding() {
+    let template = AgentTemplate::assistant_default();
+    let component_catalog = ComponentCatalogService::default();
+    let persona_version =
+        publish_component(&component_catalog, ComponentContent::persona("Persona"));
+    let model_selection = primary_model_selection(ModelCatalogVersion::new(3));
+    let profile_repository = publish_profile(
+        &template,
+        &component_catalog,
+        persona_version,
+        model_selection.clone(),
+        AgentProfileLocalBindings::default(),
+    );
+    let model_catalog = InMemoryModelBindingCatalog::default();
+    stage_model_selection(&model_catalog, model_selection);
+    let service = service_from_repositories(profile_repository, component_catalog, model_catalog);
+
+    let error = service
+        .preview(StartRunRequest::new("profile.real", "hello"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "snapshot.credential_binding_missing");
+}
+
+#[test]
+fn snapshot_service_rejects_model_catalog_selection_that_differs_from_profile_pin() {
+    let template = AgentTemplate::assistant_default();
+    let component_catalog = ComponentCatalogService::default();
+    let _persona_version =
+        publish_component(&component_catalog, ComponentContent::persona("Persona"));
+    let pinned_selection = primary_model_selection(ModelCatalogVersion::new(3));
+    let profile_repository = publish_profile(
+        &template,
+        &component_catalog,
+        _persona_version,
+        pinned_selection,
+        AgentProfileLocalBindings::default()
+            .with_credential_ref("account.openai.default", "credential.openai.default"),
+    );
+    let model_catalog = InMemoryModelBindingCatalog::default();
+    stage_model_selection(
+        &model_catalog,
+        model_selection_with_id(ModelCatalogVersion::new(3), "gpt-4o"),
+    );
+    let service = service_from_repositories(profile_repository, component_catalog, model_catalog);
+
+    let error = service
+        .preview(StartRunRequest::new("profile.real", "hello"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "snapshot.model_selection_conflict");
+}
+
+#[test]
+fn snapshot_service_does_not_persist_permission_denied_snapshot() {
+    let service = RunSnapshotService::fixture_with_permission_state(PermissionState::Denied);
+
+    let error = service
+        .resolve_and_persist(StartRunRequest::new("profile_1", "hello"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "snapshot.not_ready");
+    assert!(!service.repository().contains(RunSnapshotId::new(1)));
+}
+
+#[test]
+fn snapshot_service_rejects_component_kind_drift_at_resolution() {
+    let template = AgentTemplate::assistant_default();
+    let publishing_catalog = ComponentCatalogService::default();
+    let _persona_version =
+        publish_component(&publishing_catalog, ComponentContent::persona("Persona"));
+    let model_selection = primary_model_selection(ModelCatalogVersion::new(3));
+    let profile_repository = publish_profile(
+        &template,
+        &publishing_catalog,
+        _persona_version,
+        model_selection.clone(),
+        AgentProfileLocalBindings::default()
+            .with_credential_ref("account.openai.default", "credential.openai.default"),
+    );
+    let drifted_catalog = ComponentCatalogService::default();
+    let _instruction_version = publish_component(
+        &drifted_catalog,
+        ComponentContent::instruction("Wrong kind"),
+    );
+    let model_catalog = InMemoryModelBindingCatalog::default();
+    stage_model_selection(&model_catalog, model_selection);
+    let service = service_from_repositories(profile_repository, drifted_catalog, model_catalog);
+
+    let error = service
+        .preview(StartRunRequest::new("profile.real", "hello"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "snapshot.component_kind_mismatch");
+}
+
+#[test]
 fn snapshot_service_pins_versions_inside_one_transaction() {
     let service = RunSnapshotService::fixture();
     let snapshot = service
@@ -283,6 +380,81 @@ fn snapshot_service_pins_versions_inside_one_transaction() {
     assert_eq!(snapshot.model_binding().catalog_version().as_u64(), 7);
 }
 
+fn service_from_repositories(
+    profile_repository: InMemoryAgentProfileRepository,
+    component_catalog: ComponentCatalogService,
+    model_catalog: InMemoryModelBindingCatalog,
+) -> RunSnapshotService {
+    RunSnapshotService::from_real_repositories(
+        profile_repository,
+        component_catalog,
+        model_catalog,
+        Arc::new(
+            StaticSecurityPermissionService::default()
+                .with_permission("run.start", PermissionState::Granted),
+        ),
+        Arc::new(InMemoryCredentialResolver::default().with_secret_for(
+            "credential.openai.default",
+            "secret",
+            [CredentialPurpose::RemoteProvider],
+        )),
+        Box::new(InMemoryTransactionRunner::default()),
+    )
+}
+
+fn publish_profile(
+    template: &AgentTemplate,
+    component_catalog: &ComponentCatalogService,
+    persona_version: local_ios_agent_runtime::user_customization::UserComponentVersionId,
+    model_selection: ModelSelection,
+    local_bindings: AgentProfileLocalBindings,
+) -> InMemoryAgentProfileRepository {
+    let profile_repository = InMemoryAgentProfileRepository::default();
+    let publisher = AgentProfilePublisher::new(
+        Box::new(InMemoryTransactionRunner::default()),
+        profile_repository.clone(),
+    );
+    let draft = AgentProfileDraft::new(
+        AgentProfileId::new("profile.real"),
+        template.id().clone(),
+        "Real profile",
+    )
+    .bind(ComponentBinding::persona(
+        template
+            .slot_id_for_kind(AgentSlotKind::Persona)
+            .unwrap()
+            .clone(),
+        persona_version,
+    ))
+    .with_model_binding(AgentProfileModelBinding::new(
+        template
+            .slot_id_for_kind(AgentSlotKind::Model)
+            .unwrap()
+            .clone(),
+        model_selection.clone(),
+    ))
+    .with_local_bindings(local_bindings);
+
+    publisher
+        .publish(
+            draft,
+            template,
+            component_catalog,
+            &local_ios_agent_runtime::model::ModelBindingCatalog::default()
+                .with_selection(model_selection),
+        )
+        .unwrap();
+    profile_repository
+}
+
+fn publish_component(
+    component_catalog: &ComponentCatalogService,
+    content: ComponentContent,
+) -> local_ios_agent_runtime::user_customization::UserComponentVersionId {
+    let component_id = component_catalog.create_draft(content);
+    component_catalog.publish(component_id).unwrap()
+}
+
 impl TransactionOperation for ModelSelectionStage<'_> {
     fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
         self.catalog.stage(tx, self.selection.clone())
@@ -300,11 +472,18 @@ fn stage_model_selection(catalog: &InMemoryModelBindingCatalog, selection: Model
 }
 
 fn primary_model_selection(catalog_version: ModelCatalogVersion) -> ModelSelection {
+    model_selection_with_id(catalog_version, "gpt-4.1-mini")
+}
+
+fn model_selection_with_id(
+    catalog_version: ModelCatalogVersion,
+    model_id: impl Into<String>,
+) -> ModelSelection {
     ModelSelection::new(
         ModelBindingId::new("model_binding.primary"),
         "account.openai.default",
         "provider.openai",
-        "gpt-4.1-mini",
+        model_id,
         catalog_version,
     )
 }

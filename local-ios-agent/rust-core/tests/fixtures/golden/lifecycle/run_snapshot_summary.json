@@ -1,0 +1,21 @@
+{
+  "component_versions": [],
+  "model_binding": {
+    "binding_id": "model_binding:agent.fixture:primary",
+    "catalog_version": 1,
+    "model_id": "gpt-fixture",
+    "provider_account_id": "package.provider_account:agent.fixture:model.account",
+    "provider_id": "provider.openai_compatible"
+  },
+  "profile_id": "profile:agent.fixture",
+  "profile_version": 1,
+  "readiness": {
+    "issues": [],
+    "ready": true
+  },
+  "snapshot_id": 1,
+  "trusted_host_state": {
+    "model_credential_available": true,
+    "permission_state": "granted"
+  }
+}

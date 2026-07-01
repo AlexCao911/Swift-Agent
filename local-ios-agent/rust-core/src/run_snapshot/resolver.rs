@@ -56,6 +56,7 @@ struct RunSnapshotRepositoryRecords {
 struct ComponentSnapshotSource {
     version_id: String,
     entity_version: u64,
+    kind: ComponentKind,
 }
 
 struct PendingRunSnapshotWrite {
@@ -126,6 +127,19 @@ impl RunSnapshotResolver {
                 let source = self
                     .sources
                     .component_source(binding.component_version_id())?;
+                let Some(expected_kind) = expected_component_kind_for_slot(binding.slot_kind())
+                else {
+                    return Err(RunSnapshotError::new(
+                        "snapshot.slot_not_component",
+                        "run snapshot component binding references a non-component slot",
+                    ));
+                };
+                if source.kind != expected_kind {
+                    return Err(RunSnapshotError::new(
+                        "snapshot.component_kind_mismatch",
+                        "run snapshot component kind no longer matches the profile slot kind",
+                    ));
+                }
                 Ok(ResolvedComponentBinding::new(
                     binding.slot_id().clone(),
                     binding.slot_kind(),
@@ -149,6 +163,12 @@ impl RunSnapshotResolver {
         let current_selection = self
             .sources
             .model_selection(profile_model.selection().binding_id())?;
+        if &current_selection != profile_model.selection() {
+            return Err(RunSnapshotError::new(
+                "snapshot.model_selection_conflict",
+                "model catalog selection no longer matches the agent profile model pin",
+            ));
+        }
         Ok(ResolvedModelBinding::from_selection(&current_selection))
     }
 
@@ -333,21 +353,38 @@ impl RunSnapshotSourceCatalog {
             .permission_state(&[CapabilityRequirement::new("run.start")]);
         let local_bindings = LocalBindingState::from_profile(profile.local_bindings());
         let mut credential_availability = CredentialAvailability::default();
-        for (binding_key, credential_ref) in profile.local_bindings().credential_refs() {
-            self.credential_resolver
-                .resolve(
-                    &CredentialRef::new(credential_ref),
-                    CredentialPurpose::RemoteProvider,
-                )
-                .map_err(|error| {
+        let required_model_credential_key = profile
+            .model_binding()
+            .map(|binding| binding.selection().provider_account_id().to_string());
+
+        if let Some(binding_key) = required_model_credential_key.as_deref() {
+            let credential_ref = profile
+                .local_bindings()
+                .credential_ref(binding_key)
+                .ok_or_else(|| {
                     RunSnapshotError::new(
-                        "snapshot.credential_unavailable",
-                        format!(
-                            "credential {} is unavailable for run snapshot resolution: {}",
-                            credential_ref, error
-                        ),
+                        "snapshot.credential_binding_missing",
+                        "agent profile model binding is missing a local credential binding",
                     )
                 })?;
+            resolve_credential_ref(
+                self.credential_resolver.as_ref(),
+                binding_key,
+                credential_ref,
+            )?;
+            credential_availability =
+                credential_availability.with_available_ref(binding_key, credential_ref);
+        }
+
+        for (binding_key, credential_ref) in profile.local_bindings().credential_refs() {
+            if required_model_credential_key.as_deref() == Some(binding_key.as_str()) {
+                continue;
+            }
+            resolve_credential_ref(
+                self.credential_resolver.as_ref(),
+                binding_key,
+                credential_ref,
+            )?;
             credential_availability =
                 credential_availability.with_available_ref(binding_key, credential_ref);
         }
@@ -392,6 +429,7 @@ impl RunSnapshotSourceCatalog {
         Ok(ComponentSnapshotSource {
             version_id: component_snapshot_version_id(kind, version_id),
             entity_version,
+            kind,
         })
     }
 
@@ -567,6 +605,40 @@ fn component_kind_snapshot_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Prompt => "prompt",
         ComponentKind::Skill => "skill",
     }
+}
+
+fn expected_component_kind_for_slot(slot_kind: AgentSlotKind) -> Option<ComponentKind> {
+    match slot_kind {
+        AgentSlotKind::Brain => Some(ComponentKind::BrainPreset),
+        AgentSlotKind::Persona => Some(ComponentKind::Persona),
+        AgentSlotKind::Instruction => Some(ComponentKind::Instruction),
+        AgentSlotKind::Model => None,
+        AgentSlotKind::Toolset => Some(ComponentKind::ToolRecipe),
+        AgentSlotKind::Memory => Some(ComponentKind::MemoryProfile),
+        AgentSlotKind::Voice => Some(ComponentKind::VoiceProfile),
+    }
+}
+
+fn resolve_credential_ref(
+    resolver: &dyn CredentialRefResolver,
+    binding_key: &str,
+    credential_ref: &str,
+) -> RunSnapshotResult<()> {
+    resolver
+        .resolve(
+            &CredentialRef::new(credential_ref),
+            CredentialPurpose::RemoteProvider,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            RunSnapshotError::new(
+                "snapshot.credential_unavailable",
+                format!(
+                    "credential {} for binding {} is unavailable for run snapshot resolution: {}",
+                    credential_ref, binding_key, error
+                ),
+            )
+        })
 }
 
 fn readiness_from_trusted_host_state(

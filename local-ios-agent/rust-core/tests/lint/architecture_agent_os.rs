@@ -81,6 +81,58 @@ fn agent_builder_assembly_layer_stays_out_of_runtime_package_and_inference_execu
 }
 
 #[test]
+fn run_snapshot_resolution_layer_stays_out_of_package_builder_and_runtime_execution() {
+    let sources = [
+        (
+            "resolver.rs",
+            include_str!("../../src/run_snapshot/resolver.rs"),
+        ),
+        (
+            "snapshot_service.rs",
+            include_str!("../../src/run_snapshot/snapshot_service.rs"),
+        ),
+        (
+            "snapshot.rs",
+            include_str!("../../src/run_snapshot/snapshot.rs"),
+        ),
+        (
+            "resolved_bindings.rs",
+            include_str!("../../src/run_snapshot/resolved_bindings.rs"),
+        ),
+    ];
+
+    let mut findings = Vec::new();
+    for (file, source) in sources {
+        for finding in forbidden_run_snapshot_dependency_findings(source) {
+            findings.push(format!("{file}: {finding}"));
+        }
+    }
+
+    assert!(
+        findings.is_empty(),
+        "run snapshot resolution must not depend on package install, builder assembly, or runtime execution:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn run_snapshot_dependency_lint_detects_forbidden_imports_and_ignores_comments() {
+    let source = r#"
+        // crate::agent_package::AgentPackageInstaller in a comment should be ignored.
+        use crate::agent_package as package;
+        use crate::inference::InferenceBackend;
+        let _name = "AgentBuilderResolver should not trip inside strings";
+    "#;
+
+    let findings = forbidden_run_snapshot_dependency_findings(source);
+
+    assert!(findings.contains(&"crate::agent_package".to_string()));
+    assert!(findings.contains(&"crate::inference".to_string()));
+    assert!(findings.contains(&"InferenceBackend".to_string()));
+    assert_eq!(findings.len(), 3);
+}
+
+#[test]
 fn builder_assembly_dependency_lint_detects_forbidden_imports_and_ignores_comments() {
     let source = r#"
         // crate::agent_package::AgentPackageInstaller in a comment should be ignored.
@@ -187,6 +239,66 @@ fn forbidden_builder_assembly_dependency_findings(source: &str) -> Vec<String> {
         "GenerationSession",
         "InferenceBackend",
         "AgentPackageInstaller",
+    ] {
+        if contains_identifier(&stripped, forbidden_type) {
+            findings.push(forbidden_type.to_string());
+        }
+    }
+
+    findings.sort();
+    findings.dedup();
+    findings
+}
+
+fn forbidden_run_snapshot_dependency_findings(source: &str) -> Vec<String> {
+    let stripped = strip_comments_and_strings(source);
+    let compact: String = stripped.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let mut findings = Vec::new();
+
+    for forbidden_path in [
+        "crate::agent_package",
+        "crate::{agent_package",
+        ",agent_package",
+        "super::agent_package",
+    ] {
+        if compact.contains(forbidden_path) {
+            findings.push("crate::agent_package".to_string());
+            break;
+        }
+    }
+
+    for forbidden_path in [
+        "crate::inference",
+        "crate::{inference",
+        ",inference",
+        "super::inference",
+    ] {
+        if compact.contains(forbidden_path) {
+            findings.push("crate::inference".to_string());
+            break;
+        }
+    }
+
+    for forbidden_path in [
+        "crate::core::runtime",
+        "crate::{core::runtime",
+        "super::core::runtime",
+    ] {
+        if compact.contains(forbidden_path) {
+            findings.push("crate::core::runtime".to_string());
+            break;
+        }
+    }
+
+    for forbidden_type in [
+        "AgentPackageInstaller",
+        "PackageInstallOperation",
+        "AgentBuilderResolver",
+        "AgentAssemblyPlan",
+        "Runtime",
+        "ExecutionPlan",
+        "GenerationSession",
+        "InferenceBackend",
     ] {
         if contains_identifier(&stripped, forbidden_type) {
             findings.push(forbidden_type.to_string());

@@ -231,6 +231,12 @@ impl TransactionOperation for SnapshotPersistOperation<'_> {
             .map_err(|error| StorageError::new(error.code().to_string(), error.to_string()))?;
         ensure_preview_still_current(self.preview.snapshot(), &current)
             .map_err(|error| StorageError::new(error.code().to_string(), error.to_string()))?;
+        if !current.readiness_report().is_ready() {
+            return Err(StorageError::new(
+                "snapshot.not_ready",
+                "run snapshot cannot be persisted until readiness issues are resolved",
+            ));
+        }
         self.repository
             .stage_snapshot(tx, current, self.committed_snapshot.clone())?;
         Ok(())
