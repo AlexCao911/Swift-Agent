@@ -74,6 +74,25 @@ fn core_runtime_exposes_resolved_execution_plan_entrypoint() {
 }
 
 #[test]
+fn ffi_bridge_uses_application_service_for_run_snapshot_resolution() {
+    let ffi_source = include_str!("../../src/ffi_bridge.rs");
+    let stripped = strip_comments_and_strings(ffi_source);
+
+    assert!(
+        stripped.contains("AgentOSApplicationService"),
+        "Swift/Rust FFI boundary must call the application service layer for startRun"
+    );
+    assert!(
+        !stripped.contains("RunSnapshotService::fixture"),
+        "Swift/Rust FFI boundary must not resolve startRun with RunSnapshotService fixture state"
+    );
+    assert!(
+        !stripped.contains("RunSnapshotSourceCatalog::fixture"),
+        "Swift/Rust FFI boundary must not construct fixture snapshot source catalogs"
+    );
+}
+
+#[test]
 fn runtime_dependency_lint_detects_alias_imports_and_ignores_comments_and_strings() {
     let source = r#"
         // crate::agent_package::AgentPackageInstaller in a comment should be ignored.
@@ -263,6 +282,126 @@ fn agent_assembly_plan_does_not_expose_mutable_invariant_fields_or_profile_draft
         assert!(
             !source.contains(forbidden),
             "AgentAssemblyPlan must not expose mutable invariant API: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn swift_app_boundary_files_are_registered_in_xcode_project() {
+    let project = read_workspace_file("apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj");
+
+    for file in [
+        "AgentBuilderViewModel.swift",
+        "RuntimeProjectionModel.swift",
+        "AgentBuilderViewModelTests.swift",
+        "RuntimeProjectionModelTests.swift",
+    ] {
+        assert!(
+            project.contains(file),
+            "Swift app boundary file must be registered in the Xcode project: {file}"
+        );
+        assert!(
+            project.contains(&format!("{file} in Sources")),
+            "Swift app boundary file must be part of a Sources build phase: {file}"
+        );
+    }
+}
+
+#[test]
+fn swift_app_boundary_view_models_do_not_depend_on_rust_domain_or_c_abi() {
+    let sources = [
+        (
+            "AgentBuilderViewModel.swift",
+            read_workspace_file(
+                "apps/LocalAgentApp/LocalAgentApp/Presentation/AgentBuilder/AgentBuilderViewModel.swift",
+            ),
+        ),
+        (
+            "RuntimeProjectionModel.swift",
+            read_workspace_file(
+                "apps/LocalAgentApp/LocalAgentApp/Presentation/Runtime/RuntimeProjectionModel.swift",
+            ),
+        ),
+    ];
+
+    let forbidden = [
+        "ResolvedRunSnapshot",
+        "ExecutionPlan",
+        "RunMachine",
+        "AgentProfilePublisher",
+        "ComponentCatalogService",
+        "InMemoryAgentProfileRepository",
+        "local_agent_runtime_bridge",
+        "CLocalAgentRuntime",
+        "InferenceBackend",
+        "ToolExecutor",
+        "PromptCompiler",
+    ];
+
+    let mut findings = Vec::new();
+    for (file, source) in sources {
+        for needle in forbidden {
+            if source.contains(needle) {
+                findings.push(format!("{file}: {needle}"));
+            }
+        }
+    }
+
+    assert!(
+        findings.is_empty(),
+        "Swift app boundary view models must consume bridge DTO/UIModel clients only:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn swift_runtime_projection_exposes_prompt_and_context_debug_archives() {
+    let projection_source = read_workspace_file(
+        "apps/LocalAgentApp/LocalAgentApp/Presentation/Runtime/RuntimeProjectionModel.swift",
+    );
+    let test_source = read_workspace_file(
+        "apps/LocalAgentApp/LocalAgentAppTests/Presentation/Runtime/RuntimeProjectionModelTests.swift",
+    );
+
+    assert!(
+        projection_source.contains("archiveItems: [RuntimeArchiveItem]"),
+        "RuntimeProjectionModel must expose prompt/context archive items for the Run Debug view"
+    );
+    assert!(
+        projection_source.contains("archive.sourceLinks.map"),
+        "RuntimeProjectionModel must preserve typed archive source links"
+    );
+    assert!(
+        test_source.contains("DebugArchiveDTO(")
+            && test_source.contains("projection.archiveItems.map")
+            && test_source.contains("prompt_archive"),
+        "RuntimeProjectionModel tests must cover prompt/context archive projection"
+    );
+}
+
+#[test]
+fn swift_start_run_request_dto_does_not_model_trusted_host_state() {
+    let source = read_workspace_file("toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift");
+    let start = source
+        .find("public struct StartRunRequestDTO")
+        .expect("StartRunRequestDTO must exist");
+    let rest = &source[start..];
+    let end = rest
+        .find("public struct RunHandleDTO")
+        .expect("RunHandleDTO should follow StartRunRequestDTO");
+    let start_run_source = &rest[..end];
+
+    for forbidden in [
+        "permissionState",
+        "permission_state",
+        "localBindings",
+        "local_bindings",
+        "credentialAvailability",
+        "credential_availability",
+    ] {
+        assert!(
+            !start_run_source.contains(forbidden),
+            "StartRunRequestDTO must not expose trusted host state: {forbidden}"
         );
     }
 }
@@ -479,6 +618,15 @@ fn rust_sources_under(dir: std::path::PathBuf) -> Vec<(String, &'static str)> {
 
     sources.sort_by(|left, right| left.0.cmp(&right.0));
     sources
+}
+
+fn read_workspace_file(relative_path: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("rust-core has local-ios-agent parent")
+        .join(relative_path);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
 fn contains_identifier(source: &str, needle: &str) -> bool {

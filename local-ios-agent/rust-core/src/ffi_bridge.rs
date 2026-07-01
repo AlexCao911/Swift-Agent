@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{Mutex, MutexGuard};
@@ -5,6 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
 use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
@@ -12,7 +14,10 @@ use crate::core::{
     LocalLLMProvider, ProviderBundle, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
+use crate::execution::ExecutionPlanner;
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
+use crate::run_snapshot::StartRunRequest;
+use crate::runtime::{RecordingEffectDriver, RuntimeExecutionDebugTrace};
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
@@ -87,14 +92,20 @@ pub enum RuntimeJsonBridge {
 pub struct BridgeRuntime<S: EventStore> {
     runtime: Mutex<AgentRuntime<S>>,
     cancellations: ProviderCancellationRegistry,
+    app_services: AgentOSApplicationService,
+    debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
+    next_agent_os_run_id: Mutex<u64>,
 }
 
 impl<S: EventStore> BridgeRuntime<S> {
-    fn new(runtime: AgentRuntime<S>) -> Self {
+    fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
         let cancellations = runtime.provider_cancellation_registry();
         Self {
             runtime: Mutex::new(runtime),
             cancellations,
+            app_services,
+            debug_archives: Mutex::new(BTreeMap::new()),
+            next_agent_os_run_id: Mutex::new(1),
         }
     }
 
@@ -107,17 +118,67 @@ impl<S: EventStore> BridgeRuntime<S> {
     fn signal_provider_cancellation(&self, run_id: &RunId) {
         self.cancellations.signal(run_id);
     }
+
+    fn start_agent_os_run(&self, request: StartRunRequest) -> Result<RunHandleJson, AgentError> {
+        let snapshot = self
+            .app_services
+            .resolve_and_persist_snapshot(request)
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        let plan = ExecutionPlanner
+            .plan(snapshot)
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        let run_id = self.reserve_agent_os_run_id()?;
+        let trace = self.lock()?.execute_plan_with_run_id(
+            plan,
+            run_id.clone(),
+            RecordingEffectDriver::default(),
+        )?;
+        self.store_debug_archive(debug_archive_from_trace(&trace))?;
+        Ok(RunHandleJson { run_id })
+    }
+
+    fn load_debug_archive(&self, run_id: &str) -> Result<RunDebugArchiveJson, AgentError> {
+        self.debug_archives
+            .lock()
+            .map_err(|_| AgentError::Ffi("debug archive mutex poisoned".into()))?
+            .get(run_id)
+            .cloned()
+            .ok_or_else(|| AgentError::Storage(format!("missing debug archive for run: {run_id}")))
+    }
+
+    fn reserve_agent_os_run_id(&self) -> Result<String, AgentError> {
+        let mut next = self
+            .next_agent_os_run_id
+            .lock()
+            .map_err(|_| AgentError::Ffi("agent os run id mutex poisoned".into()))?;
+        let run_id = format!("run_{}", *next);
+        *next += 1;
+        Ok(run_id)
+    }
+
+    fn store_debug_archive(&self, archive: RunDebugArchiveJson) -> Result<(), AgentError> {
+        self.debug_archives
+            .lock()
+            .map_err(|_| AgentError::Ffi("debug archive mutex poisoned".into()))?
+            .insert(archive.run_id.clone(), archive);
+        Ok(())
+    }
 }
 
 impl RuntimeJsonBridge {
     pub fn new(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
-        Self::InMemory(BridgeRuntime::new(runtime))
+        Self::InMemory(BridgeRuntime::new(
+            runtime,
+            AgentOSApplicationService::empty(),
+        ))
     }
 
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
         let config: RuntimeBridgeConfigJson = from_json(config_json)?;
         let registry = config.provider_registry()?;
         let runtime_config = config.runtime_config(&registry)?;
+        let app_services = AgentOSApplicationService::from_config(config.agent_os.into())
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
         match config.store {
             StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::new(
                 AgentRuntime::with_store_and_registry(
@@ -125,6 +186,7 @@ impl RuntimeJsonBridge {
                     InMemoryEventStore::new(),
                     registry,
                 )?,
+                app_services,
             ))),
             StoreConfigJson::Sqlite { path, .. } => Ok(Self::Sqlite(BridgeRuntime::new(
                 AgentRuntime::with_store_and_registry(
@@ -132,6 +194,7 @@ impl RuntimeJsonBridge {
                     SqliteEventStore::open(path)?,
                     registry,
                 )?,
+                app_services,
             ))),
         }
     }
@@ -453,6 +516,24 @@ impl RuntimeJsonBridge {
         };
         to_json(&RuntimeEventJson::from_event(&event))
     }
+
+    pub fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: StartRunRequestJson = from_json(request_json)?;
+        let request = StartRunRequest::new(request.agent_profile_id, request.user_intent);
+        let handle = match self {
+            Self::InMemory(runtime) => runtime.start_agent_os_run(request),
+            Self::Sqlite(runtime) => runtime.start_agent_os_run(request),
+        }?;
+        to_json(&handle)
+    }
+
+    pub fn load_debug_archive_json(&self, run_id: &str) -> Result<String, AgentError> {
+        let archive = match self {
+            Self::InMemory(runtime) => runtime.load_debug_archive(run_id),
+            Self::Sqlite(runtime) => runtime.load_debug_archive(run_id),
+        }?;
+        to_json(&archive)
+    }
 }
 
 #[no_mangle]
@@ -726,6 +807,28 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_provider(
     })
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_start_run(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.start_run_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_load_debug_archive(
+    runtime: *mut RuntimeJsonBridge,
+    run_id: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let run_id = c_str_arg(run_id, "run_id")?;
+        bridge_ref(runtime)?.load_debug_archive_json(run_id)
+    })
+}
+
 #[derive(Deserialize)]
 struct SendMessageJson {
     session_id: String,
@@ -742,6 +845,56 @@ struct SetProviderJson {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartRunRequestJson {
+    agent_profile_id: String,
+    user_intent: String,
+}
+
+#[derive(Serialize)]
+struct RunHandleJson {
+    run_id: String,
+}
+
+#[derive(Clone, Serialize)]
+struct RunDebugArchiveJson {
+    run_id: String,
+    state: String,
+    events: Vec<RunDebugEventJson>,
+    archives: Vec<DebugArchiveJson>,
+    checkpoints: Vec<CheckpointJson>,
+}
+
+#[derive(Clone, Serialize)]
+struct RunDebugEventJson {
+    id: String,
+    code: String,
+    title: String,
+}
+
+#[derive(Clone, Serialize)]
+struct DebugArchiveJson {
+    id: String,
+    kind: String,
+    title: String,
+    redacted_payload: String,
+    source_links: Vec<DebugArchiveSourceLinkJson>,
+}
+
+#[derive(Clone, Serialize)]
+struct DebugArchiveSourceLinkJson {
+    kind: String,
+    target_id: String,
+}
+
+#[derive(Clone, Serialize)]
+struct CheckpointJson {
+    id: String,
+    title: String,
+    can_resume: bool,
+}
+
+#[derive(Deserialize)]
 struct RuntimeBridgeConfigJson {
     system_prompt: String,
     runtime_policy: String,
@@ -749,6 +902,21 @@ struct RuntimeBridgeConfigJson {
     #[serde(default)]
     providers: Vec<RuntimeProviderConfigJson>,
     store: StoreConfigJson,
+    #[serde(default)]
+    agent_os: RuntimeAgentOSConfigJson,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct RuntimeAgentOSConfigJson {
+    #[serde(default)]
+    seed_development_profile: bool,
+}
+
+impl From<RuntimeAgentOSConfigJson> for AgentOSApplicationServiceConfig {
+    fn from(value: RuntimeAgentOSConfigJson) -> Self {
+        AgentOSApplicationServiceConfig::new()
+            .with_seed_development_profile(value.seed_development_profile)
+    }
 }
 
 impl RuntimeBridgeConfigJson {
@@ -1183,6 +1351,70 @@ fn to_json<T: Serialize>(value: &T) -> Result<String, AgentError> {
 
 fn from_json<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, AgentError> {
     serde_json::from_str(json).map_err(|error| AgentError::Ffi(error.to_string()))
+}
+
+fn debug_archive_from_trace(trace: &RuntimeExecutionDebugTrace) -> RunDebugArchiveJson {
+    let events = trace
+        .event_codes()
+        .into_iter()
+        .enumerate()
+        .map(|(index, code)| RunDebugEventJson {
+            id: format!("event_{}", index + 1),
+            title: debug_title_for_event(&code),
+            code,
+        })
+        .collect::<Vec<_>>();
+    let archives = trace
+        .archives()
+        .iter()
+        .map(|archive| DebugArchiveJson {
+            id: archive.archive_id().to_string(),
+            kind: archive.kind().to_string(),
+            title: archive.title().to_string(),
+            redacted_payload: archive.redacted_payload().to_string(),
+            source_links: archive
+                .source_links()
+                .iter()
+                .map(|source| DebugArchiveSourceLinkJson {
+                    kind: source.kind().to_string(),
+                    target_id: source.target_id().to_string(),
+                })
+                .collect(),
+        })
+        .collect();
+    let checkpoints = if events
+        .iter()
+        .any(|event| event.code == "checkpoint.committed")
+    {
+        vec![CheckpointJson {
+            id: "checkpoint_1".to_string(),
+            title: "Checkpoint committed".to_string(),
+            can_resume: true,
+        }]
+    } else {
+        Vec::new()
+    };
+    RunDebugArchiveJson {
+        run_id: trace.run_id().to_string(),
+        state: trace.state().to_string(),
+        events,
+        archives,
+        checkpoints,
+    }
+}
+
+fn debug_title_for_event(code: &str) -> String {
+    code.split(['.', '_'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {

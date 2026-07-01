@@ -38,9 +38,11 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
     private var storedActiveProvider: ProviderProfileDTO
     private var toolRequests: [ToolExecutionRequestDTO]
     private var approvalRequests: [ApprovalProtocolRequestDTO]
+    private var debugArchive: RunDebugUIModel
 
     public private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     public private(set) var permissionStates: [PermissionStateSubmission] = []
+    public private(set) var startedRunRequests: [StartRunRequestDTO] = []
     public private(set) var sentMessages: [SentMessage] = []
     public private(set) var submittedToolResults: [ToolResultSubmission] = []
     public private(set) var submittedApprovalResponses: [ApprovalProtocolResponseDTO] = []
@@ -71,7 +73,13 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
             maxContextTokens: 100
         ),
         toolRequests: [ToolExecutionRequestDTO] = [],
-        approvalRequests: [ApprovalProtocolRequestDTO] = []
+        approvalRequests: [ApprovalProtocolRequestDTO] = [],
+        debugArchive: RunDebugUIModel = RunDebugUIModel(
+            runId: "run_mock",
+            state: .completed,
+            events: [],
+            checkpoints: []
+        )
     ) {
         self.storedSessionIds = sessionIds
         self.turnResult = turnResult
@@ -80,6 +88,21 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
         self.storedActiveProvider = activeProvider
         self.toolRequests = toolRequests
         self.approvalRequests = approvalRequests
+        self.debugArchive = debugArchive
+    }
+
+    public func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
+        startedRunRequests.append(request)
+        return RunHandleDTO(runId: turnResult.runId)
+    }
+
+    public func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
+        RunDebugUIModel(
+            runId: runId,
+            state: debugArchive.state,
+            events: debugArchive.events,
+            checkpoints: debugArchive.checkpoints
+        )
     }
 
     public func createSession() async throws -> String {

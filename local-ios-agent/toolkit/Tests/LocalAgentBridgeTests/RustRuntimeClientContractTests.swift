@@ -241,6 +241,33 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeClientStartRunAndDebugArchiveUseApplicationServiceBoundary() async throws {
+        let probe = RuntimeCFunctionProbe()
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+
+        let handle = try await client?.startRun(StartRunRequestDTO(
+            agentProfileId: "profile_1",
+            userIntent: "research this"
+        ))
+        let archive = try await client?.loadDebugArchive("run_agent_os")
+
+        let startRun = try decodedObject(try #require(probe.startRunJson))
+        #expect(handle?.runId == "run_agent_os")
+        #expect(startRun["agent_profile_id"] as? String == "profile_1")
+        #expect(startRun["user_intent"] as? String == "research this")
+        #expect(startRun["permission_state"] == nil)
+        #expect(startRun["local_bindings"] == nil)
+        #expect(probe.debugArchiveRunId == "run_agent_os")
+        #expect(archive?.runId == "run_agent_os")
+        #expect(archive?.state == .completed)
+
+        client = nil
+
+        #expect(probe.freedStrings == 2)
+        #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
     func rustRuntimeClientThrowsBridgeErrorsAndStillFreesReturnedStrings() async throws {
         let probe = RuntimeCFunctionProbe()
         probe.createSessionResponse = #"{"error":{"kind":"ffi","message":"bad input"}}"#
@@ -279,17 +306,27 @@ struct RustRuntimeClientContractTests {
             systemPrompt: "configured system",
             runtimePolicy: "configured policy",
             providerId: "mock",
-            store: .sqlite(path: databaseURL.path)
+            store: .sqlite(path: databaseURL.path),
+            agentOS: RustAgentOSConfiguration(seedDevelopmentProfile: true)
         )
 
         var firstClient: RustRuntimeClient? = try RustRuntimeClient(configuration: configuration)
         let createdSession = try await firstClient?.createSession()
+        let run = try await firstClient?.startRun(StartRunRequestDTO(
+            agentProfileId: "profile_1",
+            userIntent: "live bridge run"
+        ))
+        let archive = try await firstClient?.loadDebugArchive(try #require(run?.runId))
         firstClient = nil
 
         let secondClient = try RustRuntimeClient(configuration: configuration)
         let sessionIds = try await secondClient.sessionIds()
 
         #expect(createdSession != nil)
+        #expect(run?.runId == "run_1")
+        #expect(archive?.state == .completed)
+        #expect(archive?.events.map(\.code).contains("run.started") == true)
+        #expect(archive?.archives.map(\.kind.rawValue) == ["prompt", "context"])
         #expect(sessionIds.contains(try #require(createdSession)))
     }
 }
@@ -305,6 +342,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var submittedApprovalResponseJson: String?
     var setProviderJson: String?
     var runtimeOptionsJson: String?
+    var startRunJson: String?
+    var debugArchiveRunId: String?
     var forkSessionId: String?
     var forkLeafId: String?
     var activeBranchSessionId: String?
@@ -343,7 +382,9 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             latestPromptDebugSnapshot: latestPromptDebugSnapshot,
             providerProfiles: providerProfiles,
             activeProvider: activeProvider,
-            setProvider: setProvider
+            setProvider: setProvider,
+            startRun: startRun,
+            loadDebugArchive: loadDebugArchive
         )
     }
 
@@ -598,6 +639,33 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
           "kind": "provider_changed",
           "payload": "{\\"provider_id\\":\\"mock\\"}",
           "blob_refs": []
+        }
+        """)
+    }
+
+    func startRun(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        startRunJson = String(cString: requestJson!)
+        return makeCString(#"{"run_id":"run_agent_os"}"#)
+    }
+
+    func loadDebugArchive(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ runId: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        debugArchiveRunId = String(cString: runId!)
+        return makeCString("""
+        {
+          "run_id": "\(debugArchiveRunId ?? "run_agent_os")",
+          "state": "completed",
+          "events": [
+            { "id": "event_1", "code": "run.started", "title": "Run started" }
+          ],
+          "checkpoints": [
+            { "id": "checkpoint_1", "title": "Done", "can_resume": false }
+          ]
         }
         """)
     }

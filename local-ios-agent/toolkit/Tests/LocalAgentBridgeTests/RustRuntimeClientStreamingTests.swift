@@ -112,6 +112,17 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
                   "blob_refs": []
                 }
                 """)
+            },
+            startRun: { _, _ in Self.makeCString(#"{"run_id":"run_1"}"#) },
+            loadDebugArchive: { _, _ in
+                Self.makeCString("""
+                {
+                  "run_id": "run_1",
+                  "state": "completed",
+                  "events": [],
+                  "checkpoints": []
+                }
+                """)
             }
         )
     }

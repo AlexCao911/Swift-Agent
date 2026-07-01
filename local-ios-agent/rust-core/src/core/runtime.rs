@@ -190,7 +190,20 @@ impl<S: EventStore> AgentRuntime<S> {
     where
         D: EffectDriver + 'static,
     {
-        let mut machine = RunMachine::from_plan_with_effect_driver(plan, effect_driver);
+        self.execute_plan_with_run_id(plan, "run_1", effect_driver)
+    }
+
+    pub fn execute_plan_with_run_id<D>(
+        &mut self,
+        plan: ExecutionPlan,
+        run_id: impl Into<String>,
+        effect_driver: D,
+    ) -> Result<RuntimeExecutionDebugTrace, AgentError>
+    where
+        D: EffectDriver + 'static,
+    {
+        let mut machine =
+            RunMachine::from_plan_with_effect_driver_and_run_id(plan, effect_driver, run_id);
         machine.run_to_completion().map_err(|error| {
             AgentError::Storage(format!(
                 "runtime execution failed ({}): {error}",

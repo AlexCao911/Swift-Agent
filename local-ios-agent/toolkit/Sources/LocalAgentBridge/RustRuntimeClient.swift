@@ -28,19 +28,22 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
     public var providerId: String
     public var store: RustRuntimeStoreConfiguration
     public var providers: [RustRuntimeProviderConfiguration]
+    public var agentOS: RustAgentOSConfiguration?
 
     public init(
         systemPrompt: String,
         runtimePolicy: String,
         providerId: String,
         store: RustRuntimeStoreConfiguration,
-        providers: [RustRuntimeProviderConfiguration] = []
+        providers: [RustRuntimeProviderConfiguration] = [],
+        agentOS: RustAgentOSConfiguration? = nil
     ) {
         self.systemPrompt = systemPrompt
         self.runtimePolicy = runtimePolicy
         self.providerId = providerId
         self.store = store
         self.providers = providers
+        self.agentOS = agentOS
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -49,6 +52,19 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
         case providerId = "provider_id"
         case store
         case providers
+        case agentOS = "agent_os"
+    }
+}
+
+public struct RustAgentOSConfiguration: Codable, Equatable, Sendable {
+    public var seedDevelopmentProfile: Bool
+
+    public init(seedDevelopmentProfile: Bool = false) {
+        self.seedDevelopmentProfile = seedDevelopmentProfile
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case seedDevelopmentProfile = "seed_development_profile"
     }
 }
 
@@ -205,6 +221,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var providerProfiles: (RuntimeHandle?) -> StringResult
     public var activeProvider: (RuntimeHandle?) -> StringResult
     public var setProvider: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var startRun: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var loadDebugArchive: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
 
     public init(
         makeRuntime: @escaping () -> RuntimeHandle?,
@@ -259,7 +277,9 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         latestPromptDebugSnapshot: @escaping (RuntimeHandle?) -> StringResult,
         providerProfiles: @escaping (RuntimeHandle?) -> StringResult,
         activeProvider: @escaping (RuntimeHandle?) -> StringResult,
-        setProvider: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+        setProvider: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        startRun: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
+        loadDebugArchive: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     ) {
         self.makeRuntime = makeRuntime
         self.freeRuntime = freeRuntime
@@ -287,6 +307,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.providerProfiles = providerProfiles
         self.activeProvider = activeProvider
         self.setProvider = setProvider
+        self.startRun = startRun
+        self.loadDebugArchive = loadDebugArchive
     }
 
     public static func live(configuration: RustRuntimeConfiguration) throws -> Self {
@@ -424,6 +446,18 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     requestJson
                 )
+            },
+            startRun: { runtime, requestJson in
+                local_agent_runtime_bridge_start_run(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson
+                )
+            },
+            loadDebugArchive: { runtime, runId in
+                local_agent_runtime_bridge_load_debug_archive(
+                    runtime.map { OpaquePointer($0) },
+                    runId
+                )
             }
         )
     }
@@ -454,6 +488,19 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
 
     public func createSession() async throws -> String {
         try decode(functions.createSession(handle), as: String.self)
+    }
+
+    public func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
+        let json = try encode(request)
+        return try json.withCString { pointer in
+            try decode(functions.startRun(handle, pointer), as: RunHandleDTO.self)
+        }
+    }
+
+    public func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
+        try runId.withCString { pointer in
+            try decode(functions.loadDebugArchive(handle, pointer), as: RunDebugUIModel.self)
+        }
     }
 
     public func sessionIds() async throws -> [String] {

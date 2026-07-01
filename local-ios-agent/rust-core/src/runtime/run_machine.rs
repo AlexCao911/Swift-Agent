@@ -36,6 +36,7 @@ pub struct RuntimeExecutionDebugTrace {
     source_snapshot_id: Option<u64>,
     state: String,
     events: Vec<RuntimeExecutionEventDebugSummary>,
+    archives: Vec<RuntimeArchiveDebugSummary>,
     transactions: Vec<RuntimeTransactionDebugSummary>,
     last_checkpoint: Option<RuntimeCheckpointDebugSummary>,
 }
@@ -50,6 +51,21 @@ pub struct RuntimeExecutionEventDebugSummary {
 pub struct RuntimeTransactionDebugSummary {
     name: String,
     event_codes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuntimeArchiveDebugSummary {
+    archive_id: String,
+    kind: String,
+    title: String,
+    redacted_payload: String,
+    source_links: Vec<RuntimeArchiveSourceLinkDebugSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuntimeArchiveSourceLinkDebugSummary {
+    kind: String,
+    target_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -188,6 +204,19 @@ impl RunMachine {
             effect_driver: Some(Arc::new(driver)),
             ..Self::fixture_created()
         }
+    }
+
+    pub fn from_plan_with_effect_driver_and_run_id<D>(
+        plan: ExecutionPlan,
+        driver: D,
+        run_id: impl Into<String>,
+    ) -> Self
+    where
+        D: EffectDriver + 'static,
+    {
+        let mut machine = Self::from_plan_with_effect_driver(plan, driver);
+        machine.run_id = run_id.into();
+        machine
     }
 
     pub fn state(&self) -> RunState {
@@ -368,6 +397,22 @@ impl RunMachine {
                 .map(|event| RuntimeExecutionEventDebugSummary {
                     sequence: event.sequence.as_u64(),
                     code: event.event_type().to_string(),
+                })
+                .collect(),
+            archives: self
+                .archive_records()
+                .into_iter()
+                .filter(|record| record.run_id() == self.run_id)
+                .enumerate()
+                .map(|(index, record)| RuntimeArchiveDebugSummary {
+                    archive_id: format!("archive_{}", index + 1),
+                    title: archive_title(record.kind()),
+                    kind: record.kind().to_string(),
+                    redacted_payload: record.payload().to_string(),
+                    source_links: vec![RuntimeArchiveSourceLinkDebugSummary {
+                        kind: format!("{}_archive", record.kind()),
+                        target_id: format!("{}_archive:{}", record.kind(), record.run_id()),
+                    }],
                 })
                 .collect(),
             transactions: self
@@ -606,6 +651,14 @@ impl RunMachine {
     }
 }
 
+fn archive_title(kind: &str) -> String {
+    match kind {
+        "prompt" => "Prompt archive".to_string(),
+        "context" => "Context archive".to_string(),
+        other => format!("{other} archive"),
+    }
+}
+
 impl RunMachineError {
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -722,12 +775,52 @@ impl RunMachinePersistence {
 }
 
 impl RuntimeExecutionDebugTrace {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
     pub fn state(&self) -> &str {
         &self.state
     }
 
     pub fn event_codes(&self) -> Vec<String> {
         self.events.iter().map(|event| event.code.clone()).collect()
+    }
+
+    pub fn archives(&self) -> &[RuntimeArchiveDebugSummary] {
+        &self.archives
+    }
+}
+
+impl RuntimeArchiveDebugSummary {
+    pub fn archive_id(&self) -> &str {
+        &self.archive_id
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn redacted_payload(&self) -> &str {
+        &self.redacted_payload
+    }
+
+    pub fn source_links(&self) -> &[RuntimeArchiveSourceLinkDebugSummary] {
+        &self.source_links
+    }
+}
+
+impl RuntimeArchiveSourceLinkDebugSummary {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn target_id(&self) -> &str {
+        &self.target_id
     }
 }
 

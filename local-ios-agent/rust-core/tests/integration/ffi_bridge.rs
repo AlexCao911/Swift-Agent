@@ -5,9 +5,10 @@ use local_ios_agent_runtime::core::{
 };
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
-    local_agent_runtime_bridge_free, local_agent_runtime_bridge_new_with_config,
-    local_agent_runtime_bridge_send_message, local_agent_runtime_bridge_send_message_streaming,
-    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
+    local_agent_runtime_bridge_free, local_agent_runtime_bridge_load_debug_archive,
+    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message,
+    local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
+    local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
     local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
 };
 use local_ios_agent_runtime::tool::{
@@ -222,6 +223,20 @@ unsafe fn new_in_memory_c_bridge() -> *mut RuntimeJsonBridge {
     local_agent_runtime_bridge_new_with_config(config.as_ptr())
 }
 
+unsafe fn new_seeded_agent_os_c_bridge() -> *mut RuntimeJsonBridge {
+    let config = CString::new(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "mock",
+          "store": {"kind": "in_memory"},
+          "agent_os": {"seed_development_profile": true}
+        }"#,
+    )
+    .unwrap();
+    local_agent_runtime_bridge_new_with_config(config.as_ptr())
+}
+
 #[test]
 fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
     let bridge = bridge();
@@ -261,6 +276,135 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
         .as_str()
         .unwrap()
         .contains("hello"));
+}
+
+#[test]
+fn c_abi_start_run_resolves_snapshot_plan_and_debug_archive_in_rust() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let request =
+            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"hello from swift"}"#)
+                .unwrap();
+        let handle = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            request.as_ptr(),
+        )));
+        let run_id = handle["run_id"].as_str().unwrap();
+        let run_id_c = CString::new(run_id).unwrap();
+        let archive = decode(&take_bridge_string(
+            local_agent_runtime_bridge_load_debug_archive(runtime, run_id_c.as_ptr()),
+        ));
+
+        assert_eq!(run_id, "run_1");
+        assert_eq!(archive["run_id"], run_id);
+        assert_eq!(archive["state"], "completed");
+        assert!(archive["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["code"] == "run.started"));
+        assert_eq!(
+            archive["archives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|archive| archive["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["prompt", "context"]
+        );
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_start_run_requires_profile_from_configured_app_service_repository() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let request =
+            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"not seeded"}"#).unwrap();
+        let error = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            request.as_ptr(),
+        )));
+
+        assert_eq!(error["error"]["kind"], "storage");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("profile"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_load_debug_archive_is_keyed_by_run_id() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let first_request =
+            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"first"}"#).unwrap();
+        let first = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            first_request.as_ptr(),
+        )));
+        let second_request =
+            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"second"}"#).unwrap();
+        let second = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            second_request.as_ptr(),
+        )));
+        let first_run_id = first["run_id"].as_str().unwrap();
+        let second_run_id = second["run_id"].as_str().unwrap();
+
+        assert_ne!(first_run_id, second_run_id);
+
+        let first_run_id_c = CString::new(first_run_id).unwrap();
+        let first_archive = decode(&take_bridge_string(
+            local_agent_runtime_bridge_load_debug_archive(runtime, first_run_id_c.as_ptr()),
+        ));
+        assert_eq!(first_archive["run_id"], first_run_id);
+
+        let missing = CString::new("run_missing").unwrap();
+        let missing_error = decode(&take_bridge_string(
+            local_agent_runtime_bridge_load_debug_archive(runtime, missing.as_ptr()),
+        ));
+        assert_eq!(missing_error["error"]["kind"], "storage");
+        assert!(missing_error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("run_missing"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_start_run_rejects_swift_supplied_trusted_host_state() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let request = CString::new(
+            r#"{
+              "agent_profile_id":"profile_1",
+              "user_intent":"hello",
+              "permission_state":"granted",
+              "local_bindings":{}
+            }"#,
+        )
+        .unwrap();
+        let error = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            request.as_ptr(),
+        )));
+
+        assert_eq!(error["error"]["kind"], "ffi");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
 }
 
 #[test]

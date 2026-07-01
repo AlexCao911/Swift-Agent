@@ -1,4 +1,6 @@
 public protocol RuntimeClient: Sendable {
+    func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO
+    func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel
     func createSession() async throws -> String
     func sessionIds() async throws -> [String]
     func registerToolSchema(_ schema: ToolSchemaDTO) async throws
@@ -19,6 +21,22 @@ public protocol RuntimeClient: Sendable {
     ) async throws -> AgentTurnResultDTO
     func cancel(runId: String) async throws -> RuntimeEventDTO
     func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO?
+}
+
+public extension RuntimeClient {
+    func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
+        throw RuntimeBridgeError(
+            kind: "agent_os_start_run_unavailable",
+            message: "Agent OS startRun application service is not linked by this runtime client"
+        )
+    }
+
+    func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
+        throw RuntimeBridgeError(
+            kind: "agent_os_debug_archive_unavailable",
+            message: "Agent OS debug archive loading is not linked by this runtime client"
+        )
+    }
 }
 
 public struct AgentTurnStreamDTO: Sendable {

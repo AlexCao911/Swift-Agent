@@ -32,6 +32,32 @@
       "code": "checkpoint.committed"
     }
   ],
+  "archives": [
+    {
+      "archive_id": "archive_1",
+      "kind": "prompt",
+      "title": "Prompt archive",
+      "redacted_payload": "redacted prompt archive",
+      "source_links": [
+        {
+          "kind": "prompt_archive",
+          "target_id": "prompt_archive:run_1"
+        }
+      ]
+    },
+    {
+      "archive_id": "archive_2",
+      "kind": "context",
+      "title": "Context archive",
+      "redacted_payload": "context archive",
+      "source_links": [
+        {
+          "kind": "context_archive",
+          "target_id": "context_archive:run_1"
+        }
+      ]
+    }
+  ],
   "transactions": [
     {
       "name": "run.start",

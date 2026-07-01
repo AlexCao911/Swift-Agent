@@ -37,6 +37,10 @@
 		0A000001000000000000001C /* AppIntentRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011B /* AppIntentRouter.swift */; };
 		0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011C /* LocalAgentShortcuts.swift */; };
 		0A000001000000000000001E /* ChatManagementSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011D /* ChatManagementSheets.swift */; };
+		0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */; };
+		0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */; };
+		0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000120 /* AgentBuilderViewModel.swift */; };
+		0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000121 /* RuntimeProjectionModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,6 +84,10 @@
 		0A000001000000000000011B /* AppIntentRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouter.swift; sourceTree = "<group>"; };
 		0A000001000000000000011C /* LocalAgentShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentShortcuts.swift; sourceTree = "<group>"; };
 		0A000001000000000000011D /* ChatManagementSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatManagementSheets.swift; sourceTree = "<group>"; };
+		0A0000010000000000000120 /* AgentBuilderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderViewModel.swift; sourceTree = "<group>"; };
+		0A0000010000000000000121 /* RuntimeProjectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModel.swift; sourceTree = "<group>"; };
+		0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderViewModelTests.swift; sourceTree = "<group>"; };
+		0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -189,9 +197,27 @@
 		0A0000010000000000000506 /* Presentation */ = {
 			isa = PBXGroup;
 			children = (
+				0A000001000000000000050A /* AgentBuilder */,
 				0A0000010000000000000507 /* Chat */,
+				0A000001000000000000050B /* Runtime */,
 			);
 			path = Presentation;
+			sourceTree = "<group>";
+		};
+		0A000001000000000000050A /* AgentBuilder */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000120 /* AgentBuilderViewModel.swift */,
+			);
+			path = AgentBuilder;
+			sourceTree = "<group>";
+		};
+		0A000001000000000000050B /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000121 /* RuntimeProjectionModel.swift */,
+			);
+			path = Runtime;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000507 /* Chat */ = {
@@ -253,9 +279,27 @@
 		0A0000010000000000000514 /* Presentation */ = {
 			isa = PBXGroup;
 			children = (
+				0A0000010000000000000517 /* AgentBuilder */,
 				0A0000010000000000000515 /* Chat */,
+				0A0000010000000000000518 /* Runtime */,
 			);
 			path = Presentation;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000517 /* AgentBuilder */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */,
+			);
+			path = AgentBuilder;
+			sourceTree = "<group>";
+		};
+		0A0000010000000000000518 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */,
+			);
+			path = Runtime;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000515 /* Chat */ = {
@@ -412,6 +456,8 @@
 				0A000001000000000000001C /* AppIntentRouter.swift in Sources */,
 				0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */,
 				0A000001000000000000001E /* ChatManagementSheets.swift in Sources */,
+				0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */,
+				0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -426,6 +472,8 @@
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
+				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
+				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

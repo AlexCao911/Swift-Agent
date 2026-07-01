@@ -96,6 +96,14 @@ char *local_agent_runtime_bridge_set_provider(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json
 );
+char *local_agent_runtime_bridge_start_run(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_load_debug_archive(
+    LocalAgentRuntimeBridge *runtime,
+    const char *run_id
+);
 
 #ifdef __cplusplus
 }
