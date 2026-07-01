@@ -197,6 +197,23 @@ struct RuntimeDTOTests {
     }
 
     @Test
+    func providerKindDecodesRustUnknownGoldenFixtureWithoutCrashing() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rust-core/tests/fixtures/golden/bridge/provider_profile_unknown_kind.json")
+        let profile = try JSONDecoder().decode(
+            ProviderProfileDTO.self,
+            from: try Data(contentsOf: fixtureURL)
+        )
+
+        #expect(profile.id == "future_provider")
+        #expect(profile.kind == .unknown(kind: "future_quantum_provider"))
+    }
+
+    @Test
     func encodesToolResultInRustExpectedShape() throws {
         let result = ToolResultDTO(
             displayText: "Shown to user",

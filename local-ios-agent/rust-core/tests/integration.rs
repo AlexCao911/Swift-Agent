@@ -23,3 +23,5 @@ mod runtime_provider_streaming;
 mod runtime_replay;
 #[path = "integration/runtime_tool_orchestration.rs"]
 mod runtime_tool_orchestration;
+#[path = "integration/sqlite_resilience.rs"]
+mod sqlite_resilience;

@@ -28,13 +28,31 @@ This project uses layered tests so Agent OS modules can grow without silently br
 
 - Package install creates a version-pinned, repository-resolvable profile.
 - Package-installed model bindings are resolvable through the model binding catalog.
+- Package install rejects secret-like manifests through the full install path and leaves package/profile/model stores unchanged.
 - Published profiles reject missing required slots, duplicate component slots, unknown component versions, and unknown model selections.
 - HTTP tool routing uses the injected `SecurityManager`; recipe allowlists cannot bypass global egress policy.
 - Remote model provider and inference paths reject mismatched egress decisions.
 - Local provider and local inference paths do not fabricate data egress decisions.
 - Package install preview and installed profile debug summaries have stable redacted golden output.
+- SQLite legacy schema fixtures migrate forward without losing runtime history.
+- SQLite file-lock behavior is covered by a real file-backed integration test.
+- Runtime marks a run failed when provider streaming stops after partial output.
+- Swift DTOs decode Rust golden fixtures with unknown provider kinds without crashing.
 - `rust-lint.sh` currently gates formatting and architecture lint tests. Clippy runs as advisory because the inherited codebase has pre-existing warnings; tighten it to `-D warnings` after a dedicated clippy cleanup pass.
 - `rust-unit.sh` runs unit tests with `--test-threads=1` and isolates the inherited localhost transport socket test. In the Codex network-disabled sandbox, that socket test is skipped by the script; GitHub Actions and normal local shells still run it.
+
+## Hardening Roadmap
+
+The current architecture lint strips comments/strings and checks path-like dependencies so alias imports are caught without comment/string false positives. This is still an interim guard.
+
+The final architecture boundary should be Cargo crate isolation:
+
+- `agent-os-runtime` should not depend on builder/package/profile repository crates.
+- `agent-os-builder` should depend on protocol/component/model contracts but not runtime execution.
+- `agent-os-package` should depend on protocol/storage/application service contracts but not runtime execution.
+- The Swift staticlib crate should compose these crates at the FFI boundary.
+
+Once that split exists, Cargo dependency resolution becomes the primary architecture lint and `tests/lint/architecture_agent_os.rs` can shrink to checking crate manifests and public bridge exports.
 
 ## Running Locally
 

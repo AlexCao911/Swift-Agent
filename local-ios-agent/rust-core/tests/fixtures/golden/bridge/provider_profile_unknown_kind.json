@@ -1,0 +1,6 @@
+{
+  "id": "future_provider",
+  "display_name": "Future Provider",
+  "kind": "future_quantum_provider",
+  "max_context_tokens": 4096
+}

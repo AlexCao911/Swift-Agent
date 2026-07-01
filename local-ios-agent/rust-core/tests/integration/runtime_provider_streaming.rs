@@ -13,6 +13,8 @@ struct ProbeProvider {
     delta_was_observed_by_runtime: Arc<AtomicBool>,
 }
 
+struct FailingAfterDeltaProvider;
+
 impl ModelProvider for ProbeProvider {
     fn id(&self) -> &str {
         "probe"
@@ -35,6 +37,26 @@ impl ModelProvider for ProbeProvider {
             "streamed token chunk longer than threshold".into(),
         ))?;
         Ok(())
+    }
+}
+
+impl ModelProvider for FailingAfterDeltaProvider {
+    fn id(&self) -> &str {
+        "failing_after_delta"
+    }
+
+    fn stream_chat(
+        &self,
+        _frame: &PromptFrame,
+        _cancellation: CancellationToken,
+        on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        on_output(ModelProviderOutput::TextDelta(
+            "partial token chunk before remote stream EOF".into(),
+        ))?;
+        Err(AgentError::Provider(
+            "remote stream ended before completion".into(),
+        ))
     }
 }
 
@@ -75,4 +97,40 @@ fn runtime_emits_provider_outputs_during_provider_callback() {
     assert_eq!(result.state, RunState::Completed);
     assert!(streamed_kinds.contains(&EventKind::AssistantTextDelta));
     assert!(streamed_kinds.contains(&EventKind::AssistantMessageCompleted));
+}
+
+#[test]
+fn runtime_marks_run_failed_when_provider_stream_ends_after_partial_delta() {
+    let mut runtime = AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(FailingAfterDeltaProvider),
+        tool_router: None,
+    });
+    let session_id = runtime.create_session().unwrap();
+    let mut streamed_kinds = Vec::new();
+
+    let error = runtime
+        .send_message_streaming(
+            SendMessageInput {
+                session_id,
+                parent_event_id: None,
+                text: "hello".into(),
+                blob_refs: Vec::new(),
+            },
+            &mut |event| {
+                streamed_kinds.push(event.kind.clone());
+                Ok(())
+            },
+        )
+        .expect_err("partial remote stream EOF must fail the run instead of completing");
+
+    assert!(error
+        .to_string()
+        .contains("remote stream ended before completion"));
+    assert!(streamed_kinds.contains(&EventKind::AssistantTextDelta));
+    assert!(streamed_kinds.contains(&EventKind::RunFailed));
+    assert!(!streamed_kinds.contains(&EventKind::AssistantMessageCompleted));
 }

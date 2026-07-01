@@ -408,12 +408,50 @@ public struct PromptDebugSnapshotDTO: Codable, Equatable, Sendable {
     }
 }
 
-public enum ProviderKindDTO: String, Codable, Equatable, Sendable {
+public enum ProviderKindDTO: Codable, Equatable, Sendable {
     case mock
-    case desktopMiniCpm = "desktop_mini_cpm"
-    case onDeviceMiniCpm = "on_device_mini_cpm"
-    case openAiCompatibleLocal = "open_ai_compatible_local"
-    case localLLM = "local_llm"
+    case desktopMiniCpm
+    case onDeviceMiniCpm
+    case openAiCompatibleLocal
+    case localLLM
+    case unknown(kind: String)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let kind = try container.decode(String.self)
+        switch kind {
+        case "mock":
+            self = .mock
+        case "desktop_mini_cpm":
+            self = .desktopMiniCpm
+        case "on_device_mini_cpm":
+            self = .onDeviceMiniCpm
+        case "open_ai_compatible_local":
+            self = .openAiCompatibleLocal
+        case "local_llm":
+            self = .localLLM
+        default:
+            self = .unknown(kind: kind)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .mock:
+            try container.encode("mock")
+        case .desktopMiniCpm:
+            try container.encode("desktop_mini_cpm")
+        case .onDeviceMiniCpm:
+            try container.encode("on_device_mini_cpm")
+        case .openAiCompatibleLocal:
+            try container.encode("open_ai_compatible_local")
+        case .localLLM:
+            try container.encode("local_llm")
+        case .unknown(let kind):
+            try container.encode(kind)
+        }
+    }
 }
 
 public struct ProviderProfileDTO: Codable, Equatable, Sendable {
