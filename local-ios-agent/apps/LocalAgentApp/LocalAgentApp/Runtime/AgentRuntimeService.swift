@@ -161,6 +161,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         if let coordinator {
+            try await applyRuntimeOptions(from: state)
             let collector = CoordinatorEventCollector(state: state)
             try await coordinator.sendMessage(
                 text: text,
@@ -542,6 +543,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             nextState.phase = .failed(message: message)
         case .running, .waitingTool, .suspended:
             nextState.phase = .running(runId: nextTurn.runId)
+        default:
+            let message = "Unknown run state: \(nextTurn.state.rawValue)"
+            nextState.errorMessage = message
+            nextState.lastTerminalReason = .failed(message)
+            nextState.finishStreamingMessages(as: .failed(message))
+            nextState.phase = .failed(message: message)
         }
         return nextState
     }

@@ -53,11 +53,23 @@ struct RustRuntimeAppIntegrationTests {
         #expect(state.messages.map(\.text).contains("Mock response to: hello"))
     }
 
-    @Test("App bootstrapper wires conversation execution coordinator")
-    func appBootstrapperWiresConversationExecutionCoordinator() async throws {
+    @Test("App bootstrapper keeps legacy streaming path by default")
+    func appBootstrapperKeepsLegacyStreamingPathByDefault() async throws {
         let container = try AppBootstrapper.makeContainer(store: .inMemory)
 
-        #expect(await container.runtimeService.usesConversationExecutionCoordinatorForTesting())
+        let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
+        #expect(!usesCoordinator)
+    }
+
+    @Test("App bootstrapper can wire conversation execution coordinator behind feature flag")
+    func appBootstrapperCanWireConversationExecutionCoordinatorBehindFeatureFlag() async throws {
+        let container = try AppBootstrapper.makeContainer(
+            environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
+            store: .inMemory
+        )
+
+        let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
+        #expect(usesCoordinator)
     }
 
     @Test("live RustRuntimeClient completes debug echo tool loop")

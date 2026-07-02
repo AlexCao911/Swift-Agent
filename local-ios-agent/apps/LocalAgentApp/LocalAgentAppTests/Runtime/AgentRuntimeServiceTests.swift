@@ -211,20 +211,32 @@ struct AgentRuntimeServiceTests {
     @MainActor
     func sendMessageUsesCoordinatorWhenInjected() async throws {
         let coordinator = RecordingChatInteractionCoordinator()
+        let client = ScriptedRuntimeClient()
         let service = AgentRuntimeService(
-            runtimeClient: MockRuntimeClient(),
+            runtimeClient: client,
             toolDriver: MinimalHostToolDriver(),
             coordinator: coordinator
         )
 
-        let state = try await service.sendMessage(
+        var state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+        state.modelSettings = ModelSettingsViewState(temperature: 0.25, topP: 0.8)
+        state.provider.active = ProviderProfileDTO(
+            id: "mock",
+            displayName: "Mock",
+            kind: .mock,
+            maxContextTokens: 100
+        )
+        let sentState = try await service.sendMessage(
             "hello",
-            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+            state: state
         )
 
         #expect(coordinator.sentMessages == ["hello"])
-        #expect(state.phase == .ready)
-        #expect(state.draft == UserDraftViewState())
+        #expect(coordinator.agentProfileIds == ["profile_1"])
+        #expect(await client.runtimeOptions.map(\.temperature) == [0.25])
+        #expect(await client.runtimeOptions.map(\.topP) == [0.8])
+        #expect(sentState.phase == .ready)
+        #expect(sentState.draft == UserDraftViewState())
     }
 
     @Test("select conversation can load explicit branch leaf events")
@@ -1983,6 +1995,9 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
 @MainActor
 private final class RecordingChatInteractionCoordinator: ChatInteractionCoordinating, @unchecked Sendable {
     private(set) var sentMessages: [String] = []
+    private(set) var agentProfileIds: [String] = []
+    private(set) var parentEventIds: [String?] = []
+    private(set) var options: [ExecutionOptionsDTO] = []
 
     func sendMessage(
         text: String,
@@ -1993,6 +2008,9 @@ private final class RecordingChatInteractionCoordinator: ChatInteractionCoordina
         onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
     ) async throws {
         sentMessages.append(text)
+        agentProfileIds.append(agentProfileId)
+        parentEventIds.append(parentEventId)
+        self.options.append(options)
     }
 }
 

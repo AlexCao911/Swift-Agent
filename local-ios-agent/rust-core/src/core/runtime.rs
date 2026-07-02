@@ -544,6 +544,7 @@ impl<S: EventStore> AgentRuntime<S> {
             None => self.create_session()?,
         };
         let parent_event_id = match parent_event_id {
+            Some(parent_event_id) if parent_event_id.0 == ROOT_PARENT_EVENT_ID => None,
             Some(parent_event_id) => Some(parent_event_id),
             None => self.store.active_leaf(&session_id)?,
         };

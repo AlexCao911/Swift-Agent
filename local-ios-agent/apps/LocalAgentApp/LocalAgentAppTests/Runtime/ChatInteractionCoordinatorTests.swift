@@ -50,7 +50,10 @@ struct ChatInteractionCoordinatorTests {
         #expect(execution.startedRequests.first?.conversationRunFrameRef == frameRef)
         #expect(await conversation.committedRequests.first?.runId == "run_1")
         #expect(await conversation.committedRequests.first?.finalMessageId == "assistant_1")
-        #expect(observed.map(\.id) == ["event_1", "assistant_1"])
+        #expect(observed.map(\.id) == ["user_turn_1", "event_1", "assistant_1"])
+        #expect(observed.first?.kind == .userMessage)
+        #expect(observed.first?.payload == "hello")
+        #expect(observed.first?.sessionId == "session_1")
     }
 
     @Test("completed run commit can be retried after send commit failure")

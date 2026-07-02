@@ -40,6 +40,7 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
                 text: text
             )
         )
+        await onEvent(preparedTurn.userMessageEvent(text: text, parentEventId: parentEventId))
         let handle = try await execution.startRun(
             StartExecutionRequestDTO(
                 agentProfileId: agentProfileId,
@@ -50,22 +51,32 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
         )
 
         var finalMessageId: String?
+        var finalAssistantEvent: RuntimeEventDTO?
         for try await event in execution.observeEvents(
             runId: handle.runId,
             fromSequence: handle.replayFromSequence
         ) {
-            await onEvent(event)
+            let projectedEvent = event.projectedConversationEvent(
+                sessionId: preparedTurn.sessionId,
+                parentId: preparedTurn.userMessageId
+            )
             if let messageId = event.finalAssistantMessageId {
                 finalMessageId = messageId
+                finalAssistantEvent = projectedEvent
+            } else {
+                await onEvent(projectedEvent)
             }
         }
 
         if let finalMessageId {
-            try await recoverCompletedRunCommit(
+            let commit = try await commitCompletedRun(
                 runId: handle.runId,
                 finalMessageId: finalMessageId,
                 frameRef: preparedTurn.conversationRunFrameRef
             )
+            if let finalAssistantEvent {
+                await onEvent(finalAssistantEvent.withConversationEventId(commit.committedMessageId))
+            }
         }
     }
 
@@ -74,7 +85,19 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
         finalMessageId: String,
         frameRef: ConversationRunFrameRefDTO
     ) async throws {
-        _ = try await conversation.commitAssistantResult(
+        _ = try await commitCompletedRun(
+            runId: runId,
+            finalMessageId: finalMessageId,
+            frameRef: frameRef
+        )
+    }
+
+    private func commitCompletedRun(
+        runId: String,
+        finalMessageId: String,
+        frameRef: ConversationRunFrameRefDTO
+    ) async throws -> ConversationCommitResultDTO {
+        try await conversation.commitAssistantResult(
             CommitAssistantResultRequestDTO(
                 runId: runId,
                 finalMessageId: finalMessageId,
@@ -89,6 +112,31 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
 
     func cancelRun(runId: String) async throws {
         _ = try await execution.cancelRun(runId: runId)
+    }
+}
+
+private extension PreparedUserTurnDTO {
+    func userMessageEvent(text: String, parentEventId: String?) -> RuntimeEventDTO {
+        let parentId = normalizedParentEventId(parentEventId)
+            ?? (conversationRunFrameRef.branchHeadId == userMessageId ? nil : conversationRunFrameRef.branchHeadId)
+        return RuntimeEventDTO(
+            id: userMessageId,
+            sessionId: sessionId,
+            parentId: parentId,
+            runId: nil,
+            sequence: 0,
+            depth: 0,
+            kind: .userMessage,
+            payload: text,
+            blobRefs: []
+        )
+    }
+
+    private func normalizedParentEventId(_ parentEventId: String?) -> String? {
+        guard parentEventId != "__local_agent_root__" else {
+            return nil
+        }
+        return parentEventId
     }
 }
 
@@ -108,5 +156,48 @@ private extension RuntimeEventDTO {
         }
 
         return object[key] as? String
+    }
+
+    func projectedConversationEvent(sessionId: String, parentId: String) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: self.sessionId.isEmpty ? sessionId : self.sessionId,
+            parentId: self.parentId ?? parentId,
+            runId: runId,
+            sequence: 0,
+            depth: depth,
+            kind: kind,
+            payload: payload,
+            blobRefs: blobRefs
+        )
+    }
+
+    func withConversationEventId(_ id: String) -> RuntimeEventDTO {
+        RuntimeEventDTO(
+            id: id,
+            sessionId: sessionId,
+            parentId: parentId,
+            runId: runId,
+            sequence: sequence,
+            depth: depth,
+            kind: kind,
+            payload: payloadReplacingMessageId(id),
+            blobRefs: blobRefs
+        )
+    }
+
+    private func payloadReplacingMessageId(_ messageId: String) -> String {
+        guard let data = payload.data(using: .utf8),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return payload
+        }
+        object["message_id"] = messageId
+        guard let encoded = try? JSONSerialization.data(withJSONObject: object),
+              let string = String(data: encoded, encoding: .utf8)
+        else {
+            return payload
+        }
+        return string
     }
 }

@@ -306,7 +306,7 @@ struct AgentViewState: Equatable, Sendable {
     }
 
     var selectedAgentProfileId: String {
-        provider.active?.id ?? "default"
+        "profile_1"
     }
 
     var executionOptions: ExecutionOptionsDTO {

@@ -555,6 +555,33 @@ fn c_abi_prepare_user_turn_with_stale_parent_returns_json_error() {
 }
 
 #[test]
+fn c_abi_prepare_user_turn_treats_root_parent_sentinel_as_no_parent() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let request = CString::new(
+            json!({
+                "session_id": session.as_str().unwrap(),
+                "parent_event_id": "__local_agent_root__",
+                "text": "root regenerate",
+                "blob_refs": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let prepared = decode(&take_bridge_string(
+            local_agent_runtime_bridge_prepare_user_turn(runtime, request.as_ptr()),
+        ));
+
+        assert_eq!(prepared["session_id"], session);
+        assert_eq!(prepared["frame_preview"]["messages"][0]["content"], "root regenerate");
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
 fn c_abi_start_run_requires_profile_from_configured_app_service_repository() {
     unsafe {
         let runtime = new_in_memory_c_bridge();

@@ -21,6 +21,25 @@ enum AppBootstrapper {
             providers: providers
         ))
         let toolDriver = MinimalHostToolDriver()
+        let coordinator = conversationExecutionCoordinator(
+            environment: environment,
+            client: client
+        )
+        return AppContainer(runtimeService: AgentRuntimeService(
+            runtimeClient: client,
+            toolDriver: toolDriver,
+            coordinator: coordinator
+        ))
+    }
+
+    private static func conversationExecutionCoordinator(
+        environment: [String: String],
+        client: RustRuntimeClient
+    ) -> ChatInteractionCoordinator? {
+        guard environment["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR"] == "1" else {
+            return nil
+        }
+
         let conversationBridge = RustConversationBridgeClient(gateway: client, legacyClient: client)
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let conversationDomain = ConversationDomainAdapter(bridge: conversationBridge)
@@ -37,11 +56,7 @@ enum AppBootstrapper {
             conversation: conversationDomain,
             execution: executionDomain
         )
-        return AppContainer(runtimeService: AgentRuntimeService(
-            runtimeClient: client,
-            toolDriver: toolDriver,
-            coordinator: coordinator
-        ))
+        return coordinator
     }
 
     static func sqliteURL(fileManager: FileManager = .default) throws -> URL {
