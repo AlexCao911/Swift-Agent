@@ -7,7 +7,7 @@ use local_ios_agent_runtime::conversation::{
 use local_ios_agent_runtime::core::{AgentError, EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::execution::{
     CompletedRunRegistry, ExecutionEventLog, ExecutionPlanner, ExecutionService,
-    RunLifecycleService, StartExecutionRequest,
+    InferenceSettingsService, RunLifecycleService, RuntimeOptions, StartExecutionRequest,
 };
 use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
 
@@ -212,6 +212,21 @@ fn execution_events_replay_then_tail_live_events() {
     let live = stream.next_live().unwrap();
 
     assert_eq!(live.code(), "assistant.delta");
+}
+
+#[test]
+fn inference_settings_service_persists_runtime_options() {
+    let settings = InferenceSettingsService::default();
+    let options = RuntimeOptions {
+        system_prompt: "system".to_string(),
+        runtime_policy: "policy".to_string(),
+        temperature: Some(0.25),
+        top_p: Some(0.8),
+    };
+
+    settings.update_runtime_options(options.clone()).unwrap();
+
+    assert_eq!(settings.runtime_options(), Some(options));
 }
 
 #[test]

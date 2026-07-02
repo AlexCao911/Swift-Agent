@@ -50,7 +50,7 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             tool_approval: ToolApprovalService::default(),
             tool_loop: ToolLoopService::default(),
             debug_store: RunDebugStore,
-            inference_settings: InferenceSettingsService,
+            inference_settings: InferenceSettingsService::default(),
         })
     }
 

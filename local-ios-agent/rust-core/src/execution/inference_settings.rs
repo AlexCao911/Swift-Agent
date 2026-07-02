@@ -1,5 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 #[derive(Clone, Debug, Default)]
-pub struct InferenceSettingsService;
+pub struct InferenceSettingsService {
+    runtime_options: Arc<Mutex<Option<RuntimeOptions>>>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeOptions {
@@ -14,7 +18,18 @@ impl InferenceSettingsService {
         None
     }
 
-    pub fn update_runtime_options(&self, _options: RuntimeOptions) -> Result<(), String> {
+    pub fn update_runtime_options(&self, options: RuntimeOptions) -> Result<(), String> {
+        *self
+            .runtime_options
+            .lock()
+            .map_err(|_| "inference settings lock poisoned".to_string())? = Some(options);
         Ok(())
+    }
+
+    pub fn runtime_options(&self) -> Option<RuntimeOptions> {
+        self.runtime_options
+            .lock()
+            .expect("inference settings lock poisoned")
+            .clone()
     }
 }
