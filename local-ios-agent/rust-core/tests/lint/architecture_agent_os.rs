@@ -741,3 +741,13 @@ fn strip_comments_and_strings(source: &str) -> String {
 
     output
 }
+
+#[test]
+fn legacy_streaming_path_is_marked_as_compatibility() {
+    let source = include_str!("../../src/core/runtime.rs");
+
+    assert!(
+        source.contains("LEGACY_COMPATIBILITY_STREAMING_PATH"),
+        "legacy send_message_streaming path must be explicitly marked while it bypasses snapshot/execution planning"
+    );
+}
