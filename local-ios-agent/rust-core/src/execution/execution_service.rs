@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::conversation::{ConversationFrameRepository, InMemoryConversationFrameRepository};
 use crate::execution::{
     ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog,
@@ -15,7 +17,7 @@ pub struct ExecutionServiceParts<
     R: ConversationFrameRepository = InMemoryConversationFrameRepository,
 > {
     pub frames: R,
-    pub snapshot_service: RunSnapshotService,
+    pub snapshot_service: Arc<RunSnapshotService>,
     pub planner: ExecutionPlanner,
     pub run_lifecycle: RunLifecycleService,
     pub event_log: ExecutionEventLog,
@@ -33,14 +35,14 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
 
     pub fn with_runtime_parts(
         frames: R,
-        snapshot_service: RunSnapshotService,
+        snapshot_service: impl Into<Arc<RunSnapshotService>>,
         planner: ExecutionPlanner,
         event_log: ExecutionEventLog,
         completed_runs: CompletedRunRegistry,
     ) -> Self {
         Self::new(ExecutionServiceParts {
             frames,
-            snapshot_service,
+            snapshot_service: snapshot_service.into(),
             planner,
             run_lifecycle: RunLifecycleService::new(event_log.clone()),
             event_log,

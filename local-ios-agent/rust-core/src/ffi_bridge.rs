@@ -1,24 +1,29 @@
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
 use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
-use crate::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use crate::conversation::{
+    ConversationCommitService, ConversationFrameId, ConversationFrameMessage, ConversationRunFrame,
+    ConversationRunFrameRef, ConversationService, InMemoryConversationFrameRepository,
+    PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader,
+};
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
     AgentTurnResult, CAbiLocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
     LocalLLMProvider, ProviderBundle, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
-use crate::execution::ExecutionPlanner;
+use crate::execution::{
+    ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionPlanner,
+    ExecutionService, RunHandle, RuntimeOptions, StartExecutionRequest,
+};
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
-use crate::run_snapshot::StartRunRequest;
-use crate::runtime::{RecordingEffectDriver, RuntimeExecutionDebugTrace};
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
@@ -90,23 +95,42 @@ pub enum RuntimeJsonBridge {
     Sqlite(BridgeRuntime<SqliteEventStore>),
 }
 
-pub struct BridgeRuntime<S: EventStore> {
-    runtime: Mutex<AgentRuntime<S>>,
+pub struct BridgeRuntime<S: EventStore + Send + 'static> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
     cancellations: ProviderCancellationRegistry,
-    app_services: AgentOSApplicationService,
     debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
     next_agent_os_run_id: Mutex<u64>,
+    conversation:
+        ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
+    execution: ExecutionService<InMemoryConversationFrameRepository>,
+    conversation_commits: ConversationCommitService,
 }
 
-impl<S: EventStore> BridgeRuntime<S> {
+impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
+        let frames = InMemoryConversationFrameRepository::default();
         let cancellations = runtime.provider_cancellation_registry();
+        let runtime = Arc::new(Mutex::new(runtime));
+        let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
+        let event_log = ExecutionEventLog::default();
+        let completed_runs = CompletedRunRegistry::default();
+        let execution = ExecutionService::with_runtime_parts(
+            frames.clone(),
+            app_services.snapshot_service(),
+            ExecutionPlanner,
+            event_log,
+            completed_runs.clone(),
+        );
+        let conversation = ConversationService::new(frames, branch_reader);
+        let conversation_commits = ConversationCommitService::new(completed_runs);
         Self {
-            runtime: Mutex::new(runtime),
+            runtime,
             cancellations,
-            app_services,
             debug_archives: Mutex::new(BTreeMap::new()),
             next_agent_os_run_id: Mutex::new(1),
+            conversation,
+            execution,
+            conversation_commits,
         }
     }
 
@@ -116,26 +140,23 @@ impl<S: EventStore> BridgeRuntime<S> {
             .map_err(|_| AgentError::Ffi("runtime bridge mutex poisoned".into()))
     }
 
-    fn signal_provider_cancellation(&self, run_id: &RunId) {
-        self.cancellations.signal(run_id);
+    fn conversation(
+        &self,
+    ) -> &ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>
+    {
+        &self.conversation
     }
 
-    fn start_agent_os_run(&self, request: StartRunRequest) -> Result<RunHandleJson, AgentError> {
-        let snapshot = self
-            .app_services
-            .resolve_and_persist_snapshot(request)
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
-        let plan = ExecutionPlanner
-            .plan(snapshot)
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
-        let run_id = self.reserve_agent_os_run_id()?;
-        let trace = self.lock()?.execute_plan_with_run_id(
-            plan,
-            run_id.clone(),
-            RecordingEffectDriver::default(),
-        )?;
-        self.store_debug_archive(debug_archive_from_trace(&trace))?;
-        Ok(RunHandleJson { run_id })
+    fn execution(&self) -> &ExecutionService<InMemoryConversationFrameRepository> {
+        &self.execution
+    }
+
+    fn conversation_commits(&self) -> &ConversationCommitService {
+        &self.conversation_commits
+    }
+
+    fn signal_provider_cancellation(&self, run_id: &RunId) {
+        self.cancellations.signal(run_id);
     }
 
     fn load_debug_archive(&self, run_id: &str) -> Result<RunDebugArchiveJson, AgentError> {
@@ -157,12 +178,145 @@ impl<S: EventStore> BridgeRuntime<S> {
         Ok(run_id)
     }
 
-    fn store_debug_archive(&self, archive: RunDebugArchiveJson) -> Result<(), AgentError> {
-        self.debug_archives
-            .lock()
-            .map_err(|_| AgentError::Ffi("debug archive mutex poisoned".into()))?
-            .insert(archive.run_id.clone(), archive);
+    fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let _: EmptyAgentOSRequestJson = from_json(request_json)?;
+        to_json(&vec![AgentProfileJson {
+            profile_id: "profile_1".to_string(),
+            display_name: "Development Agent".to_string(),
+        }])
+    }
+
+    fn build_agent_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: BuildAgentRequestJson = from_json(request_json)?;
+        to_json(&AgentProfileJson {
+            profile_id: format!("profile.from_template.{}", request.template_id),
+            display_name: "Custom Agent".to_string(),
+        })
+    }
+
+    fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: PrepareUserTurnRequestJson = from_json(request_json)?;
+        let prepared = self
+            .conversation()
+            .prepare_user_turn(PrepareUserTurnRequest::new(
+                request.session_id.map(SessionId),
+                request.parent_event_id.map(EntryId),
+                request.text,
+                request.blob_refs,
+            ))
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&PreparedUserTurnJson::from(prepared))
+    }
+
+    fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: StartRunRequestJson = from_json(request_json)?;
+        let _options = request.options;
+        let frame_ref = request.conversation_run_frame_ref.into_domain();
+        let run_id = self.reserve_agent_os_run_id()?;
+        let handle = self
+            .execution()
+            .start_run(StartExecutionRequest::new(
+                run_id,
+                request.agent_profile_id,
+                request.user_intent,
+                frame_ref,
+            ))
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&RunHandleJson::from(handle))
+    }
+
+    fn observe_events_stream_json<F>(
+        &self,
+        request_json: &str,
+        mut emit: F,
+    ) -> Result<(), AgentError>
+    where
+        F: FnMut(String) -> Result<(), AgentError>,
+    {
+        let request: ObserveExecutionEventsRequestJson = from_json(request_json)?;
+        let mut stream = self
+            .execution()
+            .observe_event_stream(&request.run_id, Some(request.from_sequence));
+        let mut last_sequence = request.from_sequence;
+        let mut terminal_observed = false;
+
+        for event in stream.replay() {
+            if event.sequence() <= last_sequence {
+                continue;
+            }
+            terminal_observed |= is_terminal_execution_event(event);
+            last_sequence = event.sequence();
+            emit(to_json(&RuntimeEventJson::from_execution_event(event))?)?;
+        }
+
+        if terminal_observed {
+            return Ok(());
+        }
+
+        while let Some(event) = stream.next_live() {
+            if event.sequence() <= last_sequence {
+                continue;
+            }
+            let terminal = is_terminal_execution_event(&event);
+            last_sequence = event.sequence();
+            emit(to_json(&RuntimeEventJson::from_execution_event(&event))?)?;
+            if terminal {
+                break;
+            }
+        }
+
         Ok(())
+    }
+
+    fn observe_events_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ObserveExecutionEventsRequestJson = from_json(request_json)?;
+        let events = self
+            .execution()
+            .observe_events(&request.run_id, Some(request.from_sequence));
+        to_json(
+            &events
+                .iter()
+                .map(RuntimeEventJson::from_execution_event)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn commit_assistant_result_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: CommitAssistantResultRequestJson = from_json(request_json)?;
+        let frame_ref = request.conversation_run_frame_ref.into_domain();
+        let record = self
+            .conversation_commits()
+            .commit_assistant_result(&request.run_id, &request.final_message_id, &frame_ref)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&ConversationCommitResultJson {
+            committed_message_id: record.assistant_message_id().to_string(),
+            already_committed: record.already_committed(),
+        })
+    }
+
+    fn approve_tool_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ApproveToolRequestJson = from_json(request_json)?;
+        self.execution()
+            .approve_tool(request.id, request.decision.into_domain())
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&EmptyAgentOSResponseJson {})
+    }
+
+    fn cancel_run_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: CancelRunRequestJson = from_json(request_json)?;
+        let event = self.lock()?.cancel(request.run_id)?;
+        to_json(&RuntimeEventJson::from_event(&event))
+    }
+
+    fn update_execution_runtime_options_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let request: RuntimeOptionsJson = from_json(request_json)?;
+        self.execution()
+            .update_runtime_options(request.into_domain())
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&EmptyAgentOSResponseJson {})
     }
 }
 
@@ -286,6 +440,14 @@ impl RuntimeJsonBridge {
                 options.runtime_policy,
                 inference_options,
             )?,
+        }
+        match self {
+            Self::InMemory(runtime) => {
+                runtime.update_execution_runtime_options_json(options_json)?;
+            }
+            Self::Sqlite(runtime) => {
+                runtime.update_execution_runtime_options_json(options_json)?;
+            }
         }
         Ok("null".to_string())
     }
@@ -519,17 +681,74 @@ impl RuntimeJsonBridge {
     }
 
     pub fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
-        let request: StartRunRequestJson = from_json(request_json)?;
-        let request = StartRunRequest::new(
-            request.agent_profile_id,
-            request.user_intent,
-            legacy_compatibility_frame_ref(),
-        );
         let handle = match self {
-            Self::InMemory(runtime) => runtime.start_agent_os_run(request),
-            Self::Sqlite(runtime) => runtime.start_agent_os_run(request),
+            Self::InMemory(runtime) => runtime.start_run_json(request_json),
+            Self::Sqlite(runtime) => runtime.start_run_json(request_json),
         }?;
-        to_json(&handle)
+        Ok(handle)
+    }
+
+    pub fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.list_agent_profiles_json(request_json),
+            Self::Sqlite(runtime) => runtime.list_agent_profiles_json(request_json),
+        }
+    }
+
+    pub fn build_agent_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.build_agent_json(request_json),
+            Self::Sqlite(runtime) => runtime.build_agent_json(request_json),
+        }
+    }
+
+    pub fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.prepare_user_turn_json(request_json),
+            Self::Sqlite(runtime) => runtime.prepare_user_turn_json(request_json),
+        }
+    }
+
+    pub fn observe_events_stream_json<F>(
+        &self,
+        request_json: &str,
+        mut emit: F,
+    ) -> Result<(), AgentError>
+    where
+        F: FnMut(String) -> Result<(), AgentError>,
+    {
+        match self {
+            Self::InMemory(runtime) => runtime.observe_events_stream_json(request_json, &mut emit),
+            Self::Sqlite(runtime) => runtime.observe_events_stream_json(request_json, &mut emit),
+        }
+    }
+
+    pub fn observe_events_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.observe_events_json(request_json),
+            Self::Sqlite(runtime) => runtime.observe_events_json(request_json),
+        }
+    }
+
+    pub fn commit_assistant_result_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.commit_assistant_result_json(request_json),
+            Self::Sqlite(runtime) => runtime.commit_assistant_result_json(request_json),
+        }
+    }
+
+    pub fn approve_tool_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.approve_tool_json(request_json),
+            Self::Sqlite(runtime) => runtime.approve_tool_json(request_json),
+        }
+    }
+
+    pub fn cancel_run_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.cancel_run_json(request_json),
+            Self::Sqlite(runtime) => runtime.cancel_run_json(request_json),
+        }
     }
 
     pub fn load_debug_archive_json(&self, run_id: &str) -> Result<String, AgentError> {
@@ -539,15 +758,6 @@ impl RuntimeJsonBridge {
         }?;
         to_json(&archive)
     }
-}
-
-fn legacy_compatibility_frame_ref() -> ConversationRunFrameRef {
-    ConversationRunFrameRef::new(
-        ConversationFrameId::new("legacy_agent_os_frame"),
-        SessionId("legacy_agent_os_session".into()),
-        EntryId("legacy_agent_os_branch_head".into()),
-        EntryId("legacy_agent_os_user_turn".into()),
-    )
 }
 
 #[no_mangle]
@@ -833,6 +1043,99 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_start_run(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_list_agent_profiles(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.list_agent_profiles_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_build_agent(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.build_agent_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_prepare_user_turn(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.prepare_user_turn_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_observe_events(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.observe_events_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_observe_events_streaming(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+    on_event: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.observe_events_stream_json(request_json, |event_json| {
+            dispatch_stream_event(on_event, user_data, &event_json)
+        })?;
+        Ok("null".to_string())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_commit_assistant_result(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.commit_assistant_result_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_approve_tool(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.approve_tool_json(request_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_cancel_run(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_result(|| {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.cancel_run_json(request_json)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_load_debug_archive(
     runtime: *mut RuntimeJsonBridge,
     run_id: *const c_char,
@@ -860,14 +1163,119 @@ struct SetProviderJson {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct EmptyAgentOSRequestJson {}
+
+#[derive(Serialize)]
+struct EmptyAgentOSResponseJson {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildAgentRequestJson {
+    template_id: String,
+}
+
+#[derive(Serialize)]
+struct AgentProfileJson {
+    profile_id: String,
+    display_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovalDecisionJson {
+    approved: bool,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApproveToolRequestJson {
+    id: String,
+    decision: ApprovalDecisionJson,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelRunRequestJson {
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareUserTurnRequestJson {
+    session_id: Option<String>,
+    parent_event_id: Option<String>,
+    text: String,
+    #[serde(default)]
+    blob_refs: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct PreparedUserTurnJson {
+    session_id: String,
+    user_message_id: String,
+    conversation_run_frame_ref: ConversationRunFrameRefJson,
+    frame_preview: Option<ConversationRunFrameJson>,
+}
+
+#[derive(Serialize)]
+struct ConversationRunFrameJson {
+    frame_ref: ConversationRunFrameRefJson,
+    messages: Vec<ConversationFrameMessageJson>,
+    attachment_refs: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ConversationFrameMessageJson {
+    event_id: String,
+    role: String,
+    content: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationRunFrameRefJson {
+    frame_id: String,
+    session_id: String,
+    branch_head_id: String,
+    user_turn_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StartRunRequestJson {
     agent_profile_id: String,
     user_intent: String,
+    conversation_run_frame_ref: ConversationRunFrameRefJson,
+    #[serde(default)]
+    options: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObserveExecutionEventsRequestJson {
+    run_id: String,
+    from_sequence: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommitAssistantResultRequestJson {
+    run_id: String,
+    final_message_id: String,
+    conversation_run_frame_ref: ConversationRunFrameRefJson,
+}
+
+#[derive(Serialize)]
+struct ConversationCommitResultJson {
+    committed_message_id: String,
+    already_committed: bool,
 }
 
 #[derive(Serialize)]
 struct RunHandleJson {
     run_id: String,
+    replay_from_sequence: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1171,6 +1579,110 @@ impl RuntimeEventJson {
             blob_refs: event.blob_refs.clone(),
         }
     }
+
+    fn from_execution_event(event: &ExecutionEvent) -> Self {
+        Self {
+            id: format!("{}.{}", event.run_id(), event.sequence()),
+            session_id: String::new(),
+            parent_id: None,
+            run_id: Some(event.run_id().to_string()),
+            sequence: event.sequence(),
+            created_at_millis: 0,
+            depth: 0,
+            kind: "execution.event",
+            payload: event.code().to_string(),
+            blob_refs: Vec::new(),
+        }
+    }
+}
+
+impl ConversationRunFrameRefJson {
+    fn into_domain(self) -> ConversationRunFrameRef {
+        ConversationRunFrameRef::new(
+            ConversationFrameId::new(self.frame_id),
+            SessionId(self.session_id),
+            EntryId(self.branch_head_id),
+            EntryId(self.user_turn_id),
+        )
+    }
+}
+
+impl From<&ConversationRunFrameRef> for ConversationRunFrameRefJson {
+    fn from(frame_ref: &ConversationRunFrameRef) -> Self {
+        Self {
+            frame_id: frame_ref.frame_id().as_str().to_string(),
+            session_id: frame_ref.session_id().0.clone(),
+            branch_head_id: frame_ref.branch_head_id().0.clone(),
+            user_turn_id: frame_ref.user_turn_id().0.clone(),
+        }
+    }
+}
+
+impl From<PreparedUserTurn> for PreparedUserTurnJson {
+    fn from(prepared: PreparedUserTurn) -> Self {
+        Self {
+            session_id: prepared.session_id().0.clone(),
+            user_message_id: prepared.user_message_id().0.clone(),
+            conversation_run_frame_ref: ConversationRunFrameRefJson::from(
+                prepared.conversation_run_frame_ref(),
+            ),
+            frame_preview: None,
+        }
+    }
+}
+
+impl From<&ConversationRunFrame> for ConversationRunFrameJson {
+    fn from(frame: &ConversationRunFrame) -> Self {
+        Self {
+            frame_ref: ConversationRunFrameRefJson::from(frame.frame_ref()),
+            messages: frame
+                .messages()
+                .iter()
+                .map(ConversationFrameMessageJson::from)
+                .collect(),
+            attachment_refs: frame
+                .attachment_refs()
+                .iter()
+                .map(|attachment| attachment.as_str().to_string())
+                .collect(),
+        }
+    }
+}
+
+impl From<&ConversationFrameMessage> for ConversationFrameMessageJson {
+    fn from(message: &ConversationFrameMessage) -> Self {
+        Self {
+            event_id: message.event_id().0.clone(),
+            role: message.role().to_string(),
+            content: message.content().to_string(),
+        }
+    }
+}
+
+impl From<RunHandle> for RunHandleJson {
+    fn from(handle: RunHandle) -> Self {
+        Self {
+            run_id: handle.run_id().to_string(),
+            replay_from_sequence: handle.replay_from_sequence(),
+        }
+    }
+}
+
+impl ApprovalDecisionJson {
+    fn into_domain(self) -> ApprovalDecision {
+        ApprovalDecision::new(self.approved, self.reason)
+    }
+}
+
+impl RuntimeOptionsJson {
+    fn into_domain(self) -> RuntimeOptions {
+        RuntimeOptions {
+            system_prompt: self.system_prompt,
+            runtime_policy: self.runtime_policy,
+            temperature: self.temperature.map(f64::from),
+            top_p: self.top_p.map(f64::from),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1184,7 +1696,8 @@ struct ConversationSummaryJson {
     last_updated_at_millis: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RuntimeOptionsJson {
     system_prompt: String,
     runtime_policy: String,
@@ -1367,68 +1880,11 @@ fn from_json<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, AgentError> 
     serde_json::from_str(json).map_err(|error| AgentError::Ffi(error.to_string()))
 }
 
-fn debug_archive_from_trace(trace: &RuntimeExecutionDebugTrace) -> RunDebugArchiveJson {
-    let events = trace
-        .event_codes()
-        .into_iter()
-        .enumerate()
-        .map(|(index, code)| RunDebugEventJson {
-            id: format!("event_{}", index + 1),
-            title: debug_title_for_event(&code),
-            code,
-        })
-        .collect::<Vec<_>>();
-    let archives = trace
-        .archives()
-        .iter()
-        .map(|archive| DebugArchiveJson {
-            id: archive.archive_id().to_string(),
-            kind: archive.kind().to_string(),
-            title: archive.title().to_string(),
-            redacted_payload: archive.redacted_payload().to_string(),
-            source_links: archive
-                .source_links()
-                .iter()
-                .map(|source| DebugArchiveSourceLinkJson {
-                    kind: source.kind().to_string(),
-                    target_id: source.target_id().to_string(),
-                })
-                .collect(),
-        })
-        .collect();
-    let checkpoints = if events
-        .iter()
-        .any(|event| event.code == "checkpoint.committed")
-    {
-        vec![CheckpointJson {
-            id: "checkpoint_1".to_string(),
-            title: "Checkpoint committed".to_string(),
-            can_resume: true,
-        }]
-    } else {
-        Vec::new()
-    };
-    RunDebugArchiveJson {
-        run_id: trace.run_id().to_string(),
-        state: trace.state().to_string(),
-        events,
-        archives,
-        checkpoints,
-    }
-}
-
-fn debug_title_for_event(code: &str) -> String {
-    code.split(['.', '_'])
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| {
-            let mut chars = segment.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn is_terminal_execution_event(event: &ExecutionEvent) -> bool {
+    matches!(
+        event.code(),
+        "run.completed" | "run.failed" | "run.cancelled"
+    )
 }
 
 fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {

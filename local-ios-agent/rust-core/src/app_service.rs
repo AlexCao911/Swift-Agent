@@ -26,7 +26,7 @@ pub struct AgentOSApplicationServiceConfig {
 }
 
 pub struct AgentOSApplicationService {
-    snapshot_service: RunSnapshotService,
+    snapshot_service: Arc<RunSnapshotService>,
 }
 
 struct ModelSelectionStageOperation {
@@ -60,7 +60,7 @@ impl AgentOSApplicationService {
 
     pub fn empty() -> Self {
         Self {
-            snapshot_service: snapshot_service_from_repositories(
+            snapshot_service: Arc::new(snapshot_service_from_repositories(
                 InMemoryAgentProfileRepository::default(),
                 ComponentCatalogService::default(),
                 InMemoryModelBindingCatalog::default(),
@@ -69,8 +69,12 @@ impl AgentOSApplicationService {
                         .with_permission("run.start", PermissionState::Granted),
                 ),
                 Arc::new(InMemoryCredentialResolver::default()),
-            ),
+            )),
         }
+    }
+
+    pub fn snapshot_service(&self) -> Arc<RunSnapshotService> {
+        self.snapshot_service.clone()
     }
 
     pub fn resolve_and_persist_snapshot(
@@ -144,7 +148,7 @@ impl AgentOSApplicationService {
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
         Ok(Self {
-            snapshot_service: snapshot_service_from_repositories(
+            snapshot_service: Arc::new(snapshot_service_from_repositories(
                 profile_repository,
                 component_catalog,
                 model_catalog,
@@ -157,7 +161,7 @@ impl AgentOSApplicationService {
                     "secret",
                     [CredentialPurpose::RemoteProvider],
                 )),
-            ),
+            )),
         })
     }
 }

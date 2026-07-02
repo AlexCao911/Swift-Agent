@@ -28,6 +28,13 @@ pub struct ToolLoopStartError {
 
 impl ToolLoopService {
     pub fn start(&self, request: ToolLoopStartRequest) -> Result<(), ToolLoopStartError> {
+        // Phase-1 bridge adapter: the real worker will replace this synthetic completion.
+        request.event_log.append(request.run_id(), "run.completed");
+        request.completed_runs.record_completed(
+            request.run_id(),
+            "final_1",
+            request.conversation_run_frame_ref().clone(),
+        );
         self.pending
             .lock()
             .expect("tool loop pending registry poisoned")

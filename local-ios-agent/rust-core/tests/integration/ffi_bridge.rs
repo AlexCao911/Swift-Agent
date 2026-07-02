@@ -4,9 +4,11 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
-    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
-    local_agent_runtime_bridge_free, local_agent_runtime_bridge_load_debug_archive,
-    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_send_message,
+    local_agent_runtime_bridge_commit_assistant_result, local_agent_runtime_bridge_create_session,
+    local_agent_runtime_bridge_fork_session, local_agent_runtime_bridge_free,
+    local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
+    local_agent_runtime_bridge_observe_events_streaming,
+    local_agent_runtime_bridge_prepare_user_turn, local_agent_runtime_bridge_send_message,
     local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
     local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
     local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
@@ -146,6 +148,19 @@ unsafe extern "C" fn observe_stream_event(
     0
 }
 
+unsafe extern "C" fn collect_execution_event(
+    event_json: *const c_char,
+    user_data: *mut c_void,
+) -> i32 {
+    assert!(!event_json.is_null());
+    assert!(!user_data.is_null());
+    let event = CStr::from_ptr(event_json).to_string_lossy();
+    let event: Value = serde_json::from_str(&event).unwrap();
+    let observed = &*(user_data as *const Mutex<Vec<Value>>);
+    observed.lock().unwrap().push(event);
+    0
+}
+
 fn wait_for_flag(flag: &(Mutex<bool>, Condvar)) {
     let started_at = Instant::now();
     let (lock, condition) = flag;
@@ -237,6 +252,43 @@ unsafe fn new_seeded_agent_os_c_bridge() -> *mut RuntimeJsonBridge {
     local_agent_runtime_bridge_new_with_config(config.as_ptr())
 }
 
+unsafe fn prepare_c_user_turn(runtime: *mut RuntimeJsonBridge, text: &str) -> Value {
+    let request = CString::new(
+        json!({
+            "session_id": "session_1",
+            "parent_event_id": null,
+            "text": text,
+            "blob_refs": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    decode(&take_bridge_string(
+        local_agent_runtime_bridge_prepare_user_turn(runtime, request.as_ptr()),
+    ))
+}
+
+unsafe fn start_c_agent_os_run(
+    runtime: *mut RuntimeJsonBridge,
+    prepared: &Value,
+    user_intent: &str,
+) -> Value {
+    let request = CString::new(
+        json!({
+            "agent_profile_id": "profile_1",
+            "user_intent": user_intent,
+            "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+            "options": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+        runtime,
+        request.as_ptr(),
+    )))
+}
+
 #[test]
 fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
     let bridge = bridge();
@@ -282,36 +334,107 @@ fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
 fn c_abi_start_run_resolves_snapshot_plan_and_debug_archive_in_rust() {
     unsafe {
         let runtime = new_seeded_agent_os_c_bridge();
-        let request =
-            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"hello from swift"}"#)
-                .unwrap();
-        let handle = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
-            runtime,
-            request.as_ptr(),
-        )));
+        let prepared = prepare_c_user_turn(runtime, "hello from swift");
+        let handle = start_c_agent_os_run(runtime, &prepared, "hello from swift");
         let run_id = handle["run_id"].as_str().unwrap();
-        let run_id_c = CString::new(run_id).unwrap();
-        let archive = decode(&take_bridge_string(
-            local_agent_runtime_bridge_load_debug_archive(runtime, run_id_c.as_ptr()),
-        ));
 
         assert_eq!(run_id, "run_1");
-        assert_eq!(archive["run_id"], run_id);
-        assert_eq!(archive["state"], "completed");
-        assert!(archive["events"]
-            .as_array()
+        assert_eq!(handle["replay_from_sequence"], 0);
+
+        let observed: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+        let observe_request = CString::new(
+            json!({
+                "run_id": run_id,
+                "from_sequence": 0
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let observe_result = decode(&take_bridge_string(
+            local_agent_runtime_bridge_observe_events_streaming(
+                runtime,
+                observe_request.as_ptr(),
+                Some(collect_execution_event),
+                &observed as *const Mutex<Vec<Value>> as *mut c_void,
+            ),
+        ));
+
+        assert_eq!(observe_result, Value::Null);
+        assert!(observed.lock().unwrap().iter().any(|event| {
+            event["kind"] == "execution.event" && event["payload"] == "run.started"
+        }));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let prepared = prepare_c_user_turn(runtime, "hello");
+        let handle = start_c_agent_os_run(runtime, &prepared, "hello");
+        let run_id = handle["run_id"].as_str().unwrap();
+
+        assert_eq!(run_id, "run_1");
+        assert_eq!(handle["replay_from_sequence"], 0);
+
+        let mut observed = Vec::new();
+        RuntimeJsonBridge::observe_events_stream_json(
+            &*runtime,
+            &json!({
+                "run_id": run_id,
+                "from_sequence": 0
+            })
+            .to_string(),
+            |event_json| {
+                observed.push(serde_json::from_str::<Value>(&event_json).unwrap());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(observed.iter().any(|event| {
+            event["kind"] == "execution.event" && event["payload"] == "run.started"
+        }));
+
+        let commit_request = CString::new(
+            json!({
+                "run_id": run_id,
+                "final_message_id": "final_1",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let commit = decode(&take_bridge_string(
+            local_agent_runtime_bridge_commit_assistant_result(runtime, commit_request.as_ptr()),
+        ));
+        assert_eq!(commit["committed_message_id"], "assistant.run_1.final_1");
+        assert_eq!(commit["already_committed"], false);
+
+        let mut tampered_ref = prepared["conversation_run_frame_ref"].clone();
+        tampered_ref["session_id"] = Value::String("other_session".to_string());
+        let tampered_commit_request = CString::new(
+            json!({
+                "run_id": run_id,
+                "final_message_id": "final_1",
+                "conversation_run_frame_ref": tampered_ref
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let commit_error = decode(&take_bridge_string(
+            local_agent_runtime_bridge_commit_assistant_result(
+                runtime,
+                tampered_commit_request.as_ptr(),
+            ),
+        ));
+
+        assert_eq!(commit_error["error"]["kind"], "storage");
+        assert!(commit_error["error"]["message"]
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|event| event["code"] == "run.started"));
-        assert_eq!(
-            archive["archives"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|archive| archive["kind"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["prompt", "context"]
-        );
+            .contains("conversation_commit.frame_ref_mismatch"));
 
         local_agent_runtime_bridge_free(runtime);
     }
@@ -321,8 +444,17 @@ fn c_abi_start_run_resolves_snapshot_plan_and_debug_archive_in_rust() {
 fn c_abi_start_run_requires_profile_from_configured_app_service_repository() {
     unsafe {
         let runtime = new_in_memory_c_bridge();
-        let request =
-            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"not seeded"}"#).unwrap();
+        let prepared = prepare_c_user_turn(runtime, "not seeded");
+        let request = CString::new(
+            json!({
+                "agent_profile_id": "profile_1",
+                "user_intent": "not seeded",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
         let error = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
             runtime,
             request.as_ptr(),
@@ -342,28 +474,24 @@ fn c_abi_start_run_requires_profile_from_configured_app_service_repository() {
 fn c_abi_load_debug_archive_is_keyed_by_run_id() {
     unsafe {
         let runtime = new_seeded_agent_os_c_bridge();
-        let first_request =
-            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"first"}"#).unwrap();
-        let first = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
-            runtime,
-            first_request.as_ptr(),
-        )));
-        let second_request =
-            CString::new(r#"{"agent_profile_id":"profile_1","user_intent":"second"}"#).unwrap();
-        let second = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
-            runtime,
-            second_request.as_ptr(),
-        )));
+        let first_prepared = prepare_c_user_turn(runtime, "first");
+        let first = start_c_agent_os_run(runtime, &first_prepared, "first");
+        let second_prepared = prepare_c_user_turn(runtime, "second");
+        let second = start_c_agent_os_run(runtime, &second_prepared, "second");
         let first_run_id = first["run_id"].as_str().unwrap();
         let second_run_id = second["run_id"].as_str().unwrap();
 
         assert_ne!(first_run_id, second_run_id);
 
         let first_run_id_c = CString::new(first_run_id).unwrap();
-        let first_archive = decode(&take_bridge_string(
+        let first_archive_error = decode(&take_bridge_string(
             local_agent_runtime_bridge_load_debug_archive(runtime, first_run_id_c.as_ptr()),
         ));
-        assert_eq!(first_archive["run_id"], first_run_id);
+        assert_eq!(first_archive_error["error"]["kind"], "storage");
+        assert!(first_archive_error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(first_run_id));
 
         let missing = CString::new("run_missing").unwrap();
         let missing_error = decode(&take_bridge_string(
@@ -383,13 +511,17 @@ fn c_abi_load_debug_archive_is_keyed_by_run_id() {
 fn c_abi_start_run_rejects_swift_supplied_trusted_host_state() {
     unsafe {
         let runtime = new_in_memory_c_bridge();
+        let prepared = prepare_c_user_turn(runtime, "hello");
         let request = CString::new(
-            r#"{
-              "agent_profile_id":"profile_1",
-              "user_intent":"hello",
-              "permission_state":"granted",
-              "local_bindings":{}
-            }"#,
+            json!({
+                "agent_profile_id": "profile_1",
+                "user_intent": "hello",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {},
+                "permission_state": "granted",
+                "local_bindings": {}
+            })
+            .to_string(),
         )
         .unwrap();
         let error = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
