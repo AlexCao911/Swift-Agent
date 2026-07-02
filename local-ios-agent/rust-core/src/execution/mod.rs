@@ -1,5 +1,6 @@
 mod budget;
 mod completed_run_registry;
+mod context_input;
 mod debug_store;
 mod event_log;
 mod execution_plan;
@@ -13,6 +14,7 @@ mod trace;
 
 pub use budget::ExecutionBudgets;
 pub use completed_run_registry::{idempotency_key, CompletedRunRecord, CompletedRunRegistry};
+pub use context_input::{ExecutionContextInputAssembler, ExecutionContextInputError};
 pub use debug_store::RunDebugStore;
 pub use event_log::{
     ExecutionEvent, ExecutionEventLog, ExecutionEventRepository, ExecutionEventStream,

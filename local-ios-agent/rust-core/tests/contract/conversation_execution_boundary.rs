@@ -121,7 +121,9 @@ fn conversation_service_returns_structured_error_for_unreadable_branch() {
             _session_id: &SessionId,
             _branch_head_id: Option<&EntryId>,
         ) -> Result<(Option<EntryId>, Vec<RuntimeEvent>), AgentError> {
-            Err(AgentError::Storage("leaf has no path rows: stale_leaf".into()))
+            Err(AgentError::Storage(
+                "leaf has no path rows: stale_leaf".into(),
+            ))
         }
     }
 
@@ -227,6 +229,52 @@ fn inference_settings_service_persists_runtime_options() {
     settings.update_runtime_options(options.clone()).unwrap();
 
     assert_eq!(settings.runtime_options(), Some(options));
+}
+
+#[test]
+fn execution_context_input_uses_conversation_frame_and_runtime_options() {
+    use local_ios_agent_runtime::context::ModelInputRole;
+    use local_ios_agent_runtime::execution::ExecutionContextInputAssembler;
+
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_context_1"),
+        SessionId("session_1".into()),
+        EntryId("assistant_1".into()),
+        EntryId("user_turn_2".into()),
+    );
+    let frame = ConversationRunFrame::new(
+        frame_ref,
+        Some(EntryId("assistant_1".into())),
+        vec![
+            ConversationFrameMessage::user(EntryId("user_1".into()), "earlier question"),
+            ConversationFrameMessage::assistant(EntryId("assistant_1".into()), "earlier answer"),
+            ConversationFrameMessage::user(EntryId("user_turn_2".into()), "new question"),
+        ],
+        Vec::new(),
+        ConversationLineage::new(EntryId("assistant_1".into()), None, None),
+    );
+    let assembler = ExecutionContextInputAssembler::new(Some(RuntimeOptions {
+        system_prompt: "system from execution settings".to_string(),
+        runtime_policy: "policy from execution settings".to_string(),
+        temperature: Some(0.25),
+        top_p: Some(0.8),
+    }));
+
+    let input = assembler.assemble_initial(&frame).unwrap();
+
+    assert!(input.messages().iter().any(|message| {
+        message.role() == ModelInputRole::System
+            && message.content().contains("system from execution settings")
+    }));
+    assert!(input.messages().iter().any(|message| {
+        message.role() == ModelInputRole::User && message.content() == "earlier question"
+    }));
+    assert!(input.messages().iter().any(|message| {
+        message.role() == ModelInputRole::Assistant && message.content() == "earlier answer"
+    }));
+    assert!(input.messages().iter().any(|message| {
+        message.role() == ModelInputRole::User && message.content() == "new question"
+    }));
 }
 
 #[test]
