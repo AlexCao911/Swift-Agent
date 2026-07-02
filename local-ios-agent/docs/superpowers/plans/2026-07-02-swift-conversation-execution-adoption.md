@@ -12,7 +12,7 @@
 
 - Swift execution start must pass `ConversationRunFrameRefDTO`; it must not pass a full `ConversationRunFrameDTO` as trusted execution input.
 - Full `ConversationRunFrameDTO` is allowed only for UI projection, preview, and debug inspection.
-- `observeEvents(runId:fromSequence:)` must consume a Rust event stream that replays durable events before tailing live events.
+- `observeEvents(runId:fromSequence:)` must consume a Rust event stream that replays repository-backed events before tailing live events. In-memory replay is allowed only for the first Rust contract adapter and tests.
 - `commitAssistantResult` must be idempotent from Swift's perspective; coordinator retry is allowed and expected.
 - `ExecutionDomain` and `ExecutionService` must stay facades over focused services. Agent composition, run lifecycle, event observation, tool approval, debug, and inference settings must not collapse into one implementation object.
 - UI redesign is outside this plan. The work here is contract, state, and orchestration wiring.
@@ -51,6 +51,29 @@ Stage 5: Compatibility routing
   new send-message path is introduced behind an injectable coordinator
   old sendMessageStream path is classified as legacy compatibility
 ```
+
+## ABI Mapping
+
+This table is shared with the Rust migration plan. Swift DTO coding keys and Rust JSON structs must match it exactly.
+
+| Domain | Operation Name | Rust Entrypoint | Swift Operation Enum Case | Request DTO | Required JSON Keys | Response DTO |
+| --- | --- | --- | --- | --- | --- | --- |
+| conversation | `prepare_user_turn` | `prepare_user_turn_json` | `.prepareUserTurn` | `PrepareUserTurnRequestDTO` | `session_id`, `parent_event_id`, `text`, `blob_refs` | `PreparedUserTurnDTO` |
+| execution | `list_agent_profiles` | `list_agent_profiles_json` | `.listAgentProfiles` | `EmptyAgentOSRequestDTO` | none | `AgentProfileDTO[]` |
+| execution | `build_agent` | `build_agent_json` | `.buildAgent` | `BuildAgentRequestDTO` | `template_id` | `AgentProfileDTO` |
+| execution | `start_run` | `start_run_json` | `.startRun` | `StartExecutionRequestDTO` | `agent_profile_id`, `user_intent`, `conversation_run_frame_ref`, `options` | `RunHandleDTO` |
+| execution | `observe_events` | `observe_events_json` / stream callback | `.observeEvents` | `ObserveExecutionEventsRequestDTO` | `run_id`, `from_sequence` | `RuntimeEventDTO[]` replay, then live events |
+| conversation | `commit_assistant_result` | `commit_assistant_result_json` | `.commitAssistantResult` | `CommitAssistantResultRequestDTO` | `run_id`, `final_message_id`, `conversation_run_frame_ref` | `ConversationCommitResultDTO` |
+| execution | `approve_tool` | `approve_tool_json` | `.approveTool` | `ApproveToolRequestDTO` | `id`, `decision` | `EmptyAgentOSResponseDTO` |
+| execution | `cancel_run` | `cancel_run_json` | `.cancelRun` | `CancelRunRequestDTO` | `run_id` | `RuntimeEventDTO` |
+| execution | `update_runtime_options` | `update_runtime_options_json` | `.updateRuntimeOptions` | `RuntimeOptionsDTO` | `system_prompt`, `runtime_policy`, `temperature`, `top_p` | `EmptyAgentOSResponseDTO` |
+
+Rules:
+
+- `ConversationRunFrameRefDTO` must come from `PreparedUserTurnDTO`; Swift must not synthesize it from local message state.
+- `StartExecutionRequestDTO` encodes `conversation_run_frame_ref`.
+- `StartExecutionRequestDTO` never encodes `conversation_frame_ref` or `conversation_run_frame`.
+- There is no Swift operation named `startExecutionRun`; the operation is `start_run`.
 
 ## File Structure
 
@@ -122,6 +145,7 @@ Create tests:
 - Produces: `BuildAgentRequestDTO`
 - Produces: `ApproveToolRequestDTO`
 - Produces: `ApprovalDecisionDTO`
+- Produces: `CancelRunRequestDTO`
 - Updates: `RunHandleDTO.replayFromSequence`
 - Produces: `CommitAssistantResultRequestDTO`
 - Produces: `ConversationCommitResultDTO`
@@ -439,6 +463,18 @@ public struct ApproveToolRequestDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct CancelRunRequestDTO: Codable, Equatable, Sendable {
+    public var runId: String
+
+    public init(runId: String) {
+        self.runId = runId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+    }
+}
+
 public struct EmptyAgentOSRequestDTO: Codable, Equatable, Sendable {
     public init() {}
 }
@@ -542,7 +578,7 @@ func testExecutionBridgeStartRunUsesStartExecutionRequest() async throws {
     let handle = try await client.startRun(request)
 
     XCTAssertEqual(handle.runId, "run_1")
-    XCTAssertEqual(gateway.recordedOperation, .startExecutionRun)
+    XCTAssertEqual(gateway.recordedOperation, .startRun)
     XCTAssertTrue(gateway.recordedJSON.contains("conversation_run_frame_ref"))
     XCTAssertFalse(gateway.recordedJSON.contains("conversation_run_frame\""))
 }
@@ -593,9 +629,10 @@ public enum RustAgentOSOperation: String, Sendable {
     case buildAgent = "build_agent"
     case prepareUserTurn = "prepare_user_turn"
     case commitAssistantResult = "commit_assistant_result"
-    case startExecutionRun = "start_execution_run"
-    case observeExecutionEvents = "observe_execution_events"
+    case startRun = "start_run"
+    case observeEvents = "observe_events"
     case approveTool = "approve_tool"
+    case cancelRun = "cancel_run"
     case updateRuntimeOptions = "update_runtime_options"
 }
 
@@ -680,7 +717,7 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
     }
 
     public func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await gateway.request(.startExecutionRun, request, as: RunHandleDTO.self)
+        try await gateway.request(.startRun, request, as: RunHandleDTO.self)
     }
 
     public func listAgentProfiles() async throws -> [AgentProfileDTO] {
@@ -701,7 +738,7 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
 
     public func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
         gateway.stream(
-            .observeExecutionEvents,
+            .observeEvents,
             ObserveExecutionEventsRequestDTO(runId: runId, fromSequence: fromSequence)
         )
     }
@@ -723,7 +760,11 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
     }
 
     public func cancelRun(runId: String) async throws -> RuntimeEventDTO {
-        try await legacyClient.cancel(runId: runId)
+        try await gateway.request(
+            .cancelRun,
+            CancelRunRequestDTO(runId: runId),
+            as: RuntimeEventDTO.self
+        )
     }
 
     public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
@@ -755,7 +796,7 @@ public private(set) var startedExecutionRequests: [StartExecutionRequestDTO] = [
 public var executionEventsByRunId: [String: [RuntimeEventDTO]] = [:]
 ```
 
-`observeEvents(runId:fromSequence:)` filters events by sequence when the DTO has sequence. If current DTO sequence is not modeled, return the whole array for this task and add the sequence assertion in Task 5 when the reducer state is introduced.
+`RuntimeEventDTO.sequence` already exists, so `observeEvents(runId:fromSequence:)` must return events where `event.sequence > fromSequence`.
 
 - [ ] **Step 7: Run bridge tests**
 
@@ -1312,7 +1353,7 @@ final class AgentRunViewModelTests: XCTestCase {
 }
 ```
 
-If `RuntimeEventDTO` does not yet expose `sequence`, add a temporary helper in test fixtures and complete the DTO sequence field in the same task.
+Use the existing `RuntimeEventDTO.sequence` field; do not add a parallel sequencing field in app state.
 
 - [ ] **Step 2: Add `AgentRunViewModel`**
 
@@ -1703,7 +1744,7 @@ if let coordinator {
 }
 ```
 
-If `AgentViewState` does not yet have `selectedAgentProfileId` or `executionOptions`, add computed compatibility defaults:
+Add computed compatibility defaults to `AgentViewState`:
 
 ```swift
 var selectedAgentProfileId: String { provider.activeProfileId ?? "default" }
@@ -1801,6 +1842,7 @@ Run:
 ```bash
 rg "LEGACY_COMPATIBILITY_STREAMING_PATH|ConversationRunFrameRefDTO|StartExecutionRequestDTO|ChatInteractionCoordinator" local-ios-agent
 rg "conversationRunFrame:" local-ios-agent/toolkit local-ios-agent/apps/LocalAgentApp
+rg "startExecutionRun|start_execution_run|observeExecutionEvents|observe_execution_events|conversation_frame_ref" local-ios-agent/toolkit local-ios-agent/apps/LocalAgentApp
 ```
 
 Expected:
@@ -1808,6 +1850,7 @@ Expected:
 ```text
 First command finds the new contract and legacy markers.
 Second command finds no trusted execution start request that passes a full frame.
+Third command returns no matches.
 ```
 
 - [ ] **Step 5: Commit verification fixes if needed**
@@ -1828,6 +1871,7 @@ If no fixes were required, do not create a commit.
 Spec coverage:
 
 - Rust trusted input is represented as `ConversationRunFrameRefDTO` in Task 1.
+- ABI operation names and JSON keys are fixed in the ABI mapping table and enforced in Task 2.
 - Full frame DTO is restricted to preview and debug in Task 1.
 - Bridge split is handled in Task 2.
 - App domain split is handled in Task 3.
