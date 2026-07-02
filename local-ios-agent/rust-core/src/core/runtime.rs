@@ -188,6 +188,13 @@ impl<S: EventStore> AgentRuntime<S> {
         self.latest_prompt_debug_snapshot.clone()
     }
 
+    pub fn runtime_prompt_defaults(&self) -> (String, String) {
+        (
+            self.config.system_prompt.clone(),
+            self.config.runtime_policy.clone(),
+        )
+    }
+
     pub fn latest_runtime_execution_trace(&self) -> Option<RuntimeExecutionDebugTrace> {
         self.latest_runtime_execution_trace.clone()
     }

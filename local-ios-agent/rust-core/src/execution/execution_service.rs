@@ -174,6 +174,10 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
                 ExecutionStartError::new("execution.update_runtime_options_failed", message)
             })
     }
+
+    pub fn runtime_options(&self) -> Option<RuntimeOptions> {
+        self.parts.inference_settings.runtime_options()
+    }
 }
 
 #[derive(Clone, Debug)]

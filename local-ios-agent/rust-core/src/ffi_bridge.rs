@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
 use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
@@ -236,7 +236,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: StartRunRequestJson = from_json(request_json)?;
-        let _options = request.options;
+        let options = self.runtime_options_for_start_run(request.options)?;
+        self.execution()
+            .update_runtime_options(options)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         let frame_ref = request.conversation_run_frame_ref.into_domain();
         let run_id = self.reserve_agent_os_run_id()?;
         let handle = self
@@ -249,6 +252,20 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             ))
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&RunHandleJson::from(handle))
+    }
+
+    fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
+        let start_options = StartRunOptionsJson::from_value(options)?;
+        let defaults = self.execution().runtime_options().map(Ok).unwrap_or_else(|| {
+            let (system_prompt, runtime_policy) = self.lock()?.runtime_prompt_defaults();
+            Ok(RuntimeOptions {
+                system_prompt,
+                runtime_policy,
+                temperature: None,
+                top_p: None,
+            })
+        })?;
+        Ok(start_options.into_domain(defaults))
     }
 
     fn observe_events_stream_json<F>(
@@ -1295,7 +1312,17 @@ struct StartRunRequestJson {
     user_intent: String,
     conversation_run_frame_ref: ConversationRunFrameRefJson,
     #[serde(default)]
-    options: serde_json::Value,
+    options: Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartRunOptionsJson {
+    model_id: Option<String>,
+    system_prompt: Option<String>,
+    runtime_policy: Option<String>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -1737,6 +1764,26 @@ impl RuntimeOptionsJson {
             runtime_policy: self.runtime_policy,
             temperature: self.temperature.map(f64::from),
             top_p: self.top_p.map(f64::from),
+        }
+    }
+}
+
+impl StartRunOptionsJson {
+    fn from_value(value: Value) -> Result<Self, AgentError> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        serde_json::from_value(value)
+            .map_err(|error| AgentError::Ffi(format!("invalid start run options: {error}")))
+    }
+
+    fn into_domain(self, defaults: RuntimeOptions) -> RuntimeOptions {
+        let _model_id = self.model_id;
+        RuntimeOptions {
+            system_prompt: self.system_prompt.unwrap_or(defaults.system_prompt),
+            runtime_policy: self.runtime_policy.unwrap_or(defaults.runtime_policy),
+            temperature: self.temperature.map(f64::from).or(defaults.temperature),
+            top_p: self.top_p.map(f64::from).or(defaults.top_p),
         }
     }
 }

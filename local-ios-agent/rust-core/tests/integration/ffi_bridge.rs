@@ -681,6 +681,39 @@ fn c_abi_start_run_rejects_swift_supplied_trusted_host_state() {
 }
 
 #[test]
+fn c_abi_start_run_rejects_malformed_execution_options_instead_of_dropping_them() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let prepared = prepare_c_user_turn(runtime, "hello options");
+        let request = CString::new(
+            json!({
+                "agent_profile_id": "profile_1",
+                "user_intent": "hello options",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {
+                    "temperature": "warm"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let error = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            request.as_ptr(),
+        )));
+
+        assert_eq!(error["error"]["kind"], "ffi");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("invalid start run options"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
 fn bridge_update_runtime_options_changes_next_prompt_snapshot() {
     let bridge = bridge();
     let session = decode(&bridge.create_session_json().unwrap());
