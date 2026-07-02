@@ -41,6 +41,20 @@
 		0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */; };
 		0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000120 /* AgentBuilderViewModel.swift */; };
 		0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000121 /* RuntimeProjectionModel.swift */; };
+		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
+		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
+		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
+		0B0000010000000000001004 /* ExecutionDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001104 /* ExecutionDomainAdapter.swift */; };
+		0B0000010000000000001005 /* AgentProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001105 /* AgentProfileService.swift */; };
+		0B0000010000000000001006 /* AgentCompositionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001106 /* AgentCompositionService.swift */; };
+		0B0000010000000000001007 /* RunLifecycleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001107 /* RunLifecycleService.swift */; };
+		0B0000010000000000001008 /* RunEventStreamService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001108 /* RunEventStreamService.swift */; };
+		0B0000010000000000001009 /* ToolApprovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001109 /* ToolApprovalService.swift */; };
+		0B000001000000000000100A /* RunDebugService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B000001000000000000110A /* RunDebugService.swift */; };
+		0B000001000000000000100B /* InferenceSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B000001000000000000110B /* InferenceSettingsService.swift */; };
+		0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001120 /* ConversationDomainTests.swift */; };
+		0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001121 /* ExecutionDomainTests.swift */; };
+		0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -88,6 +102,20 @@
 		0A0000010000000000000121 /* RuntimeProjectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModel.swift; sourceTree = "<group>"; };
 		0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderViewModelTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModelTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
+		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
+		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
+		0B0000010000000000001104 /* ExecutionDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainAdapter.swift; sourceTree = "<group>"; };
+		0B0000010000000000001105 /* AgentProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProfileService.swift; sourceTree = "<group>"; };
+		0B0000010000000000001106 /* AgentCompositionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCompositionService.swift; sourceTree = "<group>"; };
+		0B0000010000000000001107 /* RunLifecycleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunLifecycleService.swift; sourceTree = "<group>"; };
+		0B0000010000000000001108 /* RunEventStreamService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunEventStreamService.swift; sourceTree = "<group>"; };
+		0B0000010000000000001109 /* ToolApprovalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolApprovalService.swift; sourceTree = "<group>"; };
+		0B000001000000000000110A /* RunDebugService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunDebugService.swift; sourceTree = "<group>"; };
+		0B000001000000000000110B /* InferenceSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceSettingsService.swift; sourceTree = "<group>"; };
+		0B0000010000000000001120 /* ConversationDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001121 /* ExecutionDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainArchitectureTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -167,6 +195,8 @@
 		0A0000010000000000000503 /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				0B0000010000000000001501 /* Conversation */,
+				0B0000010000000000001502 /* Execution */,
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
 				0A000001000000000000011A /* AttachmentService.swift */,
 				0A000001000000000000010F /* ConversationService.swift */,
@@ -254,9 +284,37 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
+				0B0000010000000000001120 /* ConversationDomainTests.swift */,
+				0B0000010000000000001121 /* ExecutionDomainTests.swift */,
+				0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */,
 				0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */,
 			);
 			path = Runtime;
+			sourceTree = "<group>";
+		};
+		0B0000010000000000001501 /* Conversation */ = {
+			isa = PBXGroup;
+			children = (
+				0B0000010000000000001101 /* ConversationDomain.swift */,
+				0B0000010000000000001102 /* ConversationDomainAdapter.swift */,
+			);
+			path = Conversation;
+			sourceTree = "<group>";
+		};
+		0B0000010000000000001502 /* Execution */ = {
+			isa = PBXGroup;
+			children = (
+				0B0000010000000000001103 /* ExecutionDomain.swift */,
+				0B0000010000000000001104 /* ExecutionDomainAdapter.swift */,
+				0B0000010000000000001105 /* AgentProfileService.swift */,
+				0B0000010000000000001106 /* AgentCompositionService.swift */,
+				0B0000010000000000001107 /* RunLifecycleService.swift */,
+				0B0000010000000000001108 /* RunEventStreamService.swift */,
+				0B0000010000000000001109 /* ToolApprovalService.swift */,
+				0B000001000000000000110A /* RunDebugService.swift */,
+				0B000001000000000000110B /* InferenceSettingsService.swift */,
+			);
+			path = Execution;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000512 /* Tools */ = {
@@ -442,6 +500,17 @@
 				0A0000010000000000000003 /* AppContainer.swift in Sources */,
 				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
+				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
+				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
+				0B0000010000000000001003 /* ExecutionDomain.swift in Sources */,
+				0B0000010000000000001004 /* ExecutionDomainAdapter.swift in Sources */,
+				0B0000010000000000001005 /* AgentProfileService.swift in Sources */,
+				0B0000010000000000001006 /* AgentCompositionService.swift in Sources */,
+				0B0000010000000000001007 /* RunLifecycleService.swift in Sources */,
+				0B0000010000000000001008 /* RunEventStreamService.swift in Sources */,
+				0B0000010000000000001009 /* ToolApprovalService.swift in Sources */,
+				0B000001000000000000100A /* RunDebugService.swift in Sources */,
+				0B000001000000000000100B /* InferenceSettingsService.swift in Sources */,
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
 				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
@@ -468,6 +537,9 @@
 				0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */,
 				0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */,
 				0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */,
+				0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */,
+				0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */,
+				0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */,
 				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
