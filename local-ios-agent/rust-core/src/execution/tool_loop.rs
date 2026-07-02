@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use serde_json::json;
+
 use crate::conversation::{ConversationRunFrame, ConversationRunFrameRef};
 use crate::execution::{CompletedRunRegistry, ExecutionEventLog, ExecutionPlan};
 
@@ -29,11 +31,28 @@ pub struct ToolLoopStartError {
 impl ToolLoopService {
     pub fn start(&self, request: ToolLoopStartRequest) -> Result<(), ToolLoopStartError> {
         // Phase-1 bridge adapter: the real worker will replace this synthetic completion.
-        request.event_log.append(request.run_id(), "run.completed");
-        request.completed_runs.record_completed(
+        let final_message_id = "final_1";
+        let final_text = request
+            .frame()
+            .messages()
+            .last()
+            .map(|message| format!("Synthetic response to: {}", message.content()))
+            .unwrap_or_else(|| "Synthetic response.".to_string());
+        request.event_log.append_with_payload(
             request.run_id(),
-            "final_1",
+            "assistant_message_completed",
+            json!({
+                "message_id": final_message_id,
+                "text": final_text
+            })
+            .to_string(),
+        );
+        request.event_log.append(request.run_id(), "run.completed");
+        request.completed_runs.record_completed_with_text(
+            request.run_id(),
+            final_message_id,
             request.conversation_run_frame_ref().clone(),
+            final_text,
         );
         self.pending
             .lock()

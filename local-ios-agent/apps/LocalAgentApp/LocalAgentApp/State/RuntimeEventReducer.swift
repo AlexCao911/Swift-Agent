@@ -4,7 +4,7 @@ import LocalAgentBridge
 enum RuntimeEventReducer {
     static func apply(_ event: RuntimeEventDTO, to state: inout AgentViewState) {
         if event.sequence > 0 {
-            guard event.sequence > state.lastAppliedRuntimeSequence else {
+            guard event.sequence > lastAppliedSequence(for: event, in: state) else {
                 return
             }
         }
@@ -40,8 +40,30 @@ enum RuntimeEventReducer {
         }
 
         if event.sequence > 0 {
-            state.lastAppliedRuntimeSequence = event.sequence
+            recordAppliedSequence(event, in: &state)
         }
+    }
+
+    private static func lastAppliedSequence(for event: RuntimeEventDTO, in state: AgentViewState) -> UInt64 {
+        guard let runId = executionRunSequenceScope(for: event) else {
+            return state.lastAppliedRuntimeSequence
+        }
+        return state.lastAppliedExecutionSequenceByRunId[runId] ?? 0
+    }
+
+    private static func recordAppliedSequence(_ event: RuntimeEventDTO, in state: inout AgentViewState) {
+        guard let runId = executionRunSequenceScope(for: event) else {
+            state.lastAppliedRuntimeSequence = event.sequence
+            return
+        }
+        state.lastAppliedExecutionSequenceByRunId[runId] = event.sequence
+    }
+
+    private static func executionRunSequenceScope(for event: RuntimeEventDTO) -> String? {
+        guard event.sessionId.isEmpty else {
+            return nil
+        }
+        return event.runId
     }
 
     private static func appendUserMessage(_ event: RuntimeEventDTO, to state: inout AgentViewState) {

@@ -4,10 +4,10 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
-    local_agent_runtime_bridge_commit_assistant_result, local_agent_runtime_bridge_create_session,
-    local_agent_runtime_bridge_fork_session, local_agent_runtime_bridge_free,
-    local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
-    local_agent_runtime_bridge_observe_events_streaming,
+    local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_commit_assistant_result,
+    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
+    local_agent_runtime_bridge_free, local_agent_runtime_bridge_load_debug_archive,
+    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_observe_events_streaming,
     local_agent_runtime_bridge_prepare_user_turn, local_agent_runtime_bridge_send_message,
     local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
     local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
@@ -253,9 +253,30 @@ unsafe fn new_seeded_agent_os_c_bridge() -> *mut RuntimeJsonBridge {
 }
 
 unsafe fn prepare_c_user_turn(runtime: *mut RuntimeJsonBridge, text: &str) -> Value {
+    let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
     let request = CString::new(
         json!({
-            "session_id": "session_1",
+            "session_id": session.as_str().unwrap(),
+            "parent_event_id": null,
+            "text": text,
+            "blob_refs": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    decode(&take_bridge_string(
+        local_agent_runtime_bridge_prepare_user_turn(runtime, request.as_ptr()),
+    ))
+}
+
+unsafe fn prepare_c_user_turn_in_session(
+    runtime: *mut RuntimeJsonBridge,
+    session_id: &str,
+    text: &str,
+) -> Value {
+    let request = CString::new(
+        json!({
+            "session_id": session_id,
             "parent_event_id": null,
             "text": text,
             "blob_refs": []
@@ -363,6 +384,13 @@ fn c_abi_start_run_resolves_snapshot_plan_and_debug_archive_in_rust() {
         assert!(observed.lock().unwrap().iter().any(|event| {
             event["kind"] == "execution.event" && event["payload"] == "run.started"
         }));
+        assert!(observed.lock().unwrap().iter().any(|event| {
+            event["kind"] == "assistant_message_completed"
+                && event["payload"]
+                    .as_str()
+                    .unwrap()
+                    .contains(r#""message_id":"final_1""#)
+        }));
 
         local_agent_runtime_bridge_free(runtime);
     }
@@ -396,6 +424,13 @@ fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
         assert!(observed.iter().any(|event| {
             event["kind"] == "execution.event" && event["payload"] == "run.started"
         }));
+        assert!(observed.iter().any(|event| {
+            event["kind"] == "assistant_message_completed"
+                && event["payload"]
+                    .as_str()
+                    .unwrap()
+                    .contains(r#""message_id":"final_1""#)
+        }));
 
         let commit_request = CString::new(
             json!({
@@ -409,8 +444,21 @@ fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
         let commit = decode(&take_bridge_string(
             local_agent_runtime_bridge_commit_assistant_result(runtime, commit_request.as_ptr()),
         ));
-        assert_eq!(commit["committed_message_id"], "assistant.run_1.final_1");
         assert_eq!(commit["already_committed"], false);
+        let committed_message_id = commit["committed_message_id"].as_str().unwrap();
+        assert!(committed_message_id.starts_with("entry_"));
+        let active_branch_session_id =
+            CString::new(prepared["session_id"].as_str().unwrap()).unwrap();
+        let active_branch_leaf_id = CString::new(committed_message_id).unwrap();
+        let branch = decode(&take_bridge_string(local_agent_runtime_bridge_active_branch(
+            runtime,
+            active_branch_session_id.as_ptr(),
+            active_branch_leaf_id.as_ptr(),
+        )));
+        assert!(branch.as_array().unwrap().iter().any(|event| {
+            event["kind"] == "assistant_message_completed"
+                && event["id"] == commit["committed_message_id"]
+        }));
 
         let mut tampered_ref = prepared["conversation_run_frame_ref"].clone();
         tampered_ref["session_id"] = Value::String("other_session".to_string());
@@ -435,6 +483,72 @@ fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
             .as_str()
             .unwrap()
             .contains("conversation_commit.frame_ref_mismatch"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_prepare_user_turn_without_parent_uses_current_active_branch() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let session_id = session.as_str().unwrap();
+        let first = prepare_c_user_turn_in_session(runtime, session_id, "first");
+        let first_handle = start_c_agent_os_run(runtime, &first, "first");
+        let first_run_id = first_handle["run_id"].as_str().unwrap();
+        let first_commit_request = CString::new(
+            json!({
+                "run_id": first_run_id,
+                "final_message_id": "final_1",
+                "conversation_run_frame_ref": first["conversation_run_frame_ref"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let _ = take_bridge_string(local_agent_runtime_bridge_commit_assistant_result(
+            runtime,
+            first_commit_request.as_ptr(),
+        ));
+
+        let second = prepare_c_user_turn_in_session(runtime, session_id, "second");
+        let messages = second["frame_preview"]["messages"].as_array().unwrap();
+
+        assert!(messages.iter().any(|message| message["content"] == "first"));
+        assert!(messages
+            .iter()
+            .any(|message| message["role"] == "assistant"));
+        assert!(messages.iter().any(|message| message["content"] == "second"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_prepare_user_turn_with_stale_parent_returns_json_error() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let request = CString::new(
+            json!({
+                "session_id": session.as_str().unwrap(),
+                "parent_event_id": "stale_leaf",
+                "text": "hello",
+                "blob_refs": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let response = decode(&take_bridge_string(
+            local_agent_runtime_bridge_prepare_user_turn(runtime, request.as_ptr()),
+        ));
+
+        assert_eq!(response["error"]["kind"], "storage");
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stale_leaf"));
 
         local_agent_runtime_bridge_free(runtime);
     }

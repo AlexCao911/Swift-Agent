@@ -13,7 +13,6 @@ protocol ChatInteractionCoordinating: AnyObject, Sendable {
     ) async throws
 }
 
-@MainActor
 final class ChatInteractionCoordinator: ChatInteractionCoordinating {
     private let conversation: any ConversationDomain
     private let execution: any ExecutionDomain

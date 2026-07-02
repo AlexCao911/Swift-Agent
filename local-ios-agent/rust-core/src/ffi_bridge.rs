@@ -9,7 +9,8 @@ use serde_json::json;
 use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
 use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
 use crate::conversation::{
-    ConversationCommitService, ConversationFrameId, ConversationFrameMessage, ConversationRunFrame,
+    ConversationCommitError, ConversationCommitService, ConversationFrameId,
+    ConversationFrameMessage, ConversationFrameRepository, ConversationRunFrame,
     ConversationRunFrameRef, ConversationService, InMemoryConversationFrameRepository,
     PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader,
 };
@@ -100,6 +101,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     cancellations: ProviderCancellationRegistry,
     debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
     next_agent_os_run_id: Mutex<u64>,
+    frames: InMemoryConversationFrameRepository,
     conversation:
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
     execution: ExecutionService<InMemoryConversationFrameRepository>,
@@ -121,13 +123,14 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             event_log,
             completed_runs.clone(),
         );
-        let conversation = ConversationService::new(frames, branch_reader);
+        let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
         Self {
             runtime,
             cancellations,
             debug_archives: Mutex::new(BTreeMap::new()),
             next_agent_os_run_id: Mutex::new(1),
+            frames,
             conversation,
             execution,
             conversation_commits,
@@ -153,6 +156,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn conversation_commits(&self) -> &ConversationCommitService {
         &self.conversation_commits
+    }
+
+    fn frames(&self) -> &InMemoryConversationFrameRepository {
+        &self.frames
     }
 
     fn signal_provider_cancellation(&self, run_id: &RunId) {
@@ -196,16 +203,35 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: PrepareUserTurnRequestJson = from_json(request_json)?;
+        let text = request.text;
+        let blob_refs = request.blob_refs;
+        let persisted_user_turn = self.lock()?.prepare_conversation_user_turn(
+            request.session_id.map(SessionId),
+            request.parent_event_id.map(EntryId),
+            text.clone(),
+            blob_refs.clone(),
+        )?;
         let prepared = self
             .conversation()
-            .prepare_user_turn(PrepareUserTurnRequest::new(
-                request.session_id.map(SessionId),
-                request.parent_event_id.map(EntryId),
-                request.text,
-                request.blob_refs,
-            ))
+            .prepare_user_turn(
+                PrepareUserTurnRequest::new(
+                    Some(persisted_user_turn.session_id),
+                    persisted_user_turn.parent_event_id,
+                    text,
+                    blob_refs,
+                )
+                .with_persisted_user_turn_id(persisted_user_turn.user_turn_id),
+            )
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        to_json(&PreparedUserTurnJson::from(prepared))
+        let frame_preview = self
+            .frames()
+            .get(prepared.conversation_run_frame_ref())
+            .as_ref()
+            .map(ConversationRunFrameJson::from);
+        to_json(&PreparedUserTurnJson::from_prepared(
+            prepared,
+            frame_preview,
+        ))
     }
 
     fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -286,7 +312,28 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let frame_ref = request.conversation_run_frame_ref.into_domain();
         let record = self
             .conversation_commits()
-            .commit_assistant_result(&request.run_id, &request.final_message_id, &frame_ref)
+            .commit_assistant_result_with_persist(
+                &request.run_id,
+                &request.final_message_id,
+                &frame_ref,
+                |completed| {
+                    self.lock()
+                        .and_then(|mut runtime| {
+                            runtime.commit_conversation_assistant_result(
+                                completed.conversation_run_frame_ref(),
+                                completed.run_id(),
+                                completed.final_text(),
+                            )
+                        })
+                        .map(|entry_id| entry_id.0)
+                        .map_err(|error| {
+                            ConversationCommitError::new(
+                                "conversation_commit.persist_failed",
+                                error.to_string(),
+                            )
+                        })
+                },
+            )
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&ConversationCommitResultJson {
             committed_message_id: record.assistant_message_id().to_string(),
@@ -1589,8 +1636,8 @@ impl RuntimeEventJson {
             sequence: event.sequence(),
             created_at_millis: 0,
             depth: 0,
-            kind: "execution.event",
-            payload: event.code().to_string(),
+            kind: execution_event_kind_json(event.code()),
+            payload: event.payload().to_string(),
             blob_refs: Vec::new(),
         }
     }
@@ -1620,13 +1667,22 @@ impl From<&ConversationRunFrameRef> for ConversationRunFrameRefJson {
 
 impl From<PreparedUserTurn> for PreparedUserTurnJson {
     fn from(prepared: PreparedUserTurn) -> Self {
+        Self::from_prepared(prepared, None)
+    }
+}
+
+impl PreparedUserTurnJson {
+    fn from_prepared(
+        prepared: PreparedUserTurn,
+        frame_preview: Option<ConversationRunFrameJson>,
+    ) -> Self {
         Self {
             session_id: prepared.session_id().0.clone(),
             user_message_id: prepared.user_message_id().0.clone(),
             conversation_run_frame_ref: ConversationRunFrameRefJson::from(
                 prepared.conversation_run_frame_ref(),
             ),
-            frame_preview: None,
+            frame_preview,
         }
     }
 }
@@ -1885,6 +1941,19 @@ fn is_terminal_execution_event(event: &ExecutionEvent) -> bool {
         event.code(),
         "run.completed" | "run.failed" | "run.cancelled"
     )
+}
+
+fn execution_event_kind_json(code: &str) -> &'static str {
+    match code {
+        "assistant_message_completed" => "assistant_message_completed",
+        "assistant_text_delta" => "assistant_text_delta",
+        "assistant_message_started" => "assistant_message_started",
+        "tool_call_requested" => "tool_call_requested",
+        "tool_result_message" => "tool_result_message",
+        "run.cancelled" => "run_cancelled",
+        "run.failed" => "run_failed",
+        _ => "execution.event",
+    }
 }
 
 fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {

@@ -141,6 +141,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         return try await loadConversations(state: state)
     }
 
+    #if DEBUG
+    func usesConversationExecutionCoordinatorForTesting() -> Bool {
+        coordinator != nil
+    }
+    #endif
+
     func sendMessage(
         _ text: String,
         state: AgentViewState,

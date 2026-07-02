@@ -9,7 +9,7 @@ pub struct InMemoryExecutionEventRepository {
 }
 
 pub trait ExecutionEventRepository: Clone + Send + Sync + 'static {
-    fn append(&self, run_id: String, code: String) -> ExecutionEvent;
+    fn append(&self, run_id: String, code: String, payload: String) -> ExecutionEvent;
     fn replay_after(&self, run_id: &str, from_sequence: u64) -> Vec<ExecutionEvent>;
     fn subscribe_live(&self, run_id: &str) -> Receiver<ExecutionEvent>;
 }
@@ -31,6 +31,7 @@ pub struct ExecutionEvent {
     run_id: String,
     sequence: u64,
     code: String,
+    payload: String,
 }
 
 impl Default for ExecutionEventLog<InMemoryExecutionEventRepository> {
@@ -45,7 +46,18 @@ impl<R: ExecutionEventRepository> ExecutionEventLog<R> {
     }
 
     pub fn append(&self, run_id: impl Into<String>, code: impl Into<String>) -> ExecutionEvent {
-        self.repository.append(run_id.into(), code.into())
+        let code = code.into();
+        self.repository.append(run_id.into(), code.clone(), code)
+    }
+
+    pub fn append_with_payload(
+        &self,
+        run_id: impl Into<String>,
+        code: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> ExecutionEvent {
+        self.repository
+            .append(run_id.into(), code.into(), payload.into())
     }
 
     pub fn replay(&self, run_id: &str, from_sequence: Option<u64>) -> Vec<ExecutionEvent> {
@@ -61,7 +73,7 @@ impl<R: ExecutionEventRepository> ExecutionEventLog<R> {
 }
 
 impl ExecutionEventRepository for InMemoryExecutionEventRepository {
-    fn append(&self, run_id: String, code: String) -> ExecutionEvent {
+    fn append(&self, run_id: String, code: String, payload: String) -> ExecutionEvent {
         let event = {
             let mut inner = self
                 .inner
@@ -73,6 +85,7 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
                 run_id: run_id.clone(),
                 sequence,
                 code,
+                payload,
             };
             events.push(event.clone());
             event
@@ -148,6 +161,10 @@ impl ExecutionEvent {
 
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    pub fn payload(&self) -> &str {
+        &self.payload
     }
 
     pub fn run_id(&self) -> &str {

@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::conversation::ConversationRunFrameRef;
-use crate::execution::{idempotency_key, CompletedRunRegistry};
+use crate::execution::{idempotency_key, CompletedRunRecord, CompletedRunRegistry};
 
 #[derive(Clone, Debug)]
 pub struct ConversationCommitService {
@@ -37,6 +37,27 @@ impl ConversationCommitService {
         run_id: &str,
         final_message_id: &str,
         expected_frame_ref: &ConversationRunFrameRef,
+    ) -> Result<AssistantCommitRecord, ConversationCommitError> {
+        self.commit_assistant_result_with_persist(
+            run_id,
+            final_message_id,
+            expected_frame_ref,
+            |completed| {
+                Ok(format!(
+                    "assistant.{}.{}",
+                    completed.run_id(),
+                    completed.final_message_id()
+                ))
+            },
+        )
+    }
+
+    pub fn commit_assistant_result_with_persist(
+        &self,
+        run_id: &str,
+        final_message_id: &str,
+        expected_frame_ref: &ConversationRunFrameRef,
+        persist: impl FnOnce(&CompletedRunRecord) -> Result<String, ConversationCommitError>,
     ) -> Result<AssistantCommitRecord, ConversationCommitError> {
         let key = idempotency_key(run_id, final_message_id);
         let mut commits = self
@@ -72,8 +93,9 @@ impl ConversationCommitService {
             ));
         }
 
+        let assistant_message_id = persist(&completed)?;
         let record = AssistantCommitRecord {
-            assistant_message_id: format!("assistant.{run_id}.{final_message_id}"),
+            assistant_message_id,
             already_committed: false,
             conversation_run_frame_ref: completed.conversation_run_frame_ref().clone(),
         };
@@ -104,7 +126,7 @@ impl AssistantCommitRecord {
 }
 
 impl ConversationCommitError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),

@@ -53,6 +53,13 @@ struct RustRuntimeAppIntegrationTests {
         #expect(state.messages.map(\.text).contains("Mock response to: hello"))
     }
 
+    @Test("App bootstrapper wires conversation execution coordinator")
+    func appBootstrapperWiresConversationExecutionCoordinator() async throws {
+        let container = try AppBootstrapper.makeContainer(store: .inMemory)
+
+        #expect(await container.runtimeService.usesConversationExecutionCoordinatorForTesting())
+    }
+
     @Test("live RustRuntimeClient completes debug echo tool loop")
     func liveRuntimeCompletesDebugEchoToolLoop() async throws {
         let service = try makeLiveService()

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
+use crate::conversation::ConversationRunFrameRef;
 use crate::context::{
     ContextController, InferenceOptions, PromptDebugSnapshot, PromptFrame, TokenizerAdapter,
 };
@@ -78,6 +79,13 @@ pub struct SendMessageInput {
     pub parent_event_id: Option<EntryId>,
     pub text: String,
     pub blob_refs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedConversationUserTurn {
+    pub session_id: SessionId,
+    pub parent_event_id: Option<EntryId>,
+    pub user_turn_id: EntryId,
 }
 
 const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
@@ -514,6 +522,60 @@ impl<S: EventStore> AgentRuntime<S> {
         };
 
         self.store.active_branch(session_id, &leaf_id)
+    }
+
+    pub fn prepare_conversation_user_turn(
+        &mut self,
+        session_id: Option<SessionId>,
+        parent_event_id: Option<EntryId>,
+        text: impl Into<String>,
+        blob_refs: Vec<String>,
+    ) -> Result<PreparedConversationUserTurn, AgentError> {
+        let session_id = match session_id {
+            Some(session_id) => {
+                if !self.sessions.contains_key(&session_id) {
+                    return Err(AgentError::Storage(format!(
+                        "missing session: {}",
+                        session_id.0
+                    )));
+                }
+                session_id
+            }
+            None => self.create_session()?,
+        };
+        let parent_event_id = match parent_event_id {
+            Some(parent_event_id) => Some(parent_event_id),
+            None => self.store.active_leaf(&session_id)?,
+        };
+        let user_turn_id = self.append_event_with_blob_refs(
+            &session_id,
+            parent_event_id.clone(),
+            None,
+            EventKind::UserMessage,
+            text,
+            blob_refs,
+        )?;
+
+        Ok(PreparedConversationUserTurn {
+            session_id,
+            parent_event_id,
+            user_turn_id,
+        })
+    }
+
+    pub fn commit_conversation_assistant_result(
+        &mut self,
+        frame_ref: &ConversationRunFrameRef,
+        run_id: &str,
+        content: impl Into<String>,
+    ) -> Result<EntryId, AgentError> {
+        self.append_event(
+            frame_ref.session_id(),
+            Some(frame_ref.user_turn_id().clone()),
+            Some(RunId(run_id.to_string())),
+            EventKind::AssistantMessageCompleted,
+            content,
+        )
     }
 
     pub fn fork_session(

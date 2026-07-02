@@ -21,9 +21,26 @@ enum AppBootstrapper {
             providers: providers
         ))
         let toolDriver = MinimalHostToolDriver()
+        let conversationBridge = RustConversationBridgeClient(gateway: client, legacyClient: client)
+        let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
+        let conversationDomain = ConversationDomainAdapter(bridge: conversationBridge)
+        let executionDomain = ExecutionDomainAdapter(
+            profiles: AgentProfileService(bridge: executionBridge),
+            composition: AgentCompositionService(bridge: executionBridge),
+            lifecycle: RunLifecycleService(bridge: executionBridge),
+            events: RunEventStreamService(bridge: executionBridge),
+            tools: ToolApprovalService(bridge: executionBridge),
+            debug: RunDebugService(bridge: executionBridge),
+            inference: InferenceSettingsService(bridge: executionBridge)
+        )
+        let coordinator = ChatInteractionCoordinator(
+            conversation: conversationDomain,
+            execution: executionDomain
+        )
         return AppContainer(runtimeService: AgentRuntimeService(
             runtimeClient: client,
-            toolDriver: toolDriver
+            toolDriver: toolDriver,
+            coordinator: coordinator
         ))
     }
 

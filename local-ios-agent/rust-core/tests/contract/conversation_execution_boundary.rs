@@ -1,10 +1,10 @@
 use local_ios_agent_runtime::conversation::{
-    AttachmentRef, ConversationCommitService, ConversationFrameId, ConversationFrameMessage,
-    ConversationFrameProjector, ConversationFrameRepository, ConversationLineage,
-    ConversationRunFrame, ConversationRunFrameRef, ConversationService, InMemoryBranchEventReader,
-    InMemoryConversationFrameRepository, PrepareUserTurnRequest,
+    AttachmentRef, BranchEventReader, ConversationCommitService, ConversationFrameId,
+    ConversationFrameMessage, ConversationFrameProjector, ConversationFrameRepository,
+    ConversationLineage, ConversationRunFrame, ConversationRunFrameRef, ConversationService,
+    InMemoryBranchEventReader, InMemoryConversationFrameRepository, PrepareUserTurnRequest,
 };
-use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
+use local_ios_agent_runtime::core::{AgentError, EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::execution::{
     CompletedRunRegistry, ExecutionEventLog, ExecutionPlanner, ExecutionService,
     RunLifecycleService, StartExecutionRequest,
@@ -108,6 +108,38 @@ fn conversation_service_prepares_and_persists_trusted_frame_ref() {
     assert_eq!(frame.messages()[2].blob_refs(), &["blob_1".to_string()]);
     assert_eq!(frame.parent_event_id().unwrap().0, "assistant_1");
     assert_eq!(frame.lineage().branch_head_id().0, "assistant_1");
+}
+
+#[test]
+fn conversation_service_returns_structured_error_for_unreadable_branch() {
+    #[derive(Clone)]
+    struct FailingBranchReader;
+
+    impl BranchEventReader for FailingBranchReader {
+        fn active_branch(
+            &self,
+            _session_id: &SessionId,
+            _branch_head_id: Option<&EntryId>,
+        ) -> Result<(Option<EntryId>, Vec<RuntimeEvent>), AgentError> {
+            Err(AgentError::Storage("leaf has no path rows: stale_leaf".into()))
+        }
+    }
+
+    let service = ConversationService::new(
+        InMemoryConversationFrameRepository::default(),
+        FailingBranchReader,
+    );
+
+    let error = service
+        .prepare_user_turn(PrepareUserTurnRequest::new(
+            Some(SessionId("session_1".into())),
+            Some(EntryId("stale_leaf".into())),
+            "hello",
+            Vec::new(),
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "conversation.branch_unreadable");
 }
 
 #[test]

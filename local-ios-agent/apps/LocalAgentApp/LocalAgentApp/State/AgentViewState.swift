@@ -242,6 +242,7 @@ struct AgentViewState: Equatable, Sendable {
     var conversations: ConversationListViewState
     var lastTerminalReason: RunTerminalReason?
     var lastAppliedRuntimeSequence: UInt64
+    var lastAppliedExecutionSequenceByRunId: [String: UInt64]
     var promptLibrary: PromptLibraryViewState
     var modelSettings: ModelSettingsViewState
 
@@ -255,6 +256,7 @@ struct AgentViewState: Equatable, Sendable {
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
         lastAppliedRuntimeSequence: UInt64 = 0,
+        lastAppliedExecutionSequenceByRunId: [String: UInt64] = [:],
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState()
     ) {
@@ -267,6 +269,7 @@ struct AgentViewState: Equatable, Sendable {
         self.conversations = conversations
         self.lastTerminalReason = lastTerminalReason
         self.lastAppliedRuntimeSequence = lastAppliedRuntimeSequence
+        self.lastAppliedExecutionSequenceByRunId = lastAppliedExecutionSequenceByRunId
         self.promptLibrary = promptLibrary
         self.modelSettings = modelSettings
     }

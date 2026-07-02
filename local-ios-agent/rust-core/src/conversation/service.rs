@@ -24,6 +24,7 @@ pub struct PrepareUserTurnRequest {
     parent_event_id: Option<EntryId>,
     fork_origin_id: Option<EntryId>,
     edit_origin_id: Option<EntryId>,
+    persisted_user_turn_id: Option<EntryId>,
     text: String,
     blob_refs: Vec<String>,
 }
@@ -60,26 +61,27 @@ impl<R: ConversationFrameRepository, B: BranchEventReader> ConversationService<R
             .session_id
             .clone()
             .unwrap_or_else(|| SessionId("session_1".into()));
-        let user_turn_id = EntryId(format!(
-            "user_turn_{}",
-            self.next_user_turn.fetch_add(1, Ordering::SeqCst)
-        ));
+        let user_turn_id = request.persisted_user_turn_id.clone().unwrap_or_else(|| {
+            EntryId(format!(
+                "user_turn_{}",
+                self.next_user_turn.fetch_add(1, Ordering::SeqCst)
+            ))
+        });
         let frame_id = ConversationFrameId::new(format!(
             "frame_{}",
             self.next_frame.fetch_add(1, Ordering::SeqCst)
         ));
-        let branch_head_id = request
-            .parent_event_id
-            .clone()
-            .unwrap_or_else(|| user_turn_id.clone());
-        let mut messages = if request.parent_event_id.is_some() {
-            self.projector.project(
-                self.branch_reader
-                    .active_branch(&session_id, &branch_head_id),
-            )
-        } else {
-            Vec::new()
-        };
+        let (branch_head_id, branch_events) = self
+            .branch_reader
+            .active_branch(&session_id, request.parent_event_id.as_ref())
+            .map_err(|error| {
+                ConversationServiceError::new(
+                    "conversation.branch_unreadable",
+                    format!("failed to load conversation branch: {error}"),
+                )
+            })?;
+        let branch_head_id = branch_head_id.unwrap_or_else(|| user_turn_id.clone());
+        let mut messages = self.projector.project(branch_events);
         messages.push(
             ConversationFrameMessage::user(user_turn_id.clone(), request.text)
                 .with_blob_refs(request.blob_refs),
@@ -124,6 +126,7 @@ impl PrepareUserTurnRequest {
             edit_origin_id: None,
             text: text.into(),
             blob_refs,
+            persisted_user_turn_id: None,
         }
     }
 
@@ -134,6 +137,11 @@ impl PrepareUserTurnRequest {
 
     pub fn with_edit_origin(mut self, edit_origin_id: EntryId) -> Self {
         self.edit_origin_id = Some(edit_origin_id);
+        self
+    }
+
+    pub fn with_persisted_user_turn_id(mut self, user_turn_id: EntryId) -> Self {
+        self.persisted_user_turn_id = Some(user_turn_id);
         self
     }
 }
