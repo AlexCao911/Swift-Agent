@@ -66,7 +66,7 @@ This table is the Rust/Swift bridge contract. Swift DTO coding keys and Rust JSO
 | execution | `list_agent_profiles` | `list_agent_profiles_json` | `EmptyAgentOSRequestDTO` | none | `AgentProfileDTO[]` |
 | execution | `build_agent` | `build_agent_json` | `BuildAgentRequestDTO` | `template_id` | `AgentProfileDTO` |
 | execution | `start_run` | `start_run_json` | `StartExecutionRequestDTO` | `agent_profile_id`, `user_intent`, `conversation_run_frame_ref`, `options` | `RunHandleDTO` |
-| execution | `observe_events` | `observe_events_json` / stream callback | `ObserveExecutionEventsRequestDTO` | `run_id`, `from_sequence` | `RuntimeEventDTO[]` replay, then live events |
+| execution | `observe_events` | `observe_events_stream_json` / stream callback | `ObserveExecutionEventsRequestDTO` | `run_id`, `from_sequence` | `RuntimeEventDTO` stream: durable replay, then live tail |
 | conversation | `commit_assistant_result` | `commit_assistant_result_json` | `CommitAssistantResultRequestDTO` | `run_id`, `final_message_id`, `conversation_run_frame_ref` | `ConversationCommitResultDTO` |
 | execution | `approve_tool` | `approve_tool_json` | `ApproveToolRequestDTO` | `id`, `decision` | `EmptyAgentOSResponseDTO` |
 | execution | `cancel_run` | `cancel_run_json` | `CancelRunRequestDTO` | `run_id` | `RuntimeEventDTO` |
@@ -78,6 +78,20 @@ Rules:
 - `ConversationRunFrameDTO` is never accepted by `start_run_json`.
 - `prepare_user_turn_json` is the only bridge operation that creates a new trusted frame ref from Swift user input.
 - `commit_assistant_result_json` belongs to `conversation/`; execution only exposes completed run facts.
+- `observe_events_json`, if kept during migration, is a debug/smoke-test snapshot adapter only. Swift's new execution path must use `observe_events_stream_json` so replay and live tail share one subscription boundary.
+
+## Operation Ownership During Migration
+
+| Operation | Owner | Path | Migration Status |
+| --- | --- | --- | --- |
+| `prepare_user_turn_json` | conversation | `ConversationService::prepare_user_turn` reads active branch history, appends current user turn, persists `ConversationRunFrame`, and returns the trusted ref. | New domain path. |
+| `start_run_json` | execution | `ExecutionService::start_run` validates the full frame ref, loads the frame, resolves snapshot, plans, and starts the run lifecycle. | New domain path. |
+| `observe_events_stream_json` | execution | `ExecutionEventLog::subscribe(run_id, from_sequence)` replays durable events and then tails live events. | New domain path. |
+| `commit_assistant_result_json` | conversation | `ConversationCommitService::commit_assistant_result` validates the completed-run frame ref and writes the assistant turn as a conversation durable fact. | New domain path. |
+| `approve_tool_json` | execution | `ToolApprovalService` resumes a paused execution run. | New domain path once the tool loop is moved behind `RunMachine`; no Swift MVVM call should treat it as legacy. |
+| `cancel_run_json` | legacy compatibility | Phase 1 calls the old `AgentRuntime::cancel` because `RunCancellationService` is not yet wired into `ExecutionService`. | Must be marked legacy in bridge code and Swift docs. |
+| `submit_tool_result` | legacy compatibility | Old `AgentRuntime` continuation path until tool results are owned by execution's tool loop. | Not part of the new Swift conversation/execution coordinator path. |
+| `send_message_streaming` | legacy compatibility | Old mixed `AgentRuntime` path that appends conversation events and runs model/tool loop in one object. | Must remain marked `LEGACY_COMPATIBILITY_STREAMING_PATH` until removed. |
 
 ## File Structure
 
@@ -179,7 +193,7 @@ fn conversation_frame_is_projection_not_execution_input() {
             "hello",
         )],
         vec![AttachmentRef::new("attachment_1")],
-        ConversationLineage::root(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
     );
 
     assert_eq!(frame.frame_ref(), &frame_ref);
@@ -238,7 +252,11 @@ git commit -m "test: define rust conversation execution boundary contracts"
 - Create: `local-ios-agent/rust-core/src/conversation/mod.rs`
 - Create: `local-ios-agent/rust-core/src/conversation/frame.rs`
 - Create: `local-ios-agent/rust-core/src/conversation/frame_repository.rs`
+- Create: `local-ios-agent/rust-core/src/conversation/branch_reader.rs`
+- Create: `local-ios-agent/rust-core/src/conversation/runtime_branch_reader.rs`
+- Create: `local-ios-agent/rust-core/src/conversation/projection.rs`
 - Create: `local-ios-agent/rust-core/src/conversation/service.rs`
+- Modify: `local-ios-agent/rust-core/src/core/runtime.rs`
 - Modify: `local-ios-agent/rust-core/src/lib.rs`
 - Modify: `local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs`
 
@@ -251,6 +269,10 @@ git commit -m "test: define rust conversation execution boundary contracts"
 - Produces: `ConversationLineage`
 - Produces: `ConversationFrameRepository`
 - Produces: `InMemoryConversationFrameRepository`
+- Produces: `BranchEventReader`
+- Produces: `InMemoryBranchEventReader`
+- Produces: `RuntimeBranchEventReader`
+- Produces: `ConversationFrameProjector`
 - Produces: `PrepareUserTurnRequest`
 - Produces: `PreparedUserTurn`
 - Produces: `ConversationService::prepare_user_turn`
@@ -270,13 +292,19 @@ Create `local-ios-agent/rust-core/src/conversation/mod.rs`:
 ```rust
 mod frame;
 mod frame_repository;
+mod branch_reader;
+mod runtime_branch_reader;
+mod projection;
 mod service;
 
 pub use frame::{
     AttachmentRef, ConversationFrameId, ConversationFrameMessage, ConversationLineage,
     ConversationRunFrame, ConversationRunFrameRef,
 };
+pub use branch_reader::{BranchEventReader, InMemoryBranchEventReader};
+pub use runtime_branch_reader::RuntimeBranchEventReader;
 pub use frame_repository::{ConversationFrameRepository, InMemoryConversationFrameRepository};
+pub use projection::ConversationFrameProjector;
 pub use service::{ConversationService, PrepareUserTurnRequest, PreparedUserTurn};
 ```
 
@@ -327,7 +355,9 @@ pub struct AttachmentRef(String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationLineage {
-    root: bool,
+    branch_head_id: EntryId,
+    fork_origin_id: Option<EntryId>,
+    edit_origin_id: Option<EntryId>,
 }
 
 impl ConversationFrameId {
@@ -477,12 +507,28 @@ impl AttachmentRef {
 }
 
 impl ConversationLineage {
-    pub fn root() -> Self {
-        Self { root: true }
+    pub fn new(
+        branch_head_id: EntryId,
+        fork_origin_id: Option<EntryId>,
+        edit_origin_id: Option<EntryId>,
+    ) -> Self {
+        Self {
+            branch_head_id,
+            fork_origin_id,
+            edit_origin_id,
+        }
     }
 
-    pub fn is_root(&self) -> bool {
-        self.root
+    pub fn branch_head_id(&self) -> &EntryId {
+        &self.branch_head_id
+    }
+
+    pub fn fork_origin_id(&self) -> Option<&EntryId> {
+        self.fork_origin_id.as_ref()
+    }
+
+    pub fn edit_origin_id(&self) -> Option<&EntryId> {
+        self.edit_origin_id.as_ref()
     }
 }
 ```
@@ -504,19 +550,46 @@ Append to `local-ios-agent/rust-core/tests/contract/conversation_execution_bound
 
 ```rust
 use local_ios_agent_runtime::conversation::{
-    ConversationFrameRepository, ConversationService, InMemoryConversationFrameRepository,
-    PrepareUserTurnRequest,
+    BranchEventReader, ConversationFrameRepository, ConversationService,
+    InMemoryBranchEventReader, InMemoryConversationFrameRepository, PrepareUserTurnRequest,
 };
+use local_ios_agent_runtime::core::{EventKind, RuntimeEvent};
 
 #[test]
 fn conversation_service_prepares_and_persists_trusted_frame_ref() {
     let repository = InMemoryConversationFrameRepository::default();
-    let service = ConversationService::new(repository.clone());
+    let branch_reader = InMemoryBranchEventReader::default().with_branch(
+        SessionId("session_1".into()),
+        EntryId("assistant_1".into()),
+        vec![
+            RuntimeEvent::new(
+                EntryId("user_0".into()),
+                SessionId("session_1".into()),
+                None,
+                None,
+                1,
+                0,
+                EventKind::UserMessage,
+                "earlier question",
+            ),
+            RuntimeEvent::new(
+                EntryId("assistant_1".into()),
+                SessionId("session_1".into()),
+                Some(EntryId("user_0".into())),
+                None,
+                2,
+                1,
+                EventKind::AssistantMessageCompleted,
+                "earlier answer",
+            ),
+        ],
+    );
+    let service = ConversationService::new(repository.clone(), branch_reader);
 
     let prepared = service
         .prepare_user_turn(PrepareUserTurnRequest::new(
             Some(SessionId("session_1".into())),
-            None,
+            Some(EntryId("assistant_1".into())),
             "hello",
             vec!["blob_1".to_string()],
         ))
@@ -529,8 +602,41 @@ fn conversation_service_prepares_and_persists_trusted_frame_ref() {
     assert_eq!(prepared.session_id().0, "session_1");
     assert_eq!(prepared.user_message_id().0, "user_turn_1");
     assert_eq!(frame.frame_ref(), prepared.conversation_run_frame_ref());
-    assert_eq!(frame.messages()[0].content(), "hello");
-    assert_eq!(frame.messages()[0].blob_refs(), &["blob_1".to_string()]);
+    assert_eq!(
+        frame.messages().iter().map(|message| message.content()).collect::<Vec<_>>(),
+        vec!["earlier question", "earlier answer", "hello"]
+    );
+    assert_eq!(frame.messages()[2].blob_refs(), &["blob_1".to_string()]);
+    assert_eq!(frame.parent_event_id().unwrap().0, "assistant_1");
+    assert_eq!(frame.lineage().branch_head_id().0, "assistant_1");
+}
+
+#[test]
+fn frame_repository_rejects_tampered_ref_with_real_frame_id() {
+    let repository = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("assistant_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    repository.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        Some(EntryId("assistant_1".into())),
+        vec![ConversationFrameMessage::user(EntryId("user_turn_1".into()), "hello")],
+        Vec::new(),
+        ConversationLineage::new(EntryId("assistant_1".into()), None, None),
+    ));
+
+    let tampered = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("other_session".into()),
+        EntryId("assistant_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+
+    assert!(repository.get(&tampered).is_none());
+    assert!(!repository.contains(&tampered));
 }
 ```
 
@@ -540,6 +646,7 @@ Create `local-ios-agent/rust-core/src/conversation/frame_repository.rs`:
 
 ```rust
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::conversation::{ConversationFrameId, ConversationRunFrame, ConversationRunFrameRef};
@@ -548,7 +655,9 @@ pub trait ConversationFrameRepository: Clone + Send + Sync + 'static {
     fn put(&self, frame: ConversationRunFrame);
     fn get(&self, frame_ref: &ConversationRunFrameRef) -> Option<ConversationRunFrame>;
     fn contains(&self, frame_ref: &ConversationRunFrameRef) -> bool {
-        self.get(frame_ref).is_some()
+        self.get(frame_ref)
+            .map(|frame| frame.frame_ref() == frame_ref)
+            .unwrap_or(false)
     }
 }
 
@@ -566,16 +675,165 @@ impl ConversationFrameRepository for InMemoryConversationFrameRepository {
     }
 
     fn get(&self, frame_ref: &ConversationRunFrameRef) -> Option<ConversationRunFrame> {
-        self.inner
+        let frame = self
+            .inner
             .lock()
             .expect("conversation frame repository poisoned")
             .get(frame_ref.frame_id())
-            .cloned()
+            .cloned();
+        frame.filter(|frame| frame.frame_ref() == frame_ref)
     }
 }
 ```
 
-- [ ] **Step 7: Implement conversation service**
+- [ ] **Step 7: Implement branch reader and frame projector**
+
+Create `local-ios-agent/rust-core/src/conversation/branch_reader.rs`:
+
+```rust
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use crate::core::{EntryId, RuntimeEvent, SessionId};
+
+pub trait BranchEventReader: Clone + Send + Sync + 'static {
+    fn active_branch(
+        &self,
+        session_id: &SessionId,
+        branch_head_id: &EntryId,
+    ) -> Vec<RuntimeEvent>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct InMemoryBranchEventReader {
+    branches: Arc<Mutex<BTreeMap<(SessionId, EntryId), Vec<RuntimeEvent>>>>,
+}
+
+impl InMemoryBranchEventReader {
+    pub fn with_branch(
+        self,
+        session_id: SessionId,
+        branch_head_id: EntryId,
+        events: Vec<RuntimeEvent>,
+    ) -> Self {
+        self.branches
+            .lock()
+            .expect("branch reader poisoned")
+            .insert((session_id, branch_head_id), events);
+        self
+    }
+}
+
+impl BranchEventReader for InMemoryBranchEventReader {
+    fn active_branch(
+        &self,
+        session_id: &SessionId,
+        branch_head_id: &EntryId,
+    ) -> Vec<RuntimeEvent> {
+        self.branches
+            .lock()
+            .expect("branch reader poisoned")
+            .get(&(session_id.clone(), branch_head_id.clone()))
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+```
+
+Create `local-ios-agent/rust-core/src/conversation/runtime_branch_reader.rs`:
+
+```rust
+use std::sync::{Arc, Mutex};
+
+use crate::conversation::BranchEventReader;
+use crate::core::{AgentRuntime, EntryId, RuntimeEvent, SessionId};
+use crate::memory::EventStore;
+
+#[derive(Clone)]
+pub struct RuntimeBranchEventReader<S: EventStore> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
+}
+
+impl<S: EventStore> RuntimeBranchEventReader<S> {
+    pub fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl<S> BranchEventReader for RuntimeBranchEventReader<S>
+where
+    S: EventStore + Send + 'static,
+{
+    fn active_branch(
+        &self,
+        session_id: &SessionId,
+        branch_head_id: &EntryId,
+    ) -> Vec<RuntimeEvent> {
+        self.runtime
+            .lock()
+            .expect("runtime branch reader poisoned")
+            .active_branch_events(session_id, branch_head_id)
+            .expect("failed to load active conversation branch")
+    }
+}
+```
+
+`RuntimeBranchEventReader` must reuse the existing session-tree `active_branch(session_id, branch_head_id)` behavior through a narrow `AgentRuntime::active_branch_events` read-only accessor. It must return raw events along the selected branch, in chronological order, including edit/fork lineage as represented by the session tree. It must not emit `PromptMessage` or apply context-budget/model-input policy.
+
+Modify `local-ios-agent/rust-core/src/core/runtime.rs`:
+
+```rust
+impl<S: EventStore> AgentRuntime<S> {
+    pub fn active_branch_events(
+        &self,
+        session_id: &SessionId,
+        branch_head_id: &EntryId,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        self.store.active_branch(session_id, branch_head_id)
+    }
+}
+```
+
+Create `local-ios-agent/rust-core/src/conversation/projection.rs`:
+
+```rust
+use crate::conversation::ConversationFrameMessage;
+use crate::core::{EventKind, RuntimeEvent};
+
+#[derive(Clone, Debug, Default)]
+pub struct ConversationFrameProjector;
+
+impl ConversationFrameProjector {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<ConversationFrameMessage> {
+        let mut messages = Vec::new();
+        for event in branch {
+            match event.kind {
+                EventKind::UserMessage => {
+                    messages.push(
+                        ConversationFrameMessage::user(event.id, event.payload)
+                            .with_blob_refs(event.blob_refs),
+                    );
+                }
+                EventKind::AssistantMessageCompleted => {
+                    messages.push(ConversationFrameMessage::assistant(event.id, event.payload));
+                }
+                EventKind::BranchSummaryCreated => {
+                    messages.clear();
+                    messages.push(ConversationFrameMessage::summary(event.id, event.payload));
+                }
+                _ => {}
+            }
+        }
+        messages
+    }
+}
+```
+
+- [ ] **Step 8: Implement conversation service**
 
 Create `local-ios-agent/rust-core/src/conversation/service.rs`:
 
@@ -585,14 +843,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::conversation::{
-    AttachmentRef, ConversationFrameId, ConversationFrameMessage, ConversationFrameRepository,
-    ConversationLineage, ConversationRunFrame, ConversationRunFrameRef,
+    AttachmentRef, BranchEventReader, ConversationFrameId, ConversationFrameMessage,
+    ConversationFrameProjector, ConversationFrameRepository, ConversationLineage,
+    ConversationRunFrame, ConversationRunFrameRef,
 };
 use crate::core::{EntryId, SessionId};
 
 #[derive(Clone)]
-pub struct ConversationService<R: ConversationFrameRepository> {
+pub struct ConversationService<R: ConversationFrameRepository, B: BranchEventReader> {
     frames: R,
+    branch_reader: B,
+    projector: ConversationFrameProjector,
     next_user_turn: Arc<AtomicU64>,
     next_frame: Arc<AtomicU64>,
 }
@@ -601,6 +862,8 @@ pub struct ConversationService<R: ConversationFrameRepository> {
 pub struct PrepareUserTurnRequest {
     session_id: Option<SessionId>,
     parent_event_id: Option<EntryId>,
+    fork_origin_id: Option<EntryId>,
+    edit_origin_id: Option<EntryId>,
     text: String,
     blob_refs: Vec<String>,
 }
@@ -618,10 +881,12 @@ pub struct ConversationServiceError {
     message: String,
 }
 
-impl<R: ConversationFrameRepository> ConversationService<R> {
-    pub fn new(frames: R) -> Self {
+impl<R: ConversationFrameRepository, B: BranchEventReader> ConversationService<R, B> {
+    pub fn new(frames: R, branch_reader: B) -> Self {
         Self {
             frames,
+            branch_reader,
+            projector: ConversationFrameProjector::new(),
             next_user_turn: Arc::new(AtomicU64::new(1)),
             next_frame: Arc::new(AtomicU64::new(1)),
         }
@@ -647,19 +912,34 @@ impl<R: ConversationFrameRepository> ConversationService<R> {
             .parent_event_id
             .clone()
             .unwrap_or_else(|| user_turn_id.clone());
+        let mut messages = if request.parent_event_id.is_some() {
+            self.projector.project(
+                self.branch_reader
+                    .active_branch(&session_id, &branch_head_id),
+            )
+        } else {
+            Vec::new()
+        };
+        messages.push(
+            ConversationFrameMessage::user(user_turn_id.clone(), request.text)
+                .with_blob_refs(request.blob_refs),
+        );
         let frame_ref = ConversationRunFrameRef::new(
             frame_id,
             session_id.clone(),
-            branch_head_id,
+            branch_head_id.clone(),
             user_turn_id.clone(),
         );
         let frame = ConversationRunFrame::new(
             frame_ref.clone(),
             request.parent_event_id.clone(),
-            vec![ConversationFrameMessage::user(user_turn_id.clone(), request.text)
-                .with_blob_refs(request.blob_refs)],
+            messages,
             Vec::<AttachmentRef>::new(),
-            ConversationLineage::root(),
+            ConversationLineage::new(
+                branch_head_id.clone(),
+                request.fork_origin_id.clone(),
+                request.edit_origin_id.clone(),
+            ),
         );
         self.frames.put(frame);
         Ok(PreparedUserTurn {
@@ -680,9 +960,21 @@ impl PrepareUserTurnRequest {
         Self {
             session_id,
             parent_event_id,
+            fork_origin_id: None,
+            edit_origin_id: None,
             text: text.into(),
             blob_refs,
         }
+    }
+
+    pub fn with_fork_origin(mut self, fork_origin_id: EntryId) -> Self {
+        self.fork_origin_id = Some(fork_origin_id);
+        self
+    }
+
+    pub fn with_edit_origin(mut self, edit_origin_id: EntryId) -> Self {
+        self.edit_origin_id = Some(edit_origin_id);
+        self
     }
 }
 
@@ -722,25 +1014,30 @@ impl fmt::Display for ConversationServiceError {
 impl std::error::Error for ConversationServiceError {}
 ```
 
-- [ ] **Step 8: Run trusted conversation tests**
+- [ ] **Step 9: Run trusted conversation tests**
 
 Run:
 
 ```bash
 cd local-ios-agent/rust-core
 cargo test --test contract conversation_service_prepares_and_persists_trusted_frame_ref -- --exact
+cargo test --test contract frame_repository_rejects_tampered_ref_with_real_frame_id -- --exact
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add local-ios-agent/rust-core/src/lib.rs \
   local-ios-agent/rust-core/src/conversation/mod.rs \
   local-ios-agent/rust-core/src/conversation/frame.rs \
   local-ios-agent/rust-core/src/conversation/frame_repository.rs \
+  local-ios-agent/rust-core/src/conversation/branch_reader.rs \
+  local-ios-agent/rust-core/src/conversation/runtime_branch_reader.rs \
+  local-ios-agent/rust-core/src/conversation/projection.rs \
   local-ios-agent/rust-core/src/conversation/service.rs \
+  local-ios-agent/rust-core/src/core/runtime.rs \
   local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs
 git commit -m "feat: add trusted conversation frame preparation"
 ```
@@ -935,7 +1232,7 @@ git commit -m "feat: pin conversation frame ref in snapshots"
 
 ---
 
-### Task 4: Add Focused Execution Services And Event Replay
+### Task 4: Add Focused Execution Services And Replay-Live Event Stream
 
 **Files:**
 - Create: `local-ios-agent/rust-core/src/execution/event_log.rs`
@@ -954,6 +1251,8 @@ git commit -m "feat: pin conversation frame ref in snapshots"
 
 **Interfaces:**
 - Produces: `ExecutionEventLog::append`, `ExecutionEventLog::replay`
+- Produces: `ExecutionEventLog::subscribe(run_id, from_sequence)` for replay plus live tail
+- Produces: `ExecutionEventStream`
 - Produces: `RunLifecycleService::start_run`
 - Produces: `CompletedRunRegistry`
 - Produces: `ConversationCommitService::commit_assistant_result`
@@ -986,6 +1285,24 @@ fn execution_events_replay_from_durable_sequence() {
     );
 }
 
+#[test]
+fn execution_events_replay_then_tail_live_events() {
+    let event_log = ExecutionEventLog::default();
+    event_log.append("run_1", "run.started");
+
+    let mut stream = event_log.subscribe("run_1", Some(0));
+
+    assert_eq!(
+        stream.replay().iter().map(|event| event.code()).collect::<Vec<_>>(),
+        vec!["run.started"]
+    );
+
+    event_log.append("run_1", "assistant.delta");
+    let live = stream.next_live().unwrap();
+
+    assert_eq!(live.code(), "assistant.delta");
+}
+
 use local_ios_agent_runtime::conversation::ConversationCommitService;
 
 #[test]
@@ -1000,11 +1317,40 @@ fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
     );
     completed_runs.record_completed("run_1", "final_1", frame_ref.clone());
 
-    let first = service.commit_assistant_result("run_1", "final_1").unwrap();
-    let second = service.commit_assistant_result("run_1", "final_1").unwrap();
+    let first = service
+        .commit_assistant_result("run_1", "final_1", &frame_ref)
+        .unwrap();
+    let second = service
+        .commit_assistant_result("run_1", "final_1", &frame_ref)
+        .unwrap();
 
     assert_eq!(first.assistant_message_id(), second.assistant_message_id());
     assert_eq!(service.commit_count(), 1);
+}
+
+#[test]
+fn conversation_assistant_commit_rejects_mismatched_frame_ref() {
+    let completed_runs = CompletedRunRegistry::default();
+    let service = ConversationCommitService::new(completed_runs.clone());
+    let completed_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    let tampered_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("other_session".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    completed_runs.record_completed("run_1", "final_1", completed_ref);
+
+    let error = service
+        .commit_assistant_result("run_1", "final_1", &tampered_ref)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "conversation_commit.frame_ref_mismatch");
 }
 
 #[test]
@@ -1061,6 +1407,7 @@ Run:
 ```bash
 cd local-ios-agent/rust-core
 cargo test --test contract execution_events_replay_from_durable_sequence -- --exact
+cargo test --test contract execution_events_replay_then_tail_live_events -- --exact
 cargo test --test lint execution_service_stays_thin_facade -- --exact
 ```
 
@@ -1072,21 +1419,30 @@ Create `local-ios-agent/rust-core/src/execution/event_log.rs`:
 
 ```rust
 use std::collections::BTreeMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryExecutionEventRepository {
     inner: Arc<Mutex<BTreeMap<String, Vec<ExecutionEvent>>>>,
+    subscribers: Arc<Mutex<BTreeMap<String, Vec<Sender<ExecutionEvent>>>>>,
 }
 
 pub trait ExecutionEventRepository: Clone + Send + Sync + 'static {
     fn append(&self, run_id: String, code: String) -> ExecutionEvent;
     fn replay_after(&self, run_id: &str, from_sequence: u64) -> Vec<ExecutionEvent>;
+    fn subscribe_live(&self, run_id: &str) -> Receiver<ExecutionEvent>;
 }
 
 #[derive(Clone, Debug)]
 pub struct ExecutionEventLog<R: ExecutionEventRepository = InMemoryExecutionEventRepository> {
     repository: R,
+}
+
+#[derive(Debug)]
+pub struct ExecutionEventStream {
+    replay: Vec<ExecutionEvent>,
+    live: Receiver<ExecutionEvent>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1114,22 +1470,37 @@ impl<R: ExecutionEventRepository> ExecutionEventLog<R> {
     pub fn replay(&self, run_id: &str, from_sequence: Option<u64>) -> Vec<ExecutionEvent> {
         self.repository.replay_after(run_id, from_sequence.unwrap_or(0))
     }
+
+    pub fn subscribe(&self, run_id: &str, from_sequence: Option<u64>) -> ExecutionEventStream {
+        let live = self.repository.subscribe_live(run_id);
+        let replay = self.replay(run_id, from_sequence);
+        ExecutionEventStream::new(replay, live)
+    }
 }
 
 impl ExecutionEventRepository for InMemoryExecutionEventRepository {
     fn append(&self, run_id: String, code: String) -> ExecutionEvent {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("execution event repository poisoned");
-        let events = inner.entry(run_id.clone()).or_default();
-        let sequence = events.last().map(|event| event.sequence + 1).unwrap_or(1);
-        let event = ExecutionEvent {
-            run_id,
-            sequence,
-            code,
+        let event = {
+            let mut inner = self
+                .inner
+                .lock()
+                .expect("execution event repository poisoned");
+            let events = inner.entry(run_id.clone()).or_default();
+            let sequence = events.last().map(|event| event.sequence + 1).unwrap_or(1);
+            let event = ExecutionEvent {
+                run_id: run_id.clone(),
+                sequence,
+                code,
+            };
+            events.push(event.clone());
+            event
         };
-        events.push(event.clone());
+        self.subscribers
+            .lock()
+            .expect("execution event subscriber registry poisoned")
+            .entry(run_id)
+            .or_default()
+            .retain(|sender| sender.send(event.clone()).is_ok());
         event
     }
 
@@ -1143,6 +1514,31 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
             .into_iter()
             .filter(|event| event.sequence > from_sequence)
             .collect()
+    }
+
+    fn subscribe_live(&self, run_id: &str) -> Receiver<ExecutionEvent> {
+        let (sender, receiver) = mpsc::channel();
+        self.subscribers
+            .lock()
+            .expect("execution event subscriber registry poisoned")
+            .entry(run_id.to_string())
+            .or_default()
+            .push(sender);
+        receiver
+    }
+}
+
+impl ExecutionEventStream {
+    fn new(replay: Vec<ExecutionEvent>, live: Receiver<ExecutionEvent>) -> Self {
+        Self { replay, live }
+    }
+
+    pub fn replay(&self) -> &[ExecutionEvent] {
+        &self.replay
+    }
+
+    pub fn next_live(&mut self) -> Option<ExecutionEvent> {
+        self.live.recv().ok()
     }
 }
 
@@ -1161,7 +1557,7 @@ impl ExecutionEvent {
 }
 ```
 
-`InMemoryExecutionEventRepository` is a contract adapter for tests and first-stage in-memory runtime. The production bridge path must provide a repository backed by the existing durable event store before `observe_events_json` becomes the default app path.
+`InMemoryExecutionEventRepository` is a contract adapter for tests and first-stage in-memory runtime. The production bridge path must provide a repository backed by the existing durable event store before `observe_events_stream_json` becomes the default app path. The ordering rule is subscribe-live first, then replay from the durable store, so events appended during subscription setup are still delivered exactly once by sequence de-duplication at the bridge layer.
 
 Create `local-ios-agent/rust-core/src/execution/run_lifecycle.rs`:
 
@@ -1322,10 +1718,17 @@ impl ConversationCommitService {
         &self,
         run_id: &str,
         final_message_id: &str,
+        expected_frame_ref: &ConversationRunFrameRef,
     ) -> Result<AssistantCommitRecord, ConversationCommitError> {
         let key = idempotency_key(run_id, final_message_id);
         let mut commits = self.commits.lock().expect("conversation commit state poisoned");
         if let Some(existing) = commits.get(&key) {
+            if existing.conversation_run_frame_ref() != expected_frame_ref {
+                return Err(ConversationCommitError::new(
+                    "conversation_commit.frame_ref_mismatch",
+                    format!("commit frame ref did not match existing commit for {key}"),
+                ));
+            }
             let mut record = existing.clone();
             record.already_committed = true;
             return Ok(record);
@@ -1336,6 +1739,12 @@ impl ConversationCommitService {
                 format!("completed run not found for {key}"),
             )
         })?;
+        if completed.conversation_run_frame_ref() != expected_frame_ref {
+            return Err(ConversationCommitError::new(
+                "conversation_commit.frame_ref_mismatch",
+                format!("completed run frame ref did not match commit request for {key}"),
+            ));
+        }
         let record = AssistantCommitRecord {
             assistant_message_id: format!("assistant.{run_id}.{final_message_id}"),
             already_committed: false,
@@ -1392,15 +1801,86 @@ impl std::error::Error for ConversationCommitError {}
 Create `tool_loop.rs`, `tool_approval.rs`, `debug_store.rs`, and `inference_settings.rs`:
 
 ```rust
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use crate::conversation::{ConversationRunFrame, ConversationRunFrameRef};
+use crate::execution::{CompletedRunRegistry, ExecutionEventLog, ExecutionPlan};
+
 #[derive(Clone, Debug, Default)]
-pub struct ToolLoopService;
+pub struct ToolLoopService {
+    pending: Arc<Mutex<BTreeMap<String, ToolLoopStartRequest>>>,
+}
+
+#[derive(Debug)]
+pub struct ToolLoopStartRequest {
+    run_id: String,
+    frame: ConversationRunFrame,
+    plan: ExecutionPlan,
+    event_log: ExecutionEventLog,
+    completed_runs: CompletedRunRegistry,
+    conversation_run_frame_ref: ConversationRunFrameRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolLoopStartError {
+    code: String,
+    message: String,
+}
 
 impl ToolLoopService {
+    pub fn start(&self, request: ToolLoopStartRequest) -> Result<(), ToolLoopStartError> {
+        self.pending
+            .lock()
+            .expect("tool loop pending registry poisoned")
+            .insert(request.run_id.clone(), request);
+        Ok(())
+    }
+
     pub fn pending_count(&self) -> usize {
-        0
+        self.pending
+            .lock()
+            .expect("tool loop pending registry poisoned")
+            .len()
     }
 }
+
+impl ToolLoopStartRequest {
+    pub fn new(
+        run_id: String,
+        frame: ConversationRunFrame,
+        plan: ExecutionPlan,
+        event_log: ExecutionEventLog,
+        completed_runs: CompletedRunRegistry,
+        conversation_run_frame_ref: ConversationRunFrameRef,
+    ) -> Self {
+        Self {
+            run_id,
+            frame,
+            plan,
+            event_log,
+            completed_runs,
+            conversation_run_frame_ref,
+        }
+    }
+}
+
+impl ToolLoopStartError {
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+}
+
+impl fmt::Display for ToolLoopStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ToolLoopStartError {}
 ```
+
+`ToolLoopService::start` is the handoff point to the execution worker. In the first implementation it may keep an in-process pending queue for contract tests, but it must be the component that appends tool-call, tool-result, final-response, and `run.completed` events and records `CompletedRunRegistry` when the model returns a final assistant response. `ExecutionService::start_run` must not call `RunMachine::run_to_completion` on the bridge thread.
 
 ```rust
 #[derive(Clone, Debug, Default)]
@@ -1546,14 +2026,14 @@ mod tool_loop;
 pub use completed_run_registry::{idempotency_key, CompletedRunRecord, CompletedRunRegistry};
 pub use debug_store::RunDebugStore;
 pub use event_log::{
-    ExecutionEvent, ExecutionEventLog, ExecutionEventRepository,
+    ExecutionEvent, ExecutionEventLog, ExecutionEventRepository, ExecutionEventStream,
     InMemoryExecutionEventRepository,
 };
 pub use execution_service::{ExecutionService, ExecutionServiceParts};
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use run_lifecycle::{RunHandle, RunLifecycleService};
 pub use tool_approval::{ApprovalDecision, ToolApprovalService};
-pub use tool_loop::ToolLoopService;
+pub use tool_loop::{ToolLoopService, ToolLoopStartError, ToolLoopStartRequest};
 ```
 
 Keep existing exports in `execution/mod.rs`; add these exports without deleting `ExecutionPlan`, `ExecutionPlanner`, budgets, or trace exports.
@@ -1565,7 +2045,9 @@ Run:
 ```bash
 cd local-ios-agent/rust-core
 cargo test --test contract execution_events_replay_from_durable_sequence -- --exact
+cargo test --test contract execution_events_replay_then_tail_live_events -- --exact
 cargo test --test contract conversation_assistant_commit_is_idempotent_after_execution_completion -- --exact
+cargo test --test contract conversation_assistant_commit_rejects_mismatched_frame_ref -- --exact
 cargo test --test contract execution_service_is_thin_facade -- --exact
 cargo test --test lint execution_service_stays_thin_facade -- --exact
 ```
@@ -1621,7 +2103,7 @@ use local_ios_agent_runtime::execution::{
 use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
 
 #[test]
-fn execution_start_loads_frame_resolves_snapshot_and_runs_machine() {
+fn execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop() {
     let frames = InMemoryConversationFrameRepository::default();
     let frame_ref = ConversationRunFrameRef::new(
         ConversationFrameId::new("frame_exec_1"),
@@ -1634,7 +2116,7 @@ fn execution_start_loads_frame_resolves_snapshot_and_runs_machine() {
         None,
         vec![ConversationFrameMessage::user(EntryId("user_turn_1".into()), "hello")],
         Vec::new(),
-        ConversationLineage::root(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
     ));
     let event_log = ExecutionEventLog::default();
     let completed_runs = CompletedRunRegistry::default();
@@ -1658,7 +2140,7 @@ fn execution_start_loads_frame_resolves_snapshot_and_runs_machine() {
     let events = event_log.replay(handle.run_id(), handle.replay_from_sequence());
     assert_eq!(handle.run_id(), "run_1");
     assert!(events.iter().any(|event| event.code() == "run.started"));
-    assert!(events.iter().any(|event| event.code() == "run.completed"));
+    assert_eq!(service.tool_loop().pending_count(), 1);
 }
 
 #[test]
@@ -1683,6 +2165,43 @@ fn execution_start_rejects_unissued_frame_ref() {
 
     assert_eq!(error.code(), "execution.frame_ref_untrusted");
 }
+
+#[test]
+fn execution_start_rejects_tampered_frame_ref_with_real_frame_id() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let issued_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_exec_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        issued_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(EntryId("user_turn_1".into()), "hello")],
+        Vec::new(),
+        ConversationLineage::new(EntryId("branch_head_1".into()), None, None),
+    ));
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        ExecutionEventLog::default(),
+        CompletedRunRegistry::default(),
+    );
+    let tampered_ref = ConversationRunFrameRef::new(
+        issued_ref.frame_id().clone(),
+        SessionId("other_session".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+
+    let error = service
+        .start_run(StartExecutionRequest::new("run_1", "profile_1", "hello", tampered_ref))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "execution.frame_ref_untrusted");
+}
 ```
 
 - [ ] **Step 2: Update the earlier thin-facade test for runtime parts**
@@ -1702,7 +2221,7 @@ frames.put(ConversationRunFrame::new(
     None,
     vec![ConversationFrameMessage::user(EntryId("user_turn_1".into()), "hello")],
     Vec::new(),
-    ConversationLineage::root(),
+    ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
 ));
 let event_log = ExecutionEventLog::default();
 let service = ExecutionService::with_runtime_parts(
@@ -1728,7 +2247,7 @@ Keep the existing assertions:
 
 ```rust
 assert!(events.iter().any(|event| event.code() == "run.started"));
-assert_eq!(service.tool_loop().pending_count(), 0);
+assert_eq!(service.tool_loop().pending_count(), 1);
 ```
 
 - [ ] **Step 3: Add start request and error types**
@@ -1818,12 +2337,12 @@ Modify `local-ios-agent/rust-core/src/execution/execution_service.rs` so the app
 ```rust
 use crate::conversation::{ConversationFrameRepository, InMemoryConversationFrameRepository};
 use crate::execution::{
-    ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionPlanner,
-    ExecutionStartError, InferenceSettingsService, RuntimeOptions, RunDebugStore, RunHandle,
-    RunLifecycleService, StartExecutionRequest, ToolApprovalService, ToolLoopService,
+    ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog,
+    ExecutionEventStream, ExecutionPlanner, ExecutionStartError, InferenceSettingsService,
+    RuntimeOptions, RunDebugStore, RunHandle, RunLifecycleService, StartExecutionRequest,
+    ToolLoopService, ToolLoopStartRequest, ToolApprovalService,
 };
 use crate::run_snapshot::{RunSnapshotService, StartRunRequest};
-use crate::runtime::{RecordingEffectDriver, RunMachine};
 
 #[derive(Clone, Debug)]
 pub struct ExecutionService<R: ConversationFrameRepository = InMemoryConversationFrameRepository> {
@@ -1874,15 +2393,19 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
         &self,
         request: StartExecutionRequest,
     ) -> Result<RunHandle, ExecutionStartError> {
-        if !self.parts.frames.contains(request.conversation_run_frame_ref()) {
-            return Err(ExecutionStartError::new(
-                "execution.frame_ref_untrusted",
-                format!(
-                    "conversation frame ref was not issued by conversation service: {}",
-                    request.conversation_run_frame_ref().frame_id().as_str()
-                ),
-            ));
-        }
+        let frame = self
+            .parts
+            .frames
+            .get(request.conversation_run_frame_ref())
+            .ok_or_else(|| {
+                ExecutionStartError::new(
+                    "execution.frame_ref_untrusted",
+                    format!(
+                        "conversation frame ref was not issued by conversation service: {}",
+                        request.conversation_run_frame_ref().frame_id().as_str()
+                    ),
+                )
+            })?;
         let snapshot = self
             .parts
             .snapshot_service
@@ -1897,21 +2420,18 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             .planner
             .plan(snapshot)
             .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
-        let mut machine = RunMachine::from_plan_with_effect_driver_and_run_id(
-            plan,
-            RecordingEffectDriver::default(),
-            request.run_id().to_string(),
-        );
         self.parts.event_log.append(request.run_id(), "run.started");
-        machine
-            .run_to_completion()
+        self.parts
+            .tool_loop
+            .start(ToolLoopStartRequest::new(
+                request.run_id().to_string(),
+                frame,
+                plan,
+                self.parts.event_log.clone(),
+                self.parts.completed_runs.clone(),
+                request.conversation_run_frame_ref().clone(),
+            ))
             .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
-        self.parts.event_log.append(request.run_id(), "run.completed");
-        self.parts.completed_runs.record_completed(
-            request.run_id(),
-            "final_1",
-            request.conversation_run_frame_ref().clone(),
-        );
         Ok(RunHandle::new(request.run_id(), Some(0)))
     }
 
@@ -1921,6 +2441,14 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
         from_sequence: Option<u64>,
     ) -> Vec<ExecutionEvent> {
         self.parts.event_log.replay(run_id, from_sequence)
+    }
+
+    pub fn observe_event_stream(
+        &self,
+        run_id: &str,
+        from_sequence: Option<u64>,
+    ) -> ExecutionEventStream {
+        self.parts.event_log.subscribe(run_id, from_sequence)
     }
 
     pub fn tool_loop(&self) -> &ToolLoopService {
@@ -1966,8 +2494,9 @@ Run:
 
 ```bash
 cd local-ios-agent/rust-core
-cargo test --test contract execution_start_loads_frame_resolves_snapshot_and_runs_machine -- --exact
+cargo test --test contract execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop -- --exact
 cargo test --test contract execution_start_rejects_unissued_frame_ref -- --exact
+cargo test --test contract execution_start_rejects_tampered_frame_ref_with_real_frame_id -- --exact
 cargo test --test integration runtime_execution_lifecycle -- --nocapture
 ```
 
@@ -1986,19 +2515,19 @@ git commit -m "feat: connect execution start to snapshot runtime path"
 
 ---
 
-### Task 6: Add ConversationFrameProjector And Legacy Marker
+### Task 6: Add Projector Regression And Legacy Marker
 
 **Files:**
-- Create: `local-ios-agent/rust-core/src/conversation/projection.rs`
-- Modify: `local-ios-agent/rust-core/src/conversation/mod.rs`
 - Modify: `local-ios-agent/rust-core/src/core/runtime.rs`
 - Modify: `local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs`
+- Modify: `local-ios-agent/rust-core/tests/lint/architecture_agent_os.rs`
 
 **Interfaces:**
-- Produces: `ConversationFrameProjector::project(branch: Vec<RuntimeEvent>) -> Vec<ConversationFrameMessage>`
+- Verifies: `ConversationFrameProjector::project(branch: Vec<RuntimeEvent>) -> Vec<ConversationFrameMessage>`
+- Verifies: `conversation/projection.rs` stays free of `PromptMessage`, `ContextAssembler`, and model-input concepts
 - Produces: `LEGACY_COMPATIBILITY_STREAMING_PATH` marker in `core/runtime.rs`
 
-- [ ] **Step 1: Add failing projector test**
+- [ ] **Step 1: Add projector regression test**
 
 Append to `local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs`:
 
@@ -2038,56 +2567,31 @@ fn conversation_frame_projector_outputs_visible_messages() {
 }
 ```
 
-- [ ] **Step 2: Implement projector**
+- [ ] **Step 2: Add projection boundary lint**
 
-Create `local-ios-agent/rust-core/src/conversation/projection.rs`:
+Add to `local-ios-agent/rust-core/tests/lint/architecture_agent_os.rs`:
 
 ```rust
-use crate::conversation::ConversationFrameMessage;
-use crate::core::{EventKind, RuntimeEvent};
+#[test]
+fn conversation_projection_does_not_emit_prompt_messages() {
+    let source = include_str!("../../src/conversation/projection.rs");
 
-#[derive(Clone, Debug, Default)]
-pub struct ConversationFrameProjector;
-
-impl ConversationFrameProjector {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<ConversationFrameMessage> {
-        let mut messages = Vec::new();
-        for event in branch {
-            match event.kind {
-                EventKind::UserMessage => {
-                    messages.push(
-                        ConversationFrameMessage::user(event.id, event.payload)
-                            .with_blob_refs(event.blob_refs),
-                    );
-                }
-                EventKind::AssistantMessageCompleted => {
-                    messages.push(ConversationFrameMessage::assistant(event.id, event.payload));
-                }
-                EventKind::BranchSummaryCreated => {
-                    messages.clear();
-                    messages.push(ConversationFrameMessage::summary(event.id, event.payload));
-                }
-                _ => {}
-            }
-        }
-        messages
+    for forbidden in [
+        "PromptMessage",
+        "ContextAssembler",
+        "ToolResult",
+        "ModelInputMessages",
+        "InferenceRouter",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "conversation projection must output conversation frame messages, not execution model input"
+        );
     }
 }
 ```
 
-Modify `local-ios-agent/rust-core/src/conversation/mod.rs`:
-
-```rust
-mod projection;
-
-pub use projection::ConversationFrameProjector;
-```
-
-Do not add a `PromptMessage` adapter in `conversation/`.
+Do not create a second projector in this task. `ConversationFrameProjector` was introduced with the conversation frame path in Task 2; this task only protects the boundary and labels the old mixed runtime path.
 
 - [ ] **Step 3: Mark legacy path**
 
@@ -2111,6 +2615,7 @@ Run:
 ```bash
 cd local-ios-agent/rust-core
 cargo test --test contract conversation_frame_projector_outputs_visible_messages -- --exact
+cargo test --test lint conversation_projection_does_not_emit_prompt_messages -- --exact
 cargo test --test lint legacy_streaming_path_is_marked_as_compatibility -- --exact
 ```
 
@@ -2119,11 +2624,10 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add local-ios-agent/rust-core/src/conversation/mod.rs \
-  local-ios-agent/rust-core/src/conversation/projection.rs \
-  local-ios-agent/rust-core/src/core/runtime.rs \
-  local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs
-git commit -m "feat: add conversation frame projector"
+git add local-ios-agent/rust-core/src/core/runtime.rs \
+  local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs \
+  local-ios-agent/rust-core/tests/lint/architecture_agent_os.rs
+git commit -m "test: protect conversation projector boundary"
 ```
 
 ---
@@ -2138,7 +2642,8 @@ git commit -m "feat: add conversation frame projector"
 **Interfaces:**
 - Produces: `prepare_user_turn_json`
 - Produces: `start_run_json` consuming JSON `conversation_run_frame_ref`
-- Produces: `observe_events_json`
+- Produces: `observe_events_stream_json`
+- May keep: `observe_events_json` as a debug/smoke-test snapshot adapter only
 - Produces: `commit_assistant_result_json`
 - Produces: `RunHandleJson { run_id, replay_from_sequence }`
 
@@ -2171,15 +2676,19 @@ let handle: serde_json::Value = serde_json::from_str(&handle_json).unwrap();
 assert_eq!(handle["run_id"], "run_1");
 assert_eq!(handle["replay_from_sequence"], 0);
 
-let replay_json = bridge.observe_events_json(
+let mut observed = Vec::new();
+bridge.observe_events_stream_json(
     &serde_json::json!({
         "run_id": "run_1",
         "from_sequence": 0
     })
     .to_string(),
+    |event_json| {
+        observed.push(serde_json::from_str::<serde_json::Value>(&event_json).unwrap());
+        Ok(())
+    },
 )?;
-let replayed: serde_json::Value = serde_json::from_str(&replay_json).unwrap();
-assert!(replayed.as_array().unwrap().iter().any(|event| {
+assert!(observed.iter().any(|event| {
     event["kind"] == "execution.event" && event["payload"] == "run.started"
 }));
 
@@ -2193,6 +2702,20 @@ let commit_json = bridge.commit_assistant_result_json(
 )?;
 let commit: serde_json::Value = serde_json::from_str(&commit_json).unwrap();
 assert_eq!(commit["committed_message_id"], "assistant.run_1.final_1");
+
+let mut tampered_ref = prepared["conversation_run_frame_ref"].clone();
+tampered_ref["session_id"] = serde_json::Value::String("other_session".to_string());
+let commit_error = bridge
+    .commit_assistant_result_json(
+        &serde_json::json!({
+            "run_id": "run_1",
+            "final_message_id": "final_1",
+            "conversation_run_frame_ref": tampered_ref
+        })
+        .to_string(),
+    )
+    .unwrap_err();
+assert_eq!(commit_error.code(), "conversation_commit.frame_ref_mismatch");
 ```
 
 - [ ] **Step 2: Add FFI JSON structs**
@@ -2328,8 +2851,11 @@ struct RunHandleJson {
 Add imports:
 
 ```rust
+use std::sync::Arc;
+
 use crate::conversation::{
     ConversationCommitService, ConversationFrameId, ConversationRunFrameRef,
+    RuntimeBranchEventReader,
     ConversationService, InMemoryConversationFrameRepository, PreparedUserTurn,
     PrepareUserTurnRequest,
 };
@@ -2344,13 +2870,13 @@ use crate::execution::{
 Extend `BridgeRuntime` with shared conversation and execution services:
 
 ```rust
-struct BridgeRuntime<S: EventStore> {
-    runtime: Mutex<AgentRuntime<S>>,
+struct BridgeRuntime<S: EventStore + Send + 'static> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
     cancellations: ProviderCancellationRegistry,
     app_services: AgentOSApplicationService,
     debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
     next_agent_os_run_id: Mutex<u64>,
-    conversation: ConversationService<InMemoryConversationFrameRepository>,
+    conversation: ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
     execution: ExecutionService<InMemoryConversationFrameRepository>,
     conversation_commits: ConversationCommitService,
 }
@@ -2360,6 +2886,9 @@ Create these services in `BridgeRuntime::new` from the same frame repository and
 
 ```rust
 let frames = InMemoryConversationFrameRepository::default();
+let cancellations = runtime.provider_cancellation_registry();
+let runtime = Arc::new(Mutex::new(runtime));
+let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
 let event_log = ExecutionEventLog::default();
 let completed_runs = CompletedRunRegistry::default();
 let execution = ExecutionService::with_runtime_parts(
@@ -2369,34 +2898,39 @@ let execution = ExecutionService::with_runtime_parts(
     event_log,
     completed_runs.clone(),
 );
-let conversation = ConversationService::new(frames);
+let conversation = ConversationService::new(frames, branch_reader);
 let conversation_commits = ConversationCommitService::new(completed_runs);
 ```
 
-Add private accessors on `RuntimeJsonBridge` so the JSON methods can share the same implementation for in-memory and SQLite runtimes:
+Update `BridgeRuntime::lock` to lock the shared runtime:
 
 ```rust
-fn conversation(&self) -> &ConversationService<InMemoryConversationFrameRepository> {
-    match self {
-        Self::InMemory(runtime) => &runtime.conversation,
-        Self::Sqlite(runtime) => &runtime.conversation,
-    }
+fn lock(&self) -> Result<MutexGuard<'_, AgentRuntime<S>>, AgentError> {
+    self.runtime
+        .lock()
+        .map_err(|_| AgentError::Ffi("runtime bridge mutex poisoned".into()))
+}
+```
+
+Add private accessors on `BridgeRuntime<S>` so each enum variant shares the same implementation body:
+
+```rust
+fn conversation(
+    &self,
+) -> &ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>> {
+    &self.conversation
 }
 
 fn execution(&self) -> &ExecutionService<InMemoryConversationFrameRepository> {
-    match self {
-        Self::InMemory(runtime) => &runtime.execution,
-        Self::Sqlite(runtime) => &runtime.execution,
-    }
+    &self.execution
 }
 
 fn conversation_commits(&self) -> &ConversationCommitService {
-    match self {
-        Self::InMemory(runtime) => &runtime.conversation_commits,
-        Self::Sqlite(runtime) => &runtime.conversation_commits,
-    }
+    &self.conversation_commits
 }
 ```
+
+`RuntimeJsonBridge` should keep matching on `Self::InMemory(runtime)` and `Self::Sqlite(runtime)` at the outer JSON entrypoint layer, then call the same `BridgeRuntime<S>` method body for each variant. Do not create separate in-memory and SQLite conversation/execution services with divergent behavior.
 
 Expose `AgentOSApplicationService::snapshot_service(&self) -> &RunSnapshotService`. Do not create a second fixture snapshot service inside the bridge.
 
@@ -2457,19 +2991,61 @@ pub fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
     to_json(&RunHandleJson::from(handle))
 }
 
+pub fn observe_events_stream_json<F>(
+    &self,
+    request_json: &str,
+    mut emit: F,
+) -> Result<(), AgentError>
+where
+    F: FnMut(String) -> Result<(), AgentError>,
+{
+    let request: ObserveExecutionEventsRequestJson = from_json(request_json)?;
+    let mut stream = self
+        .execution()
+        .observe_event_stream(&request.run_id, Some(request.from_sequence));
+    let mut last_sequence = request.from_sequence;
+
+    for event in stream.replay() {
+        if event.sequence() <= last_sequence {
+            continue;
+        }
+        last_sequence = event.sequence();
+        emit(to_json(&RuntimeEventJson::from_execution_event(event))?)?;
+    }
+
+    while let Some(event) = stream.next_live() {
+        if event.sequence() <= last_sequence {
+            continue;
+        }
+        let terminal = matches!(
+            event.code(),
+            "run.completed" | "run.failed" | "run.cancelled"
+        );
+        last_sequence = event.sequence();
+        emit(to_json(&RuntimeEventJson::from_execution_event(&event))?)?;
+        if terminal {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn observe_events_json(&self, request_json: &str) -> Result<String, AgentError> {
+    // Debug/smoke-test adapter only. Swift MVVM must call observe_events_stream_json.
     let request: ObserveExecutionEventsRequestJson = from_json(request_json)?;
     let events = self
         .execution()
         .observe_events(&request.run_id, Some(request.from_sequence));
-    to_json(&events.into_iter().map(RuntimeEventJson::from_execution_event).collect::<Vec<_>>())
+    to_json(&events.iter().map(RuntimeEventJson::from_execution_event).collect::<Vec<_>>())
 }
 
 pub fn commit_assistant_result_json(&self, request_json: &str) -> Result<String, AgentError> {
     let request: CommitAssistantResultRequestJson = from_json(request_json)?;
+    let frame_ref = request.conversation_run_frame_ref.into_domain();
     let record = self
         .conversation_commits()
-        .commit_assistant_result(&request.run_id, &request.final_message_id)?;
+        .commit_assistant_result(&request.run_id, &request.final_message_id, &frame_ref)?;
     to_json(&ConversationCommitResultJson {
         committed_message_id: record.assistant_message_id().to_string(),
         already_committed: record.already_committed(),
@@ -2483,6 +3059,7 @@ pub fn approve_tool_json(&self, request_json: &str) -> Result<String, AgentError
 }
 
 pub fn cancel_run_json(&self, request_json: &str) -> Result<String, AgentError> {
+    // Legacy compatibility during Phase 1. Replace with RunCancellationService.
     let request: CancelRunRequestJson = from_json(request_json)?;
     let event = self.lock()?.cancel(RunId(request.run_id))?;
     to_json(&RuntimeEventJson::from_event(&event))
@@ -2534,7 +3111,7 @@ impl From<PreparedUserTurn> for PreparedUserTurnJson {
 }
 
 impl RuntimeEventJson {
-    fn from_execution_event(event: ExecutionEvent) -> Self {
+    fn from_execution_event(event: &ExecutionEvent) -> Self {
         RuntimeEventJson {
             id: format!("{}.{}", event.run_id(), event.sequence()),
             session_id: String::new(),
@@ -2585,14 +3162,14 @@ Keep the existing `local_agent_runtime_bridge_start_run` exported symbol as the 
 local_agent_runtime_bridge_list_agent_profiles
 local_agent_runtime_bridge_build_agent
 local_agent_runtime_bridge_prepare_user_turn
-local_agent_runtime_bridge_observe_events
+local_agent_runtime_bridge_observe_events_streaming
 local_agent_runtime_bridge_commit_assistant_result
 local_agent_runtime_bridge_approve_tool
 local_agent_runtime_bridge_cancel_run
 local_agent_runtime_bridge_update_runtime_options
 ```
 
-Each symbol must call the matching `*_json` method in the ABI mapping table. Do not add a `start_execution_run` symbol.
+Each symbol must call the matching `*_json` method in the ABI mapping table. `local_agent_runtime_bridge_observe_events_streaming` must call `observe_events_stream_json` and deliver every emitted JSON event through the callback. Do not add a `start_execution_run` symbol. If `local_agent_runtime_bridge_observe_events` remains for smoke tests, mark it as a snapshot/debug adapter and keep it out of the Swift operation enum.
 
 - [ ] **Step 6: Run FFI test**
 
@@ -2686,9 +3263,9 @@ Spec coverage:
 - Trusted frame issuance through Rust conversation service: Task 2.
 - Snapshot pinning: Task 3.
 - Thin execution services: Task 4.
-- Repository-backed replayable events: Task 4.
-- Execution start connected to frame repository, snapshot, planner, and RunMachine: Task 5.
-- Idempotent conversation-owned final commit with execution completed-run facts: Task 4.
+- Repository-backed replay plus live-tail events: Task 4.
+- Execution start connected to frame repository, snapshot, planner, and tool-loop scheduling: Task 5.
+- Idempotent conversation-owned final commit with completed-run frame-ref validation: Task 4.
 - FFI prepare/start/observe/commit ABI contract: Task 7.
 - Verification: Task 8.
 

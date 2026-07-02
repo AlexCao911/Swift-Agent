@@ -62,7 +62,7 @@ This table is shared with the Rust migration plan. Swift DTO coding keys and Rus
 | execution | `list_agent_profiles` | `list_agent_profiles_json` | `.listAgentProfiles` | `EmptyAgentOSRequestDTO` | none | `AgentProfileDTO[]` |
 | execution | `build_agent` | `build_agent_json` | `.buildAgent` | `BuildAgentRequestDTO` | `template_id` | `AgentProfileDTO` |
 | execution | `start_run` | `start_run_json` | `.startRun` | `StartExecutionRequestDTO` | `agent_profile_id`, `user_intent`, `conversation_run_frame_ref`, `options` | `RunHandleDTO` |
-| execution | `observe_events` | `observe_events_json` / stream callback | `.observeEvents` | `ObserveExecutionEventsRequestDTO` | `run_id`, `from_sequence` | `RuntimeEventDTO[]` replay, then live events |
+| execution | `observe_events` | `observe_events_stream_json` / stream callback | `.observeEvents` | `ObserveExecutionEventsRequestDTO` | `run_id`, `from_sequence` | `RuntimeEventDTO` stream: durable replay, then live tail |
 | conversation | `commit_assistant_result` | `commit_assistant_result_json` | `.commitAssistantResult` | `CommitAssistantResultRequestDTO` | `run_id`, `final_message_id`, `conversation_run_frame_ref` | `ConversationCommitResultDTO` |
 | execution | `approve_tool` | `approve_tool_json` | `.approveTool` | `ApproveToolRequestDTO` | `id`, `decision` | `EmptyAgentOSResponseDTO` |
 | execution | `cancel_run` | `cancel_run_json` | `.cancelRun` | `CancelRunRequestDTO` | `run_id` | `RuntimeEventDTO` |
@@ -74,6 +74,20 @@ Rules:
 - `StartExecutionRequestDTO` encodes `conversation_run_frame_ref`.
 - `StartExecutionRequestDTO` never encodes `conversation_frame_ref` or `conversation_run_frame`.
 - There is no Swift operation named `startExecutionRun`; the operation is `start_run`.
+- `.observeEvents` must call the streaming bridge entrypoint. A one-shot `observe_events_json` adapter may exist for Rust smoke tests, but it is not the Swift MVVM execution subscription.
+
+## Operation Ownership During Migration
+
+| Operation | Swift Client | Rust Owner | Migration Status |
+| --- | --- | --- | --- |
+| `.prepareUserTurn` | `ConversationBridgeClient` | conversation | New domain path; creates the only trusted `ConversationRunFrameRefDTO`. |
+| `.startRun` | `ExecutionBridgeClient` | execution | New domain path; consumes only `ConversationRunFrameRefDTO`, never a frame DTO. |
+| `.observeEvents` | `ExecutionBridgeClient` | execution | New domain path; `AsyncThrowingStream` must replay from `fromSequence` and then live-tail the same run. |
+| `.commitAssistantResult` | `ConversationBridgeClient` | conversation | New domain path; commits final assistant output and is idempotent. |
+| `.approveTool` | `ExecutionBridgeClient` | execution | New domain path once Rust tool-loop pause/resume is wired. |
+| `.cancelRun` | `ExecutionBridgeClient` wrapper | legacy compatibility in Phase 1 | Calls Rust `cancel_run_json`, which still delegates to old `AgentRuntime` until `RunCancellationService` lands. |
+| `submitToolResult` | `ExecutionBridgeClient` legacy method | legacy compatibility | Calls `legacyClient.submitToolResult`; the new coordinator must not treat this as execution-domain completion. |
+| `sendMessageStream` | `AgentRuntimeService` fallback | legacy compatibility | Kept only for fallback while the coordinator-backed path rolls out. |
 
 ## File Structure
 
@@ -582,6 +596,26 @@ func testExecutionBridgeStartRunUsesStartExecutionRequest() async throws {
     XCTAssertTrue(gateway.recordedJSON.contains("conversation_run_frame_ref"))
     XCTAssertFalse(gateway.recordedJSON.contains("conversation_run_frame\""))
 }
+
+func testExecutionBridgeObserveEventsUsesStreamingGateway() async throws {
+    let gateway = RecordingAgentOSBridgeGateway()
+    let client = RustExecutionBridgeClient(
+        gateway: gateway,
+        legacyClient: MockRuntimeClient()
+    )
+    gateway.nextStreamEvents = [
+        RuntimeEventDTO.fixture(runId: "run_1", sequence: 1, payload: "run.started"),
+        RuntimeEventDTO.fixture(runId: "run_1", sequence: 2, payload: "assistant.delta")
+    ]
+
+    var observed: [RuntimeEventDTO] = []
+    for try await event in client.observeEvents(runId: "run_1", fromSequence: 0) {
+        observed.append(event)
+    }
+
+    XCTAssertEqual(gateway.recordedStreamOperation, .observeEvents)
+    XCTAssertEqual(observed.map(\.sequence), [1, 2])
+}
 ```
 
 - [ ] **Step 2: Add bridge protocols**
@@ -649,6 +683,8 @@ public protocol RustAgentOSBridgeGateway: Sendable {
     ) -> AsyncThrowingStream<RuntimeEventDTO, Error>
 }
 ```
+
+`stream(.observeEvents, request)` must call the Rust streaming C ABI symbol `local_agent_runtime_bridge_observe_events_streaming`, which is backed by `observe_events_stream_json`. It must not call a one-shot `observe_events_json` request helper.
 
 - [ ] **Step 4: Implement Rust bridge clients**
 
@@ -737,6 +773,7 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
     }
 
     public func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
+        // New execution path: replay from Rust's durable event log, then live-tail the same run.
         gateway.stream(
             .observeEvents,
             ObserveExecutionEventsRequestDTO(runId: runId, fromSequence: fromSequence)
@@ -756,10 +793,12 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
     }
 
     public func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        // Legacy compatibility only. The new Rust execution path owns tool-loop continuation.
         try await legacyClient.submitToolResult(runId: runId, result: result)
     }
 
     public func cancelRun(runId: String) async throws -> RuntimeEventDTO {
+        // Phase 1 compatibility wrapper. Rust cancel_run_json still delegates to old AgentRuntime.
         try await gateway.request(
             .cancelRun,
             CancelRunRequestDTO(runId: runId),
@@ -1842,7 +1881,7 @@ Run:
 ```bash
 rg "LEGACY_COMPATIBILITY_STREAMING_PATH|ConversationRunFrameRefDTO|StartExecutionRequestDTO|ChatInteractionCoordinator" local-ios-agent
 rg "conversationRunFrame:" local-ios-agent/toolkit local-ios-agent/apps/LocalAgentApp
-rg "startExecutionRun|start_execution_run|observeExecutionEvents|observe_execution_events|conversation_frame_ref" local-ios-agent/toolkit local-ios-agent/apps/LocalAgentApp
+rg "startExecutionRun|start_execution_run|observeExecutionEvents|observe_execution_events|conversation_frame_ref|observe_events_json" local-ios-agent/toolkit local-ios-agent/apps/LocalAgentApp
 ```
 
 Expected:
@@ -1872,6 +1911,7 @@ Spec coverage:
 
 - Rust trusted input is represented as `ConversationRunFrameRefDTO` in Task 1.
 - ABI operation names and JSON keys are fixed in the ABI mapping table and enforced in Task 2.
+- `.observeEvents` is bound to the Rust streaming bridge entrypoint, not the one-shot debug adapter.
 - Full frame DTO is restricted to preview and debug in Task 1.
 - Bridge split is handled in Task 2.
 - App domain split is handled in Task 3.
