@@ -241,6 +241,7 @@ struct AgentViewState: Equatable, Sendable {
     var provider: ProviderSelectionViewState
     var conversations: ConversationListViewState
     var lastTerminalReason: RunTerminalReason?
+    var lastAppliedRuntimeSequence: UInt64
     var promptLibrary: PromptLibraryViewState
     var modelSettings: ModelSettingsViewState
 
@@ -253,6 +254,7 @@ struct AgentViewState: Equatable, Sendable {
         provider: ProviderSelectionViewState = ProviderSelectionViewState(),
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
+        lastAppliedRuntimeSequence: UInt64 = 0,
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState()
     ) {
@@ -264,6 +266,7 @@ struct AgentViewState: Equatable, Sendable {
         self.provider = provider
         self.conversations = conversations
         self.lastTerminalReason = lastTerminalReason
+        self.lastAppliedRuntimeSequence = lastAppliedRuntimeSequence
         self.promptLibrary = promptLibrary
         self.modelSettings = modelSettings
     }

@@ -28,6 +28,42 @@ struct RuntimeEventReducerTests {
         #expect(state.messages[0].isStreaming)
     }
 
+    @Test("sequenced events are applied once")
+    func sequencedEventsApplyOnce() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "assistant_started",
+                kind: .assistantMessageStarted,
+                payload: #"{"message_id":"assistant_1"}"#,
+                sequence: 1
+            ),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "delta_1",
+                kind: .assistantTextDelta,
+                payload: #"{"message_id":"assistant_1","text":"hello"}"#,
+                sequence: 2
+            ),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "delta_1",
+                kind: .assistantTextDelta,
+                payload: #"{"message_id":"assistant_1","text":"hello"}"#,
+                sequence: 2
+            ),
+            to: &state
+        )
+
+        #expect(state.messages.map(\.text) == ["hello"])
+        #expect(state.lastAppliedRuntimeSequence == 2)
+    }
+
     @Test("assistant reasoning tags are projected as reasoning parts")
     func assistantReasoningProjectsAsParts() {
         var state = AgentViewState()
@@ -375,14 +411,15 @@ struct RuntimeEventReducerTests {
         payload: String,
         parentId: String? = nil,
         runId: String? = "run_1",
-        blobRefs: [String] = []
+        blobRefs: [String] = [],
+        sequence: UInt64 = 0
     ) -> RuntimeEventDTO {
         RuntimeEventDTO(
             id: id,
             sessionId: "session_1",
             parentId: parentId,
             runId: runId,
-            sequence: 1,
+            sequence: sequence,
             depth: 0,
             kind: kind,
             payload: payload,

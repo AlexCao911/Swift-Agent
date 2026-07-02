@@ -3,6 +3,12 @@ import LocalAgentBridge
 
 enum RuntimeEventReducer {
     static func apply(_ event: RuntimeEventDTO, to state: inout AgentViewState) {
+        if event.sequence > 0 {
+            guard event.sequence > state.lastAppliedRuntimeSequence else {
+                return
+            }
+        }
+
         switch event.kind {
         case .sessionCreated:
             state.currentSessionId = event.sessionId
@@ -31,6 +37,10 @@ enum RuntimeEventReducer {
             state.finishStreamingMessages(as: .failed(message))
         default:
             break
+        }
+
+        if event.sequence > 0 {
+            state.lastAppliedRuntimeSequence = event.sequence
         }
     }
 

@@ -57,6 +57,8 @@
 		0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */; };
 		0B0000010000000000001030 /* ConversationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001130 /* ConversationViewModel.swift */; };
 		0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001131 /* ConversationViewModelTests.swift */; };
+		0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001140 /* AgentRunViewModel.swift */; };
+		0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001141 /* AgentRunViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,6 +122,8 @@
 		0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainArchitectureTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001130 /* ConversationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModel.swift; sourceTree = "<group>"; };
 		0B0000010000000000001131 /* ConversationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModelTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001140 /* AgentRunViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModel.swift; sourceTree = "<group>"; };
+		0B0000010000000000001141 /* AgentRunViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -249,6 +253,7 @@
 		0A000001000000000000050B /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				0B0000010000000000001140 /* AgentRunViewModel.swift */,
 				0A0000010000000000000121 /* RuntimeProjectionModel.swift */,
 			);
 			path = Runtime;
@@ -360,6 +365,7 @@
 		0A0000010000000000000518 /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				0B0000010000000000001141 /* AgentRunViewModelTests.swift */,
 				0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */,
 			);
 			path = Runtime;
@@ -506,6 +512,7 @@
 				0A0000010000000000000003 /* AppContainer.swift in Sources */,
 				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
 				0B0000010000000000001030 /* ConversationViewModel.swift in Sources */,
+				0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
 				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
 				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
@@ -554,6 +561,7 @@
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
+				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
