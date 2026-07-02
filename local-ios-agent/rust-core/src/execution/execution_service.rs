@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
+use crate::context::{ModelInputMessages, ModelInputRole};
 use crate::conversation::{ConversationFrameRepository, InMemoryConversationFrameRepository};
 use crate::execution::{
     ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog,
-    ExecutionEventStream, ExecutionPlanner, ExecutionStartError, InferenceSettingsService,
+    ExecutionEventStream, ExecutionModelClient, ExecutionModelTurn, ExecutionPlanner,
+    ExecutionReactWorker, ExecutionStartError, InferenceSettingsService, NoopExecutionToolExecutor,
     RunDebugStore, RunHandle, RunLifecycleService, RuntimeOptions, StartExecutionRequest,
     ToolApprovalService, ToolLoopService, ToolLoopStartRequest,
 };
@@ -26,6 +28,13 @@ pub struct ExecutionServiceParts<
     pub tool_loop: ToolLoopService,
     pub debug_store: RunDebugStore,
     pub inference_settings: InferenceSettingsService,
+    pub worker_mode: ExecutionWorkerMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionWorkerMode {
+    ReactWorker,
+    SyntheticAdapter,
 }
 
 impl<R: ConversationFrameRepository> ExecutionService<R> {
@@ -51,6 +60,7 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             tool_loop: ToolLoopService::default(),
             debug_store: RunDebugStore,
             inference_settings: InferenceSettingsService::default(),
+            worker_mode: ExecutionWorkerMode::ReactWorker,
         })
     }
 
@@ -87,17 +97,41 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
 
         let handle = self.parts.run_lifecycle.start_run(request.run_id());
-        self.parts
-            .tool_loop
-            .start(ToolLoopStartRequest::new(
-                request.run_id().to_string(),
-                frame,
-                plan,
-                self.parts.event_log.clone(),
-                self.parts.completed_runs.clone(),
-                request.conversation_run_frame_ref().clone(),
-            ))
-            .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
+        match self.parts.worker_mode {
+            ExecutionWorkerMode::ReactWorker => {
+                let worker = ExecutionReactWorker::new(
+                    DefaultExecutionModelClient,
+                    NoopExecutionToolExecutor,
+                    crate::execution::ExecutionContextInputAssembler::new(
+                        self.parts.inference_settings.runtime_options(),
+                    ),
+                    self.parts.event_log.clone(),
+                    self.parts.completed_runs.clone(),
+                );
+                worker
+                    .run(
+                        request.run_id(),
+                        &frame,
+                        request.conversation_run_frame_ref(),
+                    )
+                    .map_err(|message| {
+                        ExecutionStartError::new("execution.react_worker_failed", message)
+                    })?;
+            }
+            ExecutionWorkerMode::SyntheticAdapter => {
+                self.parts
+                    .tool_loop
+                    .start_synthetic_for_contract_tests(ToolLoopStartRequest::new(
+                        request.run_id().to_string(),
+                        frame,
+                        plan,
+                        self.parts.event_log.clone(),
+                        self.parts.completed_runs.clone(),
+                        request.conversation_run_frame_ref().clone(),
+                    ))
+                    .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
+            }
+        }
 
         Ok(handle)
     }
@@ -139,5 +173,24 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             .map_err(|message| {
                 ExecutionStartError::new("execution.update_runtime_options_failed", message)
             })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DefaultExecutionModelClient;
+
+impl ExecutionModelClient for DefaultExecutionModelClient {
+    fn next_turn(&self, input: &ModelInputMessages) -> Result<ExecutionModelTurn, String> {
+        let user_text = input
+            .messages()
+            .iter()
+            .rev()
+            .find(|message| message.role() == ModelInputRole::User)
+            .map(|message| message.content())
+            .unwrap_or("");
+        Ok(ExecutionModelTurn::Final {
+            message_id: "final_1".to_string(),
+            text: format!("Execution worker response: {user_text}"),
+        })
     }
 }

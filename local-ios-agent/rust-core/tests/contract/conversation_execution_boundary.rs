@@ -431,6 +431,15 @@ fn react_worker_includes_tool_observation_in_second_model_call() {
 }
 
 #[test]
+fn execution_service_default_path_does_not_emit_synthetic_response() {
+    let source = include_str!("../../src/execution/tool_loop.rs");
+    assert!(
+        !source.contains("Synthetic response to:"),
+        "production ToolLoopService must not synthesize assistant responses"
+    );
+}
+
+#[test]
 fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
     let completed_runs = CompletedRunRegistry::default();
     let service = ConversationCommitService::new(completed_runs.clone());
@@ -498,12 +507,13 @@ fn execution_service_is_thin_facade() {
         ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
     ));
     let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
     let service = ExecutionService::with_runtime_parts(
         frames,
         RunSnapshotService::fixture(),
         ExecutionPlanner::default(),
         event_log.clone(),
-        CompletedRunRegistry::default(),
+        completed_runs.clone(),
     );
 
     let handle = service
@@ -517,11 +527,16 @@ fn execution_service_is_thin_facade() {
     let events = service.observe_events(handle.run_id(), handle.replay_from_sequence());
 
     assert!(events.iter().any(|event| event.code() == "run.started"));
-    assert_eq!(service.tool_loop().pending_count(), 1);
+    assert!(events
+        .iter()
+        .any(|event| event.code() == "assistant_message_completed"));
+    assert!(events.iter().any(|event| event.code() == "run.completed"));
+    assert_eq!(service.tool_loop().pending_count(), 0);
+    assert!(completed_runs.get("run_facade_1", "final_1").is_some());
 }
 
 #[test]
-fn execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop() {
+fn execution_start_loads_frame_resolves_snapshot_and_runs_react_worker() {
     let frames = InMemoryConversationFrameRepository::default();
     let frame_ref = ConversationRunFrameRef::new(
         ConversationFrameId::new("frame_exec_1"),
@@ -546,7 +561,7 @@ fn execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop() {
         RunSnapshotService::fixture(),
         ExecutionPlanner::default(),
         event_log.clone(),
-        completed_runs,
+        completed_runs.clone(),
     );
 
     let handle = service
@@ -561,7 +576,12 @@ fn execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop() {
     let events = event_log.replay(handle.run_id(), handle.replay_from_sequence());
     assert_eq!(handle.run_id(), "run_1");
     assert!(events.iter().any(|event| event.code() == "run.started"));
-    assert_eq!(service.tool_loop().pending_count(), 1);
+    assert!(events
+        .iter()
+        .any(|event| event.code() == "assistant_message_completed"));
+    assert!(events.iter().any(|event| event.code() == "run.completed"));
+    assert_eq!(service.tool_loop().pending_count(), 0);
+    assert!(completed_runs.get("run_1", "final_1").is_some());
 }
 
 #[test]

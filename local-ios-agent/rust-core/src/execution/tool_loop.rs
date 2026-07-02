@@ -30,14 +30,24 @@ pub struct ToolLoopStartError {
 
 impl ToolLoopService {
     pub fn start(&self, request: ToolLoopStartRequest) -> Result<(), ToolLoopStartError> {
-        // Phase-1 bridge adapter: the real worker will replace this synthetic completion.
+        self.pending
+            .lock()
+            .expect("tool loop pending registry poisoned")
+            .insert(request.run_id.clone(), request);
+        Ok(())
+    }
+
+    pub fn start_synthetic_for_contract_tests(
+        &self,
+        request: ToolLoopStartRequest,
+    ) -> Result<(), ToolLoopStartError> {
         let final_message_id = "final_1";
         let final_text = request
             .frame()
             .messages()
             .last()
-            .map(|message| format!("Synthetic response to: {}", message.content()))
-            .unwrap_or_else(|| "Synthetic response.".to_string());
+            .map(|message| format!("Contract adapter response for: {}", message.content()))
+            .unwrap_or_else(|| "Contract adapter response.".to_string());
         request.event_log.append_with_payload(
             request.run_id(),
             "assistant_message_completed",
