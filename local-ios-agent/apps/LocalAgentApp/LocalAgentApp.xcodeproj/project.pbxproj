@@ -59,6 +59,8 @@
 		0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001131 /* ConversationViewModelTests.swift */; };
 		0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001140 /* AgentRunViewModel.swift */; };
 		0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001141 /* AgentRunViewModelTests.swift */; };
+		0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001150 /* ChatInteractionCoordinator.swift */; };
+		0B0000010000000000001051 /* ChatInteractionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -124,6 +126,8 @@
 		0B0000010000000000001131 /* ConversationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModelTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001140 /* AgentRunViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModel.swift; sourceTree = "<group>"; };
 		0B0000010000000000001141 /* AgentRunViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModelTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001150 /* ChatInteractionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionCoordinator.swift; sourceTree = "<group>"; };
+		0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionCoordinatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -207,6 +211,7 @@
 				0B0000010000000000001502 /* Execution */,
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
 				0A000001000000000000011A /* AttachmentService.swift */,
+				0B0000010000000000001150 /* ChatInteractionCoordinator.swift */,
 				0A000001000000000000010F /* ConversationService.swift */,
 				0A000001000000000000010E /* RuntimeStreamBuffer.swift */,
 			);
@@ -294,6 +299,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
+				0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */,
 				0B0000010000000000001120 /* ConversationDomainTests.swift */,
 				0B0000010000000000001121 /* ExecutionDomainTests.swift */,
 				0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */,
@@ -525,6 +531,7 @@
 				0B0000010000000000001009 /* ToolApprovalService.swift in Sources */,
 				0B000001000000000000100A /* RunDebugService.swift in Sources */,
 				0B000001000000000000100B /* InferenceSettingsService.swift in Sources */,
+				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
 				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
@@ -551,6 +558,7 @@
 				0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */,
 				0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */,
 				0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */,
+				0B0000010000000000001051 /* ChatInteractionCoordinatorTests.swift in Sources */,
 				0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */,
 				0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */,
 				0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */,
