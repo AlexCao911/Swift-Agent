@@ -29,6 +29,15 @@ public struct RunHandleDTO: Codable, Equatable, Sendable {
         case runId = "run_id"
         case replayFromSequence = "replay_from_sequence"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.runId = try container.decode(String.self, forKey: .runId)
+        self.replayFromSequence = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .replayFromSequence
+        ) ?? 0
+    }
 }
 
 public struct ConversationRunFrameRefDTO: Codable, Equatable, Sendable {
@@ -299,6 +308,20 @@ public struct EmptyAgentOSRequestDTO: Codable, Equatable, Sendable {
 
 public struct EmptyAgentOSResponseDTO: Codable, Equatable, Sendable {
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self.init()
+            return
+        }
+        self.init()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode([String: String]())
+    }
 }
 
 public struct AgentProfileDTO: Codable, Equatable, Sendable {

@@ -1,3 +1,5 @@
+/// Compatibility aggregate used by the existing chat path.
+/// New code should depend on ConversationBridgeClient and ExecutionBridgeClient.
 public protocol RuntimeClient: Sendable {
     func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel

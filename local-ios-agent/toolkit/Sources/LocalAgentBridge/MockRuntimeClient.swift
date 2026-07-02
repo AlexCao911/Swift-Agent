@@ -1,4 +1,6 @@
-public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient {
+import Foundation
+
+public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, ConversationBridgeClient, ExecutionBridgeClient {
     public struct SentMessage: Equatable, Sendable {
         public var sessionId: String
         public var parentEventId: String?
@@ -31,7 +33,21 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
         }
     }
 
+    public struct ToolApprovalSubmission: Equatable, Sendable {
+        public var id: String
+        public var decision: ApprovalDecisionDTO
+
+        public init(id: String, decision: ApprovalDecisionDTO) {
+            self.id = id
+            self.decision = decision
+        }
+    }
+
     private var storedSessionIds: [String]
+    private var storedConversationSummaries: [ConversationSummaryDTO]
+    private var storedActiveBranch: [RuntimeEventDTO]
+    private var storedAgentProfiles: [AgentProfileDTO]
+    private nonisolated let splitState: MockRuntimeSplitState
     private var turnResult: AgentTurnResultDTO
     private var promptDebugSnapshot: PromptDebugSnapshotDTO?
     private var storedProviderProfiles: [ProviderProfileDTO]
@@ -48,9 +64,21 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
     public private(set) var submittedApprovalResponses: [ApprovalProtocolResponseDTO] = []
     public private(set) var cancelledRunIds: [String] = []
     public private(set) var selectedProviders: [(sessionId: String, providerId: String)] = []
+    public private(set) var preparedUserTurnRequests: [PrepareUserTurnRequestDTO] = []
+    public private(set) var commitAssistantResultRequests: [CommitAssistantResultRequestDTO] = []
+    public private(set) var startedExecutionRequests: [StartExecutionRequestDTO] = []
+    public private(set) var approvedTools: [ToolApprovalSubmission] = []
+    public private(set) var builtAgentTemplateIds: [String] = []
+    public private(set) var updatedRuntimeOptions: [RuntimeOptionsDTO] = []
 
     public init(
         sessionIds: [String] = [],
+        conversationSummaries: [ConversationSummaryDTO] = [],
+        activeBranch: [RuntimeEventDTO] = [],
+        agentProfiles: [AgentProfileDTO] = [
+            AgentProfileDTO(profileId: "profile_mock", displayName: "Mock Agent")
+        ],
+        executionEventsByRunId: [String: [RuntimeEventDTO]] = [:],
         turnResult: AgentTurnResultDTO = AgentTurnResultDTO(
             runId: "run_mock",
             state: .completed,
@@ -82,6 +110,10 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
         )
     ) {
         self.storedSessionIds = sessionIds
+        self.storedConversationSummaries = conversationSummaries
+        self.storedActiveBranch = activeBranch
+        self.storedAgentProfiles = agentProfiles
+        self.splitState = MockRuntimeSplitState(executionEventsByRunId: executionEventsByRunId)
         self.turnResult = turnResult
         self.promptDebugSnapshot = promptDebugSnapshot
         self.storedProviderProfiles = providerProfiles
@@ -94,6 +126,11 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
     public func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
         startedRunRequests.append(request)
         return RunHandleDTO(runId: turnResult.runId)
+    }
+
+    public func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
+        startedExecutionRequests.append(request)
+        return RunHandleDTO(runId: turnResult.runId, replayFromSequence: 0)
     }
 
     public func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
@@ -113,6 +150,65 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
 
     public func sessionIds() async throws -> [String] {
         storedSessionIds
+    }
+
+    public func conversationSummaries() async throws -> [ConversationSummaryDTO] {
+        storedConversationSummaries
+    }
+
+    public func listSessions() async throws -> [ConversationSummaryDTO] {
+        storedConversationSummaries
+    }
+
+    public func prepareUserTurn(_ request: PrepareUserTurnRequestDTO) async throws -> PreparedUserTurnDTO {
+        preparedUserTurnRequests.append(request)
+        let sessionId = request.sessionId ?? storedSessionIds.last ?? "session_mock"
+        let branchHeadId = request.parentEventId ?? "entry_root"
+        let userMessageId = "entry_user_\(preparedUserTurnRequests.count)"
+        let frameRef = ConversationRunFrameRefDTO(
+            frameId: "frame_\(preparedUserTurnRequests.count)",
+            sessionId: sessionId,
+            branchHeadId: branchHeadId,
+            userTurnId: userMessageId
+        )
+        return PreparedUserTurnDTO(
+            sessionId: sessionId,
+            userMessageId: userMessageId,
+            conversationRunFrameRef: frameRef,
+            framePreview: ConversationRunFrameDTO(
+                frameRef: frameRef,
+                messages: [
+                    ConversationFrameMessageDTO(
+                        eventId: userMessageId,
+                        role: "user",
+                        content: request.text
+                    )
+                ],
+                attachmentRefs: request.blobRefs
+            )
+        )
+    }
+
+    public func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
+        storedActiveBranch
+    }
+
+    public func forkSession(sessionId: String, leafId: String) async throws -> String {
+        "session_forked"
+    }
+
+    public func archiveSession(sessionId: String) async throws {}
+
+    public func renameSession(sessionId: String, title: String) async throws {}
+
+    public func deleteSession(sessionId: String) async throws {}
+
+    public func commitAssistantResult(_ request: CommitAssistantResultRequestDTO) async throws -> ConversationCommitResultDTO {
+        commitAssistantResultRequests.append(request)
+        return ConversationCommitResultDTO(
+            committedMessageId: "assistant.\(request.runId).\(request.finalMessageId)",
+            alreadyCommitted: false
+        )
     }
 
     public func registerToolSchema(_ schema: ToolSchemaDTO) async throws {
@@ -174,8 +270,39 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
         )
     }
 
+    public func cancelRun(runId: String) async throws -> RuntimeEventDTO {
+        try await cancel(runId: runId)
+    }
+
     public func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
         promptDebugSnapshot
+    }
+
+    public func listAgentProfiles() async throws -> [AgentProfileDTO] {
+        storedAgentProfiles
+    }
+
+    public func buildAgent(templateId: String) async throws -> AgentProfileDTO {
+        builtAgentTemplateIds.append(templateId)
+        return storedAgentProfiles.first ?? AgentProfileDTO(
+            profileId: "profile_mock",
+            displayName: "Mock Agent"
+        )
+    }
+
+    public nonisolated func observeEvents(
+        runId: String,
+        fromSequence: UInt64
+    ) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
+        splitState.observeEvents(runId: runId, fromSequence: fromSequence)
+    }
+
+    public func approveTool(id: String, decision: ApprovalDecisionDTO) async throws {
+        approvedTools.append(ToolApprovalSubmission(id: id, decision: decision))
+    }
+
+    public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
+        updatedRuntimeOptions.append(options)
     }
 
     public func providerProfiles() async throws -> [ProviderProfileDTO] {
@@ -202,5 +329,34 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient 
             payload: #"{"provider_id":"\#(providerId)"}"#,
             blobRefs: []
         )
+    }
+}
+
+private final class MockRuntimeSplitState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var executionEventsByRunId: [String: [RuntimeEventDTO]]
+
+    init(executionEventsByRunId: [String: [RuntimeEventDTO]]) {
+        self.executionEventsByRunId = executionEventsByRunId
+    }
+
+    func observeEvents(
+        runId: String,
+        fromSequence: UInt64
+    ) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
+        let events = self.events(runId: runId, fromSequence: fromSequence)
+        return AsyncThrowingStream<RuntimeEventDTO, Error> { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+
+    private func events(runId: String, fromSequence: UInt64) -> [RuntimeEventDTO] {
+        lock.lock()
+        defer { lock.unlock() }
+        return (executionEventsByRunId[runId] ?? [])
+            .filter { $0.sequence > fromSequence }
     }
 }

@@ -268,6 +268,179 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeClientGatewayDispatchesConversationExecutionBoundaryOperations() async throws {
+        let probe = RuntimeCFunctionProbe()
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+        let frameRef = conversationRunFrameRef()
+
+        let prepared: PreparedUserTurnDTO = try await client!.request(
+            .prepareUserTurn,
+            PrepareUserTurnRequestDTO(
+                sessionId: "session_1",
+                parentEventId: "entry_parent",
+                text: "ship it"
+            ),
+            as: PreparedUserTurnDTO.self
+        )
+        let run: RunHandleDTO = try await client!.request(
+            .startRun,
+            StartExecutionRequestDTO(
+                agentProfileId: "profile_1",
+                userIntent: "ship it",
+                conversationRunFrameRef: frameRef,
+                options: ExecutionOptionsDTO(modelId: "model_1", temperature: 0.2)
+            ),
+            as: RunHandleDTO.self
+        )
+        let commit: ConversationCommitResultDTO = try await client!.request(
+            .commitAssistantResult,
+            CommitAssistantResultRequestDTO(
+                runId: "run_agent_os",
+                finalMessageId: "final_1",
+                conversationRunFrameRef: frameRef
+            ),
+            as: ConversationCommitResultDTO.self
+        )
+        let profile: AgentProfileDTO = try await client!.request(
+            .buildAgent,
+            BuildAgentRequestDTO(templateId: "template_1"),
+            as: AgentProfileDTO.self
+        )
+        let _: EmptyAgentOSResponseDTO = try await client!.request(
+            .approveTool,
+            ApproveToolRequestDTO(id: "approval_1", decision: ApprovalDecisionDTO(approved: true)),
+            as: EmptyAgentOSResponseDTO.self
+        )
+        let _: EmptyAgentOSResponseDTO = try await client!.request(
+            .updateRuntimeOptions,
+            RuntimeOptionsDTO(
+                systemPrompt: "system",
+                runtimePolicy: "policy",
+                temperature: 0.1,
+                topP: 0.9
+            ),
+            as: EmptyAgentOSResponseDTO.self
+        )
+
+        let preparedRequest = try decodedObject(try #require(probe.prepareUserTurnJson))
+        let startRequest = try decodedObject(try #require(probe.startRunJson))
+        let commitRequest = try decodedObject(try #require(probe.commitAssistantResultJson))
+        let buildRequest = try decodedObject(try #require(probe.buildAgentJson))
+        let approveRequest = try decodedObject(try #require(probe.approveToolJson))
+
+        #expect(prepared.sessionId == "session_1")
+        #expect(prepared.conversationRunFrameRef == frameRef)
+        #expect(run.runId == "run_agent_os")
+        #expect(run.replayFromSequence == 0)
+        #expect(commit.committedMessageId == "assistant.final_1")
+        #expect(profile.profileId == "profile_1")
+        #expect(preparedRequest["parent_event_id"] as? String == "entry_parent")
+        #expect((startRequest["conversation_run_frame_ref"] as? [String: Any])?["frame_id"] as? String == "frame_1")
+        #expect(startRequest["conversation_frame_ref"] == nil)
+        #expect(commitRequest["run_id"] as? String == "run_agent_os")
+        #expect((commitRequest["conversation_run_frame_ref"] as? [String: Any])?["user_turn_id"] as? String == "entry_user")
+        #expect(buildRequest["template_id"] as? String == "template_1")
+        #expect(approveRequest["id"] as? String == "approval_1")
+        #expect((approveRequest["decision"] as? [String: Any])?["approved"] as? Bool == true)
+
+        client = nil
+
+        #expect(probe.freedStrings == 6)
+        #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
+    func rustRuntimeClientGatewayStreamsReplayAndLiveExecutionEvents() async throws {
+        let probe = RuntimeCFunctionProbe()
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+
+        let stream = client!.stream(
+            .observeEvents,
+            ObserveExecutionEventsRequestDTO(runId: "run_agent_os", fromSequence: 4)
+        )
+        var events: [RuntimeEventDTO] = []
+        for try await event in stream {
+            events.append(event)
+        }
+
+        let observeRequest = try decodedObject(try #require(probe.observeEventsJson))
+
+        #expect(events.map(\.sequence) == [5, 6])
+        #expect(events.map(\.payload) == ["run.started", "run.completed"])
+        #expect(observeRequest["run_id"] as? String == "run_agent_os")
+        #expect(observeRequest["from_sequence"] as? Int == 4)
+
+        client = nil
+
+        #expect(probe.freedStrings == 1)
+        #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
+    func mockRuntimeClientSupportsSplitConversationAndExecutionContracts() async throws {
+        let frameRef = conversationRunFrameRef()
+        let event = RuntimeEventDTO(
+            id: "event_5",
+            sessionId: "session_1",
+            parentId: nil,
+            runId: "run_mock",
+            sequence: 5,
+            depth: 0,
+            kind: .unknown(raw: "execution.event"),
+            payload: "run.completed",
+            blobRefs: []
+        )
+        let mock = MockRuntimeClient(
+            sessionIds: ["session_1"],
+            conversationSummaries: [
+                ConversationSummaryDTO(
+                    sessionId: "session_1",
+                    title: "Planning",
+                    activeLeafId: "entry_user",
+                    lastEventId: "entry_user",
+                    lastUpdatedSequence: 4
+                )
+            ],
+            activeBranch: [event],
+            agentProfiles: [
+                AgentProfileDTO(profileId: "profile_1", displayName: "Planner")
+            ],
+            executionEventsByRunId: ["run_mock": [event]]
+        )
+
+        let sessions = try await mock.listSessions()
+        let prepared = try await mock.prepareUserTurn(PrepareUserTurnRequestDTO(
+            sessionId: "session_1",
+            parentEventId: "entry_parent",
+            text: "continue"
+        ))
+        let handle = try await mock.startRun(StartExecutionRequestDTO(
+            agentProfileId: "profile_1",
+            userIntent: "continue",
+            conversationRunFrameRef: frameRef
+        ))
+        var observed: [RuntimeEventDTO] = []
+        for try await event in mock.observeEvents(runId: "run_mock", fromSequence: 4) {
+            observed.append(event)
+        }
+        let commit = try await mock.commitAssistantResult(CommitAssistantResultRequestDTO(
+            runId: "run_mock",
+            finalMessageId: "final_1",
+            conversationRunFrameRef: frameRef
+        ))
+
+        #expect(sessions.map(\.sessionId) == ["session_1"])
+        #expect(prepared.sessionId == "session_1")
+        #expect(prepared.conversationRunFrameRef.sessionId == "session_1")
+        #expect(handle.runId == "run_mock")
+        #expect(observed == [event])
+        #expect(commit.committedMessageId == "assistant.run_mock.final_1")
+        #expect(await mock.preparedUserTurnRequests.count == 1)
+        #expect(await mock.startedExecutionRequests.count == 1)
+        #expect(await mock.commitAssistantResultRequests.count == 1)
+    }
+
+    @Test
     func rustRuntimeClientThrowsBridgeErrorsAndStillFreesReturnedStrings() async throws {
         let probe = RuntimeCFunctionProbe()
         probe.createSessionResponse = #"{"error":{"kind":"ffi","message":"bad input"}}"#
@@ -311,23 +484,45 @@ struct RustRuntimeClientContractTests {
         )
 
         var firstClient: RustRuntimeClient? = try RustRuntimeClient(configuration: configuration)
-        let createdSession = try await firstClient?.createSession()
-        let run = try await firstClient?.startRun(StartRunRequestDTO(
-            agentProfileId: "profile_1",
-            userIntent: "live bridge run"
-        ))
-        let archive = try await firstClient?.loadDebugArchive(try #require(run?.runId))
+        let createdSession = try await firstClient!.createSession()
+        let prepared: PreparedUserTurnDTO = try await firstClient!.request(
+            .prepareUserTurn,
+            PrepareUserTurnRequestDTO(
+                sessionId: createdSession,
+                parentEventId: nil,
+                text: "live bridge run"
+            ),
+            as: PreparedUserTurnDTO.self
+        )
+        let run: RunHandleDTO = try await firstClient!.request(
+            .startRun,
+            StartExecutionRequestDTO(
+                agentProfileId: "profile_1",
+                userIntent: "live bridge run",
+                conversationRunFrameRef: prepared.conversationRunFrameRef
+            ),
+            as: RunHandleDTO.self
+        )
+        var events: [RuntimeEventDTO] = []
+        for try await event in firstClient!.stream(
+            .observeEvents,
+            ObserveExecutionEventsRequestDTO(
+                runId: run.runId,
+                fromSequence: run.replayFromSequence
+            )
+        ) {
+            events.append(event)
+        }
         firstClient = nil
 
         let secondClient = try RustRuntimeClient(configuration: configuration)
         let sessionIds = try await secondClient.sessionIds()
 
-        #expect(createdSession != nil)
-        #expect(run?.runId == "run_1")
-        #expect(archive?.state == .completed)
-        #expect(archive?.events.map(\.code).contains("run.started") == true)
-        #expect(archive?.archives.map(\.kind.rawValue) == ["prompt", "context"])
-        #expect(sessionIds.contains(try #require(createdSession)))
+        #expect(prepared.sessionId == createdSession)
+        #expect(run.runId == "run_1")
+        #expect(events.map(\.payload).contains("run.started"))
+        #expect(events.map(\.payload).contains("run.completed"))
+        #expect(sessionIds.contains(createdSession))
     }
 }
 
@@ -344,6 +539,13 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var runtimeOptionsJson: String?
     var startRunJson: String?
     var debugArchiveRunId: String?
+    var listAgentProfilesJson: String?
+    var buildAgentJson: String?
+    var prepareUserTurnJson: String?
+    var observeEventsJson: String?
+    var commitAssistantResultJson: String?
+    var approveToolJson: String?
+    var cancelRunJson: String?
     var forkSessionId: String?
     var forkLeafId: String?
     var activeBranchSessionId: String?
@@ -384,7 +586,15 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             activeProvider: activeProvider,
             setProvider: setProvider,
             startRun: startRun,
-            loadDebugArchive: loadDebugArchive
+            loadDebugArchive: loadDebugArchive,
+            listAgentProfiles: listAgentProfiles,
+            buildAgent: buildAgent,
+            prepareUserTurn: prepareUserTurn,
+            observeEvents: observeEvents,
+            observeEventsStreaming: observeEventsStreaming,
+            commitAssistantResult: commitAssistantResult,
+            approveTool: approveTool,
+            cancelRun: cancelRun
         )
     }
 
@@ -670,6 +880,106 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         """)
     }
 
+    func listAgentProfiles(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        listAgentProfilesJson = requestJson.map { String(cString: $0) }
+        return makeCString("""
+        [{
+          "profile_id": "profile_1",
+          "display_name": "Planner"
+        }]
+        """)
+    }
+
+    func buildAgent(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        buildAgentJson = String(cString: requestJson!)
+        return makeCString("""
+        {
+          "profile_id": "profile_1",
+          "display_name": "Planner"
+        }
+        """)
+    }
+
+    func prepareUserTurn(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        prepareUserTurnJson = String(cString: requestJson!)
+        return makeCString("""
+        {
+          "session_id": "session_1",
+          "user_message_id": "entry_user",
+          "conversation_run_frame_ref": {
+            "frame_id": "frame_1",
+            "session_id": "session_1",
+            "branch_head_id": "entry_parent",
+            "user_turn_id": "entry_user"
+          },
+          "frame_preview": null
+        }
+        """)
+    }
+
+    func observeEvents(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        observeEventsJson = String(cString: requestJson!)
+        return makeCString(Self.executionEventsJson)
+    }
+
+    func observeEventsStreaming(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?,
+        _ callback: RustRuntimeCFunctionTable.RuntimeEventCallback?,
+        _ userData: UnsafeMutableRawPointer?
+    ) -> UnsafeMutablePointer<CChar>? {
+        observeEventsJson = String(cString: requestJson!)
+        for eventJson in Self.executionEventJsonLines {
+            _ = eventJson.withCString { pointer in
+                callback?(pointer, userData)
+            }
+        }
+        return makeCString("null")
+    }
+
+    func commitAssistantResult(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        commitAssistantResultJson = String(cString: requestJson!)
+        return makeCString("""
+        {
+          "committed_message_id": "assistant.final_1",
+          "already_committed": false
+        }
+        """)
+    }
+
+    func approveTool(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        approveToolJson = String(cString: requestJson!)
+        return makeCString("null")
+    }
+
+    func cancelRun(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        cancelRunJson = String(cString: requestJson!)
+        return "run_agent_os".withCString { runId in
+            cancel(runtime, runId)
+        }
+    }
+
     private func makeCString(_ string: String) -> UnsafeMutablePointer<CChar> {
         let cString = string.utf8CString
         let pointer = UnsafeMutablePointer<CChar>.allocate(capacity: cString.count)
@@ -689,9 +999,49 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         }
         """
     }
+
+    private static let executionEventJsonLines = [
+        """
+        {
+          "id": "event_5",
+          "session_id": "session_1",
+          "parent_id": null,
+          "run_id": "run_agent_os",
+          "sequence": 5,
+          "depth": 0,
+          "kind": "execution.event",
+          "payload": "run.started",
+          "blob_refs": []
+        }
+        """,
+        """
+        {
+          "id": "event_6",
+          "session_id": "session_1",
+          "parent_id": null,
+          "run_id": "run_agent_os",
+          "sequence": 6,
+          "depth": 0,
+          "kind": "execution.event",
+          "payload": "run.completed",
+          "blob_refs": []
+        }
+        """
+    ]
+
+    private static let executionEventsJson = "[\(executionEventJsonLines.joined(separator: ","))]"
 }
 
 private func decodedObject(_ json: String) throws -> [String: Any] {
     let data = json.data(using: .utf8)!
     return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func conversationRunFrameRef() -> ConversationRunFrameRefDTO {
+    ConversationRunFrameRefDTO(
+        frameId: "frame_1",
+        sessionId: "session_1",
+        branchHeadId: "entry_parent",
+        userTurnId: "entry_user"
+    )
 }

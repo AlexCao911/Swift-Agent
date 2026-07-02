@@ -100,6 +100,40 @@ char *local_agent_runtime_bridge_start_run(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json
 );
+char *local_agent_runtime_bridge_list_agent_profiles(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_build_agent(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_prepare_user_turn(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_observe_events(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_observe_events_streaming(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json,
+    LocalAgentRuntimeEventCallback callback,
+    void *user_data
+);
+char *local_agent_runtime_bridge_commit_assistant_result(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_approve_tool(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_cancel_run(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
 char *local_agent_runtime_bridge_load_debug_archive(
     LocalAgentRuntimeBridge *runtime,
     const char *run_id
