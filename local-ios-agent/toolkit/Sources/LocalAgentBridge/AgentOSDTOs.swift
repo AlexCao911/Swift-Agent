@@ -1,5 +1,6 @@
 import Foundation
 
+@available(*, deprecated, message: "Use StartExecutionRequestDTO with ConversationRunFrameRefDTO")
 public struct StartRunRequestDTO: Codable, Equatable, Sendable {
     public var agentProfileId: String
     public var userIntent: String
@@ -17,6 +18,271 @@ public struct StartRunRequestDTO: Codable, Equatable, Sendable {
 
 public struct RunHandleDTO: Codable, Equatable, Sendable {
     public var runId: String
+    public var replayFromSequence: UInt64
+
+    public init(runId: String, replayFromSequence: UInt64 = 0) {
+        self.runId = runId
+        self.replayFromSequence = replayFromSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case replayFromSequence = "replay_from_sequence"
+    }
+}
+
+public struct ConversationRunFrameRefDTO: Codable, Equatable, Sendable {
+    public var frameId: String
+    public var sessionId: String
+    public var branchHeadId: String
+    public var userTurnId: String
+
+    public init(
+        frameId: String,
+        sessionId: String,
+        branchHeadId: String,
+        userTurnId: String
+    ) {
+        self.frameId = frameId
+        self.sessionId = sessionId
+        self.branchHeadId = branchHeadId
+        self.userTurnId = userTurnId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case frameId = "frame_id"
+        case sessionId = "session_id"
+        case branchHeadId = "branch_head_id"
+        case userTurnId = "user_turn_id"
+    }
+}
+
+public struct ConversationRunFrameDTO: Codable, Equatable, Sendable {
+    public var frameRef: ConversationRunFrameRefDTO
+    public var messages: [ConversationFrameMessageDTO]
+    public var attachmentRefs: [String]
+
+    public init(
+        frameRef: ConversationRunFrameRefDTO,
+        messages: [ConversationFrameMessageDTO],
+        attachmentRefs: [String] = []
+    ) {
+        self.frameRef = frameRef
+        self.messages = messages
+        self.attachmentRefs = attachmentRefs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case frameRef = "frame_ref"
+        case messages
+        case attachmentRefs = "attachment_refs"
+    }
+}
+
+public struct ConversationFrameMessageDTO: Codable, Equatable, Sendable {
+    public var eventId: String
+    public var role: String
+    public var content: String
+
+    public init(eventId: String, role: String, content: String) {
+        self.eventId = eventId
+        self.role = role
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case role
+        case content
+    }
+}
+
+public struct PrepareUserTurnRequestDTO: Codable, Equatable, Sendable {
+    public var sessionId: String?
+    public var parentEventId: String?
+    public var text: String
+    public var blobRefs: [String]
+
+    public init(
+        sessionId: String?,
+        parentEventId: String?,
+        text: String,
+        blobRefs: [String] = []
+    ) {
+        self.sessionId = sessionId
+        self.parentEventId = parentEventId
+        self.text = text
+        self.blobRefs = blobRefs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case parentEventId = "parent_event_id"
+        case text
+        case blobRefs = "blob_refs"
+    }
+}
+
+public struct PreparedUserTurnDTO: Codable, Equatable, Sendable {
+    public var sessionId: String
+    public var userMessageId: String
+    public var conversationRunFrameRef: ConversationRunFrameRefDTO
+    public var framePreview: ConversationRunFrameDTO?
+
+    public init(
+        sessionId: String,
+        userMessageId: String,
+        conversationRunFrameRef: ConversationRunFrameRefDTO,
+        framePreview: ConversationRunFrameDTO? = nil
+    ) {
+        self.sessionId = sessionId
+        self.userMessageId = userMessageId
+        self.conversationRunFrameRef = conversationRunFrameRef
+        self.framePreview = framePreview
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case userMessageId = "user_message_id"
+        case conversationRunFrameRef = "conversation_run_frame_ref"
+        case framePreview = "frame_preview"
+    }
+}
+
+public struct CommitAssistantResultRequestDTO: Codable, Equatable, Sendable {
+    public var runId: String
+    public var finalMessageId: String
+    public var conversationRunFrameRef: ConversationRunFrameRefDTO
+
+    public init(
+        runId: String,
+        finalMessageId: String,
+        conversationRunFrameRef: ConversationRunFrameRefDTO
+    ) {
+        self.runId = runId
+        self.finalMessageId = finalMessageId
+        self.conversationRunFrameRef = conversationRunFrameRef
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case finalMessageId = "final_message_id"
+        case conversationRunFrameRef = "conversation_run_frame_ref"
+    }
+}
+
+public struct ConversationCommitResultDTO: Codable, Equatable, Sendable {
+    public var committedMessageId: String
+    public var alreadyCommitted: Bool
+
+    public init(committedMessageId: String, alreadyCommitted: Bool) {
+        self.committedMessageId = committedMessageId
+        self.alreadyCommitted = alreadyCommitted
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case committedMessageId = "committed_message_id"
+        case alreadyCommitted = "already_committed"
+    }
+}
+
+public struct ExecutionOptionsDTO: Codable, Equatable, Sendable {
+    public var modelId: String?
+    public var temperature: Double?
+    public var topP: Double?
+
+    public init(
+        modelId: String? = nil,
+        temperature: Double? = nil,
+        topP: Double? = nil
+    ) {
+        self.modelId = modelId
+        self.temperature = temperature
+        self.topP = topP
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case modelId = "model_id"
+        case temperature
+        case topP = "top_p"
+    }
+}
+
+public struct StartExecutionRequestDTO: Codable, Equatable, Sendable {
+    public var agentProfileId: String
+    public var userIntent: String
+    public var conversationRunFrameRef: ConversationRunFrameRefDTO
+    public var options: ExecutionOptionsDTO
+
+    public init(
+        agentProfileId: String,
+        userIntent: String,
+        conversationRunFrameRef: ConversationRunFrameRefDTO,
+        options: ExecutionOptionsDTO = ExecutionOptionsDTO()
+    ) {
+        self.agentProfileId = agentProfileId
+        self.userIntent = userIntent
+        self.conversationRunFrameRef = conversationRunFrameRef
+        self.options = options
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentProfileId = "agent_profile_id"
+        case userIntent = "user_intent"
+        case conversationRunFrameRef = "conversation_run_frame_ref"
+        case options
+    }
+}
+
+public struct ObserveExecutionEventsRequestDTO: Codable, Equatable, Sendable {
+    public var runId: String
+    public var fromSequence: UInt64
+
+    public init(runId: String, fromSequence: UInt64) {
+        self.runId = runId
+        self.fromSequence = fromSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case fromSequence = "from_sequence"
+    }
+}
+
+public struct BuildAgentRequestDTO: Codable, Equatable, Sendable {
+    public var templateId: String
+
+    public init(templateId: String) {
+        self.templateId = templateId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case templateId = "template_id"
+    }
+}
+
+public struct ApprovalDecisionDTO: Codable, Equatable, Sendable {
+    public var approved: Bool
+    public var reason: String?
+
+    public init(approved: Bool, reason: String? = nil) {
+        self.approved = approved
+        self.reason = reason
+    }
+}
+
+public struct ApproveToolRequestDTO: Codable, Equatable, Sendable {
+    public var id: String
+    public var decision: ApprovalDecisionDTO
+
+    public init(id: String, decision: ApprovalDecisionDTO) {
+        self.id = id
+        self.decision = decision
+    }
+}
+
+public struct CancelRunRequestDTO: Codable, Equatable, Sendable {
+    public var runId: String
 
     public init(runId: String) {
         self.runId = runId
@@ -25,6 +291,14 @@ public struct RunHandleDTO: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case runId = "run_id"
     }
+}
+
+public struct EmptyAgentOSRequestDTO: Codable, Equatable, Sendable {
+    public init() {}
+}
+
+public struct EmptyAgentOSResponseDTO: Codable, Equatable, Sendable {
+    public init() {}
 }
 
 public struct AgentProfileDTO: Codable, Equatable, Sendable {

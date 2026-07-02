@@ -4,6 +4,42 @@ import Testing
 
 @Suite("Agent OS bridge DTOs")
 struct AgentOSDTOTests {
+    @Test("StartExecutionRequestDTO encodes only ConversationRunFrameRef as trusted execution input")
+    func startExecutionRequestEncodesConversationRunFrameRefOnly() throws {
+        let request = StartExecutionRequestDTO(
+            agentProfileId: "profile_1",
+            userIntent: "answer the user",
+            conversationRunFrameRef: ConversationRunFrameRefDTO(
+                frameId: "frame_1",
+                sessionId: "session_1",
+                branchHeadId: "branch_head_1",
+                userTurnId: "user_turn_1"
+            ),
+            options: ExecutionOptionsDTO()
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["conversation_run_frame_ref"] != nil)
+        #expect(object["conversation_run_frame"] == nil)
+    }
+
+    @Test("RunHandleDTO decodes replay_from_sequence")
+    func runHandleDecodesReplayFromSequence() throws {
+        let json = """
+        {
+          "run_id": "run_1",
+          "replay_from_sequence": 0
+        }
+        """.data(using: .utf8)!
+
+        let handle = try JSONDecoder().decode(RunHandleDTO.self, from: json)
+
+        #expect(handle.runId == "run_1")
+        #expect(handle.replayFromSequence == 0)
+    }
+
     @Test("StartRunRequestDTO does not encode trusted host state")
     func startRunRequestDoesNotEncodeTrustedHostState() throws {
         let dto = StartRunRequestDTO(agentProfileId: "profile_1", userIntent: "hello")
