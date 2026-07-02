@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded planning note:** This mixed Rust/Swift contract plan was replaced by two narrower plans:
+> `2026-07-02-rust-kernel-conversation-execution-migration.md` and
+> `2026-07-02-swift-conversation-execution-adoption.md`. Use those two plans for implementation.
+
 **Goal:** Land the Rust boundary contract that makes execution runs pin a trusted `ConversationRunFrameRef`, replay durable execution events, and commit final assistant output idempotently.
 
 **Architecture:** Add a small `conversation` domain for frame identity/projection and keep `execution` as a thin facade over focused services. `RunSnapshotService` will pin `ConversationRunFrameRef`; `ExecutionEventLog` will make start/observe safe; `FinalAssistantCommitService` will make completed run recovery explicit.
@@ -1906,7 +1910,7 @@ Spec coverage:
 
 Placeholder scan:
 
-- No red-flag placeholder wording remains in the task steps.
+- No red-flag unfinished wording remains in the task steps.
 
 Type consistency:
 
