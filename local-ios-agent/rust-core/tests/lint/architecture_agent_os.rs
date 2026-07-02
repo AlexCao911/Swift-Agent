@@ -406,6 +406,26 @@ fn swift_start_run_request_dto_does_not_model_trusted_host_state() {
     }
 }
 
+#[test]
+fn execution_service_stays_thin_facade() {
+    let source = include_str!("../../src/execution/execution_service.rs");
+
+    for forbidden in [
+        "AgentProfileDraft",
+        "ComponentCatalogService",
+        "ToolRouter",
+        "ContextAssembler",
+        "ProviderRegistry",
+        "ModelProvider",
+        "InMemoryEventStore",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "ExecutionService must delegate {forbidden} responsibilities to focused services"
+        );
+    }
+}
+
 fn forbidden_runtime_dependency_findings(source: &str) -> Vec<String> {
     let stripped = strip_comments_and_strings(source);
     let compact: String = stripped.chars().filter(|ch| !ch.is_whitespace()).collect();

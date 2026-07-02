@@ -1,9 +1,15 @@
 use local_ios_agent_runtime::conversation::{
-    AttachmentRef, ConversationFrameId, ConversationFrameMessage, ConversationFrameRepository,
-    ConversationLineage, ConversationRunFrame, ConversationRunFrameRef, ConversationService,
-    InMemoryBranchEventReader, InMemoryConversationFrameRepository, PrepareUserTurnRequest,
+    AttachmentRef, ConversationCommitService, ConversationFrameId, ConversationFrameMessage,
+    ConversationFrameRepository, ConversationLineage, ConversationRunFrame,
+    ConversationRunFrameRef, ConversationService, InMemoryBranchEventReader,
+    InMemoryConversationFrameRepository, PrepareUserTurnRequest,
 };
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
+use local_ios_agent_runtime::execution::{
+    CompletedRunRegistry, ExecutionEventLog, ExecutionService, ExecutionServiceParts,
+    InferenceSettingsService, RunDebugStore, RunLifecycleService, ToolApprovalService,
+    ToolLoopService,
+};
 
 #[test]
 fn conversation_run_frame_ref_pins_branch_and_user_turn() {
@@ -133,4 +139,113 @@ fn frame_repository_rejects_tampered_ref_with_real_frame_id() {
 
     assert!(repository.get(&tampered).is_none());
     assert!(!repository.contains(&tampered));
+}
+
+#[test]
+fn execution_events_replay_from_durable_sequence() {
+    let event_log = ExecutionEventLog::default();
+    let lifecycle = RunLifecycleService::new(event_log.clone());
+
+    let handle = lifecycle.start_run("run_1");
+    event_log.append("run_1", "assistant.delta");
+
+    let replayed = event_log.replay("run_1", handle.replay_from_sequence());
+
+    assert_eq!(
+        replayed
+            .iter()
+            .map(|event| event.code())
+            .collect::<Vec<_>>(),
+        vec!["run.started", "assistant.delta"]
+    );
+}
+
+#[test]
+fn execution_events_replay_then_tail_live_events() {
+    let event_log = ExecutionEventLog::default();
+    event_log.append("run_1", "run.started");
+
+    let mut stream = event_log.subscribe("run_1", Some(0));
+
+    assert_eq!(
+        stream
+            .replay()
+            .iter()
+            .map(|event| event.code())
+            .collect::<Vec<_>>(),
+        vec!["run.started"]
+    );
+
+    event_log.append("run_1", "assistant.delta");
+    let live = stream.next_live().unwrap();
+
+    assert_eq!(live.code(), "assistant.delta");
+}
+
+#[test]
+fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
+    let completed_runs = CompletedRunRegistry::default();
+    let service = ConversationCommitService::new(completed_runs.clone());
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    completed_runs.record_completed("run_1", "final_1", frame_ref.clone());
+
+    let first = service
+        .commit_assistant_result("run_1", "final_1", &frame_ref)
+        .unwrap();
+    let second = service
+        .commit_assistant_result("run_1", "final_1", &frame_ref)
+        .unwrap();
+
+    assert_eq!(first.assistant_message_id(), second.assistant_message_id());
+    assert_eq!(service.commit_count(), 1);
+}
+
+#[test]
+fn conversation_assistant_commit_rejects_mismatched_frame_ref() {
+    let completed_runs = CompletedRunRegistry::default();
+    let service = ConversationCommitService::new(completed_runs.clone());
+    let completed_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    let tampered_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("other_session".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    completed_runs.record_completed("run_1", "final_1", completed_ref);
+
+    let error = service
+        .commit_assistant_result("run_1", "final_1", &tampered_ref)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "conversation_commit.frame_ref_mismatch");
+}
+
+#[test]
+fn execution_service_is_thin_facade() {
+    let event_log = ExecutionEventLog::default();
+    let service = ExecutionService::new(ExecutionServiceParts {
+        run_lifecycle: RunLifecycleService::new(event_log.clone()),
+        event_log: event_log.clone(),
+        completed_runs: CompletedRunRegistry::default(),
+        tool_approval: ToolApprovalService::default(),
+        tool_loop: ToolLoopService::default(),
+        debug_store: RunDebugStore::default(),
+        inference_settings: InferenceSettingsService::default(),
+    });
+
+    let handle = service.start_run("run_facade_1");
+    let events = service.observe_events(handle.run_id(), handle.replay_from_sequence());
+
+    assert_eq!(events[0].code(), "run.started");
+    assert_eq!(service.tool_loop().pending_count(), 0);
 }
