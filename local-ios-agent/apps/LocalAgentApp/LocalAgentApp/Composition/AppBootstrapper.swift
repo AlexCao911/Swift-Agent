@@ -36,6 +36,8 @@ enum AppBootstrapper {
         environment: [String: String],
         client: RustRuntimeClient
     ) -> ChatInteractionCoordinator? {
+        // Keep this feature gated until Rust execution uses the verified ReAct worker path.
+        // The migration adapter must not become the default app path.
         guard environment["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR"] == "1" else {
             return nil
         }
