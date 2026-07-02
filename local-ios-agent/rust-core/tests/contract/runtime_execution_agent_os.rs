@@ -1,3 +1,5 @@
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::execution::{
     ExecutionBudgets, ExecutionPlan, ExecutionPlanner, ExecutionStep,
 };
@@ -8,6 +10,15 @@ use local_ios_agent_runtime::runtime::{
     EffectKind, RecordingEffectDriver, RunMachine, RunMachinePersistence, RunState,
 };
 use local_ios_agent_runtime::security::PermissionState;
+
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
 
 #[test]
 fn planner_accepts_resolved_snapshot_not_agent_profile() {
@@ -25,7 +36,11 @@ fn planner_accepts_resolved_snapshot_not_agent_profile() {
 #[test]
 fn planner_rejects_unready_snapshot_before_runtime_can_start() {
     let snapshot = RunSnapshotService::fixture_with_permission_state(PermissionState::Denied)
-        .preview(StartRunRequest::new("profile_1", "hello runtime"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello runtime",
+            frame_ref_fixture(),
+        ))
         .unwrap()
         .snapshot()
         .clone();
@@ -366,7 +381,11 @@ fn failed_run_with_checkpoint_can_resume_to_running() {
 
 fn resolved_snapshot_fixture() -> ResolvedRunSnapshot {
     RunSnapshotService::fixture()
-        .resolve_and_persist(StartRunRequest::new("profile_1", "hello runtime"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "hello runtime",
+            frame_ref_fixture(),
+        ))
         .unwrap()
 }
 

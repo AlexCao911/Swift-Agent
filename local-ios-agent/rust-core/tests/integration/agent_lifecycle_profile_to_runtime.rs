@@ -1,10 +1,21 @@
 use crate::support::agent_os_fixtures::AgentOsTestWorld;
 
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotId, RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
 use local_ios_agent_runtime::storage::InMemoryTransactionRunner;
+
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
 
 #[test]
 fn package_install_profile_model_binding_readiness_is_satisfied() {
@@ -59,6 +70,7 @@ fn package_install_profile_resolves_to_persisted_run_snapshot() {
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
             "hello",
+            frame_ref_fixture(),
         ))
         .unwrap();
 
@@ -107,6 +119,7 @@ fn run_snapshot_denied_permission_stops_before_repository_commit() {
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
             "hello",
+            frame_ref_fixture(),
         ))
         .unwrap_err();
 

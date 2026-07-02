@@ -2,12 +2,23 @@ use crate::support::agent_os_fixtures::AgentOsTestWorld;
 use crate::support::assertions::assert_redacted_debug_output;
 
 use local_ios_agent_runtime::agent_package::AgentPackageManifest;
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
 use local_ios_agent_runtime::storage::InMemoryTransactionRunner;
 use serde_json::json;
+
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
 
 #[test]
 fn package_install_preview_matches_golden_and_mentions_all_transaction_writes() {
@@ -64,6 +75,7 @@ fn package_installed_run_snapshot_summary_matches_golden_and_is_redacted() {
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
             "golden run",
+            frame_ref_fixture(),
         ))
         .unwrap();
     let model_account = snapshot.model_binding().provider_account_id();

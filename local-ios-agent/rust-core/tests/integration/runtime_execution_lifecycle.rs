@@ -1,15 +1,29 @@
 use local_ios_agent_runtime::context::MockTokenizer;
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
 use local_ios_agent_runtime::core::{
-    AgentRuntime, AgentRuntimeConfig, MockStreamingProvider, SendMessageInput,
+    AgentRuntime, AgentRuntimeConfig, EntryId, MockStreamingProvider, SendMessageInput, SessionId,
 };
 use local_ios_agent_runtime::execution::ExecutionPlanner;
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::runtime::{RecordingEffectDriver, RunMachine, RunState};
 
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
+
 #[test]
 fn resolved_snapshot_plans_and_executes_without_profile_or_package_state() {
     let snapshot = RunSnapshotService::fixture()
-        .resolve_and_persist(StartRunRequest::new("profile_1", "integration hello"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "integration hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let plan = ExecutionPlanner::default().plan(snapshot).unwrap();
 
@@ -37,7 +51,11 @@ fn resolved_snapshot_plans_and_executes_without_profile_or_package_state() {
 #[test]
 fn core_runtime_public_plan_entry_delegates_to_run_machine() {
     let snapshot = RunSnapshotService::fixture()
-        .resolve_and_persist(StartRunRequest::new("profile_1", "core runtime plan entry"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "core runtime plan entry",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let plan = ExecutionPlanner::default().plan(snapshot).unwrap();
     let driver = RecordingEffectDriver::default();

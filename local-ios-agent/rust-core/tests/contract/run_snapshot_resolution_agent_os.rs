@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
@@ -22,19 +24,57 @@ struct ModelSelectionStage<'a> {
     selection: ModelSelection,
 }
 
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
+
 #[test]
-fn start_run_request_contains_only_profile_id_and_user_intent() {
-    let request = StartRunRequest::new("profile_1", "user asked a question");
+fn start_run_request_requires_conversation_run_frame_ref() {
+    let request = StartRunRequest::new("profile_1", "user asked a question", frame_ref_fixture());
 
     assert_eq!(request.agent_profile_id().as_str(), "profile_1");
     assert_eq!(request.user_intent().as_str(), "user asked a question");
+    assert_eq!(
+        request.conversation_run_frame_ref().frame_id().as_str(),
+        "frame_1"
+    );
+}
+
+#[test]
+fn resolved_snapshot_pins_conversation_run_frame_ref() {
+    let service = RunSnapshotService::fixture();
+    let snapshot = service
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        snapshot.conversation_run_frame_ref().frame_id().as_str(),
+        "frame_1"
+    );
+    assert_eq!(
+        snapshot.conversation_run_frame_ref().branch_head_id().0,
+        "branch_head_1"
+    );
 }
 
 #[test]
 fn snapshot_preview_pins_component_versions_and_model_binding() {
     let service = RunSnapshotService::fixture();
     let preview = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let snapshot = preview.snapshot();
 
@@ -132,7 +172,11 @@ fn snapshot_service_consumes_published_profile_from_real_repositories() {
     );
 
     let snapshot = service
-        .resolve_and_persist(StartRunRequest::new("profile.real", "hello"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile.real",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
 
     assert_eq!(snapshot.agent_profile_id().as_str(), "profile.real");
@@ -147,7 +191,11 @@ fn snapshot_service_consumes_published_profile_from_real_repositories() {
 fn snapshot_service_persists_snapshot_before_runtime() {
     let service = RunSnapshotService::fixture();
     let snapshot = service
-        .resolve_and_persist(StartRunRequest::new("profile_1", "hello"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
 
     assert!(service.repository().contains(snapshot.snapshot_id()));
@@ -158,7 +206,11 @@ fn snapshot_service_persists_snapshot_before_runtime() {
 fn snapshot_service_rejects_profile_changed_between_preview_and_persist() {
     let service = RunSnapshotService::fixture();
     let preview = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let changed_service = RunSnapshotService::fixture_with_profile_version(2);
 
@@ -173,7 +225,11 @@ fn snapshot_service_rejects_profile_changed_between_preview_and_persist() {
 fn snapshot_service_rejects_component_changed_between_preview_and_persist() {
     let service = RunSnapshotService::fixture();
     let preview = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let changed_service = RunSnapshotService::fixture_with_component_entity_version(2);
 
@@ -188,7 +244,11 @@ fn snapshot_service_rejects_component_changed_between_preview_and_persist() {
 fn snapshot_service_rejects_model_changed_between_preview_and_persist() {
     let service = RunSnapshotService::fixture();
     let preview = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let changed_service = RunSnapshotService::fixture_with_model_catalog_version(8);
 
@@ -203,7 +263,11 @@ fn snapshot_service_rejects_model_changed_between_preview_and_persist() {
 fn snapshot_service_rejects_model_content_changed_at_same_catalog_version() {
     let service = RunSnapshotService::fixture();
     let preview = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let changed_service =
         RunSnapshotService::fixture_with_model_id_at_same_catalog_version("gpt-4o");
@@ -219,10 +283,18 @@ fn snapshot_service_rejects_model_content_changed_at_same_catalog_version() {
 fn snapshot_service_allocates_snapshot_ids_at_persist_time() {
     let service = RunSnapshotService::fixture();
     let first_preview = service
-        .preview(StartRunRequest::new("profile_1", "first"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "first",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let second_preview = service
-        .preview(StartRunRequest::new("profile_1", "second"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "second",
+            frame_ref_fixture(),
+        ))
         .unwrap();
 
     let first = service.resolve_preview_and_persist(first_preview).unwrap();
@@ -238,7 +310,11 @@ fn snapshot_service_captures_denied_permission_from_security_service() {
     let service = RunSnapshotService::fixture_with_permission_state(PermissionState::Denied);
 
     let snapshot = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
 
     assert_eq!(
@@ -257,7 +333,11 @@ fn snapshot_service_rejects_unresolvable_model_credential() {
     let service = RunSnapshotService::fixture_without_credentials();
 
     let error = service
-        .preview(StartRunRequest::new("profile_1", "hello"))
+        .preview(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap_err();
 
     assert_eq!(error.code(), "snapshot.credential_unavailable");
@@ -282,7 +362,11 @@ fn snapshot_service_rejects_missing_model_credential_binding() {
     let service = service_from_repositories(profile_repository, component_catalog, model_catalog);
 
     let error = service
-        .preview(StartRunRequest::new("profile.real", "hello"))
+        .preview(StartRunRequest::new(
+            "profile.real",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap_err();
 
     assert_eq!(error.code(), "snapshot.credential_binding_missing");
@@ -311,7 +395,11 @@ fn snapshot_service_rejects_model_catalog_selection_that_differs_from_profile_pi
     let service = service_from_repositories(profile_repository, component_catalog, model_catalog);
 
     let error = service
-        .preview(StartRunRequest::new("profile.real", "hello"))
+        .preview(StartRunRequest::new(
+            "profile.real",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap_err();
 
     assert_eq!(error.code(), "snapshot.model_selection_conflict");
@@ -322,7 +410,11 @@ fn snapshot_service_does_not_persist_permission_denied_snapshot() {
     let service = RunSnapshotService::fixture_with_permission_state(PermissionState::Denied);
 
     let error = service
-        .resolve_and_persist(StartRunRequest::new("profile_1", "hello"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap_err();
 
     assert_eq!(error.code(), "snapshot.not_ready");
@@ -354,7 +446,11 @@ fn snapshot_service_rejects_component_kind_drift_at_resolution() {
     let service = service_from_repositories(profile_repository, drifted_catalog, model_catalog);
 
     let error = service
-        .preview(StartRunRequest::new("profile.real", "hello"))
+        .preview(StartRunRequest::new(
+            "profile.real",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap_err();
 
     assert_eq!(error.code(), "snapshot.component_kind_mismatch");
@@ -364,7 +460,11 @@ fn snapshot_service_rejects_component_kind_drift_at_resolution() {
 fn snapshot_service_pins_versions_inside_one_transaction() {
     let service = RunSnapshotService::fixture();
     let snapshot = service
-        .resolve_and_persist(StartRunRequest::new("profile_1", "hello"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "hello",
+            frame_ref_fixture(),
+        ))
         .unwrap();
 
     assert_eq!(

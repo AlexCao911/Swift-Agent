@@ -1,11 +1,26 @@
+use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::execution::ExecutionPlanner;
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::runtime::{RecordingEffectDriver, RunMachine};
 
+fn frame_ref_fixture() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    )
+}
+
 #[test]
 fn runtime_execution_trace_matches_golden_fixture() {
     let snapshot = RunSnapshotService::fixture()
-        .resolve_and_persist(StartRunRequest::new("profile_1", "golden runtime"))
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            "golden runtime",
+            frame_ref_fixture(),
+        ))
         .unwrap();
     let plan = ExecutionPlanner::default().plan(snapshot).unwrap();
     let mut machine =

@@ -1,3 +1,4 @@
+use crate::conversation::ConversationRunFrameRef;
 use crate::run_snapshot::{
     ResolvedComponentBinding, ResolvedMemoryBinding, ResolvedModelBinding, ResolvedToolBinding,
     ResolvedVoiceBinding, TrustedHostRunState,
@@ -14,6 +15,7 @@ pub struct RunUserIntent(String);
 pub struct StartRunRequest {
     agent_profile_id: AgentProfileId,
     user_intent: RunUserIntent,
+    conversation_run_frame_ref: ConversationRunFrameRef,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +37,7 @@ pub struct ResolvedRunSnapshot {
     voice_binding: Option<ResolvedVoiceBinding>,
     trusted_host_state: TrustedHostRunState,
     readiness_report: RunSnapshotReadinessReport,
+    conversation_run_frame_ref: ConversationRunFrameRef,
     created_at_millis: u64,
 }
 
@@ -80,10 +83,15 @@ impl RunUserIntent {
 }
 
 impl StartRunRequest {
-    pub fn new(agent_profile_id: impl Into<String>, user_intent: impl Into<String>) -> Self {
+    pub fn new(
+        agent_profile_id: impl Into<String>,
+        user_intent: impl Into<String>,
+        conversation_run_frame_ref: ConversationRunFrameRef,
+    ) -> Self {
         Self {
             agent_profile_id: AgentProfileId::new(agent_profile_id),
             user_intent: RunUserIntent::new(user_intent),
+            conversation_run_frame_ref,
         }
     }
 
@@ -93,6 +101,10 @@ impl StartRunRequest {
 
     pub fn user_intent(&self) -> &RunUserIntent {
         &self.user_intent
+    }
+
+    pub fn conversation_run_frame_ref(&self) -> &ConversationRunFrameRef {
+        &self.conversation_run_frame_ref
     }
 }
 
@@ -146,6 +158,7 @@ impl ResolvedRunSnapshot {
             voice_binding,
             trusted_host_state,
             readiness_report,
+            conversation_run_frame_ref: request.conversation_run_frame_ref().clone(),
             created_at_millis,
         }
     }
@@ -197,6 +210,10 @@ impl ResolvedRunSnapshot {
 
     pub fn readiness_report(&self) -> &RunSnapshotReadinessReport {
         &self.readiness_report
+    }
+
+    pub fn conversation_run_frame_ref(&self) -> &ConversationRunFrameRef {
+        &self.conversation_run_frame_ref
     }
 
     pub fn created_at_millis(&self) -> u64 {

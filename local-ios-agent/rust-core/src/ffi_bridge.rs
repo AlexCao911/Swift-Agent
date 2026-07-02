@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
 use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
+use crate::conversation::{ConversationFrameId, ConversationRunFrameRef};
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
     AgentTurnResult, CAbiLocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
@@ -519,7 +520,11 @@ impl RuntimeJsonBridge {
 
     pub fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: StartRunRequestJson = from_json(request_json)?;
-        let request = StartRunRequest::new(request.agent_profile_id, request.user_intent);
+        let request = StartRunRequest::new(
+            request.agent_profile_id,
+            request.user_intent,
+            legacy_compatibility_frame_ref(),
+        );
         let handle = match self {
             Self::InMemory(runtime) => runtime.start_agent_os_run(request),
             Self::Sqlite(runtime) => runtime.start_agent_os_run(request),
@@ -534,6 +539,15 @@ impl RuntimeJsonBridge {
         }?;
         to_json(&archive)
     }
+}
+
+fn legacy_compatibility_frame_ref() -> ConversationRunFrameRef {
+    ConversationRunFrameRef::new(
+        ConversationFrameId::new("legacy_agent_os_frame"),
+        SessionId("legacy_agent_os_session".into()),
+        EntryId("legacy_agent_os_branch_head".into()),
+        EntryId("legacy_agent_os_user_turn".into()),
+    )
 }
 
 #[no_mangle]
