@@ -1,8 +1,20 @@
 import Foundation
 import LocalAgentBridge
 
+protocol ChatInteractionCoordinating: AnyObject, Sendable {
+    @MainActor
+    func sendMessage(
+        text: String,
+        sessionId: String?,
+        parentEventId: String?,
+        agentProfileId: String,
+        options: ExecutionOptionsDTO,
+        onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws
+}
+
 @MainActor
-final class ChatInteractionCoordinator {
+final class ChatInteractionCoordinator: ChatInteractionCoordinating {
     private let conversation: any ConversationDomain
     private let execution: any ExecutionDomain
 
@@ -20,7 +32,7 @@ final class ChatInteractionCoordinator {
         parentEventId: String?,
         agentProfileId: String,
         options: ExecutionOptionsDTO,
-        onEvent: @MainActor @escaping (RuntimeEventDTO) -> Void = { _ in }
+        onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void = { _ in }
     ) async throws {
         let preparedTurn = try await conversation.prepareUserTurn(
             PrepareUserTurnRequestDTO(
@@ -43,7 +55,7 @@ final class ChatInteractionCoordinator {
             runId: handle.runId,
             fromSequence: handle.replayFromSequence
         ) {
-            onEvent(event)
+            await onEvent(event)
             if let messageId = event.finalAssistantMessageId {
                 finalMessageId = messageId
             }

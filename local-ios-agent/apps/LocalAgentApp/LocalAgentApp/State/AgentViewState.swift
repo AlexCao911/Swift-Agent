@@ -302,6 +302,17 @@ struct AgentViewState: Equatable, Sendable {
         set { draft.text = newValue }
     }
 
+    var selectedAgentProfileId: String {
+        provider.active?.id ?? "default"
+    }
+
+    var executionOptions: ExecutionOptionsDTO {
+        ExecutionOptionsDTO(
+            temperature: modelSettings.temperature,
+            topP: modelSettings.topP
+        )
+    }
+
     mutating func finishStreamingMessages(as terminalState: MessageStreamingState) {
         for index in messages.indices where messages[index].isStreaming {
             messages[index].isStreaming = false

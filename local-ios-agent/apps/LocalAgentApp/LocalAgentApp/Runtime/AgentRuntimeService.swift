@@ -76,11 +76,28 @@ enum AgentRuntimeServiceError: Error, Equatable, Sendable {
 }
 
 private let rootParentEventId = "__local_agent_root__"
+private let legacyCompatibilityStreamingPath = "LEGACY_COMPATIBILITY_STREAMING_PATH"
 
 private enum StreamBufferInput: Sendable {
     case event(RuntimeEventDTO)
     case flushTick
     case finished
+}
+
+private actor CoordinatorEventCollector {
+    private var state: AgentViewState
+
+    init(state: AgentViewState) {
+        self.state = state
+    }
+
+    func apply(_ event: RuntimeEventDTO) {
+        RuntimeEventReducer.apply(event, to: &state)
+    }
+
+    func snapshot() -> AgentViewState {
+        state
+    }
 }
 
 actor AgentRuntimeService: AgentRuntimeServicing {
@@ -92,17 +109,20 @@ actor AgentRuntimeService: AgentRuntimeServicing {
     private let runtimeClient: any RuntimeClient
     private let toolDriver: MinimalHostToolDriver
     private let streamFlushNanoseconds: UInt64
+    private let coordinator: (any ChatInteractionCoordinating)?
     private var activeRun: ActiveRun?
     private var hasPrepared = false
 
     init(
         runtimeClient: any RuntimeClient,
         toolDriver: MinimalHostToolDriver,
-        streamFlushNanoseconds: UInt64 = 50_000_000
+        streamFlushNanoseconds: UInt64 = 50_000_000,
+        coordinator: (any ChatInteractionCoordinating)? = nil
     ) {
         self.runtimeClient = runtimeClient
         self.toolDriver = toolDriver
         self.streamFlushNanoseconds = streamFlushNanoseconds
+        self.coordinator = coordinator
     }
 
     func prepare() async throws -> AgentViewState {
@@ -134,6 +154,27 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             activeRun = nil
         }
 
+        if let coordinator {
+            let collector = CoordinatorEventCollector(state: state)
+            try await coordinator.sendMessage(
+                text: text,
+                sessionId: state.currentSessionId,
+                parentEventId: state.draft.targetParentEventId,
+                agentProfileId: state.selectedAgentProfileId,
+                options: state.executionOptions,
+                onEvent: { event in
+                    await collector.apply(event)
+                    await onEvent(event)
+                }
+            )
+            var nextState = await collector.snapshot()
+            nextState.draft = UserDraftViewState()
+            nextState.phase = .ready
+            nextState.lastTerminalReason = .completed
+            nextState.finishStreamingMessages(as: .idle)
+            return nextState
+        }
+
         var nextState = state
         let parentEventId = state.draft.targetParentEventId
         let draftAttachments = state.draft.attachments
@@ -149,6 +190,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         if let streamingClient = runtimeClient as? any StreamingBlobReferencingRuntimeClient {
+            _ = legacyCompatibilityStreamingPath
             let stream = streamingClient.sendMessageStream(
                 sessionId: sessionId,
                 parentEventId: parentEventId,
@@ -182,6 +224,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         if let streamingClient = runtimeClient as? any StreamingRuntimeClient {
+            _ = legacyCompatibilityStreamingPath
             let stream = streamingClient.sendMessageStream(
                 sessionId: sessionId,
                 parentEventId: parentEventId,

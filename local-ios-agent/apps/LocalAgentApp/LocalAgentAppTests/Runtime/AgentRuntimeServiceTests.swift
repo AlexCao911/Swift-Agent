@@ -207,6 +207,26 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text).contains("hello"))
     }
 
+    @Test("send message uses coordinator when injected")
+    @MainActor
+    func sendMessageUsesCoordinatorWhenInjected() async throws {
+        let coordinator = RecordingChatInteractionCoordinator()
+        let service = AgentRuntimeService(
+            runtimeClient: MockRuntimeClient(),
+            toolDriver: MinimalHostToolDriver(),
+            coordinator: coordinator
+        )
+
+        let state = try await service.sendMessage(
+            "hello",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        #expect(coordinator.sentMessages == ["hello"])
+        #expect(state.phase == .ready)
+        #expect(state.draft == UserDraftViewState())
+    }
+
     @Test("select conversation can load explicit branch leaf events")
     func selectConversationCanLoadExplicitBranchLeafEvents() async throws {
         let client = ScriptedRuntimeClient()
@@ -1957,6 +1977,22 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
 
     private func activeBranchKey(sessionId: String, leafId: String?) -> String {
         "\(sessionId)#\(leafId ?? "")"
+    }
+}
+
+@MainActor
+private final class RecordingChatInteractionCoordinator: ChatInteractionCoordinating, @unchecked Sendable {
+    private(set) var sentMessages: [String] = []
+
+    func sendMessage(
+        text: String,
+        sessionId: String?,
+        parentEventId: String?,
+        agentProfileId: String,
+        options: ExecutionOptionsDTO,
+        onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
+    ) async throws {
+        sentMessages.append(text)
     }
 }
 
