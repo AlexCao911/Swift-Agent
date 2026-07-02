@@ -278,6 +278,65 @@ fn execution_context_input_uses_conversation_frame_and_runtime_options() {
 }
 
 #[test]
+fn react_worker_emits_final_response_without_synthetic_adapter() {
+    use local_ios_agent_runtime::execution::{
+        ExecutionContextInputAssembler, ExecutionModelClient, ExecutionModelTurn,
+        ExecutionReactWorker, NoopExecutionToolExecutor,
+    };
+
+    #[derive(Clone)]
+    struct FinalModel;
+
+    impl ExecutionModelClient for FinalModel {
+        fn next_turn(
+            &self,
+            _input: &local_ios_agent_runtime::context::ModelInputMessages,
+        ) -> Result<ExecutionModelTurn, String> {
+            Ok(ExecutionModelTurn::Final {
+                message_id: "final_model_1".to_string(),
+                text: "real model answer".to_string(),
+            })
+        }
+    }
+
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_react_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    let frame = ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    );
+    let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
+    let worker = ExecutionReactWorker::new(
+        FinalModel,
+        NoopExecutionToolExecutor,
+        ExecutionContextInputAssembler::new(None),
+        event_log.clone(),
+        completed_runs.clone(),
+    );
+
+    worker.run("run_1", &frame, &frame_ref).unwrap();
+
+    let events = event_log.replay("run_1", Some(0));
+    assert!(events.iter().any(|event| {
+        event.code() == "assistant_message_completed"
+            && event.payload().contains("real model answer")
+    }));
+    assert!(events.iter().any(|event| event.code() == "run.completed"));
+    assert!(completed_runs.get("run_1", "final_model_1").is_some());
+}
+
+#[test]
 fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
     let completed_runs = CompletedRunRegistry::default();
     let service = ConversationCommitService::new(completed_runs.clone());
