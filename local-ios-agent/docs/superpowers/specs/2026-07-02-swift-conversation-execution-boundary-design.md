@@ -398,7 +398,208 @@ The implementation should not mutate or reuse a single prompt string as the
 source of truth. It should rebuild each call from structured state and archive
 the resulting context trace.
 
-## 8. ChatInteractionCoordinator
+## 8. Rust Boundary Adjustment
+
+The same two-domain split should be reflected in Rust. This is the missing
+counterpart to the Swift protocol split.
+
+Current Rust code has the right primitives, but they are still mixed through
+runtime-facing APIs:
+
+- `core/session_tree.rs`, `core/event.rs`, and event-store branch APIs represent
+  conversation history.
+- `core/runtime.rs` still combines session operations, provider calls, context
+  construction, tool continuation, and run state.
+- `context/`, `run_snapshot/`, `execution/`, and `runtime/` already point toward
+  execution ownership, but conversation-frame preparation is not yet a first
+  class Rust boundary.
+
+### 8.1 Target Rust Paths
+
+```text
+rust-core/src/conversation/
+  mod.rs
+  session.rs
+  session_tree.rs
+  event.rs
+  branch.rs
+  turn.rs
+  frame.rs
+  projection.rs
+  repository.rs
+  conversation_service.rs
+
+rust-core/src/execution/
+  mod.rs
+  execution_service.rs
+  execution_plan.rs
+  execution_planner.rs
+  run_lifecycle.rs
+  context_bridge.rs
+  tool_loop.rs
+  trace.rs
+  budgets.rs
+```
+
+`conversation/` is the renamed and clarified home for what was previously
+described as the interaction runtime. It is not an agent runtime. It is the
+conversation history and interaction domain.
+
+`execution/` is the clarified home for what was previously described as app
+service plus runtime execution. It owns agent execution and calls into
+`run_snapshot/`, `context/`, `runtime/`, `tool/`, `memory/`, and `inference/`.
+
+The existing `runtime/` module can remain the lower-level run machine/effect
+layer. The higher-level start-run application service belongs under
+`execution/`.
+
+### 8.2 Rust Conversation Path
+
+The Rust conversation path owns durable conversation facts:
+
+```text
+ConversationService
+  list_sessions()
+  create_session()
+  load_session(session_id, leaf_id)
+  prepare_user_turn(request)
+  fork_session(request)
+  edit_turn(request)
+  commit_assistant_result(request)
+  rename/archive/delete
+```
+
+It uses:
+
+```text
+SessionTree
+EventStore
+BranchProjector or successor
+ConversationProjection
+ConversationRunFrame
+```
+
+`ConversationRunFrame` is produced here and passed to execution. It should be a
+Rust domain object with a DTO mapping for Swift:
+
+```rust
+pub struct ConversationRunFrame {
+    pub frame_id: ConversationFrameId,
+    pub session_id: SessionId,
+    pub branch_id: BranchId,
+    pub branch_head_id: EntryId,
+    pub user_turn_id: EntryId,
+    pub parent_event_id: Option<EntryId>,
+    pub conversation_messages: Vec<ConversationFrameMessage>,
+    pub attachment_refs: Vec<AttachmentRef>,
+    pub lineage: ConversationLineage,
+}
+```
+
+The conversation path may normalize visible message history into frame
+messages. It must not inject system prompts, memories, tool schemas, context
+budget decisions, or provider-specific message roles.
+
+`BranchProjector` currently lives in `context/` and turns branch runtime events
+into `PromptMessage`. That coupling should be split:
+
+- conversation projection should produce `ConversationFrameMessage`
+- execution context assembly should map those frame messages into
+  `ContextSegment` or model-input roles
+
+This keeps branch replay in conversation and model-input selection in
+execution/context.
+
+### 8.3 Rust Execution Path
+
+The Rust execution path owns agent execution:
+
+```text
+ExecutionService
+  start_run(StartExecutionRequest)
+  observe_events(run_id)
+  approve_tool(decision)
+  submit_tool_result(result)
+  cancel_run(run_id)
+  preview_context(request)
+  get_run_debug_snapshot(run_id)
+```
+
+It orchestrates:
+
+```text
+ConversationRunFrame
+  + AgentProfileId
+  + trusted host state captured inside Rust
+  -> RunSnapshotService.resolve()
+  -> ExecutionPlanner.plan()
+  -> RuntimeExecutionService / RunMachine
+  -> ContextAssembler before every LLM call
+  -> InferenceRouter
+  -> ToolLoop
+  -> ExecutionEvent stream
+```
+
+`StartRunRequest` in `run_snapshot/` currently contains `agent_profile_id` and
+`user_intent`. The execution boundary should evolve to either include
+`ConversationRunFrameId`/`ConversationRunFrame` or wrap it in a new
+`StartExecutionRequest`.
+
+The trust rule remains unchanged:
+
+```text
+Swift may provide conversation facts and selected agent profile id.
+Swift must not provide trusted permission state, local binding state, or
+credential availability.
+Rust execution captures trusted host state before resolving the snapshot.
+```
+
+### 8.4 Rust Event Ownership
+
+Rust should distinguish event ownership:
+
+```text
+ConversationEvent
+  durable session facts:
+  session created, user turn committed, assistant final committed,
+  branch/fork/edit metadata, title/archive/delete metadata
+
+ExecutionEvent
+  transient or debug execution facts:
+  run started, model call started/completed, assistant delta,
+  tool call requested, approval requested, tool result observed,
+  context archive created, run completed/failed/cancelled
+```
+
+Some execution events may reference conversation ids or message ids. That does
+not make them conversation events.
+
+The final assistant result crosses the boundary through
+`ConversationService.commit_assistant_result`, which stores a durable visible
+assistant message plus run/debug references. The complete execution event tree,
+context archives, and model-call traces stay in execution storage/debug
+archives.
+
+### 8.5 Rust Migration Path
+
+1. Introduce `conversation/` with re-exported wrappers around the existing
+   session/event-store primitives. Do not move storage tables first.
+2. Add `ConversationRunFrame` and DTO mapping.
+3. Move branch-to-visible-history projection out of `context/BranchProjector`
+   into conversation, leaving context to consume frame messages as inputs.
+4. Add `ConversationService.prepare_user_turn` and
+   `commit_assistant_result`.
+5. Add `execution/ExecutionService` as the Rust app-service entry point for
+   `StartExecutionRequest`.
+6. Update `run_snapshot::StartRunRequest` or add a wrapper so snapshot
+   resolution receives conversation frame identity/content plus agent profile.
+7. Move provider/model/tool-loop orchestration out of `core/runtime.rs` into
+   execution services while keeping `runtime/RunMachine` as the lower-level
+   state machine.
+8. Keep compatibility bridge APIs until Swift finishes moving from
+   `AgentRuntimeService` to the two-domain coordinator.
+
+## 9. ChatInteractionCoordinator
 
 The coordinator is an app-layer use-case orchestrator.
 
@@ -455,9 +656,9 @@ final class ChatInteractionCoordinator {
 The coordinator may call both domains. Individual view models should not call
 across domains directly.
 
-## 9. View Models
+## 10. View Models
 
-### 9.1 ConversationViewModel
+### 10.1 ConversationViewModel
 
 Owns conversation UI state:
 
@@ -478,7 +679,7 @@ final class ConversationViewModel {
 It calls `ConversationDomain` only. It does not know tool approval or run loop
 rules.
 
-### 9.2 AgentRunViewModel
+### 10.2 AgentRunViewModel
 
 Owns active run UI state:
 
@@ -502,7 +703,7 @@ final class AgentRunViewModel {
 It reduces execution events. It does not own sessions, fork tree, or durable
 conversation history.
 
-### 9.3 AgentBuilderViewModel
+### 10.3 AgentBuilderViewModel
 
 Owns agent editing:
 
@@ -515,7 +716,7 @@ var activeProfile: AgentProfileViewState?
 
 It calls execution agent-composition APIs.
 
-### 9.4 InferenceSettingsViewModel
+### 10.4 InferenceSettingsViewModel
 
 Owns provider/model/generation option UI state:
 
@@ -529,7 +730,7 @@ var topP: Double
 
 It belongs to execution configuration.
 
-### 9.5 RunDebugViewModel
+### 10.5 RunDebugViewModel
 
 Owns run debug archive projection:
 
@@ -543,7 +744,7 @@ var modelCalls: [ModelCallTraceViewState]
 
 It calls execution debug APIs.
 
-## 10. Bridge Split
+## 11. Bridge Split
 
 The Swift bridge should avoid one broad runtime protocol. Split it into two
 capability groups:
@@ -575,28 +776,36 @@ ExecutionBridgeClient
 Both clients can still use JSON over the same C ABI handle. The split is a
 Swift/Rust boundary contract, not necessarily two separate native libraries.
 
-## 11. Migration Order
+## 12. Migration Order
 
-1. Add DTOs and protocols without changing behavior:
+1. Add Rust `conversation/` and `execution/` module shells around existing
+   primitives without changing behavior.
+2. Add DTOs and protocols without changing behavior:
    `ConversationDomain`, `ExecutionDomain`, `ConversationRunFrameDTO`,
    `StartExecutionRequestDTO`, and initial bridge client shells.
-2. Extract conversation projection and session operations from
+3. Add Rust `ConversationRunFrame` and map it to
+   `ConversationRunFrameDTO`.
+4. Extract conversation projection and session operations from
    `AgentRuntimeService` into `ConversationCommandService` and
    `ConversationProjectionStore`.
-3. Extract run event reduction from `AgentViewState`/`RuntimeEventReducer` into
+5. Extract run event reduction from `AgentViewState`/`RuntimeEventReducer` into
    `AgentRunViewModel` and `RuntimeEventStore`.
-4. Add `ChatInteractionCoordinator` and route send/cancel/regenerate/edit flows
+6. Add `ChatInteractionCoordinator` and route send/cancel/regenerate/edit flows
    through it while preserving existing runtime calls.
-5. Move provider/model/agent build APIs under execution services.
-6. Replace Swift prompt-text attachment concatenation with attachment refs in
+7. Move provider/model/agent build APIs under execution services.
+8. Replace Swift prompt-text attachment concatenation with attachment refs in
    conversation frames and Rust-side context policy.
-7. Add context preview/debug DTOs once execution archive APIs are stable.
-8. Delete or shrink `AgentRuntimeService` into bridge adapters after the split.
+9. Add context preview/debug DTOs once execution archive APIs are stable.
+10. Delete or shrink `AgentRuntimeService` into bridge adapters after the split.
 
-## 12. Acceptance Criteria
+## 13. Acceptance Criteria
 
 - Swift has separate `ConversationDomain` and `ExecutionDomain` protocols.
+- Rust has clear `conversation/` and `execution/` module boundaries or module
+  facades, even if storage migration remains incremental.
 - Agent configuration APIs are not exposed from conversation APIs.
+- Rust conversation APIs produce `ConversationRunFrame`; Rust execution APIs
+  consume it.
 - `ConversationRunFrameDTO` contains conversation skeleton data only.
 - Swift does not assemble `ModelInputMessages`.
 - Every LLM call context is assembled in Rust execution/context code.
@@ -607,8 +816,10 @@ Swift/Rust boundary contract, not necessarily two separate native libraries.
 - Final assistant output is committed to conversation through an explicit
   conversation API.
 - Run debug/context preview is read through execution APIs.
+- `BranchProjector` no longer makes conversation history depend on prompt/model
+  input types.
 
-## 13. Test Boundary
+## 14. Test Boundary
 
 Swift tests:
 
@@ -624,14 +835,17 @@ Swift tests:
 
 Rust/bridge tests:
 
+- Rust conversation frame fixture from a branched session tree.
 - Start execution request accepts conversation frame plus profile id.
 - Swift cannot forge trusted permission/local binding state.
 - Context preview and actual context archive use the same assembler.
 - Tool-loop second LLM call includes prior tool call/result through execution
   run state, not conversation history mutation.
 - Conversation frame replay is deterministic for the same session leaf.
+- Execution final response commits only visible assistant result and run links
+  into conversation storage.
 
-## 14. Review Gate
+## 15. Review Gate
 
 Any future API that tries to pass prompt strings, tool schemas, memory
 contributions, or provider-specific messages through `ConversationDomain` should
