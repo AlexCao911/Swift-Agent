@@ -432,6 +432,24 @@ fn execution_service_stays_thin_facade() {
     }
 }
 
+#[test]
+fn conversation_projection_does_not_emit_prompt_messages() {
+    let source = include_str!("../../src/conversation/projection.rs");
+
+    for forbidden in [
+        "PromptMessage",
+        "ContextAssembler",
+        "ToolResult",
+        "ModelInputMessages",
+        "InferenceRouter",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "conversation projection must output conversation frame messages, not execution model input"
+        );
+    }
+}
+
 fn forbidden_runtime_dependency_findings(source: &str) -> Vec<String> {
     let stripped = strip_comments_and_strings(source);
     let compact: String = stripped.chars().filter(|ch| !ch.is_whitespace()).collect();

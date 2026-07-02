@@ -81,6 +81,8 @@ pub struct SendMessageInput {
 }
 
 const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
+const LEGACY_COMPATIBILITY_STREAMING_PATH: &str =
+    "AgentRuntime.send_message_streaming bypasses ConversationRunFrameRef and ExecutionPlan during migration";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationSummary {
@@ -588,6 +590,7 @@ impl<S: EventStore> AgentRuntime<S> {
         input: SendMessageInput,
         on_event: RuntimeEventSink<'_>,
     ) -> Result<AgentTurnResult, AgentError> {
+        let _legacy_path_marker = LEGACY_COMPATIBILITY_STREAMING_PATH;
         let run_id = RunId(self.ids.next_id("run"));
         let run_id_string = run_id.0.clone();
         self.runs.insert(

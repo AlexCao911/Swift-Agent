@@ -1,7 +1,7 @@
 use local_ios_agent_runtime::conversation::{
     AttachmentRef, ConversationCommitService, ConversationFrameId, ConversationFrameMessage,
-    ConversationFrameRepository, ConversationLineage, ConversationRunFrame,
-    ConversationRunFrameRef, ConversationService, InMemoryBranchEventReader,
+    ConversationFrameProjector, ConversationFrameRepository, ConversationLineage,
+    ConversationRunFrame, ConversationRunFrameRef, ConversationService, InMemoryBranchEventReader,
     InMemoryConversationFrameRepository, PrepareUserTurnRequest,
 };
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
@@ -387,4 +387,35 @@ fn execution_start_rejects_tampered_frame_ref_with_real_frame_id() {
         .unwrap_err();
 
     assert_eq!(error.code(), "execution.frame_ref_untrusted");
+}
+
+#[test]
+fn conversation_frame_projector_outputs_visible_messages() {
+    let user_event = RuntimeEvent::new(
+        EntryId("user_1".into()),
+        SessionId("session_1".into()),
+        None,
+        None,
+        1,
+        0,
+        EventKind::UserMessage,
+        "hello",
+    );
+    let assistant_event = RuntimeEvent::new(
+        EntryId("assistant_1".into()),
+        SessionId("session_1".into()),
+        Some(EntryId("user_1".into())),
+        None,
+        2,
+        1,
+        EventKind::AssistantMessageCompleted,
+        "hi",
+    );
+
+    let messages = ConversationFrameProjector::new().project(vec![user_event, assistant_event]);
+
+    assert_eq!(messages[0].role(), "user");
+    assert_eq!(messages[0].content(), "hello");
+    assert_eq!(messages[1].role(), "assistant");
+    assert_eq!(messages[1].content(), "hi");
 }
