@@ -6,10 +6,10 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::execution::{
-    CompletedRunRegistry, ExecutionEventLog, ExecutionService, ExecutionServiceParts,
-    InferenceSettingsService, RunDebugStore, RunLifecycleService, ToolApprovalService,
-    ToolLoopService,
+    CompletedRunRegistry, ExecutionEventLog, ExecutionPlanner, ExecutionService,
+    RunLifecycleService, StartExecutionRequest,
 };
+use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
 
 #[test]
 fn conversation_run_frame_ref_pins_branch_and_user_turn() {
@@ -232,20 +232,159 @@ fn conversation_assistant_commit_rejects_mismatched_frame_ref() {
 
 #[test]
 fn execution_service_is_thin_facade() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_facade_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    ));
     let event_log = ExecutionEventLog::default();
-    let service = ExecutionService::new(ExecutionServiceParts {
-        run_lifecycle: RunLifecycleService::new(event_log.clone()),
-        event_log: event_log.clone(),
-        completed_runs: CompletedRunRegistry::default(),
-        tool_approval: ToolApprovalService::default(),
-        tool_loop: ToolLoopService::default(),
-        debug_store: RunDebugStore::default(),
-        inference_settings: InferenceSettingsService::default(),
-    });
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        event_log.clone(),
+        CompletedRunRegistry::default(),
+    );
 
-    let handle = service.start_run("run_facade_1");
+    let handle = service
+        .start_run(StartExecutionRequest::new(
+            "run_facade_1",
+            "profile_1",
+            "hello",
+            frame_ref,
+        ))
+        .unwrap();
     let events = service.observe_events(handle.run_id(), handle.replay_from_sequence());
 
-    assert_eq!(events[0].code(), "run.started");
-    assert_eq!(service.tool_loop().pending_count(), 0);
+    assert!(events.iter().any(|event| event.code() == "run.started"));
+    assert_eq!(service.tool_loop().pending_count(), 1);
+}
+
+#[test]
+fn execution_start_loads_frame_resolves_snapshot_and_schedules_tool_loop() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_exec_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    ));
+    let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        event_log.clone(),
+        completed_runs,
+    );
+
+    let handle = service
+        .start_run(StartExecutionRequest::new(
+            "run_1",
+            "profile_1",
+            "hello",
+            frame_ref,
+        ))
+        .unwrap();
+
+    let events = event_log.replay(handle.run_id(), handle.replay_from_sequence());
+    assert_eq!(handle.run_id(), "run_1");
+    assert!(events.iter().any(|event| event.code() == "run.started"));
+    assert_eq!(service.tool_loop().pending_count(), 1);
+}
+
+#[test]
+fn execution_start_rejects_unissued_frame_ref() {
+    let service = ExecutionService::with_runtime_parts(
+        InMemoryConversationFrameRepository::default(),
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        ExecutionEventLog::default(),
+        CompletedRunRegistry::default(),
+    );
+    let missing_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("missing_frame"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+
+    let error = service
+        .start_run(StartExecutionRequest::new(
+            "run_1",
+            "profile_1",
+            "hello",
+            missing_ref,
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "execution.frame_ref_untrusted");
+}
+
+#[test]
+fn execution_start_rejects_tampered_frame_ref_with_real_frame_id() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let issued_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_exec_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        issued_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("branch_head_1".into()), None, None),
+    ));
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        ExecutionEventLog::default(),
+        CompletedRunRegistry::default(),
+    );
+    let tampered_ref = ConversationRunFrameRef::new(
+        issued_ref.frame_id().clone(),
+        SessionId("other_session".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+
+    let error = service
+        .start_run(StartExecutionRequest::new(
+            "run_1",
+            "profile_1",
+            "hello",
+            tampered_ref,
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "execution.frame_ref_untrusted");
 }

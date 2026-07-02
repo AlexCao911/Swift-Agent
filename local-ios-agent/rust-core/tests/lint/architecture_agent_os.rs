@@ -16,6 +16,9 @@ fn agent_os_runtime_execution_modules_do_not_read_builder_package_or_profile_sta
     let mut findings = Vec::new();
     for (file, source) in runtime_execution_module_sources() {
         for finding in forbidden_runtime_dependency_findings(source) {
+            if file == "src/execution/execution_service.rs" && finding == "RunSnapshotService" {
+                continue;
+            }
             findings.push(format!("{file}: {finding}"));
         }
     }
@@ -418,6 +421,9 @@ fn execution_service_stays_thin_facade() {
         "ProviderRegistry",
         "ModelProvider",
         "InMemoryEventStore",
+        "RunSnapshotService::fixture",
+        "RunSnapshotSourceCatalog",
+        "RunSnapshotResolver",
     ] {
         assert!(
             !source.contains(forbidden),

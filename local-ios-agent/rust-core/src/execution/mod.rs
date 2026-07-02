@@ -22,7 +22,9 @@ pub use execution_plan::{ExecutionPlan, ExecutionStep, ExecutionStepKind};
 pub use execution_planner::{ExecutionPlanner, ExecutionPlanningError, ExecutionPlanningResult};
 pub use execution_service::{ExecutionService, ExecutionServiceParts};
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
-pub use run_lifecycle::{RunHandle, RunLifecycleService};
+pub use run_lifecycle::{
+    ExecutionStartError, RunHandle, RunLifecycleService, StartExecutionRequest,
+};
 pub use tool_approval::{ApprovalDecision, ToolApprovalService};
 pub use tool_loop::{ToolLoopService, ToolLoopStartError, ToolLoopStartRequest};
 pub use trace::TraceConfig;

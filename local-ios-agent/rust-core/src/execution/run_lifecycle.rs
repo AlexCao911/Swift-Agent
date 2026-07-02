@@ -1,4 +1,21 @@
+use std::fmt;
+
+use crate::conversation::ConversationRunFrameRef;
 use crate::execution::ExecutionEventLog;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartExecutionRequest {
+    run_id: String,
+    agent_profile_id: String,
+    user_intent: String,
+    conversation_run_frame_ref: ConversationRunFrameRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionStartError {
+    code: String,
+    message: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunHandle {
@@ -39,3 +56,56 @@ impl RunHandle {
         self.replay_from_sequence
     }
 }
+
+impl StartExecutionRequest {
+    pub fn new(
+        run_id: impl Into<String>,
+        agent_profile_id: impl Into<String>,
+        user_intent: impl Into<String>,
+        conversation_run_frame_ref: ConversationRunFrameRef,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            agent_profile_id: agent_profile_id.into(),
+            user_intent: user_intent.into(),
+            conversation_run_frame_ref,
+        }
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn agent_profile_id(&self) -> &str {
+        &self.agent_profile_id
+    }
+
+    pub fn user_intent(&self) -> &str {
+        &self.user_intent
+    }
+
+    pub fn conversation_run_frame_ref(&self) -> &ConversationRunFrameRef {
+        &self.conversation_run_frame_ref
+    }
+}
+
+impl ExecutionStartError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+}
+
+impl fmt::Display for ExecutionStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ExecutionStartError {}
