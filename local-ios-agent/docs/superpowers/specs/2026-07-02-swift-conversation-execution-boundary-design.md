@@ -145,7 +145,8 @@ path. It understands fork/edit lineage and message ordering. It does not choose
 which messages fit in the model context.
 
 `TurnPreparationService` turns the current draft into a durable user turn and a
-`ConversationRunFrameDTO`.
+`PreparedUserTurnDTO` whose trusted execution field is
+`ConversationRunFrameRef`.
 
 `BranchingService` owns fork, edit, regenerate, and parent-target semantics.
 
@@ -172,10 +173,10 @@ protocol ConversationDomain {
 
     func prepareUserTurn(
         _ request: PrepareUserTurnRequestDTO
-    ) async throws -> ConversationRunFrameDTO
+    ) async throws -> PreparedUserTurnDTO
 
     func forkSession(_ request: ForkSessionRequestDTO) async throws -> SessionDTO
-    func editTurn(_ request: EditTurnRequestDTO) async throws -> ConversationRunFrameDTO
+    func editTurn(_ request: EditTurnRequestDTO) async throws -> PreparedUserTurnDTO
 
     func commitAssistantResult(
         _ request: CommitAssistantResultDTO
@@ -188,8 +189,18 @@ protocol ConversationDomain {
 ```
 
 `prepareUserTurn` creates or selects the session, applies the intended parent
-or edit/fork semantics, stores the user turn, and returns a stable frame for
-execution.
+or edit/fork semantics, stores the user turn, and returns a stable frame
+reference for execution.
+
+```text
+PreparedUserTurnDTO
+  conversationRunFrameRef
+  conversationProjection
+  debugConversationRunFrame?
+```
+
+Only `conversationRunFrameRef` is passed into execution start. The optional
+debug frame is for UI inspection and tests.
 
 `commitAssistantResult` is called only when execution reaches final assistant
 output. Streaming deltas, transient tool calls, and debug events remain
@@ -200,10 +211,12 @@ context archive, or model-call trace into conversation history.
 
 ### 5.3 ConversationRunFrameDTO
 
-`ConversationRunFrameDTO` is the clean conversation skeleton for a run.
+`ConversationRunFrameDTO` is the clean conversation skeleton projection for
+UI, preview, and debug. It is not the trusted execution input.
 
 ```text
 ConversationRunFrameDTO
+  ref
   frameId
   sessionId
   branchId
@@ -226,6 +239,37 @@ include:
 - accumulated ReAct tool call transcript
 - provider-specific message format
 - token trimming decisions
+
+Execution trusted input accepts only `ConversationRunFrameRef`. If Swift has a
+full `ConversationRunFrameDTO`, it may display or cache that projection, but
+Rust execution must resolve/load the frame by trusted reference before snapshot
+resolution.
+
+```text
+ConversationRunFrameRef
+  frameId
+  sessionId
+  branchHeadId
+  userTurnId
+```
+
+### 5.4 Final Assistant Commit
+
+Final assistant commit must be idempotent and recoverable.
+
+```text
+commitAssistantResult(runId, finalMessageId, conversationFrameRef)
+```
+
+The idempotency key is `runId + finalMessageId`. If the same final result has
+already been committed, the conversation domain returns the existing assistant
+message projection instead of appending another message.
+
+Execution must persist the final assistant result or final result reference
+before reporting a terminal completed event. If the conversation commit fails
+after execution completed, no model output is lost. A later conversation refresh
+or coordinator retry must be able to discover a completed-but-uncommitted run by
+`conversationFrameRef` and retry `commitAssistantResult`.
 
 ## 6. Execution Domain
 
@@ -307,7 +351,8 @@ protocol ExecutionDomain {
 
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(
-        runId: RunID
+        runId: RunID,
+        fromSequence: UInt64?
     ) -> AsyncThrowingStream<ExecutionEventDTO, Error>
 
     func approveTool(_ decision: ToolApprovalDecisionDTO) async throws
@@ -331,7 +376,7 @@ Agent configuration APIs such as `listModels`, `listComponents`, and
 
 ```text
 StartExecutionRequestDTO
-  conversationRunFrame
+  conversationRunFrameRef
   agentProfileId
   executionOptions
 ```
@@ -339,7 +384,8 @@ StartExecutionRequestDTO
 Rust execution/app-service then resolves:
 
 ```text
-ConversationRunFrame
+ConversationRunFrameRef
+  -> trusted ConversationRunFrame load
   + AgentProfile
   + PromptCompiler
   + ToolRegistry
@@ -349,8 +395,36 @@ ConversationRunFrame
   -> ModelInputMessages
 ```
 
-The bridge may pass conversation facts and user intent. It must not pass trusted
-permission state, local binding state, or provider internals from Swift.
+The bridge may pass conversation frame references and user intent. It must not
+pass full conversation facts as trusted execution input, trusted permission
+state, local binding state, or provider internals from Swift.
+
+### 6.4 Execution Event Subscription
+
+Execution events must be durable and replayable. A split `startRun` /
+`observeEvents` API is valid only if `observeEvents(runId, fromSequence:)`
+replays from the persistent execution event log before tailing live events.
+
+The contract is:
+
+```text
+startRun(...)
+  -> persists RunStarted
+  -> returns RunHandle(runId, replayFromSequence)
+
+observeEvents(runId, fromSequence)
+  -> emits all events with sequence > fromSequence
+  -> then tails live events until terminal state or cancellation
+```
+
+`RunHandle.replayFromSequence` is the sequence cursor immediately before the
+first event Swift must observe. `nil` means replay from the beginning of the
+run.
+
+An implementation may instead return an event stream atomically from
+`startRunStream(...)`. What is not allowed is a best-effort subscription that can
+miss early `RunStarted`, model-call, assistant delta, or tool events between
+`startRun` and `observeEvents`.
 
 ## 7. Context Assembly Boundary
 
@@ -363,15 +437,18 @@ SessionTree active branch
   + edit/fork lineage
   + current user turn
   + attachment refs
-  -> ConversationRunFrameDTO
+  -> persisted ConversationRunFrame
+  -> ConversationRunFrameRef
 ```
 
-This stage produces a clean skeleton. It does not assemble prompt text.
+This stage produces a clean skeleton and a trusted reference to it. It does not
+assemble prompt text.
 
 Stage 2: `execution/` assembles model input before every LLM call.
 
 ```text
-ConversationRunFrameDTO
+ConversationRunFrameRef
+  -> trusted ConversationRunFrame load
   + compiled prompt
   + tool schemas
   + memory contributions
@@ -517,7 +594,7 @@ It uses:
 ```text
 SessionTree
 EventStore
-BranchProjector or successor
+ConversationFrameProjector
 ConversationProjection
 ConversationRunFrame
 ```
@@ -550,10 +627,12 @@ The conversation path may normalize visible message history into frame
 messages. It must not inject system prompts, memories, tool schemas, context
 budget decisions, or provider-specific message roles.
 
-`BranchProjector` currently lives in `context/` and turns branch runtime events
-into `PromptMessage`. That coupling should be split:
+`ConversationFrameProjector` should replace the conversation-facing role of the
+current `context/BranchProjector`. The current projector turns branch runtime
+events into `PromptMessage` and decides whether tool results inject into
+context. That coupling should be split:
 
-- conversation projection should produce `ConversationFrameMessage`
+- `ConversationFrameProjector` should produce `ConversationFrameMessage`
 - execution context assembly should map those frame messages into
   `ContextSegment` or model-input roles
 
@@ -578,7 +657,8 @@ ExecutionService
 It orchestrates:
 
 ```text
-ConversationRunFrame
+ConversationRunFrameRef
+  -> trusted ConversationRunFrame load
   + AgentProfileId
   + trusted host state captured inside Rust
   -> RunSnapshotService.resolve()
@@ -650,6 +730,22 @@ assistant message plus run/debug references. The complete execution event tree,
 context archives, and model-call traces stay in execution storage/debug
 archives.
 
+The crossing must be recoverable:
+
+```text
+Execution RunCompleted
+  final_message_id
+  final_output_ref
+  conversation_frame_ref
+
+Conversation AssistantCommitted
+  idempotency_key = run_id + final_message_id
+```
+
+If `RunCompleted` exists but `AssistantCommitted` does not, conversation refresh
+or coordinator recovery must retry the commit. Retrying the same
+`run_id + final_message_id` must not create duplicate assistant messages.
+
 ### 8.6 Legacy Runtime Classification
 
 The legacy runtime path should be explicitly classified, not treated as already
@@ -686,8 +782,9 @@ conversation-frame contract.
    `submit_tool_result_streaming` as legacy compatibility paths in docs/tests.
 5. Introduce `conversation/` with re-exported wrappers around the existing
    session/event-store primitives. Do not move storage tables first.
-6. Move branch-to-visible-history projection out of `context/BranchProjector`
-   into conversation, leaving context to consume frame messages as inputs.
+6. Replace the conversation-facing use of `context/BranchProjector` with
+   `ConversationFrameProjector`, leaving context to consume frame messages as
+   inputs.
 7. Add `ConversationService.prepare_user_turn` and
    `commit_assistant_result`.
 8. Add `execution/ExecutionService` as the Rust app-service entry point for
@@ -728,23 +825,24 @@ final class ChatInteractionCoordinator {
 1. Read draft from ConversationViewModel.
 2. conversation.prepareUserTurn(...)
 3. runVM.resetForNewRun(...)
-4. execution.startRun(conversationRunFrame + activeAgentProfileId)
-5. execution.observeEvents(runId)
+4. execution.startRun(conversationRunFrameRef + activeAgentProfileId)
+5. execution.observeEvents(runId, fromSequence: runHandle.replayFromSequence)
 6. runVM.apply(event)
 7. On final assistant response:
-     conversation.commitAssistantResult(...)
+     conversation.commitAssistantResult(runId, finalMessageId, frameRef)
 8. conversationVM refreshes active session projection.
 ```
 
-Swift may pass a frame DTO or frame reference depending on bridge maturity.
-Rust execution must persist the frame reference in the snapshot either way.
+Swift may display a full frame DTO for preview/debug. Execution start must use
+the frame reference as the trusted input, and Rust execution must persist that
+frame reference in the snapshot.
 
 `approveTool` flow:
 
 ```text
 1. Read pending approval from AgentRunViewModel.
 2. execution.approveTool(...)
-3. Continue observing execution events.
+3. Continue observing execution events from the last applied sequence.
 ```
 
 `cancelRun` flow:
@@ -880,29 +978,46 @@ Swift/Rust boundary contract, not necessarily two separate native libraries.
 
 ## 12. Migration Order
 
-1. Add Rust `ConversationRunFrame` / `ConversationRunFrameRef` and wire the
-   reference into `StartRunRequest` or `StartExecutionRequest`.
-2. Persist the frame reference in `ResolvedRunSnapshot`.
-3. Mark the legacy Rust `send_message_streaming` path as a compatibility path
+Implementation should be split into two plans. The Rust boundary contract comes
+first because Swift should not stabilize around an execution request shape that
+does not yet pin conversation frame identity.
+
+Rust boundary contract plan:
+
+1. Add Rust `ConversationRunFrame` / `ConversationRunFrameRef`.
+2. Wire `ConversationRunFrameRef` into `StartRunRequest` or
+   `StartExecutionRequest`.
+3. Persist the frame reference in `ResolvedRunSnapshot`.
+4. Make execution events durable and replayable through
+   `observe_events(run_id, from_sequence)`, or provide atomic
+   `start_run_stream`.
+5. Make final assistant commit idempotent by `run_id + final_message_id` and
+   recoverable after completed-but-uncommitted runs.
+6. Mark the legacy Rust `send_message_streaming` path as a compatibility path
    and keep tests that show it bypasses snapshot/execution planning.
-4. Add Rust `conversation/` and `execution/` module shells around existing
+7. Add Rust `conversation/` and `execution/` module shells around existing
    primitives without changing behavior.
-5. Add DTOs and protocols without changing behavior:
+8. Map branch history through `ConversationFrameProjector`, not
+   `context/BranchProjector`.
+
+Swift adoption plan:
+
+1. Add DTOs and protocols without changing behavior:
    `ConversationDomain`, `ExecutionDomain`, `ConversationRunFrameDTO`,
    `StartExecutionRequestDTO`, and initial bridge client shells.
-6. Map Rust `ConversationRunFrame` to `ConversationRunFrameDTO`.
-7. Extract conversation projection and session operations from
+2. Map Rust `ConversationRunFrameRef` and debug `ConversationRunFrameDTO`.
+3. Extract conversation projection and session operations from
    `AgentRuntimeService` into `ConversationCommandService` and
    `ConversationProjectionStore`.
-8. Extract run event reduction from `AgentViewState`/`RuntimeEventReducer` into
+4. Extract run event reduction from `AgentViewState`/`RuntimeEventReducer` into
    `AgentRunViewModel` and `RuntimeEventStore`.
-9. Add `ChatInteractionCoordinator` and route send/cancel/regenerate/edit flows
+5. Add `ChatInteractionCoordinator` and route send/cancel/regenerate/edit flows
    through it while preserving existing runtime calls.
-10. Move provider/model/agent build APIs under execution services.
-11. Replace Swift prompt-text attachment concatenation with attachment refs in
+6. Move provider/model/agent build APIs under execution services.
+7. Replace Swift prompt-text attachment concatenation with attachment refs in
    conversation frames and Rust-side context policy.
-12. Add context preview/debug DTOs once execution archive APIs are stable.
-13. Delete or shrink `AgentRuntimeService` into bridge adapters after the split.
+8. Add context preview/debug DTOs once execution archive APIs are stable.
+9. Delete or shrink `AgentRuntimeService` into bridge adapters after the split.
 
 ## 13. Acceptance Criteria
 
@@ -911,22 +1026,29 @@ Swift/Rust boundary contract, not necessarily two separate native libraries.
   facades, even if storage migration remains incremental.
 - Agent configuration APIs are not exposed from conversation APIs.
 - Rust conversation APIs produce `ConversationRunFrame`; Rust execution APIs
-  consume it.
+  consume only `ConversationRunFrameRef` as trusted start input.
 - `StartRunRequest` or `StartExecutionRequest` carries a
   `ConversationRunFrameRef`.
 - `ResolvedRunSnapshot` pins the conversation frame reference used by the run.
 - `ConversationRunFrameDTO` contains conversation skeleton data only.
+- A full `ConversationRunFrameDTO` is allowed for UI projection, preview, and
+  debug, but not as the execution trust source.
 - Swift does not assemble `ModelInputMessages`.
 - Every LLM call context is assembled in Rust execution/context code.
+- `observeEvents(runId, fromSequence:)` replays durable events before tailing
+  live events, or `startRun` returns an event stream atomically.
 - `ChatInteractionCoordinator` has no long-lived domain state beyond task/run
   coordination.
 - `ConversationViewModel` does not know tool loop details.
 - `AgentRunViewModel` does not own session list or fork tree.
 - Final assistant output is committed to conversation through an explicit
-  conversation API.
+  idempotent conversation API.
+- Completed-but-uncommitted runs are discoverable and can retry final assistant
+  commit without duplicate messages.
 - Run debug/context preview is read through execution APIs.
-- `BranchProjector` no longer makes conversation history depend on prompt/model
-  input types.
+- `ConversationFrameProjector` replaces conversation-facing
+  `BranchProjector` usage so conversation history does not depend on
+  prompt/model input types.
 - Legacy `send_message_streaming` is documented and tested as a compatibility
   path until it is removed or routed through execution.
 
@@ -936,22 +1058,30 @@ Swift tests:
 
 - Conversation projection from branch DTOs.
 - `prepareUserTurn` maps draft, parent target, and attachment refs into
-  `ConversationRunFrameDTO`.
+  a `ConversationRunFrameRef` plus optional debug `ConversationRunFrameDTO`.
 - `ConversationViewModel` does not require execution mocks.
 - `AgentRunViewModel` reduces execution events without conversation mocks.
 - `ChatInteractionCoordinator.sendMessage` calls prepare -> start -> observe ->
   commit in order.
+- `ChatInteractionCoordinator` observes from the returned run sequence and does
+  not drop early run events.
 - Tool approval routes to execution only.
 - Cancel does not mutate conversation projection directly.
 
 Rust/bridge tests:
 
 - Rust conversation frame fixture from a branched session tree.
-- Start execution request accepts conversation frame plus profile id.
+- Start execution request accepts conversation frame ref plus profile id.
 - Snapshot fixture records `conversation_frame_ref`.
 - Swift cannot forge trusted permission/local binding state.
 - Legacy `send_message_streaming` fixture documents that it bypasses snapshot
   resolution until migration is complete.
+- Event replay fixture proves `observe_events(run_id, from_sequence)` returns
+  already-persisted `RunStarted` and early delta events.
+- Final commit fixture proves retrying `commit_assistant_result` with the same
+  `run_id + final_message_id` is idempotent.
+- Recovery fixture proves a completed-but-uncommitted run can be discovered and
+  committed later.
 - Context preview and actual context archive use the same assembler.
 - Tool-loop second LLM call includes prior tool call/result through execution
   run state, not conversation history mutation.
