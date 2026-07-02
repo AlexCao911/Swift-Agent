@@ -1,6 +1,7 @@
 pub mod agent_package;
 pub mod app_service;
 pub mod context;
+pub mod conversation;
 pub mod core;
 pub mod execution;
 pub mod ffi_bridge;
