@@ -9,14 +9,17 @@ final class AgentViewModel {
 
     private let service: any AgentRuntimeServicing
     private let attachmentService: AttachmentService
+    private let conversationViewModel: ConversationViewModel?
 
     init(
         service: any AgentRuntimeServicing,
         attachmentService: AttachmentService = AttachmentService(),
-        initialState: AgentViewState = AgentViewState()
+        initialState: AgentViewState = AgentViewState(),
+        conversationViewModel: ConversationViewModel? = nil
     ) {
         self.service = service
         self.attachmentService = attachmentService
+        self.conversationViewModel = conversationViewModel
         self.state = initialState
     }
 
@@ -93,6 +96,17 @@ final class AgentViewModel {
     }
 
     func loadConversations() async {
+        if let conversationViewModel {
+            do {
+                try await conversationViewModel.loadConversations()
+                state.conversations.conversations = conversationViewModel.conversations
+                state.conversations.errorMessage = nil
+            } catch {
+                state.conversations.errorMessage = error.localizedDescription
+            }
+            return
+        }
+
         do {
             state = try await service.loadConversations(state: state)
         } catch {

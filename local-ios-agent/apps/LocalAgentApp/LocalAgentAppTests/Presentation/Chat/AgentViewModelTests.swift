@@ -244,6 +244,32 @@ struct AgentViewModelTests {
         #expect(viewModel.state.messages.map(\.text) == ["answer"])
     }
 
+    @Test("load conversations delegates to injected conversation view model")
+    func loadConversationsDelegatesToInjectedConversationViewModel() async {
+        let service = ViewModelServiceStub()
+        let conversation = ConversationViewModel(domain: AgentViewModelConversationDomainStub(
+            summaries: [
+                ConversationSummaryDTO(
+                    sessionId: "session_1",
+                    title: "First",
+                    activeLeafId: "leaf_1",
+                    lastEventId: "event_1",
+                    lastUpdatedSequence: 1
+                ),
+            ]
+        ))
+        let viewModel = AgentViewModel(
+            service: service,
+            initialState: AgentViewState(phase: .ready),
+            conversationViewModel: conversation
+        )
+
+        await viewModel.loadConversations()
+
+        #expect(viewModel.state.conversations.conversations.map(\.sessionId) == ["session_1"])
+        #expect(await service.didLoadConversations == false)
+    }
+
     @Test("regenerate delegates assistant message id")
     func regenerateDelegatesMessageId() async {
         let service = ViewModelServiceStub()
@@ -455,6 +481,7 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
     var sentTexts: [String] = []
     var selectedProviderIds: [String] = []
     var didCreateNewChat = false
+    var didLoadConversations = false
     var regeneratedMessageIds: [String] = []
     var forkRequests: [ForkRequest] = []
     private let preparedState: AgentViewState
@@ -502,6 +529,7 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
     }
 
     func loadConversations(state: AgentViewState) async throws -> AgentViewState {
+        didLoadConversations = true
         state
     }
 
@@ -695,4 +723,38 @@ private enum StreamingViewModelServiceError: LocalizedError {
     var errorDescription: String? {
         "stream stopped"
     }
+}
+
+private struct AgentViewModelConversationDomainStub: ConversationDomain {
+    var summaries: [ConversationSummaryDTO]
+
+    func listSessions() async throws -> [ConversationSummaryDTO] {
+        summaries
+    }
+
+    func prepareUserTurn(_ request: PrepareUserTurnRequestDTO) async throws -> PreparedUserTurnDTO {
+        throw AgentViewModelConversationDomainError.unimplemented
+    }
+
+    func activeBranch(sessionId: String, leafId: String?) async throws -> [RuntimeEventDTO] {
+        []
+    }
+
+    func forkSession(sessionId: String, leafId: String) async throws -> String {
+        sessionId
+    }
+
+    func archiveSession(sessionId: String) async throws {}
+
+    func renameSession(sessionId: String, title: String) async throws {}
+
+    func deleteSession(sessionId: String) async throws {}
+
+    func commitAssistantResult(_ request: CommitAssistantResultRequestDTO) async throws -> ConversationCommitResultDTO {
+        throw AgentViewModelConversationDomainError.unimplemented
+    }
+}
+
+private enum AgentViewModelConversationDomainError: Error {
+    case unimplemented
 }

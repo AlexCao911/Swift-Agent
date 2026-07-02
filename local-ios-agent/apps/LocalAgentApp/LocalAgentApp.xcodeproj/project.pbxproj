@@ -55,6 +55,8 @@
 		0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001120 /* ConversationDomainTests.swift */; };
 		0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001121 /* ExecutionDomainTests.swift */; };
 		0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */; };
+		0B0000010000000000001030 /* ConversationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001130 /* ConversationViewModel.swift */; };
+		0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001131 /* ConversationViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,6 +118,8 @@
 		0B0000010000000000001120 /* ConversationDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001121 /* ExecutionDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainArchitectureTests.swift; sourceTree = "<group>"; };
+		0B0000010000000000001130 /* ConversationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModel.swift; sourceTree = "<group>"; };
+		0B0000010000000000001131 /* ConversationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -257,6 +261,7 @@
 				0A000001000000000000011D /* ChatManagementSheets.swift */,
 				0A0000010000000000000109 /* ChatView.swift */,
 				0A0000010000000000000119 /* ConversationListView.swift */,
+				0B0000010000000000001130 /* ConversationViewModel.swift */,
 				0A0000010000000000000118 /* MessageContentView.swift */,
 			);
 			path = Chat;
@@ -364,6 +369,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000114 /* AgentViewModelTests.swift */,
+				0B0000010000000000001131 /* ConversationViewModelTests.swift */,
 			);
 			path = Chat;
 			sourceTree = "<group>";
@@ -499,6 +505,7 @@
 				0A0000010000000000000002 /* AppBootstrapper.swift in Sources */,
 				0A0000010000000000000003 /* AppContainer.swift in Sources */,
 				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
+				0B0000010000000000001030 /* ConversationViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
 				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
 				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
@@ -541,6 +548,7 @@
 				0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */,
 				0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */,
 				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
+				0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
