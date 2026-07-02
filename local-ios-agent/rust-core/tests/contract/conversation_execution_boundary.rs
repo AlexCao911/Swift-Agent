@@ -337,6 +337,100 @@ fn react_worker_emits_final_response_without_synthetic_adapter() {
 }
 
 #[test]
+fn react_worker_includes_tool_observation_in_second_model_call() {
+    use std::sync::{Arc, Mutex};
+
+    use local_ios_agent_runtime::context::ModelInputMessages;
+    use local_ios_agent_runtime::execution::{
+        ExecutionContextInputAssembler, ExecutionModelClient, ExecutionModelTurn,
+        ExecutionReactWorker, ExecutionToolCall, ExecutionToolExecutor, ExecutionToolObservation,
+    };
+
+    #[derive(Clone)]
+    struct ScriptedModel {
+        seen_inputs: Arc<Mutex<Vec<ModelInputMessages>>>,
+    }
+
+    impl ExecutionModelClient for ScriptedModel {
+        fn next_turn(&self, input: &ModelInputMessages) -> Result<ExecutionModelTurn, String> {
+            let mut seen = self.seen_inputs.lock().unwrap();
+            seen.push(input.clone());
+            if seen.len() == 1 {
+                Ok(ExecutionModelTurn::ToolCall {
+                    call_id: "call_1".to_string(),
+                    name: "debug.echo".to_string(),
+                    arguments_json: r#"{"text":"hello"}"#.to_string(),
+                })
+            } else {
+                assert!(input
+                    .messages()
+                    .iter()
+                    .any(|message| message.content().contains("tool said hello")));
+                Ok(ExecutionModelTurn::Final {
+                    message_id: "final_after_tool".to_string(),
+                    text: "answer after tool".to_string(),
+                })
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct EchoTool;
+
+    impl ExecutionToolExecutor for EchoTool {
+        fn execute_tool(
+            &self,
+            call: &ExecutionToolCall,
+        ) -> Result<ExecutionToolObservation, String> {
+            Ok(ExecutionToolObservation {
+                call_id: call.call_id.clone(),
+                model_text: "tool said hello".to_string(),
+            })
+        }
+    }
+
+    let seen_inputs = Arc::new(Mutex::new(Vec::new()));
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_tool_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    let frame = ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "use tool",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    );
+    let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
+    let worker = ExecutionReactWorker::new(
+        ScriptedModel {
+            seen_inputs: seen_inputs.clone(),
+        },
+        EchoTool,
+        ExecutionContextInputAssembler::new(None),
+        event_log.clone(),
+        completed_runs.clone(),
+    );
+
+    worker.run("run_tool_1", &frame, &frame_ref).unwrap();
+
+    assert_eq!(seen_inputs.lock().unwrap().len(), 2);
+    assert!(event_log
+        .replay("run_tool_1", Some(0))
+        .iter()
+        .any(|event| { event.code() == "tool_result_message" }));
+    assert!(completed_runs
+        .get("run_tool_1", "final_after_tool")
+        .is_some());
+}
+
+#[test]
 fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
     let completed_runs = CompletedRunRegistry::default();
     let service = ConversationCommitService::new(completed_runs.clone());

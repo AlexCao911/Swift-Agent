@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::context::{ContextAssembler, ContextSegment, ModelInputMessages, PromptMessage};
 use crate::conversation::{ConversationFrameMessage, ConversationRunFrame};
-use crate::execution::RuntimeOptions;
+use crate::execution::{ExecutionToolObservation, RuntimeOptions};
 
 #[derive(Clone, Debug)]
 pub struct ExecutionContextInputAssembler {
@@ -24,6 +24,14 @@ impl ExecutionContextInputAssembler {
         &self,
         frame: &ConversationRunFrame,
     ) -> Result<ModelInputMessages, ExecutionContextInputError> {
+        self.assemble_with_observations(frame, &[])
+    }
+
+    pub fn assemble_with_observations(
+        &self,
+        frame: &ConversationRunFrame,
+        observations: &[ExecutionToolObservation],
+    ) -> Result<ModelInputMessages, ExecutionContextInputError> {
         let mut assembler = ContextAssembler::new();
 
         if let Some(options) = &self.runtime_options {
@@ -43,6 +51,16 @@ impl ExecutionContextInputAssembler {
                 .map(prompt_message_from_conversation)
                 .collect(),
         );
+
+        for observation in observations {
+            assembler = assembler.with_segment(
+                ContextSegment::tool_result(
+                    format!("execution.tool_result.{}", observation.call_id),
+                    observation.model_text.clone(),
+                )
+                .with_provenance(format!("execution.tool_result.{}", observation.call_id)),
+            );
+        }
 
         Ok(assembler
             .assemble_default()

@@ -86,28 +86,54 @@ where
         frame: &ConversationRunFrame,
         frame_ref: &ConversationRunFrameRef,
     ) -> Result<(), String> {
-        let input = self
-            .context
-            .assemble_initial(frame)
-            .map_err(|error| format!("{}: {error}", error.code()))?;
-        match self.model.next_turn(&input)? {
-            ExecutionModelTurn::Final { message_id, text } => {
-                self.record_final(run_id, frame_ref, message_id, text);
-                Ok(())
-            }
-            ExecutionModelTurn::ToolCall {
-                call_id,
-                name,
-                arguments_json,
-            } => {
-                let _ = self.tools.execute_tool(&ExecutionToolCall {
+        let mut observations = Vec::new();
+
+        for _ in 0..8 {
+            let input = self
+                .context
+                .assemble_with_observations(frame, &observations)
+                .map_err(|error| format!("{}: {error}", error.code()))?;
+            match self.model.next_turn(&input)? {
+                ExecutionModelTurn::Final { message_id, text } => {
+                    self.record_final(run_id, frame_ref, message_id, text);
+                    return Ok(());
+                }
+                ExecutionModelTurn::ToolCall {
                     call_id,
                     name,
                     arguments_json,
-                })?;
-                Err("tool continuation not implemented in Task 2".to_string())
+                } => {
+                    self.event_log.append_with_payload(
+                        run_id,
+                        "tool_call_requested",
+                        json!({
+                            "call_id": &call_id,
+                            "name": &name,
+                            "arguments_json": &arguments_json
+                        })
+                        .to_string(),
+                    );
+                    let observation = self.tools.execute_tool(&ExecutionToolCall {
+                        call_id,
+                        name,
+                        arguments_json,
+                    })?;
+                    self.event_log.append_with_payload(
+                        run_id,
+                        "tool_result_message",
+                        json!({
+                            "call_id": &observation.call_id,
+                            "model_text": &observation.model_text
+                        })
+                        .to_string(),
+                    );
+                    observations.push(observation);
+                }
             }
         }
+
+        self.event_log.append(run_id, "run.failed");
+        Err("execution tool loop exceeded 8 model calls".to_string())
     }
 
     fn record_final(
