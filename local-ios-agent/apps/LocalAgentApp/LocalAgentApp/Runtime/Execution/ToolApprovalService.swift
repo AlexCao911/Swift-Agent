@@ -10,6 +10,10 @@ struct ToolApprovalService: Sendable {
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws {
         try await bridge.approveTool(id: id, decision: decision)
     }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        try await bridge.submitToolResult(runId: runId, result: result)
+    }
 }
 
 #if DEBUG

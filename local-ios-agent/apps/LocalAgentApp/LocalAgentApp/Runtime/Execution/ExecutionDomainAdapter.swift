@@ -47,6 +47,10 @@ struct ExecutionDomainAdapter: ExecutionDomain {
         try await tools.approveTool(id: id, decision: decision)
     }
 
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        try await tools.submitToolResult(runId: runId, result: result)
+    }
+
     func cancelRun(runId: String) async throws -> RuntimeEventDTO {
         try await lifecycle.cancelRun(runId: runId)
     }

@@ -54,6 +54,18 @@ struct ExecutionDomainTests {
             id: "approval_1",
             decision: ApprovalDecisionDTO(approved: true)
         )
+        let submitted = try await domain.submitToolResult(
+            runId: "run_mock",
+            result: ToolResultDTO(
+                displayText: "tool ok",
+                modelText: "tool said ok",
+                structuredJson: "{}",
+                auditText: "tool audit",
+                sensitivity: .public,
+                retention: .runOnly,
+                isError: false
+            )
+        )
         let cancelled = try await domain.cancelRun(runId: "run_mock")
         try await domain.updateRuntimeOptions(RuntimeOptionsDTO(
             systemPrompt: "system",
@@ -66,10 +78,12 @@ struct ExecutionDomainTests {
         #expect(built.profileId == "profile_1")
         #expect(handle.runId == "run_mock")
         #expect(observed == [event])
+        #expect(submitted.state == .completed)
         #expect(cancelled.kind == .runCancelled)
         #expect(await bridge.builtAgentTemplateIds == ["template_1"])
         #expect(await bridge.startedExecutionRequests.count == 1)
         #expect(await bridge.approvedTools.count == 1)
+        #expect(await bridge.submittedToolResults.map(\.runId) == ["run_mock"])
         #expect(await bridge.updatedRuntimeOptions.count == 1)
     }
 }

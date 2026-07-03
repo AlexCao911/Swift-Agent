@@ -4,14 +4,18 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
-    local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_commit_assistant_result,
-    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
-    local_agent_runtime_bridge_free, local_agent_runtime_bridge_load_debug_archive,
-    local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_observe_events_streaming,
-    local_agent_runtime_bridge_prepare_user_turn, local_agent_runtime_bridge_send_message,
+    local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
+    local_agent_runtime_bridge_commit_assistant_result, local_agent_runtime_bridge_create_session,
+    local_agent_runtime_bridge_fork_session, local_agent_runtime_bridge_free,
+    local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
+    local_agent_runtime_bridge_observe_events_streaming,
+    local_agent_runtime_bridge_pending_approval_requests,
+    local_agent_runtime_bridge_pending_tool_requests, local_agent_runtime_bridge_prepare_user_turn,
+    local_agent_runtime_bridge_register_tool_schema, local_agent_runtime_bridge_send_message,
     local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
     local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
-    local_agent_runtime_bridge_string_free, RuntimeJsonBridge,
+    local_agent_runtime_bridge_string_free, local_agent_runtime_bridge_submit_tool_result,
+    RuntimeJsonBridge,
 };
 use local_ios_agent_runtime::tool::{
     ToolCall, ToolRecipe, ToolRecipeCompiler, ToolRegistry, ToolRouter,
@@ -253,7 +257,9 @@ unsafe fn new_seeded_agent_os_c_bridge() -> *mut RuntimeJsonBridge {
 }
 
 unsafe fn prepare_c_user_turn(runtime: *mut RuntimeJsonBridge, text: &str) -> Value {
-    let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+    let session = decode(&take_bridge_string(
+        local_agent_runtime_bridge_create_session(runtime),
+    ));
     let request = CString::new(
         json!({
             "session_id": session.as_str().unwrap(),
@@ -450,11 +456,13 @@ fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
         let active_branch_session_id =
             CString::new(prepared["session_id"].as_str().unwrap()).unwrap();
         let active_branch_leaf_id = CString::new(committed_message_id).unwrap();
-        let branch = decode(&take_bridge_string(local_agent_runtime_bridge_active_branch(
-            runtime,
-            active_branch_session_id.as_ptr(),
-            active_branch_leaf_id.as_ptr(),
-        )));
+        let branch = decode(&take_bridge_string(
+            local_agent_runtime_bridge_active_branch(
+                runtime,
+                active_branch_session_id.as_ptr(),
+                active_branch_leaf_id.as_ptr(),
+            ),
+        ));
         assert!(branch.as_array().unwrap().iter().any(|event| {
             event["kind"] == "assistant_message_completed"
                 && event["id"] == commit["committed_message_id"]
@@ -489,10 +497,315 @@ fn c_abi_prepare_start_observe_commit_uses_trusted_frame_ref() {
 }
 
 #[test]
+fn c_abi_start_run_routes_tool_call_to_pending_tool_request() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let schema = CString::new(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"read_only"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_register_tool_schema(runtime, schema.as_ptr())
+            )),
+            Value::Null
+        );
+        let prepared = prepare_c_user_turn(runtime, "use tool debug.echo");
+        let handle = start_c_agent_os_run(runtime, &prepared, "use tool debug.echo");
+        let run_id = handle["run_id"].as_str().unwrap();
+
+        let pending = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_tool_requests(runtime),
+        ));
+
+        assert_eq!(run_id, "run_1");
+        assert_eq!(pending.as_array().unwrap().len(), 1);
+        assert_eq!(pending[0]["run_id"], run_id);
+        assert_eq!(pending[0]["tool_call_id"], "call_mock_1");
+        assert_eq!(pending[0]["tool_name"], "debug.echo");
+        assert_eq!(pending[0]["arguments_json"], r#"{"text":"hello"}"#);
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_submit_tool_result_resumes_new_execution_run() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let schema = CString::new(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"read_only"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_register_tool_schema(runtime, schema.as_ptr())
+            )),
+            Value::Null
+        );
+        let prepared = prepare_c_user_turn(runtime, "use tool debug.echo");
+        let handle = start_c_agent_os_run(runtime, &prepared, "use tool debug.echo");
+        let run_id = handle["run_id"].as_str().unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_pending_tool_requests(runtime)
+            ))
+            .as_array()
+            .unwrap()
+            .len(),
+            1
+        );
+
+        let run_id_c = CString::new(run_id).unwrap();
+        let result = CString::new(
+            r#"{"display_text":"echoed","model_text":"tool said hello","structured_json":"{}","audit_text":"audit","sensitivity":"public","retention":"run_only","provenance":"tool.debug.echo.swift","is_error":false}"#,
+        )
+        .unwrap();
+        let resumed = decode(&take_bridge_string(
+            local_agent_runtime_bridge_submit_tool_result(
+                runtime,
+                run_id_c.as_ptr(),
+                result.as_ptr(),
+            ),
+        ));
+        let observed = decode(
+            &RuntimeJsonBridge::observe_events_json(
+                &*runtime,
+                &json!({
+                    "run_id": run_id,
+                    "from_sequence": 0
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(resumed["state"], "completed");
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_pending_tool_requests(runtime)
+            )),
+            json!([])
+        );
+        assert!(observed.as_array().unwrap().iter().any(|event| {
+            event["kind"] == "tool_result_message"
+                && event["payload"]
+                    .as_str()
+                    .unwrap()
+                    .contains("tool said hello")
+        }));
+        assert!(observed.as_array().unwrap().iter().any(|event| {
+            event["kind"] == "assistant_message_completed"
+                && event["payload"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Mock response after tool")
+        }));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_start_run_routes_confirm_tool_call_to_approval_request() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let schema = CString::new(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"confirm"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_register_tool_schema(runtime, schema.as_ptr())
+            )),
+            Value::Null
+        );
+        let prepared = prepare_c_user_turn(runtime, "use tool debug.echo");
+        let handle = start_c_agent_os_run(runtime, &prepared, "use tool debug.echo");
+        let run_id = handle["run_id"].as_str().unwrap();
+
+        let pending_tools = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_tool_requests(runtime),
+        ));
+        let approvals = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_approval_requests(runtime),
+        ));
+        let observed = decode(
+            &RuntimeJsonBridge::observe_events_json(
+                &*runtime,
+                &json!({
+                    "run_id": run_id,
+                    "from_sequence": 0
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(pending_tools, json!([]));
+        assert_eq!(approvals.as_array().unwrap().len(), 1);
+        assert_eq!(approvals[0]["run_id"], run_id);
+        assert_eq!(approvals[0]["scope"]["kind"], "operation");
+        assert_eq!(approvals[0]["scope"]["operation"], "tool.debug.echo");
+        assert!(observed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["kind"] == "run_suspended" && event["run_id"] == run_id }));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_approve_tool_resolves_new_execution_approval_to_pending_tool() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let schema = CString::new(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"confirm"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_register_tool_schema(runtime, schema.as_ptr())
+            )),
+            Value::Null
+        );
+        let prepared = prepare_c_user_turn(runtime, "use tool debug.echo");
+        let handle = start_c_agent_os_run(runtime, &prepared, "use tool debug.echo");
+        let run_id = handle["run_id"].as_str().unwrap();
+        let approvals = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_approval_requests(runtime),
+        ));
+        let approval_id = approvals[0]["approval_id"].as_str().unwrap();
+        let approve_request = CString::new(
+            json!({
+                "id": approval_id,
+                "decision": {
+                    "approved": true,
+                    "reason": null
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_approve_tool(runtime, approve_request.as_ptr(),)
+            )),
+            json!({})
+        );
+        let pending_tools = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_tool_requests(runtime),
+        ));
+        let observed = decode(
+            &RuntimeJsonBridge::observe_events_json(
+                &*runtime,
+                &json!({
+                    "run_id": run_id,
+                    "from_sequence": 0
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(pending_tools.as_array().unwrap().len(), 1);
+        assert_eq!(pending_tools[0]["run_id"], run_id);
+        assert_eq!(pending_tools[0]["tool_call_id"], "call_mock_1");
+        assert!(observed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["kind"] == "tool_call_approved" && event["run_id"] == run_id }));
+        assert!(observed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["kind"] == "run_waiting_tool" && event["run_id"] == run_id }));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_reject_tool_approval_records_execution_rejection() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let schema = CString::new(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"confirm"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_register_tool_schema(runtime, schema.as_ptr())
+            )),
+            Value::Null
+        );
+        let prepared = prepare_c_user_turn(runtime, "use tool debug.echo");
+        let handle = start_c_agent_os_run(runtime, &prepared, "use tool debug.echo");
+        let run_id = handle["run_id"].as_str().unwrap();
+        let approvals = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_approval_requests(runtime),
+        ));
+        let approval_id = approvals[0]["approval_id"].as_str().unwrap();
+        let reject_request = CString::new(
+            json!({
+                "id": approval_id,
+                "decision": {
+                    "approved": false,
+                    "reason": "not now"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode(&take_bridge_string(
+                local_agent_runtime_bridge_approve_tool(runtime, reject_request.as_ptr(),)
+            )),
+            json!({})
+        );
+        let pending_tools = decode(&take_bridge_string(
+            local_agent_runtime_bridge_pending_tool_requests(runtime),
+        ));
+        let observed = decode(
+            &RuntimeJsonBridge::observe_events_json(
+                &*runtime,
+                &json!({
+                    "run_id": run_id,
+                    "from_sequence": 0
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(pending_tools, json!([]));
+        assert!(observed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["kind"] == "tool_call_rejected" && event["run_id"] == run_id }));
+        assert!(observed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["kind"] == "run_failed" && event["run_id"] == run_id }));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
 fn c_abi_prepare_user_turn_without_parent_uses_current_active_branch() {
     unsafe {
         let runtime = new_seeded_agent_os_c_bridge();
-        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let session = decode(&take_bridge_string(
+            local_agent_runtime_bridge_create_session(runtime),
+        ));
         let session_id = session.as_str().unwrap();
         let first = prepare_c_user_turn_in_session(runtime, session_id, "first");
         let first_handle = start_c_agent_os_run(runtime, &first, "first");
@@ -518,7 +831,9 @@ fn c_abi_prepare_user_turn_without_parent_uses_current_active_branch() {
         assert!(messages
             .iter()
             .any(|message| message["role"] == "assistant"));
-        assert!(messages.iter().any(|message| message["content"] == "second"));
+        assert!(messages
+            .iter()
+            .any(|message| message["content"] == "second"));
 
         local_agent_runtime_bridge_free(runtime);
     }
@@ -528,7 +843,9 @@ fn c_abi_prepare_user_turn_without_parent_uses_current_active_branch() {
 fn c_abi_prepare_user_turn_with_stale_parent_returns_json_error() {
     unsafe {
         let runtime = new_seeded_agent_os_c_bridge();
-        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let session = decode(&take_bridge_string(
+            local_agent_runtime_bridge_create_session(runtime),
+        ));
         let request = CString::new(
             json!({
                 "session_id": session.as_str().unwrap(),
@@ -558,7 +875,9 @@ fn c_abi_prepare_user_turn_with_stale_parent_returns_json_error() {
 fn c_abi_prepare_user_turn_treats_root_parent_sentinel_as_no_parent() {
     unsafe {
         let runtime = new_seeded_agent_os_c_bridge();
-        let session = decode(&take_bridge_string(local_agent_runtime_bridge_create_session(runtime)));
+        let session = decode(&take_bridge_string(
+            local_agent_runtime_bridge_create_session(runtime),
+        ));
         let request = CString::new(
             json!({
                 "session_id": session.as_str().unwrap(),
@@ -575,7 +894,10 @@ fn c_abi_prepare_user_turn_treats_root_parent_sentinel_as_no_parent() {
         ));
 
         assert_eq!(prepared["session_id"], session);
-        assert_eq!(prepared["frame_preview"]["messages"][0]["content"], "root regenerate");
+        assert_eq!(
+            prepared["frame_preview"]["messages"][0]["content"],
+            "root regenerate"
+        );
 
         local_agent_runtime_bridge_free(runtime);
     }

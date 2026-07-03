@@ -2,17 +2,20 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::conversation::ConversationRunFrameRef;
 use crate::context::{
-    ContextController, InferenceOptions, PromptDebugSnapshot, PromptFrame, TokenizerAdapter,
+    ContextController, InferenceOptions, ModelInputMessages, ModelInputRole, PromptDebugSnapshot,
+    PromptFrame, PromptMessage, TokenizerAdapter,
 };
+use crate::conversation::ConversationRunFrameRef;
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
     ModelProviderOutput, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
     ProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
     StreamBatcher,
 };
-use crate::execution::ExecutionPlan;
+use crate::execution::{
+    ExecutionModelTurn, ExecutionPlan, ExecutionToolObservation, ExecutionToolOutcome,
+};
 use crate::memory::{EventStore, InMemoryEventStore, ProviderSetting};
 use crate::runtime::{EffectDriver, RunMachine, RuntimeExecutionDebugTrace};
 use crate::security::{
@@ -86,6 +89,14 @@ pub struct PreparedConversationUserTurn {
     pub session_id: SessionId,
     pub parent_event_id: Option<EntryId>,
     pub user_turn_id: EntryId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionApprovalResolution {
+    pub run_id: RunId,
+    pub approved_tool_call_id: Option<String>,
+    pub approved: bool,
+    pub message: String,
 }
 
 const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
@@ -176,6 +187,23 @@ impl<S: EventStore> AgentRuntime<S> {
         &self.pending_tool_requests
     }
 
+    pub fn consume_execution_pending_tool_request(
+        &mut self,
+        run_id: &RunId,
+    ) -> Result<ToolExecutionRequest, AgentError> {
+        let request_index = self
+            .pending_tool_requests
+            .iter()
+            .position(|request| request.run_id() == run_id)
+            .ok_or_else(|| {
+                AgentError::ToolExecution(format!(
+                    "missing pending execution tool request for run: {}",
+                    run_id.0
+                ))
+            })?;
+        Ok(self.pending_tool_requests.remove(request_index))
+    }
+
     pub fn provider_profiles(&self) -> Vec<ProviderProfile> {
         self.provider_registry.profiles()
     }
@@ -197,6 +225,86 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn latest_runtime_execution_trace(&self) -> Option<RuntimeExecutionDebugTrace> {
         self.latest_runtime_execution_trace.clone()
+    }
+
+    pub fn next_execution_model_turn(
+        &mut self,
+        run_id: &RunId,
+        input: &ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, AgentError> {
+        let frame = self.execution_prompt_frame(input);
+        let cancellation = self.start_provider_call(run_id);
+        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
+        let mut text_buffer = String::new();
+        let mut completed_text = None;
+        let mut tool_call = None;
+        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
+            match provider_event {
+                ModelProviderOutput::TextDelta(text) => {
+                    text_buffer.push_str(&text);
+                }
+                ModelProviderOutput::Completed(text) => {
+                    completed_text = Some(text);
+                }
+                ModelProviderOutput::ToolCall(call) => {
+                    tool_call = Some(call);
+                }
+            }
+            Ok(())
+        });
+        self.config.provider = provider;
+        self.finish_provider_call(run_id);
+        provider_result?;
+
+        if let Some(call) = tool_call {
+            return Ok(ExecutionModelTurn::ToolCall {
+                call_id: call.id,
+                name: call.name,
+                arguments_json: call.arguments_json,
+            });
+        }
+
+        Ok(ExecutionModelTurn::Final {
+            message_id: "final_1".to_string(),
+            text: completed_text.unwrap_or(text_buffer),
+        })
+    }
+
+    pub fn route_execution_tool_call(
+        &mut self,
+        run_id: &RunId,
+        session_id: &SessionId,
+        call: ToolCall,
+    ) -> Result<ExecutionToolOutcome, AgentError> {
+        let call_id = call.id.clone();
+        let tool_call_entry_id = EntryId(format!("execution_tool_call_{call_id}"));
+        let router = self
+            .config
+            .tool_router
+            .as_mut()
+            .ok_or_else(|| AgentError::ToolValidation("no tool router configured".into()))?;
+
+        match router.route(run_id, session_id, &tool_call_entry_id, call)? {
+            ToolRouteOutcome::ExecuteInSwift(request) => {
+                let call_id = request.tool_call_id().to_string();
+                self.pending_tool_requests.push(request);
+                Ok(ExecutionToolOutcome::PendingHostTool { call_id })
+            }
+            ToolRouteOutcome::ApprovalRequired {
+                request,
+                approval: _,
+                reason,
+            } => Ok(ExecutionToolOutcome::ApprovalRequired {
+                call_id: request.tool_call_id().to_string(),
+                reason,
+            }),
+            ToolRouteOutcome::Denied(result) => Ok(ExecutionToolOutcome::Observation(
+                ExecutionToolObservation {
+                    call_id,
+                    model_text: result.model_text,
+                },
+            )),
+        }
     }
 
     pub fn execute_plan<D>(
@@ -410,6 +518,46 @@ impl<S: EventStore> AgentRuntime<S> {
                     state: resumed.state,
                     events: emitted,
                     pending_tool_call_id: resumed.pending_tool_call_id,
+                })
+            }
+        }
+    }
+
+    pub fn approve_execution_tool_request(
+        &mut self,
+        response: ApprovalProtocolResponse,
+    ) -> Result<ExecutionApprovalResolution, AgentError> {
+        let (approval, decision, tool_request) = self
+            .config
+            .tool_router
+            .as_mut()
+            .ok_or_else(|| AgentError::PolicyDenied("no tool router configured".into()))?
+            .resolve_approval(response)?;
+
+        match decision {
+            ApprovalDecision::Approved => {
+                let request = tool_request.ok_or_else(|| {
+                    AgentError::PolicyDenied(format!(
+                        "approved tool request missing for approval: {}",
+                        approval.approval_id
+                    ))
+                })?;
+                let run_id = request.run_id().clone();
+                let call_id = request.tool_call_id().to_string();
+                self.pending_tool_requests.push(request);
+                Ok(ExecutionApprovalResolution {
+                    run_id,
+                    approved_tool_call_id: Some(call_id),
+                    approved: true,
+                    message: approval.message,
+                })
+            }
+            ApprovalDecision::Rejected | ApprovalDecision::Cancelled => {
+                Ok(ExecutionApprovalResolution {
+                    run_id: approval.run_id,
+                    approved_tool_call_id: None,
+                    approved: false,
+                    message: approval.message,
                 })
             }
         }
@@ -1259,6 +1407,49 @@ impl<S: EventStore> AgentRuntime<S> {
 
     fn context_controller(&self) -> &ContextController {
         &self.context_controller
+    }
+
+    fn execution_prompt_frame(&self, input: &ModelInputMessages) -> PromptFrame {
+        let mut system_prompt = String::new();
+        let mut messages = Vec::new();
+
+        for message in input.messages() {
+            match message.role() {
+                ModelInputRole::System => {
+                    if !system_prompt.is_empty() {
+                        system_prompt.push('\n');
+                    }
+                    system_prompt.push_str(message.content());
+                }
+                ModelInputRole::User => {
+                    if message.blob_refs().is_empty() {
+                        messages.push(PromptMessage::User(message.content().to_string()));
+                    } else {
+                        messages.push(PromptMessage::UserWithBlobRefs {
+                            content: message.content().to_string(),
+                            blob_refs: message.blob_refs().to_vec(),
+                        });
+                    }
+                }
+                ModelInputRole::Assistant => {
+                    messages.push(PromptMessage::Assistant(message.content().to_string()));
+                }
+                ModelInputRole::Tool => {
+                    messages.push(PromptMessage::ToolResult(message.content().to_string()));
+                }
+                ModelInputRole::Summary => {
+                    messages.push(PromptMessage::Summary(message.content().to_string()));
+                }
+            }
+        }
+
+        PromptFrame {
+            system_prompt,
+            runtime_policy: String::new(),
+            tool_schemas: self.config.tool_schemas.clone(),
+            inference_options: InferenceOptions::default(),
+            messages,
+        }
     }
 
     fn rebuild_context_controller(&mut self) {

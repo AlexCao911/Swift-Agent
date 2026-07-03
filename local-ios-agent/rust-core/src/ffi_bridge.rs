@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
-use crate::context::{InferenceOptions, PromptFrame, TokenizerAdapter};
+use crate::context::{InferenceOptions, ModelInputMessages, PromptFrame, TokenizerAdapter};
 use crate::conversation::{
     ConversationCommitError, ConversationCommitService, ConversationFrameId,
     ConversationFrameMessage, ConversationFrameRepository, ConversationRunFrame,
@@ -21,8 +21,10 @@ use crate::core::{
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
 use crate::execution::{
-    ApprovalDecision, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionPlanner,
-    ExecutionService, RunHandle, RuntimeOptions, StartExecutionRequest,
+    CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionModelClient,
+    ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionToolCall,
+    ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
+    ExecutionWorkerDependencies, RunHandle, RuntimeOptions, StartExecutionRequest,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::security::{
@@ -31,7 +33,7 @@ use crate::security::{
 };
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
-    Sensitivity, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
+    Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
 };
 
 pub type RuntimeEventCallback =
@@ -91,6 +93,65 @@ impl TokenizerAdapter for BridgeWhitespaceTokenizer {
     }
 }
 
+#[derive(Clone)]
+struct BridgeExecutionModelClient<S: EventStore + Send + 'static> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
+}
+
+#[derive(Clone)]
+struct BridgeExecutionToolExecutor<S: EventStore + Send + 'static> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
+}
+
+impl<S: EventStore + Send + 'static> BridgeExecutionModelClient<S> {
+    fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl<S: EventStore + Send + 'static> BridgeExecutionToolExecutor<S> {
+    fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl<S: EventStore + Send + 'static> ExecutionModelClient for BridgeExecutionModelClient<S> {
+    fn next_turn(
+        &self,
+        run_id: &str,
+        input: &ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, String> {
+        self.runtime
+            .lock()
+            .map_err(|_| "runtime bridge mutex poisoned".to_string())?
+            .next_execution_model_turn(&RunId(run_id.to_string()), input)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl<S: EventStore + Send + 'static> ExecutionToolExecutor for BridgeExecutionToolExecutor<S> {
+    fn execute_tool(
+        &self,
+        run_id: &str,
+        frame_ref: &ConversationRunFrameRef,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        self.runtime
+            .lock()
+            .map_err(|_| "runtime bridge mutex poisoned".to_string())?
+            .route_execution_tool_call(
+                &RunId(run_id.to_string()),
+                frame_ref.session_id(),
+                ToolCall {
+                    id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments_json: call.arguments_json.clone(),
+                },
+            )
+            .map_err(|error| error.to_string())
+    }
+}
+
 pub enum RuntimeJsonBridge {
     InMemory(BridgeRuntime<InMemoryEventStore>),
     Sqlite(BridgeRuntime<SqliteEventStore>),
@@ -116,12 +177,17 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let event_log = ExecutionEventLog::default();
         let completed_runs = CompletedRunRegistry::default();
+        let worker_dependencies = ExecutionWorkerDependencies::new(
+            Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
+            Arc::new(BridgeExecutionToolExecutor::new(runtime.clone())),
+        );
         let execution = ExecutionService::with_runtime_parts(
             frames.clone(),
             app_services.snapshot_service(),
             ExecutionPlanner,
             event_log,
             completed_runs.clone(),
+            worker_dependencies,
         );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
@@ -256,15 +322,19 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
         let start_options = StartRunOptionsJson::from_value(options)?;
-        let defaults = self.execution().runtime_options().map(Ok).unwrap_or_else(|| {
-            let (system_prompt, runtime_policy) = self.lock()?.runtime_prompt_defaults();
-            Ok(RuntimeOptions {
-                system_prompt,
-                runtime_policy,
-                temperature: None,
-                top_p: None,
-            })
-        })?;
+        let defaults = self
+            .execution()
+            .runtime_options()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                let (system_prompt, runtime_policy) = self.lock()?.runtime_prompt_defaults();
+                Ok(RuntimeOptions {
+                    system_prompt,
+                    runtime_policy,
+                    temperature: None,
+                    top_p: None,
+                })
+            })?;
         Ok(start_options.into_domain(defaults))
     }
 
@@ -281,18 +351,18 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .execution()
             .observe_event_stream(&request.run_id, Some(request.from_sequence));
         let mut last_sequence = request.from_sequence;
-        let mut terminal_observed = false;
+        let mut boundary_observed = false;
 
         for event in stream.replay() {
             if event.sequence() <= last_sequence {
                 continue;
             }
-            terminal_observed |= is_terminal_execution_event(event);
+            boundary_observed |= is_execution_stream_boundary(event);
             last_sequence = event.sequence();
             emit(to_json(&RuntimeEventJson::from_execution_event(event))?)?;
         }
 
-        if terminal_observed {
+        if boundary_observed {
             return Ok(());
         }
 
@@ -300,10 +370,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             if event.sequence() <= last_sequence {
                 continue;
             }
-            let terminal = is_terminal_execution_event(&event);
+            let boundary = is_execution_stream_boundary(&event);
             last_sequence = event.sequence();
             emit(to_json(&RuntimeEventJson::from_execution_event(&event))?)?;
-            if terminal {
+            if boundary {
                 break;
             }
         }
@@ -360,9 +430,39 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn approve_tool_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: ApproveToolRequestJson = from_json(request_json)?;
-        self.execution()
-            .approve_tool(request.id, request.decision.into_domain())
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        let resolved = self
+            .lock()?
+            .approve_execution_tool_request(ApprovalProtocolResponse {
+                approval_id: request.id,
+                approved: request.decision.approved,
+                reason: request.decision.reason,
+            })?;
+        if let Some(call_id) = resolved.approved_tool_call_id {
+            self.execution().record_external_event(
+                &resolved.run_id.0,
+                "tool_call_approved",
+                json!({ "call_id": call_id.clone() }).to_string(),
+            );
+            self.execution().record_external_event(
+                &resolved.run_id.0,
+                "run.waiting_tool",
+                json!({ "call_id": call_id }).to_string(),
+            );
+        } else if !resolved.approved {
+            self.execution().record_external_event(
+                &resolved.run_id.0,
+                "tool_call_rejected",
+                json!({ "message": resolved.message.clone() }).to_string(),
+            );
+            self.execution().record_external_event(
+                &resolved.run_id.0,
+                "run.failed",
+                json!({
+                    "message": format!("tool approval rejected: {}", resolved.message)
+                })
+                .to_string(),
+            );
+        }
         to_json(&EmptyAgentOSResponseJson {})
     }
 
@@ -381,6 +481,41 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .update_runtime_options(request.into_domain())
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&EmptyAgentOSResponseJson {})
+    }
+
+    fn submit_tool_result_json(
+        &self,
+        run_id: &str,
+        result_json: &str,
+    ) -> Result<String, AgentError> {
+        let result: ToolResultJson = from_json(result_json)?;
+        let mut result = result.into_tool_result()?;
+
+        if self.execution().has_active_run(run_id) {
+            let run_id_key = RunId(run_id.to_string());
+            let request = self
+                .lock()?
+                .consume_execution_pending_tool_request(&run_id_key)?;
+            if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
+                result.provenance = format!("tool.{}", request.tool_name());
+            }
+            let events = self
+                .execution()
+                .submit_tool_observation(
+                    run_id,
+                    ExecutionToolObservation {
+                        call_id: request.tool_call_id().to_string(),
+                        model_text: result.model_text,
+                    },
+                )
+                .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+            return to_json(&AgentTurnResultJson::from_execution_events(run_id, &events));
+        }
+
+        let turn = self
+            .lock()?
+            .submit_tool_result(run_id.to_string(), result)?;
+        to_json(&AgentTurnResultJson::from_result(&turn))
     }
 }
 
@@ -644,17 +779,10 @@ impl RuntimeJsonBridge {
         run_id: &str,
         result_json: &str,
     ) -> Result<String, AgentError> {
-        let result: ToolResultJson = from_json(result_json)?;
-        let result = result.into_tool_result()?;
-        let turn = match self {
-            Self::InMemory(runtime) => runtime
-                .lock()?
-                .submit_tool_result(run_id.to_string(), result),
-            Self::Sqlite(runtime) => runtime
-                .lock()?
-                .submit_tool_result(run_id.to_string(), result),
-        };
-        to_json(&AgentTurnResultJson::from_result(&turn?))
+        match self {
+            Self::InMemory(runtime) => runtime.submit_tool_result_json(run_id, result_json),
+            Self::Sqlite(runtime) => runtime.submit_tool_result_json(run_id, result_json),
+        }
     }
 
     pub fn submit_tool_result_streaming_json(
@@ -1622,6 +1750,23 @@ impl AgentTurnResultJson {
             pending_tool_call_id: result.pending_tool_call_id.clone(),
         }
     }
+
+    fn from_execution_events(run_id: &str, events: &[ExecutionEvent]) -> Self {
+        let state = execution_turn_state_json(events);
+        Self {
+            run_id: run_id.to_string(),
+            state,
+            events: events
+                .iter()
+                .map(RuntimeEventJson::from_execution_event)
+                .collect(),
+            pending_tool_call_id: if matches!(state, "waiting_tool" | "suspended") {
+                execution_pending_tool_call_id(events)
+            } else {
+                None
+            },
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1748,12 +1893,6 @@ impl From<RunHandle> for RunHandleJson {
             run_id: handle.run_id().to_string(),
             replay_from_sequence: handle.replay_from_sequence(),
         }
-    }
-}
-
-impl ApprovalDecisionJson {
-    fn into_domain(self) -> ApprovalDecision {
-        ApprovalDecision::new(self.approved, self.reason)
     }
 }
 
@@ -1983,10 +2122,10 @@ fn from_json<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, AgentError> 
     serde_json::from_str(json).map_err(|error| AgentError::Ffi(error.to_string()))
 }
 
-fn is_terminal_execution_event(event: &ExecutionEvent) -> bool {
+fn is_execution_stream_boundary(event: &ExecutionEvent) -> bool {
     matches!(
         event.code(),
-        "run.completed" | "run.failed" | "run.cancelled"
+        "run.completed" | "run.failed" | "run.cancelled" | "run.waiting_tool" | "run.suspended"
     )
 }
 
@@ -1996,7 +2135,11 @@ fn execution_event_kind_json(code: &str) -> &'static str {
         "assistant_text_delta" => "assistant_text_delta",
         "assistant_message_started" => "assistant_message_started",
         "tool_call_requested" => "tool_call_requested",
+        "tool_call_approved" => "tool_call_approved",
+        "tool_call_rejected" => "tool_call_rejected",
         "tool_result_message" => "tool_result_message",
+        "run.suspended" => "run_suspended",
+        "run.waiting_tool" => "run_waiting_tool",
         "run.cancelled" => "run_cancelled",
         "run.failed" => "run_failed",
         _ => "execution.event",
@@ -2182,6 +2325,34 @@ fn run_state_json(state: &RunState) -> &'static str {
     }
 }
 
+fn execution_turn_state_json(events: &[ExecutionEvent]) -> &'static str {
+    for event in events.iter().rev() {
+        match event.code() {
+            "run.completed" => return "completed",
+            "run.failed" => return "failed",
+            "run.cancelled" => return "cancelled",
+            "run.waiting_tool" => return "waiting_tool",
+            "run.suspended" => return "suspended",
+            _ => {}
+        }
+    }
+    "running"
+}
+
+fn execution_pending_tool_call_id(events: &[ExecutionEvent]) -> Option<String> {
+    for event in events.iter().rev() {
+        if !matches!(event.code(), "run.waiting_tool" | "run.suspended") {
+            continue;
+        }
+        let payload: Value = serde_json::from_str(event.payload()).ok()?;
+        return payload
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+    }
+    None
+}
+
 fn event_kind_json(kind: &EventKind) -> &'static str {
     match kind {
         EventKind::SessionCreated => "session_created",
@@ -2211,6 +2382,16 @@ fn event_kind_json(kind: &EventKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_stream_boundary_includes_paused_tool_states() {
+        let log = ExecutionEventLog::default();
+        let waiting = log.append("run_1", "run.waiting_tool");
+        let suspended = log.append("run_2", "run.suspended");
+
+        assert!(is_execution_stream_boundary(&waiting));
+        assert!(is_execution_stream_boundary(&suspended));
+    }
 
     #[test]
     fn tool_schema_json_preserves_metadata_json() {

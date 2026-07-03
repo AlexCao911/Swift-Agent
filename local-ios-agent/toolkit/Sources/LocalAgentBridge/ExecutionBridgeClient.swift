@@ -58,7 +58,11 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
     }
 
     public func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
-        try await legacyClient.submitToolResult(runId: runId, result: result)
+        try await gateway.request(
+            .submitToolResult,
+            SubmitToolResultRequestDTO(runId: runId, result: result),
+            as: AgentTurnResultDTO.self
+        )
     }
 
     public func cancelRun(runId: String) async throws -> RuntimeEventDTO {

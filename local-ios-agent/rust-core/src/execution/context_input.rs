@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::context::{ContextAssembler, ContextSegment, ModelInputMessages, PromptMessage};
+use crate::context::{
+    ContextAssembler, ContextBudget, ContextSegment, ModelInputMessages, PromptMessage,
+};
 use crate::conversation::{ConversationFrameMessage, ConversationRunFrame};
 use crate::execution::{ExecutionToolObservation, RuntimeOptions};
 
@@ -32,6 +34,15 @@ impl ExecutionContextInputAssembler {
         frame: &ConversationRunFrame,
         observations: &[ExecutionToolObservation],
     ) -> Result<ModelInputMessages, ExecutionContextInputError> {
+        self.assemble_with_observations_and_budget(frame, observations, None)
+    }
+
+    pub fn assemble_with_observations_and_budget(
+        &self,
+        frame: &ConversationRunFrame,
+        observations: &[ExecutionToolObservation],
+        max_model_input_tokens: Option<usize>,
+    ) -> Result<ModelInputMessages, ExecutionContextInputError> {
         let mut assembler = ContextAssembler::new();
 
         if let Some(options) = &self.runtime_options {
@@ -62,8 +73,14 @@ impl ExecutionContextInputAssembler {
             );
         }
 
-        Ok(assembler
-            .assemble_default()
+        let assembled = match max_model_input_tokens {
+            Some(max_model_input_tokens) => {
+                assembler.assemble(ContextBudget::tokens(max_model_input_tokens))
+            }
+            None => assembler.assemble_default(),
+        };
+
+        Ok(assembled
             .map_err(|error| {
                 ExecutionContextInputError::new(
                     "execution_context.assembly_failed",

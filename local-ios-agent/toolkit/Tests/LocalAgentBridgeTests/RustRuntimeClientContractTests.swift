@@ -321,12 +321,29 @@ struct RustRuntimeClientContractTests {
             ),
             as: EmptyAgentOSResponseDTO.self
         )
+        let submitted: AgentTurnResultDTO = try await client!.request(
+            .submitToolResult,
+            SubmitToolResultRequestDTO(
+                runId: "run_agent_os",
+                result: ToolResultDTO(
+                    displayText: "tool ok",
+                    modelText: "tool model text",
+                    structuredJson: "{}",
+                    auditText: "tool audit",
+                    sensitivity: .public,
+                    retention: .runOnly,
+                    isError: false
+                )
+            ),
+            as: AgentTurnResultDTO.self
+        )
 
         let preparedRequest = try decodedObject(try #require(probe.prepareUserTurnJson))
         let startRequest = try decodedObject(try #require(probe.startRunJson))
         let commitRequest = try decodedObject(try #require(probe.commitAssistantResultJson))
         let buildRequest = try decodedObject(try #require(probe.buildAgentJson))
         let approveRequest = try decodedObject(try #require(probe.approveToolJson))
+        let submitRequest = try decodedObject(try #require(probe.submittedToolResultJson))
 
         #expect(prepared.sessionId == "session_1")
         #expect(prepared.conversationRunFrameRef == frameRef)
@@ -334,6 +351,7 @@ struct RustRuntimeClientContractTests {
         #expect(run.replayFromSequence == 0)
         #expect(commit.committedMessageId == "assistant.final_1")
         #expect(profile.profileId == "profile_1")
+        #expect(submitted.state == .completed)
         #expect(preparedRequest["parent_event_id"] as? String == "entry_parent")
         #expect((startRequest["conversation_run_frame_ref"] as? [String: Any])?["frame_id"] as? String == "frame_1")
         let forbiddenFrameKey = ["conversation", "frame", "ref"].joined(separator: "_")
@@ -343,10 +361,12 @@ struct RustRuntimeClientContractTests {
         #expect(buildRequest["template_id"] as? String == "template_1")
         #expect(approveRequest["id"] as? String == "approval_1")
         #expect((approveRequest["decision"] as? [String: Any])?["approved"] as? Bool == true)
+        #expect(probe.submittedToolResultRunId == "run_agent_os")
+        #expect(submitRequest["model_text"] as? String == "tool model text")
 
         client = nil
 
-        #expect(probe.freedStrings == 6)
+        #expect(probe.freedStrings == 7)
         #expect(probe.freedRuntimeHandles == 1)
     }
 
@@ -534,6 +554,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var registeredSchemaJson: String?
     var permissionStateJson: String?
     var sentMessageJson: String?
+    var submittedToolResultRunId: String?
     var submittedToolResultJson: String?
     var submittedApprovalResponseJson: String?
     var setProviderJson: String?
@@ -767,6 +788,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         _ runId: UnsafePointer<CChar>?,
         _ resultJson: UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>? {
+        submittedToolResultRunId = String(cString: runId!)
         submittedToolResultJson = String(cString: resultJson!)
         return makeCString(Self.turnJson(state: "completed"))
     }

@@ -180,6 +180,7 @@ private actor FakeConversationDomain: ConversationDomain {
 private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
     var startedRequests: [StartExecutionRequestDTO] = []
     var approvedTools: [(id: String, decision: ApprovalDecisionDTO)] = []
+    var submittedToolResults: [(runId: String, result: ToolResultDTO)] = []
     var cancelledRunIds: [String] = []
     private let handle: RunHandleDTO
     private let events: [RuntimeEventDTO]
@@ -216,6 +217,16 @@ private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
 
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws {
         approvedTools.append((id: id, decision: decision))
+    }
+
+    func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {
+        submittedToolResults.append((runId: runId, result: result))
+        return AgentTurnResultDTO(
+            runId: runId,
+            state: .completed,
+            events: [],
+            pendingToolCallId: nil
+        )
     }
 
     func cancelRun(runId: String) async throws -> RuntimeEventDTO {

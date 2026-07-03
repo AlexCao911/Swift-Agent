@@ -608,6 +608,17 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                 result = functions.startRun(handle, pointer)
             case .approveTool:
                 result = functions.approveTool(handle, pointer)
+            case .submitToolResult:
+                let submitRequest = try JSONDecoder().decode(
+                    SubmitToolResultRequestDTO.self,
+                    from: Data(json.utf8)
+                )
+                let resultJson = try encode(submitRequest.result)
+                result = submitRequest.runId.withCString { runIdPointer in
+                    resultJson.withCString { resultPointer in
+                        functions.submitToolResult(handle, runIdPointer, resultPointer)
+                    }
+                }
             case .cancelRun:
                 result = functions.cancelRun(handle, pointer)
             case .updateRuntimeOptions:

@@ -530,7 +530,7 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
 
     func loadConversations(state: AgentViewState) async throws -> AgentViewState {
         didLoadConversations = true
-        state
+        return state
     }
 
     func selectConversation(sessionId: String, state: AgentViewState) async throws -> AgentViewState {

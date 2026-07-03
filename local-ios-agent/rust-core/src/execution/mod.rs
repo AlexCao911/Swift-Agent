@@ -23,11 +23,15 @@ pub use event_log::{
 };
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ExecutionStepKind};
 pub use execution_planner::{ExecutionPlanner, ExecutionPlanningError, ExecutionPlanningResult};
-pub use execution_service::{ExecutionService, ExecutionServiceParts, ExecutionWorkerMode};
+pub use execution_service::{
+    ActiveExecutionRunRegistry, ExecutionService, ExecutionServiceParts,
+    ExecutionWorkerDependencies, ExecutionWorkerMode,
+};
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use react_worker::{
     ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker, ExecutionToolCall,
-    ExecutionToolExecutor, ExecutionToolObservation, NoopExecutionToolExecutor,
+    ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
+    NoopExecutionToolExecutor,
 };
 pub use run_lifecycle::{
     ExecutionStartError, RunHandle, RunLifecycleService, StartExecutionRequest,

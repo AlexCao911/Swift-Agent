@@ -55,7 +55,7 @@ struct RustRuntimeAppIntegrationTests {
 
     @Test("App bootstrapper keeps legacy streaming path by default")
     func appBootstrapperKeepsLegacyStreamingPathByDefault() async throws {
-        let container = try AppBootstrapper.makeContainer(store: .inMemory)
+        let container = try AppBootstrapper.makeContainer(environment: [:], store: .inMemory)
 
         let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
         #expect(!usesCoordinator)

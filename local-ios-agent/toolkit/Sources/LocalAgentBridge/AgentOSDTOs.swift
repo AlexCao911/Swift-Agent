@@ -290,6 +290,21 @@ public struct ApproveToolRequestDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct SubmitToolResultRequestDTO: Codable, Equatable, Sendable {
+    public var runId: String
+    public var result: ToolResultDTO
+
+    public init(runId: String, result: ToolResultDTO) {
+        self.runId = runId
+        self.result = result
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case result
+    }
+}
+
 public struct CancelRunRequestDTO: Codable, Equatable, Sendable {
     public var runId: String
 

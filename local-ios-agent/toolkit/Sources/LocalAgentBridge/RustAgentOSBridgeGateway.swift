@@ -8,6 +8,7 @@ public enum RustAgentOSOperation: String, Sendable {
     case startRun = "start_run"
     case observeEvents = "observe_events"
     case approveTool = "approve_tool"
+    case submitToolResult = "submit_tool_result"
     case cancelRun = "cancel_run"
     case updateRuntimeOptions = "update_runtime_options"
 }

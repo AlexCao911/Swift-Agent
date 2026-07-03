@@ -6,10 +6,49 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{AgentError, EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::execution::{
-    CompletedRunRegistry, ExecutionEventLog, ExecutionPlanner, ExecutionService,
+    CompletedRunRegistry, ExecutionBudgets, ExecutionEventLog, ExecutionModelClient,
+    ExecutionModelTurn, ExecutionPlan, ExecutionPlanner, ExecutionService, ExecutionToolCall,
+    ExecutionToolExecutor, ExecutionToolOutcome, ExecutionWorkerDependencies,
     InferenceSettingsService, RunLifecycleService, RuntimeOptions, StartExecutionRequest,
 };
 use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
+
+#[derive(Clone)]
+struct FixtureExecutionModel;
+
+impl ExecutionModelClient for FixtureExecutionModel {
+    fn next_turn(
+        &self,
+        _run_id: &str,
+        _input: &local_ios_agent_runtime::context::ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, String> {
+        Ok(ExecutionModelTurn::Final {
+            message_id: "final_1".to_string(),
+            text: "fixture model answer".to_string(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct FixtureToolExecutor;
+
+impl ExecutionToolExecutor for FixtureToolExecutor {
+    fn execute_tool(
+        &self,
+        _run_id: &str,
+        _frame_ref: &ConversationRunFrameRef,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        Err(format!("unexpected fixture tool call: {}", call.name))
+    }
+}
+
+fn fixture_worker_dependencies() -> ExecutionWorkerDependencies {
+    ExecutionWorkerDependencies::new(
+        std::sync::Arc::new(FixtureExecutionModel),
+        std::sync::Arc::new(FixtureToolExecutor),
+    )
+}
 
 #[test]
 fn conversation_run_frame_ref_pins_branch_and_user_turn() {
@@ -290,6 +329,7 @@ fn react_worker_emits_final_response_without_synthetic_adapter() {
     impl ExecutionModelClient for FinalModel {
         fn next_turn(
             &self,
+            _run_id: &str,
             _input: &local_ios_agent_runtime::context::ModelInputMessages,
         ) -> Result<ExecutionModelTurn, String> {
             Ok(ExecutionModelTurn::Final {
@@ -352,7 +392,11 @@ fn react_worker_includes_tool_observation_in_second_model_call() {
     }
 
     impl ExecutionModelClient for ScriptedModel {
-        fn next_turn(&self, input: &ModelInputMessages) -> Result<ExecutionModelTurn, String> {
+        fn next_turn(
+            &self,
+            _run_id: &str,
+            input: &ModelInputMessages,
+        ) -> Result<ExecutionModelTurn, String> {
             let mut seen = self.seen_inputs.lock().unwrap();
             seen.push(input.clone());
             if seen.len() == 1 {
@@ -380,12 +424,16 @@ fn react_worker_includes_tool_observation_in_second_model_call() {
     impl ExecutionToolExecutor for EchoTool {
         fn execute_tool(
             &self,
+            _run_id: &str,
+            _frame_ref: &ConversationRunFrameRef,
             call: &ExecutionToolCall,
-        ) -> Result<ExecutionToolObservation, String> {
-            Ok(ExecutionToolObservation {
-                call_id: call.call_id.clone(),
-                model_text: "tool said hello".to_string(),
-            })
+        ) -> Result<ExecutionToolOutcome, String> {
+            Ok(ExecutionToolOutcome::Observation(
+                ExecutionToolObservation {
+                    call_id: call.call_id.clone(),
+                    model_text: "tool said hello".to_string(),
+                },
+            ))
         }
     }
 
@@ -428,6 +476,126 @@ fn react_worker_includes_tool_observation_in_second_model_call() {
     assert!(completed_runs
         .get("run_tool_1", "final_after_tool")
         .is_some());
+}
+
+#[test]
+fn react_worker_applies_execution_plan_budget_before_model_call() {
+    use std::sync::{Arc, Mutex};
+
+    use local_ios_agent_runtime::context::ModelInputMessages;
+    use local_ios_agent_runtime::execution::{
+        ExecutionContextInputAssembler, ExecutionModelClient, ExecutionModelTurn,
+        ExecutionReactWorker, NoopExecutionToolExecutor,
+    };
+    use local_ios_agent_runtime::run_snapshot::RunSnapshotId;
+
+    #[derive(Clone)]
+    struct RecordingModel {
+        seen_inputs: Arc<Mutex<Vec<ModelInputMessages>>>,
+    }
+
+    impl ExecutionModelClient for RecordingModel {
+        fn next_turn(
+            &self,
+            _run_id: &str,
+            input: &ModelInputMessages,
+        ) -> Result<ExecutionModelTurn, String> {
+            self.seen_inputs.lock().unwrap().push(input.clone());
+            Ok(ExecutionModelTurn::Final {
+                message_id: "final_budgeted".to_string(),
+                text: "budgeted answer".to_string(),
+            })
+        }
+    }
+
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_budget_1"),
+        SessionId("session_1".into()),
+        EntryId("assistant_1".into()),
+        EntryId("user_turn_2".into()),
+    );
+    let frame = ConversationRunFrame::new(
+        frame_ref.clone(),
+        Some(EntryId("assistant_1".into())),
+        vec![
+            ConversationFrameMessage::user(EntryId("user_1".into()), "older words overflow"),
+            ConversationFrameMessage::assistant(EntryId("assistant_1".into()), "older answer"),
+            ConversationFrameMessage::user(EntryId("user_turn_2".into()), "new"),
+        ],
+        Vec::new(),
+        ConversationLineage::new(EntryId("assistant_1".into()), None, None),
+    );
+    let seen_inputs = Arc::new(Mutex::new(Vec::new()));
+    let worker = ExecutionReactWorker::new(
+        RecordingModel {
+            seen_inputs: seen_inputs.clone(),
+        },
+        NoopExecutionToolExecutor,
+        ExecutionContextInputAssembler::new(None),
+        ExecutionEventLog::default(),
+        CompletedRunRegistry::default(),
+    );
+    let plan =
+        ExecutionPlan::for_snapshot(RunSnapshotId::new(99)).with_budgets(ExecutionBudgets::new(1));
+
+    worker
+        .run_with_plan("run_budget_1", &frame, &frame_ref, &plan)
+        .unwrap();
+
+    let seen = seen_inputs.lock().unwrap();
+    let input_token_count: usize = seen[0]
+        .messages()
+        .iter()
+        .map(|message| message.content().split_whitespace().count())
+        .sum();
+    assert!(input_token_count <= 1);
+}
+
+#[test]
+fn execution_service_passes_plan_to_react_worker_trace() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_plan_trace_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    ));
+    let event_log = ExecutionEventLog::default();
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        event_log.clone(),
+        CompletedRunRegistry::default(),
+        fixture_worker_dependencies(),
+    );
+
+    let handle = service
+        .start_run(StartExecutionRequest::new(
+            "run_plan_trace_1",
+            "profile_1",
+            "hello",
+            frame_ref,
+        ))
+        .unwrap();
+    let events = event_log.replay(handle.run_id(), handle.replay_from_sequence());
+
+    assert!(events
+        .iter()
+        .any(|event| event.code() == "context.assembled"));
+    assert!(events
+        .iter()
+        .any(|event| event.code() == "inference.generate"));
 }
 
 #[test]
@@ -514,6 +682,7 @@ fn execution_service_is_thin_facade() {
         ExecutionPlanner::default(),
         event_log.clone(),
         completed_runs.clone(),
+        fixture_worker_dependencies(),
     );
 
     let handle = service
@@ -533,6 +702,100 @@ fn execution_service_is_thin_facade() {
     assert!(events.iter().any(|event| event.code() == "run.completed"));
     assert_eq!(service.tool_loop().pending_count(), 0);
     assert!(completed_runs.get("run_facade_1", "final_1").is_some());
+}
+
+#[test]
+fn execution_service_uses_injected_worker_model_client() {
+    use std::sync::{Arc, Mutex};
+
+    use local_ios_agent_runtime::context::ModelInputMessages;
+    use local_ios_agent_runtime::execution::{ExecutionModelClient, ExecutionModelTurn};
+
+    #[derive(Clone)]
+    struct RecordingModel {
+        seen_inputs: Arc<Mutex<Vec<ModelInputMessages>>>,
+    }
+
+    impl ExecutionModelClient for RecordingModel {
+        fn next_turn(
+            &self,
+            _run_id: &str,
+            input: &ModelInputMessages,
+        ) -> Result<ExecutionModelTurn, String> {
+            self.seen_inputs.lock().unwrap().push(input.clone());
+            Ok(ExecutionModelTurn::Final {
+                message_id: "injected_final".to_string(),
+                text: "injected model answer".to_string(),
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct UnusedToolExecutor;
+
+    impl ExecutionToolExecutor for UnusedToolExecutor {
+        fn execute_tool(
+            &self,
+            _run_id: &str,
+            _frame_ref: &ConversationRunFrameRef,
+            call: &ExecutionToolCall,
+        ) -> Result<ExecutionToolOutcome, String> {
+            Err(format!("unexpected tool call: {}", call.name))
+        }
+    }
+
+    let frames = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_injected_1"),
+        SessionId("session_1".into()),
+        EntryId("user_turn_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("user_turn_1".into()),
+            "hello injected",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("user_turn_1".into()), None, None),
+    ));
+    let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
+    let seen_inputs = Arc::new(Mutex::new(Vec::new()));
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        event_log.clone(),
+        completed_runs.clone(),
+        ExecutionWorkerDependencies::new(
+            Arc::new(RecordingModel {
+                seen_inputs: seen_inputs.clone(),
+            }),
+            Arc::new(UnusedToolExecutor),
+        ),
+    );
+
+    let handle = service
+        .start_run(StartExecutionRequest::new(
+            "run_injected_1",
+            "profile_1",
+            "hello injected",
+            frame_ref,
+        ))
+        .unwrap();
+
+    let events = event_log.replay(handle.run_id(), handle.replay_from_sequence());
+    assert_eq!(seen_inputs.lock().unwrap().len(), 1);
+    assert!(events.iter().any(|event| {
+        event.code() == "assistant_message_completed"
+            && event.payload().contains("injected model answer")
+    }));
+    assert!(completed_runs
+        .get("run_injected_1", "injected_final")
+        .is_some());
 }
 
 #[test]
@@ -562,6 +825,7 @@ fn execution_start_loads_frame_resolves_snapshot_and_runs_react_worker() {
         ExecutionPlanner::default(),
         event_log.clone(),
         completed_runs.clone(),
+        fixture_worker_dependencies(),
     );
 
     let handle = service
@@ -592,6 +856,7 @@ fn execution_start_rejects_unissued_frame_ref() {
         ExecutionPlanner::default(),
         ExecutionEventLog::default(),
         CompletedRunRegistry::default(),
+        fixture_worker_dependencies(),
     );
     let missing_ref = ConversationRunFrameRef::new(
         ConversationFrameId::new("missing_frame"),
@@ -637,6 +902,7 @@ fn execution_start_rejects_tampered_frame_ref_with_real_frame_id() {
         ExecutionPlanner::default(),
         ExecutionEventLog::default(),
         CompletedRunRegistry::default(),
+        fixture_worker_dependencies(),
     );
     let tampered_ref = ConversationRunFrameRef::new(
         issued_ref.frame_id().clone(),
