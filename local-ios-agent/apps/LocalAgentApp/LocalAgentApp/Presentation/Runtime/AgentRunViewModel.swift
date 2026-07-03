@@ -50,6 +50,8 @@ final class AgentRunViewModel {
             runState = .completed(runId: event.runId)
         case .toolCallRequested:
             runState = .waitingTool(runId: event.runId ?? "")
+        case .runWaitingTool:
+            runState = .waitingTool(runId: event.runId ?? "")
         case .runCancelled:
             runState = .cancelled(runId: event.runId)
         case .runFailed:

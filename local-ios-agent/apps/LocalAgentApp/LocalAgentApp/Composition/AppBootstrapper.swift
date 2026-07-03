@@ -23,7 +23,8 @@ enum AppBootstrapper {
         let toolDriver = MinimalHostToolDriver()
         let coordinator = conversationExecutionCoordinator(
             environment: environment,
-            client: client
+            client: client,
+            toolDriver: toolDriver
         )
         return AppContainer(runtimeService: AgentRuntimeService(
             runtimeClient: client,
@@ -34,7 +35,8 @@ enum AppBootstrapper {
 
     private static func conversationExecutionCoordinator(
         environment: [String: String],
-        client: RustRuntimeClient
+        client: RustRuntimeClient,
+        toolDriver: MinimalHostToolDriver
     ) -> ChatInteractionCoordinator? {
         // Keep this feature gated until Rust execution uses the verified ReAct worker path.
         // The migration adapter must not become the default app path.
@@ -56,7 +58,8 @@ enum AppBootstrapper {
         )
         let coordinator = ChatInteractionCoordinator(
             conversation: conversationDomain,
-            execution: executionDomain
+            execution: executionDomain,
+            toolDriver: toolDriver
         )
         return coordinator
     }

@@ -29,9 +29,30 @@ struct AgentRunViewModelTests {
         #expect(viewModel.events.map(\.id) == ["event_5"])
         #expect(viewModel.lastAppliedSequence == 5)
     }
+
+    @Test("run waiting tool boundary updates run state")
+    func runWaitingToolBoundaryUpdatesRunState() {
+        let viewModel = AgentRunViewModel()
+
+        viewModel.apply(runtimeEvent(
+            id: "waiting",
+            runId: "run_1",
+            sequence: 1,
+            kind: .runWaitingTool,
+            payload: "run.waiting_tool"
+        ))
+
+        #expect(viewModel.runState == .waitingTool(runId: "run_1"))
+    }
 }
 
-private func runtimeEvent(id: String, runId: String, sequence: UInt64) -> RuntimeEventDTO {
+private func runtimeEvent(
+    id: String,
+    runId: String,
+    sequence: UInt64,
+    kind: RuntimeEventKindDTO = .unknown(raw: "execution.event"),
+    payload: String = "run.started"
+) -> RuntimeEventDTO {
     RuntimeEventDTO(
         id: id,
         sessionId: "session_1",
@@ -39,8 +60,8 @@ private func runtimeEvent(id: String, runId: String, sequence: UInt64) -> Runtim
         runId: runId,
         sequence: sequence,
         depth: 0,
-        kind: .unknown(raw: "execution.event"),
-        payload: "run.started",
+        kind: kind,
+        payload: payload,
         blobRefs: []
     )
 }

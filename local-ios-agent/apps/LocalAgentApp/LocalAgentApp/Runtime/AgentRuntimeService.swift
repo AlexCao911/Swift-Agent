@@ -163,7 +163,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         if let coordinator {
             try await applyRuntimeOptions(from: state)
             let collector = CoordinatorEventCollector(state: state)
-            try await coordinator.sendMessage(
+            let result = try await coordinator.sendMessage(
                 text: text,
                 sessionId: state.currentSessionId,
                 parentEventId: state.draft.targetParentEventId,
@@ -176,9 +176,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             )
             var nextState = await collector.snapshot()
             nextState.draft = UserDraftViewState()
-            nextState.phase = .ready
-            nextState.lastTerminalReason = .completed
-            nextState.finishStreamingMessages(as: .idle)
+            applyCoordinatorResult(result, to: &nextState)
             return nextState
         }
 
@@ -695,6 +693,31 @@ actor AgentRuntimeService: AgentRuntimeServicing {
     ) {
         for event in events where !streamedEventIds.contains(event.id) {
             RuntimeEventReducer.apply(event, to: &state)
+        }
+    }
+
+    private func applyCoordinatorResult(_ result: ChatInteractionResult, to state: inout AgentViewState) {
+        switch result.state {
+        case .completed:
+            state.phase = .ready
+            state.lastTerminalReason = .completed
+            state.finishStreamingMessages(as: .idle)
+        case .cancelled:
+            state.phase = .ready
+            state.lastTerminalReason = .cancelled
+            state.finishStreamingMessages(as: .cancelled)
+        case .failed:
+            let message = state.errorMessage ?? "Run failed."
+            state.errorMessage = message
+            state.phase = .failed(message: message)
+            state.lastTerminalReason = .failed(message)
+            state.finishStreamingMessages(as: .failed(message))
+        case .running, .waitingTool, .suspended:
+            state.phase = .running(runId: result.runId)
+            state.lastTerminalReason = nil
+        default:
+            state.phase = .running(runId: result.runId)
+            state.lastTerminalReason = nil
         }
     }
 

@@ -239,6 +239,36 @@ struct AgentRuntimeServiceTests {
         #expect(sentState.draft == UserDraftViewState())
     }
 
+    @Test("coordinator paused run is not marked completed")
+    @MainActor
+    func coordinatorPausedRunIsNotMarkedCompleted() async throws {
+        let coordinator = RecordingChatInteractionCoordinator(eventsToEmit: [
+            event(
+                id: "tool_call_entry",
+                kind: .toolCallRequested,
+                payload: #"{"tool_call_id":"call_1","tool_name":"debug.echo"}"#
+            ),
+            event(
+                id: "waiting",
+                kind: .runWaitingTool,
+                payload: "run.waiting_tool"
+            ),
+        ], result: ChatInteractionResult(runId: "run_1", state: .waitingTool))
+        let service = AgentRuntimeService(
+            runtimeClient: ScriptedRuntimeClient(),
+            toolDriver: MinimalHostToolDriver(),
+            coordinator: coordinator
+        )
+
+        let state = try await service.sendMessage(
+            "use tool debug.echo",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        #expect(state.phase == .running(runId: "run_1"))
+        #expect(state.lastTerminalReason == Optional<RunTerminalReason>.none)
+    }
+
     @Test("select conversation can load explicit branch leaf events")
     func selectConversationCanLoadExplicitBranchLeafEvents() async throws {
         let client = ScriptedRuntimeClient()
@@ -1998,6 +2028,16 @@ private final class RecordingChatInteractionCoordinator: ChatInteractionCoordina
     private(set) var agentProfileIds: [String] = []
     private(set) var parentEventIds: [String?] = []
     private(set) var options: [ExecutionOptionsDTO] = []
+    private let eventsToEmit: [RuntimeEventDTO]
+    private let result: ChatInteractionResult
+
+    init(
+        eventsToEmit: [RuntimeEventDTO] = [],
+        result: ChatInteractionResult = ChatInteractionResult(runId: "run_1", state: .completed)
+    ) {
+        self.eventsToEmit = eventsToEmit
+        self.result = result
+    }
 
     func sendMessage(
         text: String,
@@ -2006,11 +2046,15 @@ private final class RecordingChatInteractionCoordinator: ChatInteractionCoordina
         agentProfileId: String,
         options: ExecutionOptionsDTO,
         onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
-    ) async throws {
+    ) async throws -> ChatInteractionResult {
         sentMessages.append(text)
         agentProfileIds.append(agentProfileId)
         parentEventIds.append(parentEventId)
         self.options.append(options)
+        for event in eventsToEmit {
+            await onEvent(event)
+        }
+        return result
     }
 }
 

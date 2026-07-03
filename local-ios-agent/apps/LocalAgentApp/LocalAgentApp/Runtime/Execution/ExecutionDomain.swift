@@ -6,6 +6,7 @@ protocol ExecutionDomain: Sendable {
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error>
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO]
     func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO
     func cancelRun(runId: String) async throws -> RuntimeEventDTO
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel

@@ -4,6 +4,7 @@ public protocol ExecutionBridgeClient: Sendable {
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error>
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws
+    func pendingToolRequests() async throws -> [ToolExecutionRequestDTO]
     func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO
     func cancelRun(runId: String) async throws -> RuntimeEventDTO
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel
@@ -55,6 +56,10 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
             ApproveToolRequestDTO(id: id, decision: decision),
             as: EmptyAgentOSResponseDTO.self
         )
+    }
+
+    public func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        try await legacyClient.pendingToolRequests()
     }
 
     public func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {

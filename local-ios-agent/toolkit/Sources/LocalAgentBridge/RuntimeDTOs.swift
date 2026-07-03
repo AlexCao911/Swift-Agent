@@ -22,6 +22,7 @@ public struct RuntimeEventKindDTO: RawRepresentable, Codable, Equatable, Sendabl
     public static let toolExecutionCompleted = Self(rawValue: "tool_execution_completed")
     public static let toolExecutionFailed = Self(rawValue: "tool_execution_failed")
     public static let toolResultMessage = Self(rawValue: "tool_result_message")
+    public static let runWaitingTool = Self(rawValue: "run_waiting_tool")
     public static let runSuspended = Self(rawValue: "run_suspended")
     public static let runResumed = Self(rawValue: "run_resumed")
     public static let compactionCreated = Self(rawValue: "compaction_created")

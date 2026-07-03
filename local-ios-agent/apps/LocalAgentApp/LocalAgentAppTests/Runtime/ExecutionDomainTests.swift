@@ -21,7 +21,17 @@ struct ExecutionDomainTests {
             agentProfiles: [
                 AgentProfileDTO(profileId: "profile_1", displayName: "Planner"),
             ],
-            executionEventsByRunId: ["run_mock": [event]]
+            executionEventsByRunId: ["run_mock": [event]],
+            toolRequests: [
+                ToolExecutionRequestDTO(
+                    runId: "run_mock",
+                    sessionId: "session_1",
+                    toolCallEntryId: "tool_entry_1",
+                    toolCallId: "call_1",
+                    toolName: "debug.echo",
+                    argumentsJson: "{}"
+                ),
+            ]
         )
         let domain = ExecutionDomainAdapter(
             profiles: AgentProfileService(bridge: bridge),
@@ -54,6 +64,7 @@ struct ExecutionDomainTests {
             id: "approval_1",
             decision: ApprovalDecisionDTO(approved: true)
         )
+        let pending = try await domain.pendingToolRequests()
         let submitted = try await domain.submitToolResult(
             runId: "run_mock",
             result: ToolResultDTO(
@@ -78,6 +89,7 @@ struct ExecutionDomainTests {
         #expect(built.profileId == "profile_1")
         #expect(handle.runId == "run_mock")
         #expect(observed == [event])
+        #expect(pending.map(\.toolCallId) == ["call_1"])
         #expect(submitted.state == .completed)
         #expect(cancelled.kind == .runCancelled)
         #expect(await bridge.builtAgentTemplateIds == ["template_1"])
