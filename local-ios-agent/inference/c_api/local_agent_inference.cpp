@@ -1,229 +1,404 @@
 #include "local_agent_inference.h"
 
+#include "engine_registry.h"
+#include "generation_request.h"
 #include "inference_engine.h"
-#include "llama_cpp_engine.h"
-#include "mock_inference_engine.h"
 #include "model_config.h"
 
-#include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <string>
-
-struct LocalAgentBackend {
-    local_agent::ModelConfig config;
-    std::unique_ptr<local_agent::InferenceEngine> engine;
-};
-
-struct LocalAgentBackendStream {
-    local_agent::InferenceEngine *engine = nullptr;
-    std::unique_ptr<local_agent::TokenStream> stream;
-};
-
-namespace local_agent {
-
-std::unique_ptr<InferenceEngine> make_inference_engine(const ModelConfig &config) {
-    if (config.backend == "mock") {
-        return std::make_unique<MockInferenceEngine>();
-    }
-    if (config.backend == "llama_cpp") {
-        return std::make_unique<LlamaCppEngine>();
-    }
-    throw std::invalid_argument("unsupported backend in this build: " + config.backend);
-}
-
-} // namespace local_agent
+#include <utility>
 
 namespace {
 
-LocalAgentStatus map_exception() {
+struct LocalAgentError {
+    std::string code = "ok";
+    std::string message;
+};
+
+struct LocalAgentEngineState {
+    std::string engine_id;
+    local_agent::EngineDescriptor descriptor;
+    std::unique_ptr<local_agent::InferenceEngine> engine;
+    LocalAgentError last_error;
+};
+
+struct LocalAgentModelState {
+    std::shared_ptr<LocalAgentEngineState> engine_state;
+    std::unique_ptr<local_agent::LoadedModel> model;
+    local_agent::ModelRuntimeInfo runtime_info;
+};
+
+struct LocalAgentGenerationState {
+    std::shared_ptr<LocalAgentModelState> model_state;
+    std::unique_ptr<local_agent::GenerationSession> generation;
+};
+
+thread_local LocalAgentError thread_last_error;
+
+std::string escape_json(const std::string &value) {
+    std::string escaped;
+    for (char c : value) {
+        switch (c) {
+        case '\\':
+            escaped += "\\\\";
+            break;
+        case '"':
+            escaped += "\\\"";
+            break;
+        case '\n':
+            escaped += "\\n";
+            break;
+        case '\r':
+            escaped += "\\r";
+            break;
+        case '\t':
+            escaped += "\\t";
+            break;
+        default:
+            escaped.push_back(c);
+            break;
+        }
+    }
+    return escaped;
+}
+
+std::string error_json(const LocalAgentError &error) {
+    return "{\"code\":\"" + escape_json(error.code) + "\",\"message\":\"" +
+        escape_json(error.message) + "\"}";
+}
+
+char *copy_c_string(const std::string &value) {
+    char *buffer = static_cast<char *>(std::malloc(value.size() + 1));
+    if (buffer == nullptr) {
+        throw std::bad_alloc();
+    }
+    std::memcpy(buffer, value.c_str(), value.size() + 1);
+    return buffer;
+}
+
+void set_error(LocalAgentError &target, std::string code, std::string message) {
+    target.code = std::move(code);
+    target.message = std::move(message);
+}
+
+void set_thread_error(std::string code, std::string message) {
+    set_error(thread_last_error, std::move(code), std::move(message));
+}
+
+void set_engine_error(
+    const std::shared_ptr<LocalAgentEngineState> &engine_state,
+    std::string code,
+    std::string message
+) {
+    if (engine_state) {
+        set_error(engine_state->last_error, code, message);
+    }
+    set_thread_error(std::move(code), std::move(message));
+}
+
+LocalAgentStatus status_from_exception(
+    const std::shared_ptr<LocalAgentEngineState> &engine_state,
+    const char *fallback_code
+) {
     try {
         throw;
-    } catch (const std::invalid_argument &) {
+    } catch (const std::invalid_argument &error) {
+        set_engine_error(engine_state, "invalid_argument", error.what());
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
-    } catch (const std::exception &) {
+    } catch (const std::bad_alloc &error) {
+        set_engine_error(engine_state, "allocation_failed", error.what());
+        return LOCAL_AGENT_STATUS_ERROR;
+    } catch (const std::exception &error) {
+        set_engine_error(engine_state, fallback_code, error.what());
         return LOCAL_AGENT_STATUS_ERROR;
     } catch (...) {
+        set_engine_error(engine_state, fallback_code, "unknown local inference error");
         return LOCAL_AGENT_STATUS_ERROR;
     }
+}
+
+local_agent::EngineRegistry active_registry() {
+#ifdef LOCAL_AGENT_ENABLE_TEST_ENGINES
+    return local_agent::EngineRegistry::test();
+#else
+    return local_agent::EngineRegistry::production();
+#endif
 }
 
 } // namespace
 
+struct LocalAgentEngineHandle {
+    std::shared_ptr<LocalAgentEngineState> state;
+};
+
+struct LocalAgentModelHandle {
+    std::shared_ptr<LocalAgentModelState> state;
+};
+
+struct LocalAgentGenerationHandle {
+    std::shared_ptr<LocalAgentGenerationState> state;
+};
+
 extern "C" {
 
-LocalAgentStatus local_agent_backend_init(LocalAgentBackend **out_backend) {
-    if (out_backend == nullptr) {
+void local_agent_string_free(char *value) {
+    std::free(value);
+}
+
+LocalAgentStatus local_agent_engine_list(char **out_json) {
+    if (out_json == nullptr) {
+        set_thread_error("invalid_argument", "out_json must not be null");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    *out_backend = new LocalAgentBackend();
+    *out_json = nullptr;
+    try {
+        *out_json = copy_c_string(local_agent::engine_descriptor_list_json(active_registry().list()));
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(nullptr, "engine_list_failed");
+    }
+}
+
+LocalAgentStatus local_agent_engine_create(
+    const char *engine_id,
+    LocalAgentEngineHandle **out_engine
+) {
+    if (out_engine == nullptr) {
+        set_thread_error("invalid_argument", "out_engine must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_engine = nullptr;
+    if (engine_id == nullptr) {
+        set_thread_error("invalid_argument", "engine_id must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+
+    try {
+        local_agent::EngineRegistry registry = active_registry();
+        const local_agent::EngineDescriptor *descriptor = registry.find(engine_id);
+        if (descriptor == nullptr) {
+            set_thread_error("engine_unavailable", std::string("engine is not available: ") + engine_id);
+            return LOCAL_AGENT_STATUS_ERROR;
+        }
+        auto engine = registry.create(engine_id);
+        if (!engine) {
+            set_thread_error("engine_unavailable", std::string("engine cannot be created: ") + engine_id);
+            return LOCAL_AGENT_STATUS_ERROR;
+        }
+
+        auto state = std::make_shared<LocalAgentEngineState>();
+        state->engine_id = engine_id;
+        state->descriptor = *descriptor;
+        state->engine = std::move(engine);
+
+        auto *handle = new LocalAgentEngineHandle();
+        handle->state = std::move(state);
+        *out_engine = handle;
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(nullptr, "engine_create_failed");
+    }
+}
+
+LocalAgentStatus local_agent_engine_capabilities(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+) {
+    if (out_json == nullptr) {
+        set_thread_error("invalid_argument", "out_json must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_json = nullptr;
+    if (engine == nullptr || !engine->state) {
+        set_thread_error("invalid_argument", "engine handle must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        *out_json = copy_c_string(local_agent::engine_capabilities_json(engine->state->descriptor));
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(engine->state, "engine_capabilities_failed");
+    }
+}
+
+LocalAgentStatus local_agent_engine_release(LocalAgentEngineHandle *engine) {
+    if (engine == nullptr) {
+        return LOCAL_AGENT_STATUS_OK;
+    }
+    delete engine;
     return LOCAL_AGENT_STATUS_OK;
 }
 
-LocalAgentStatus local_agent_backend_load_model(
-    LocalAgentBackend *backend,
-    const char *model_config_json
+LocalAgentStatus local_agent_model_load(
+    LocalAgentEngineHandle *engine,
+    const char *model_config_json,
+    LocalAgentModelHandle **out_model
 ) {
-    if (backend == nullptr || model_config_json == nullptr) {
+    if (out_model == nullptr) {
+        set_thread_error("invalid_argument", "out_model must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_model = nullptr;
+    if (engine == nullptr || !engine->state || model_config_json == nullptr) {
+        set_thread_error("invalid_argument", "engine and model_config_json are required");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
     try {
-        backend->config = local_agent::parse_model_config(model_config_json);
-        backend->engine = local_agent::make_inference_engine(backend->config);
-        backend->engine->load(backend->config);
+        local_agent::ModelLoadConfig config = local_agent::parse_model_load_config(model_config_json);
+        if (config.engine != engine->state->engine_id) {
+            throw std::invalid_argument("model config engine does not match engine handle");
+        }
+        auto model = engine->state->engine->load_model(config);
+        if (!model) {
+            throw std::runtime_error("engine returned null loaded model");
+        }
+
+        auto state = std::make_shared<LocalAgentModelState>();
+        state->engine_state = engine->state;
+        state->model = std::move(model);
+        state->runtime_info = state->model->runtime_info();
+
+        auto *handle = new LocalAgentModelHandle();
+        handle->state = std::move(state);
+        *out_model = handle;
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
-        return map_exception();
+        return status_from_exception(engine->state, "model_load_failed");
     }
 }
 
-LocalAgentStatus local_agent_backend_stream_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    local_agent_token_callback callback,
-    void *user_data,
-    LocalAgentBackendStream **out_stream
-) {
-    LocalAgentStatus start = local_agent_backend_start_chat(
-        backend,
-        prompt_json,
-        out_stream
-    );
-    if (start != LOCAL_AGENT_STATUS_OK) {
-        return start;
+LocalAgentStatus local_agent_model_unload(LocalAgentModelHandle *model) {
+    if (model == nullptr) {
+        return LOCAL_AGENT_STATUS_OK;
     }
-    return local_agent_backend_read_stream(*out_stream, callback, user_data);
+    delete model;
+    return LOCAL_AGENT_STATUS_OK;
 }
 
-LocalAgentStatus local_agent_backend_start_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    LocalAgentBackendStream **out_stream
+LocalAgentStatus local_agent_generation_start(
+    LocalAgentModelHandle *model,
+    const char *generation_request_json,
+    const LocalAgentImageInput *images,
+    uint64_t image_count,
+    LocalAgentGenerationHandle **out_generation
 ) {
-    if (out_stream == nullptr) {
+    if (out_generation == nullptr) {
+        set_thread_error("invalid_argument", "out_generation must not be null");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    *out_stream = nullptr;
-    if (backend == nullptr || prompt_json == nullptr) {
+    *out_generation = nullptr;
+    if (model == nullptr || !model->state || generation_request_json == nullptr) {
+        set_thread_error("invalid_argument", "model and generation_request_json are required");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    if (!backend->engine) {
-        return LOCAL_AGENT_STATUS_ERROR;
+    if (image_count > 0 || images != nullptr) {
+        set_engine_error(model->state->engine_state, "invalid_argument", "image buffers are not enabled in this task");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
+
     try {
-        auto stream = new LocalAgentBackendStream();
-        stream->engine = backend->engine.get();
-        stream->stream = backend->engine->start_chat(prompt_json);
-        *out_stream = stream;
+        local_agent::GenerationRequest request =
+            local_agent::parse_generation_request(generation_request_json);
+        auto generation = model->state->model->start_generation(request, {});
+        if (!generation) {
+            throw std::runtime_error("model returned null generation session");
+        }
+
+        auto state = std::make_shared<LocalAgentGenerationState>();
+        state->model_state = model->state;
+        state->generation = std::move(generation);
+
+        auto *handle = new LocalAgentGenerationHandle();
+        handle->state = std::move(state);
+        *out_generation = handle;
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
-        return map_exception();
+        return status_from_exception(model->state->engine_state, "generation_start_failed");
     }
 }
 
-LocalAgentStatus local_agent_backend_start_chat_with_image(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    const unsigned char *rgb_data,
-    uint32_t width,
-    uint32_t height,
-    LocalAgentBackendStream **out_stream
-) {
-    if (out_stream == nullptr) {
-        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
-    }
-    *out_stream = nullptr;
-    if (
-        backend == nullptr ||
-        prompt_json == nullptr ||
-        rgb_data == nullptr ||
-        width == 0 ||
-        height == 0
-    ) {
-        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
-    }
-    if (!backend->engine) {
-        return LOCAL_AGENT_STATUS_ERROR;
-    }
-    try {
-        local_agent::ImageInput image;
-        image.width = width;
-        image.height = height;
-        image.rgb_data.assign(
-            rgb_data,
-            rgb_data + (static_cast<size_t>(width) * static_cast<size_t>(height) * 3)
-        );
-
-        auto stream = new LocalAgentBackendStream();
-        stream->engine = backend->engine.get();
-        stream->stream = backend->engine->start_chat_with_image(prompt_json, image);
-        *out_stream = stream;
-        return LOCAL_AGENT_STATUS_OK;
-    } catch (...) {
-        return map_exception();
-    }
-}
-
-LocalAgentStatus local_agent_backend_read_stream(
-    LocalAgentBackendStream *stream,
+LocalAgentStatus local_agent_generation_read(
+    LocalAgentGenerationHandle *generation,
     local_agent_token_callback callback,
     void *user_data
 ) {
-    if (
-        stream == nullptr ||
-        stream->engine == nullptr ||
-        stream->stream == nullptr ||
-        callback == nullptr
-    ) {
+    if (generation == nullptr || !generation->state || callback == nullptr) {
+        set_thread_error("invalid_argument", "generation and callback are required");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    if (stream->stream->is_cancelled()) {
-        return LOCAL_AGENT_STATUS_CANCELLED;
-    }
-    try {
-        LocalAgentStatus callback_status = LOCAL_AGENT_STATUS_OK;
-        auto emit = [&](const std::string &json) -> bool {
-            callback_status = callback(json.c_str(), user_data);
-            if (callback_status != LOCAL_AGENT_STATUS_OK) {
-                stream->stream->cancel();
-                return false;
-            }
-            return !stream->stream->is_cancelled();
-        };
-        stream->engine->read_stream(*stream->stream, emit);
+
+    LocalAgentStatus callback_status = LOCAL_AGENT_STATUS_OK;
+    auto emit = [&](const std::string &token_json) -> bool {
+        callback_status = callback(token_json.c_str(), user_data);
         if (callback_status != LOCAL_AGENT_STATUS_OK) {
+            generation->state->generation->cancel();
+            return false;
+        }
+        return true;
+    };
+
+    try {
+        generation->state->generation->read(emit);
+        if (callback_status != LOCAL_AGENT_STATUS_OK) {
+            set_engine_error(
+                generation->state->model_state->engine_state,
+                "callback_cancelled",
+                "token callback stopped generation"
+            );
             return callback_status;
         }
-        return stream->stream->is_cancelled()
-            ? LOCAL_AGENT_STATUS_CANCELLED
-            : LOCAL_AGENT_STATUS_OK;
+        return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
-        return map_exception();
+        return status_from_exception(
+            generation->state->model_state->engine_state,
+            "generation_read_failed"
+        );
     }
 }
 
-LocalAgentStatus local_agent_backend_cancel(LocalAgentBackendStream *stream) {
-    if (stream == nullptr || stream->stream == nullptr) {
+LocalAgentStatus local_agent_generation_cancel(LocalAgentGenerationHandle *generation) {
+    if (generation == nullptr || !generation->state) {
+        set_thread_error("invalid_argument", "generation handle must not be null");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    stream->stream->cancel();
+    generation->state->generation->cancel();
     return LOCAL_AGENT_STATUS_CANCELLED;
 }
 
-LocalAgentStatus local_agent_backend_release_stream(LocalAgentBackendStream *stream) {
-    if (stream == nullptr) {
-        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+LocalAgentStatus local_agent_generation_release(LocalAgentGenerationHandle *generation) {
+    if (generation == nullptr) {
+        return LOCAL_AGENT_STATUS_OK;
     }
-    delete stream;
+    delete generation;
     return LOCAL_AGENT_STATUS_OK;
 }
 
-LocalAgentStatus local_agent_backend_release(LocalAgentBackend *backend) {
-    if (backend == nullptr) {
+LocalAgentStatus local_agent_last_error(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+) {
+    if (out_json == nullptr) {
+        set_thread_error("invalid_argument", "out_json must not be null");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    delete backend;
-    return LOCAL_AGENT_STATUS_OK;
+    *out_json = nullptr;
+    try {
+        const LocalAgentError &error = (engine != nullptr && engine->state)
+            ? engine->state->last_error
+            : thread_last_error;
+        *out_json = copy_c_string(error_json(error));
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(
+            engine == nullptr ? nullptr : engine->state,
+            "last_error_failed"
+        );
+    }
 }
 
 } // extern "C"

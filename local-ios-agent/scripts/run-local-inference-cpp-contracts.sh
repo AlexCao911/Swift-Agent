@@ -19,6 +19,19 @@ CXXFLAGS=(
   -I inference/backends/litert
 )
 
+COMMON_SOURCES=(
+  inference/c_api/local_agent_inference.cpp
+  inference/core/json_value.cpp
+  inference/core/model_config.cpp
+  inference/core/generation_request.cpp
+  inference/core/engine_registry.cpp
+  inference/core/token_stream.cpp
+  inference/backends/mock/mock_inference_engine.cpp
+  inference/backends/llama_cpp/llama_cpp_api.cpp
+  inference/backends/llama_cpp/llama_cpp_engine.cpp
+  inference/backends/llama_cpp/llama_cpp_prompt.cpp
+)
+
 "$CC_BIN" -std=c11 -I inference/include \
   -c inference/tests/header_contract.c \
   -o "$BUILD_DIR/header_contract.o"
@@ -68,6 +81,12 @@ CXXFLAGS=(
 "$BUILD_DIR/mock_backend_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/c_api_v2_contract.cpp \
+  "${COMMON_SOURCES[@]}" \
+  -o "$BUILD_DIR/c_api_v2_contract"
+"$BUILD_DIR/c_api_v2_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/llama_cpp_backend_contract.cpp \
   inference/core/json_value.cpp \
   inference/core/model_config.cpp \
@@ -85,5 +104,20 @@ else
     exit "$status"
   fi
 fi
+
+RELEASE_CXXFLAGS=(
+  -std=c++17
+  -I inference/include
+  -I inference/core
+  -I inference/backends/mock
+  -I inference/backends/llama_cpp
+  -I inference/backends/litert
+)
+
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  inference/tests/c_api_release_registry_contract.cpp \
+  "${COMMON_SOURCES[@]}" \
+  -o "$BUILD_DIR/c_api_release_registry_contract"
+"$BUILD_DIR/c_api_release_registry_contract"
 
 echo "local inference C++ contracts passed"

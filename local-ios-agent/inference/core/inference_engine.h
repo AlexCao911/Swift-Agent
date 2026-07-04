@@ -16,8 +16,6 @@ public:
     virtual std::unique_ptr<LoadedModel> load_model(const ModelLoadConfig &config) = 0;
 };
 
-std::unique_ptr<InferenceEngine> make_inference_engine(const ModelConfig &config);
-
 } // namespace local_agent
 
 #endif
