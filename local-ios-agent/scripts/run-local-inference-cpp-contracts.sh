@@ -70,6 +70,15 @@ COMMON_SOURCES=(
   -o "$BUILD_DIR/engine_registry_contract"
 "$BUILD_DIR/engine_registry_contract"
 
+"$CXX_BIN" "${CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LITERT_SCAFFOLD \
+  inference/tests/engine_registry_contract.cpp \
+  inference/core/engine_registry.cpp \
+  inference/core/token_stream.cpp \
+  inference/backends/mock/mock_inference_engine.cpp \
+  inference/backends/litert/litert_engine.cpp \
+  -o "$BUILD_DIR/engine_registry_litert_contract"
+"$BUILD_DIR/engine_registry_litert_contract" --expect-litert-hidden
+
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/mock_backend_contract.cpp \
   inference/core/json_value.cpp \

@@ -13,6 +13,10 @@
 #include "llama_cpp_engine.h"
 #endif
 
+#ifdef LOCAL_AGENT_ENABLE_LITERT
+#include "litert_engine.h"
+#endif
+
 namespace local_agent {
 namespace {
 
@@ -74,6 +78,18 @@ EngineDescriptor llama_cpp_descriptor() {
     return descriptor;
 }
 
+EngineDescriptor litert_descriptor() {
+    EngineDescriptor descriptor;
+    descriptor.engine_id = "litert";
+    descriptor.display_name = "LiteRT";
+    descriptor.capabilities.supports_vision = false;
+    descriptor.capabilities.supports_streaming = true;
+    descriptor.capabilities.supports_cancellation = true;
+    descriptor.capabilities.supports_token_usage = false;
+    descriptor.capabilities.supported_model_formats = {"litert", "tflite"};
+    return descriptor;
+}
+
 void append_descriptor_json(std::ostringstream &out, const EngineDescriptor &descriptor) {
     out << "{"
         << "\"engine_id\":\"" << json_escape(descriptor.engine_id) << "\","
@@ -123,6 +139,9 @@ EngineRegistry EngineRegistry::production() {
 #ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP
     descriptors.push_back(llama_cpp_descriptor());
 #endif
+#ifdef LOCAL_AGENT_ENABLE_LITERT
+    descriptors.push_back(litert_descriptor());
+#endif
     return EngineRegistry(std::move(descriptors));
 }
 
@@ -162,6 +181,11 @@ std::unique_ptr<InferenceEngine> EngineRegistry::create(const std::string &engin
 #ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP
     if (engine_id == "llama_cpp") {
         return std::make_unique<LlamaCppEngine>();
+    }
+#endif
+#ifdef LOCAL_AGENT_ENABLE_LITERT
+    if (engine_id == "litert") {
+        return std::make_unique<LiteRTInferenceEngine>();
     }
 #endif
     return nullptr;

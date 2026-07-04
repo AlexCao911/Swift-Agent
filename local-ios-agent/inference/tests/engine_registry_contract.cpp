@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <string>
 
-int main() {
+int main(int argc, char **argv) {
+    bool expect_litert_hidden = argc > 1 && std::string(argv[1]) == "--expect-litert-hidden";
     auto test_registry = local_agent::EngineRegistry::test();
     auto test_descriptors = test_registry.list();
     assert(std::any_of(test_descriptors.begin(), test_descriptors.end(), [](const auto &descriptor) {
@@ -18,6 +20,12 @@ int main() {
         return descriptor.engine_id == "mock";
     }));
     assert(production_registry.create("mock") == nullptr);
+    if (expect_litert_hidden) {
+        assert(std::none_of(production_descriptors.begin(), production_descriptors.end(), [](const auto &descriptor) {
+            return descriptor.engine_id == "litert";
+        }));
+        assert(production_registry.find("litert") == nullptr);
+    }
 
     const auto *mock = test_registry.find("mock");
     assert(mock != nullptr);
