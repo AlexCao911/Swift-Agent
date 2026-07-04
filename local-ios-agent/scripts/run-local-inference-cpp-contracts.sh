@@ -31,9 +31,23 @@ CXXFLAGS=(
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/model_config_contract.cpp \
+  inference/core/json_value.cpp \
   inference/core/model_config.cpp \
   -o "$BUILD_DIR/model_config_contract"
 "$BUILD_DIR/model_config_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/json_value_contract.cpp \
+  inference/core/json_value.cpp \
+  -o "$BUILD_DIR/json_value_contract"
+"$BUILD_DIR/json_value_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/generation_request_contract.cpp \
+  inference/core/json_value.cpp \
+  inference/core/generation_request.cpp \
+  -o "$BUILD_DIR/generation_request_contract"
+"$BUILD_DIR/generation_request_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/engine_registry_contract.cpp \
@@ -45,6 +59,7 @@ CXXFLAGS=(
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/llama_cpp_backend_contract.cpp \
+  inference/core/json_value.cpp \
   inference/core/model_config.cpp \
   inference/core/token_stream.cpp \
   inference/backends/llama_cpp/llama_cpp_api.cpp \

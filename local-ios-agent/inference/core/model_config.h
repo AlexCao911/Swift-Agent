@@ -5,6 +5,22 @@
 
 namespace local_agent {
 
+struct RuntimeOptions {
+    int n_gpu_layers = 0;
+    int n_threads = 4;
+};
+
+struct ModelLoadConfig {
+    std::string engine;
+    std::string model_id;
+    std::string model_format;
+    std::string model_path;
+    std::string mmproj_path;
+    std::string chat_template;
+    int context_tokens = 2048;
+    RuntimeOptions runtime;
+};
+
 struct GenerationConfig {
     float temperature = 0.2f;
     float top_p = 0.9f;
@@ -28,6 +44,7 @@ struct ModelConfig {
     LlamaCppConfig llama_cpp;
 };
 
+ModelLoadConfig parse_model_load_config(const char *model_config_json);
 ModelConfig parse_model_config(const char *model_config_json);
 std::string require_json_string(const std::string &json, const std::string &key);
 int optional_json_int(const std::string &json, const std::string &key, int fallback);

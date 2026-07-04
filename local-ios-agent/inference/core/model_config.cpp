@@ -1,36 +1,12 @@
 #include "model_config.h"
 
-#include <cstdlib>
+#include "json_value.h"
+
 #include <stdexcept>
 #include <string>
 
 namespace local_agent {
 namespace {
-
-std::string find_raw_value(const std::string &json, const std::string &key) {
-    const std::string needle = "\"" + key + "\"";
-    const std::size_t key_pos = json.find(needle);
-    if (key_pos == std::string::npos) {
-        return "";
-    }
-    const std::size_t colon_pos = json.find(':', key_pos + needle.size());
-    if (colon_pos == std::string::npos) {
-        return "";
-    }
-    const std::size_t value_start = json.find_first_not_of(" \n\r\t", colon_pos + 1);
-    if (value_start == std::string::npos) {
-        return "";
-    }
-    if (json[value_start] == '"') {
-        const std::size_t value_end = json.find('"', value_start + 1);
-        if (value_end == std::string::npos) {
-            throw std::invalid_argument("unterminated string for key: " + key);
-        }
-        return json.substr(value_start + 1, value_end - value_start - 1);
-    }
-    const std::size_t value_end = json.find_first_of(",}\n\r\t ", value_start);
-    return json.substr(value_start, value_end - value_start);
-}
 
 void require_non_empty(const std::string &value, const std::string &key) {
     if (value.empty()) {
@@ -38,28 +14,36 @@ void require_non_empty(const std::string &value, const std::string &key) {
     }
 }
 
+std::string default_model_format(const std::string &engine) {
+    if (engine == "mock") {
+        return "mock";
+    }
+    if (engine == "llama_cpp") {
+        return "gguf";
+    }
+    return "";
+}
+
+void validate_supported_engine(const std::string &engine) {
+    if (engine != "mock" && engine != "llama_cpp") {
+        throw std::invalid_argument("unsupported inference engine: " + engine);
+    }
+}
+
 } // namespace
 
 std::string require_json_string(const std::string &json, const std::string &key) {
-    std::string value = find_raw_value(json, key);
+    std::string value = local_agent::json::require_string(local_agent::json::parse(json.c_str()), key);
     require_non_empty(value, key);
     return value;
 }
 
 int optional_json_int(const std::string &json, const std::string &key, int fallback) {
-    std::string value = find_raw_value(json, key);
-    if (value.empty()) {
-        return fallback;
-    }
-    return std::atoi(value.c_str());
+    return local_agent::json::optional_int(local_agent::json::parse(json.c_str()), key, fallback);
 }
 
 float optional_json_float(const std::string &json, const std::string &key, float fallback) {
-    std::string value = find_raw_value(json, key);
-    if (value.empty()) {
-        return fallback;
-    }
-    return static_cast<float>(std::atof(value.c_str()));
+    return local_agent::json::optional_float(local_agent::json::parse(json.c_str()), key, fallback);
 }
 
 std::string optional_json_string(
@@ -67,36 +51,67 @@ std::string optional_json_string(
     const std::string &key,
     const std::string &fallback
 ) {
-    std::string value = find_raw_value(json, key);
-    if (value.empty()) {
-        return fallback;
-    }
-    return value;
+    return local_agent::json::optional_string(local_agent::json::parse(json.c_str()), key, fallback);
 }
 
-ModelConfig parse_model_config(const char *model_config_json) {
+ModelLoadConfig parse_model_load_config(const char *model_config_json) {
     if (model_config_json == nullptr) {
         throw std::invalid_argument("model config json is null");
     }
 
-    const std::string json(model_config_json);
-    ModelConfig config;
-    config.backend = optional_json_string(json, "backend", "mock");
-    config.model_path = require_json_string(json, "model_path");
-    config.model_id = optional_json_string(json, "model_id", config.model_path);
-    config.chat_template = optional_json_string(json, "chat_template", "gguf");
-    config.max_context_tokens = optional_json_int(json, "max_context_tokens", 2048);
-    config.generation.temperature = optional_json_float(json, "temperature", 0.2f);
-    config.generation.top_p = optional_json_float(json, "top_p", 0.9f);
-    config.generation.max_new_tokens = optional_json_int(json, "max_new_tokens", 128);
-    config.generation.seed = optional_json_int(json, "seed", 42);
-    config.llama_cpp.n_gpu_layers = optional_json_int(json, "n_gpu_layers", 0);
-    config.llama_cpp.n_threads = optional_json_int(json, "n_threads", 4);
-    config.llama_cpp.mmproj_path = optional_json_string(json, "mmproj_path", "");
-
-    if (config.backend != "mock" && config.backend != "llama_cpp") {
-        throw std::invalid_argument("unsupported inference backend: " + config.backend);
+    const json::Value root = json::parse(model_config_json);
+    if (!root.is_object()) {
+        throw std::invalid_argument("model config must be a json object");
     }
+
+    ModelLoadConfig config;
+    config.engine = json::require_string(root, "engine");
+    require_non_empty(config.engine, "engine");
+    validate_supported_engine(config.engine);
+    config.model_path = json::require_string(root, "model_path");
+    require_non_empty(config.model_path, "model_path");
+    config.model_id = json::optional_string(root, "model_id", config.model_path);
+    config.model_format = json::optional_string(root, "model_format", default_model_format(config.engine));
+    config.mmproj_path = json::optional_string(root, "mmproj_path", "");
+    config.chat_template = json::optional_string(root, "chat_template", "gguf");
+    config.context_tokens = json::optional_int(root, "context_tokens", 2048);
+    const json::Value *runtime = root.get("runtime");
+    if (runtime != nullptr) {
+        config.runtime.n_threads = json::optional_int(*runtime, "n_threads", config.runtime.n_threads);
+        config.runtime.n_gpu_layers = json::optional_int(*runtime, "n_gpu_layers", config.runtime.n_gpu_layers);
+    }
+    if (config.context_tokens <= 0) {
+        throw std::invalid_argument("context_tokens must be positive");
+    }
+    return config;
+}
+
+ModelConfig parse_model_config(const char *model_config_json) {
+    const json::Value root = json::parse(model_config_json);
+
+    ModelConfig config;
+    config.backend = json::optional_string(root, "backend", json::optional_string(root, "engine", "mock"));
+    validate_supported_engine(config.backend);
+    config.model_path = json::require_string(root, "model_path");
+    require_non_empty(config.model_path, "model_path");
+    config.model_id = json::optional_string(root, "model_id", config.model_path);
+    config.chat_template = json::optional_string(root, "chat_template", "gguf");
+    config.max_context_tokens = json::optional_int(root, "max_context_tokens", json::optional_int(root, "context_tokens", 2048));
+
+    const json::Value *generation = root.get("generation");
+    if (generation != nullptr) {
+        config.generation.temperature = json::optional_float(*generation, "temperature", config.generation.temperature);
+        config.generation.top_p = json::optional_float(*generation, "top_p", config.generation.top_p);
+        config.generation.max_new_tokens = json::optional_int(*generation, "max_new_tokens", config.generation.max_new_tokens);
+        config.generation.seed = json::optional_int(*generation, "seed", config.generation.seed);
+    }
+    const json::Value *llama_cpp = root.get("llama_cpp");
+    if (llama_cpp != nullptr) {
+        config.llama_cpp.n_gpu_layers = json::optional_int(*llama_cpp, "n_gpu_layers", config.llama_cpp.n_gpu_layers);
+        config.llama_cpp.n_threads = json::optional_int(*llama_cpp, "n_threads", config.llama_cpp.n_threads);
+        config.llama_cpp.mmproj_path = json::optional_string(*llama_cpp, "mmproj_path", config.llama_cpp.mmproj_path);
+    }
+
     if (config.max_context_tokens <= 0) {
         throw std::invalid_argument("max_context_tokens must be positive");
     }
