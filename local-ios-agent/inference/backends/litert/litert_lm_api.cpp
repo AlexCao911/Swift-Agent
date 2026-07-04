@@ -5,6 +5,7 @@
 #endif
 
 #include "litert_active_generation.h"
+#include "litert_quiesce_wait.h"
 
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine_factory.h"
@@ -25,6 +26,8 @@
 namespace local_agent {
 namespace {
 
+constexpr int kMaxLiteRTQuiesceWaits = 3;
+
 std::runtime_error litert_error(const std::string &context, const absl::Status &status) {
     return std::runtime_error(context + ": " + std::string(status.message()));
 }
@@ -34,12 +37,15 @@ bool is_cancelled_status(const absl::Status &status) {
 }
 
 absl::Status wait_until_generation_quiesced(litert::lm::Engine &engine) {
-    for (;;) {
-        absl::Status status = engine.WaitUntilDone(litert::lm::Engine::kDefaultTimeout);
-        if (status.ok() || is_cancelled_status(status)) {
-            return status;
-        }
-    }
+    return wait_until_litert_quiesced<absl::Status>(
+        [&]() {
+            return engine.WaitUntilDone(litert::lm::Engine::kDefaultTimeout);
+        },
+        [](const absl::Status &status) {
+            return status.ok() || is_cancelled_status(status);
+        },
+        kMaxLiteRTQuiesceWaits
+    );
 }
 
 std::string normalized_litert_role(const std::string &role) {
@@ -263,6 +269,12 @@ public:
             active_generation_.cancel();
             wait_status = wait_until_generation_quiesced(*engine);
             active_generation_.finish();
+            if (!wait_status.ok() && !is_cancelled_status(wait_status)) {
+                throw litert_error(
+                    "LiteRT-LM generation did not quiesce after cancellation",
+                    wait_status
+                );
+            }
             throw litert_error("LiteRT-LM generation did not finish", original_status);
         }
         active_generation_.finish();

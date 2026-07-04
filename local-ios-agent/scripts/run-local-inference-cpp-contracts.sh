@@ -137,6 +137,11 @@ COMMON_SOURCES=(
 "$BUILD_DIR/litert_active_generation_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/litert_quiesce_wait_contract.cpp \
+  -o "$BUILD_DIR/litert_quiesce_wait_contract"
+"$BUILD_DIR/litert_quiesce_wait_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/litert_backend_contract.cpp \
   inference/core/json_value.cpp \
   inference/core/generation_request.cpp \

@@ -609,7 +609,8 @@ create LiteRT-LM Engine and short-lived Conversation sessions
 stream message deltas through the common token event stream
 cancel asynchronous generation through LiteRT-LM task groups
 guard active Conversation lifetime while cancellation is in flight
-wait for LiteRT-LM tasks to quiesce before releasing callback-captured state
+wait for LiteRT-LM tasks to quiesce with bounded retries before releasing callback-captured state
+map unable-to-quiesce outcomes to generation failure instead of blocking forever
 map LiteRT errors
 ```
 

@@ -31,7 +31,8 @@ backends/litert/*
   registry; vendor builds compile `litert_lm_api.cpp` and use LiteRT-LM
   Engine/Conversation APIs for real local LLM generation. Active generation
   teardown must wait for in-flight cancellation callbacks before releasing a
-  LiteRT-LM Conversation.
+  LiteRT-LM Conversation; quiesce waiting is bounded and reports failure if the
+  vendor runtime cannot settle.
 ```
 
 ## Forbidden Dependencies

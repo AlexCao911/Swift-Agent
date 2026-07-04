@@ -1335,6 +1335,7 @@ git commit -m "refactor: remove legacy local inference entry points"
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_api.h/.cpp` as the adapter session boundary.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_lm_api.cpp` as the real LiteRT-LM vendor bridge.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_active_generation.h/.cpp` to serialize cancellation and active Conversation teardown.
+- [ ] Add `local-ios-agent/inference/backends/litert/litert_quiesce_wait.h` to bound post-cancel quiesce retries.
 - [ ] Compile adapter-boundary tests with an injected test `LiteRTSession`.
 - [ ] Add optional vendor compile/link verification using `LOCAL_AGENT_LITERT_LM_INCLUDE_DIR`, `LOCAL_AGENT_LITERT_LM_CXXFLAGS`, and `LOCAL_AGENT_LITERT_LM_LDFLAGS`.
 - [ ] Add optional real model smoke using `LOCAL_AGENT_LITERT_LM_MODEL_PATH`.
@@ -1381,7 +1382,8 @@ With LOCAL_AGENT_ENABLE_LITERT and LOCAL_AGENT_ENABLE_LITERT_VENDOR:
   generation creates a short-lived LiteRT-LM Conversation and streams SendMessageAsync deltas.
   cancellation calls LiteRT-LM task-group cancellation.
   cancellation and Conversation teardown are serialized by LiteRTActiveGeneration.
-  non-OK WaitUntilDone states do not return until the LiteRT task is quiesced.
+  non-OK WaitUntilDone states trigger bounded quiesce retries.
+  unable-to-quiesce states return a stable generation failure instead of blocking forever.
 ```
 
 Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are enabled:
@@ -1426,6 +1428,11 @@ Add a LiteRT-specific runner section:
   inference/backends/litert/litert_active_generation.cpp \
   -o "$BUILD_DIR/litert_active_generation_contract"
 "$BUILD_DIR/litert_active_generation_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/litert_quiesce_wait_contract.cpp \
+  -o "$BUILD_DIR/litert_quiesce_wait_contract"
+"$BUILD_DIR/litert_quiesce_wait_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/litert_backend_contract.cpp \
