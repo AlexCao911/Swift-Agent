@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the current local C++ inference ABI with a clean v2 local-only engine boundary using opaque handles, explicit memory ownership, compiled-engine registry, model/generation separation, deterministic test coverage, and a vendor-gated LiteRT adapter boundary.
+**Goal:** Replace the current local C++ inference ABI with a clean v2 local-only engine boundary using opaque handles, explicit memory ownership, compiled-engine registry, model/generation separation, deterministic test coverage, and a vendor-gated LiteRT-LM adapter that can run real local LLM generation when the SDK is linked.
 
 **Architecture:** Swift remains the app-level inference router. Swift chooses `LocalCppInferenceClient` for downloaded local model files and `CloudInferenceClient` for cloud providers. C++ owns only local compiled engine execution: registry, capabilities, model load/unload, generation sessions, token events, cancellation, and stable local errors. The old v1 `local_agent_backend_*` ABI is removed from the C++ public boundary. Rust direct local-LLM C ABI ownership is a migration leftover that is explicitly retired later, in the Swift/Rust HostInference takeover.
 
-**Tech Stack:** C++17, C ABI, clang/clang++, existing `local-ios-agent/inference` tree, mock deterministic backend, llama.cpp adapter, LiteRT adapter boundary with vendor-gated registry exposure, shell contract runner.
+**Tech Stack:** C++17, C ABI, clang/clang++, existing `local-ios-agent/inference` tree, mock deterministic backend, llama.cpp adapter, LiteRT-LM adapter with vendor-gated registry exposure, shell contract runner.
 
 ## Global Constraints
 
@@ -16,7 +16,7 @@
 - Rust must not become the target owner for local engine selection or local model loading. Existing Rust direct-C++ local inference feature flags are retired in this C++ phase and fail fast if enabled; app-facing local inference moves in the later Swift/Rust HostInference takeover.
 - Engines are compile-time linked and signed with the app. The registry must not model runtime-downloaded dylibs/frameworks.
 - `mock` is test/debug-only. Release-capability checks must prove the public registry does not expose `mock`.
-- `llama_cpp` and `litert` are production engine ids. LiteRT adapter-boundary code may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT vendor runtime bridge is linked.
+- `llama_cpp` and `litert` are production engine ids. LiteRT adapter-boundary code may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT-LM vendor runtime bridge is linked.
 - All returned `char *` JSON/string buffers are allocated by C++ and released by `local_agent_string_free`.
 - Callback `const char *token_json` is borrowed and valid only for the callback invocation.
 - C++ token events must not include agent-level tool call events. Use `text_delta`, `reasoning_delta`, `structured_delta`, `usage`, `completed`, and `error`.
@@ -99,7 +99,10 @@ local-ios-agent/inference/
 │   ├── llama_cpp/
 │   └── litert/
 │       ├── litert_engine.h
-│       └── litert_engine.cpp
+│       ├── litert_engine.cpp
+│       ├── litert_api.h
+│       ├── litert_api.cpp
+│       └── litert_lm_api.cpp
 └── tests/
     ├── c_api_release_registry_contract.cpp
     ├── c_api_v2_contract.cpp
@@ -1325,12 +1328,14 @@ git add local-ios-agent/inference/c_api/local_agent_inference.cpp \
 git commit -m "refactor: remove legacy local inference entry points"
 ```
 
-## Task 10: Add LiteRT Adapter Boundary Behind Vendor Gate
+## Task 10: Add LiteRT-LM Adapter Behind Vendor Gate
 
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_engine.h`.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_engine.cpp`.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_api.h/.cpp` as the adapter session boundary.
+- [ ] Add `local-ios-agent/inference/backends/litert/litert_lm_api.cpp` as the real LiteRT-LM vendor bridge.
 - [ ] Compile adapter-boundary tests with an injected test `LiteRTSession`.
+- [ ] Add optional vendor compile/link verification using `LOCAL_AGENT_LITERT_LM_INCLUDE_DIR`, `LOCAL_AGENT_LITERT_LM_CXXFLAGS`, and `LOCAL_AGENT_LITERT_LM_LDFLAGS`.
 - [ ] Register public `litert` only when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are both defined by a build that also links the vendor runtime bridge.
 - [ ] Add registry tests proving `litert` is absent with no LiteRT macro and also absent when only `LOCAL_AGENT_ENABLE_LITERT` is defined.
 
@@ -1366,11 +1371,13 @@ With LOCAL_AGENT_ENABLE_LITERT only:
   load_model is not reachable through the public registry.
 
 With LOCAL_AGENT_ENABLE_LITERT and LOCAL_AGENT_ENABLE_LITERT_VENDOR:
-  vendor LiteRT headers and library are linked.
-  vendor bridge supplies make_litert_session().
+  LiteRT-LM headers and library are linked.
+  litert_lm_api.cpp supplies make_litert_session().
   unavailable fallback litert_api.cpp is not compiled.
   litert registers descriptor metadata in the public production registry.
-  load_model attempts real LiteRT model loading and maps vendor failures to stable local errors.
+  load_model creates a real LiteRT-LM Engine.
+  generation creates a short-lived LiteRT-LM Conversation and streams SendMessageAsync deltas.
+  cancellation calls LiteRT-LM task-group cancellation.
 ```
 
 Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are enabled:
@@ -1378,7 +1385,7 @@ Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LIT
 ```text
 engine_id: litert
 display_name: LiteRT
-supported_model_formats: litert, tflite
+supported_model_formats: litert_lm, litertlm, task, tflite
 supports_streaming: true
 supports_cancellation: true
 supports_vision: false
@@ -1419,6 +1426,23 @@ Add a LiteRT-specific runner section:
   inference/backends/litert/litert_engine.cpp \
   -o "$BUILD_DIR/litert_backend_contract"
 "$BUILD_DIR/litert_backend_contract"
+
+if [[ -n "${LOCAL_AGENT_LITERT_LM_INCLUDE_DIR:-}" ]]; then
+  "$CXX_BIN" "${CXXFLAGS[@]}" \
+    -DLOCAL_AGENT_ENABLE_LITERT \
+    -DLOCAL_AGENT_ENABLE_LITERT_VENDOR \
+    -I "$LOCAL_AGENT_LITERT_LM_INCLUDE_DIR" \
+    ${LOCAL_AGENT_LITERT_LM_CXXFLAGS:-} \
+    inference/tests/engine_registry_contract.cpp \
+    inference/core/engine_registry.cpp \
+    inference/core/token_stream.cpp \
+    inference/backends/mock/mock_inference_engine.cpp \
+    inference/backends/litert/litert_engine.cpp \
+    inference/backends/litert/litert_lm_api.cpp \
+    ${LOCAL_AGENT_LITERT_LM_LDFLAGS:-} \
+    -o "$BUILD_DIR/engine_registry_litert_vendor_contract"
+  "$BUILD_DIR/engine_registry_litert_vendor_contract" --expect-litert-visible
+fi
 ```
 
 Verification command:
@@ -1443,7 +1467,7 @@ git add local-ios-agent/inference/backends/litert/litert_engine.h \
   local-ios-agent/inference/core/engine_registry.cpp \
   local-ios-agent/inference/tests/engine_registry_contract.cpp \
   local-ios-agent/scripts/run-local-inference-cpp-contracts.sh
-git commit -m "feat: add litert local inference adapter boundary"
+git commit -m "feat: add litert lm local inference adapter"
 ```
 
 ## Task 11: Record Swift/Rust Bridge Takeover Boundary
@@ -1515,7 +1539,7 @@ git commit -m "test: verify local cpp inference engine boundary"
 - Request-scoped prompt/image state lives in `GenerationSession`, not `InferenceEngine`.
 - v2 image buffers are copied before `local_agent_generation_start` returns.
 - Token events include text, reasoning, structured, usage, completed, and error forms; no tool-call event names exist in C++.
-- LiteRT has a vendor-gated adapter boundary and registry descriptor path.
+- LiteRT has a vendor-gated LiteRT-LM adapter and registry descriptor path.
 - v1 `local_agent_backend_*` ABI is removed from the public header and C API implementation.
 - Rust direct C++ local inference feature flags fail fast with a retirement message; Swift/Rust HostInference takeover remains the follow-up for the app-facing local route.
 - Filesystem naming cleanup from `inference/backends` to a future `local-inference/adapters` shape is intentionally deferred to a separate path-migration change.

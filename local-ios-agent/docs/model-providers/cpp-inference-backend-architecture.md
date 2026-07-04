@@ -25,6 +25,11 @@ backends/mock/*
 
 backends/llama_cpp/*
   llama.cpp engine and llama API shim.
+
+backends/litert/*
+  LiteRT engine adapter. Non-vendor builds keep this hidden from the public
+  registry; vendor builds compile `litert_lm_api.cpp` and use LiteRT-LM
+  Engine/Conversation APIs for real local LLM generation.
 ```
 
 ## Forbidden Dependencies
@@ -33,4 +38,4 @@ C++ code must not include Rust headers, Swift headers, session IDs, run IDs, too
 
 ## Replacement Rule
 
-Replacing llama.cpp with Core ML, MLC, ExecuTorch, or another engine must only require a new `InferenceEngine` implementation and a new backend factory branch. C ABI, Rust runtime, and SwiftUI must remain unchanged.
+Replacing llama.cpp/LiteRT with Core ML, MLC, ExecuTorch, or another engine must only require a new `InferenceEngine` implementation and a new backend factory branch. C ABI, Rust runtime, and SwiftUI must remain unchanged.

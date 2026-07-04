@@ -20,15 +20,32 @@ public:
           request_(std::move(request)) {}
 
     void read(const TokenStream::Emit &emit) override {
-        LiteRTGenerationOutput output = session_.generate(config_, request_);
+        std::string completed;
+        LiteRTGenerationOutput output = session_.stream_generate(
+            config_,
+            request_,
+            [&](const std::string &delta) {
+                if (stream_.is_cancelled()) {
+                    return false;
+                }
+                if (!stream_.emit_text_delta(delta, emit)) {
+                    stream_.cancel();
+                    return false;
+                }
+                completed += delta;
+                return true;
+            }
+        );
         usage_ = output.usage;
-        if (!output.text.empty() && !stream_.emit_text_delta(output.text, emit)) {
-            return;
-        }
         if (output.usage.available && !stream_.emit_usage(output.usage, emit)) {
             return;
         }
-        stream_.emit_completed(output.text, emit);
+        if (!stream_.is_cancelled()) {
+            if (!output.text.empty() && completed.empty()) {
+                completed = output.text;
+            }
+            stream_.emit_completed(completed, emit);
+        }
     }
 
     void cancel() override {
@@ -87,7 +104,10 @@ private:
 };
 
 bool is_supported_litert_format(const std::string &format) {
-    return format == "litert" || format == "tflite";
+    return format == "litert_lm"
+        || format == "litertlm"
+        || format == "task"
+        || format == "tflite";
 }
 
 } // namespace
@@ -107,7 +127,7 @@ EngineCapabilities LiteRTInferenceEngine::capabilities() const {
     capabilities.supports_streaming = true;
     capabilities.supports_cancellation = true;
     capabilities.supports_token_usage = false;
-    capabilities.supported_model_formats = {"litert", "tflite"};
+    capabilities.supported_model_formats = {"litert_lm", "litertlm", "task", "tflite"};
     return capabilities;
 }
 
@@ -116,7 +136,9 @@ std::unique_ptr<LoadedModel> LiteRTInferenceEngine::load_model(const ModelLoadCo
         throw std::invalid_argument("LiteRTInferenceEngine requires engine=litert");
     }
     if (!is_supported_litert_format(config.model_format)) {
-        throw std::invalid_argument("LiteRTInferenceEngine requires model_format=litert or tflite");
+        throw std::invalid_argument(
+            "LiteRTInferenceEngine requires model_format=litert_lm, litertlm, task, or tflite"
+        );
     }
     if (config.model_path.empty()) {
         throw std::invalid_argument("LiteRT model_path must not be empty");

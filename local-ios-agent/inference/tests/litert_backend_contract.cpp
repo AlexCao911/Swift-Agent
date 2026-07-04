@@ -16,15 +16,22 @@ public:
         loaded_model_format = config.model_format;
     }
 
-    local_agent::LiteRTGenerationOutput generate(
+    local_agent::LiteRTGenerationOutput stream_generate(
         const local_agent::ModelLoadConfig &,
-        const local_agent::GenerationRequest &request
+        const local_agent::GenerationRequest &request,
+        const local_agent::LiteRTTokenEmit &emit
     ) override {
         assert(loaded);
         prompts.push_back(request.messages.back().content);
         local_agent::LiteRTGenerationOutput output;
         output.text = "LiteRT response: " + request.messages.back().content;
         output.usage = local_agent::UsageReport{3, 4, 7, true};
+        if (!emit("LiteRT ")) {
+            return output;
+        }
+        if (!emit("response: " + request.messages.back().content)) {
+            return output;
+        }
         return output;
     }
 
@@ -53,15 +60,15 @@ int main() {
     local_agent::ModelLoadConfig config;
     config.engine = "litert";
     config.model_id = "edge.local";
-    config.model_format = "tflite";
-    config.model_path = "/tmp/model.tflite";
+    config.model_format = "litert_lm";
+    config.model_path = "/tmp/model.litertlm";
     config.context_tokens = 128;
 
     auto model = engine.load_model(config);
     assert(model != nullptr);
     assert(raw_session->loaded);
-    assert(raw_session->loaded_model_path == "/tmp/model.tflite");
-    assert(raw_session->loaded_model_format == "tflite");
+    assert(raw_session->loaded_model_path == "/tmp/model.litertlm");
+    assert(raw_session->loaded_model_format == "litert_lm");
     assert(model->runtime_info().engine_id == "litert");
     assert(model->runtime_info().model_id == "edge.local");
 
@@ -77,12 +84,23 @@ int main() {
 
     assert(raw_session->prompts.size() == 1);
     assert(raw_session->prompts[0] == "hello");
-    assert(events.size() == 3);
-    assert(events[0] == R"({"type":"text_delta","text":"LiteRT response: hello"})");
-    assert(events[1].find("\"type\":\"usage\"") != std::string::npos);
-    assert(events[2] == R"({"type":"completed","text":"LiteRT response: hello"})");
+    assert(events.size() == 4);
+    assert(events[0] == R"({"type":"text_delta","text":"LiteRT "})");
+    assert(events[1] == R"({"type":"text_delta","text":"response: hello"})");
+    assert(events[2].find("\"type\":\"usage\"") != std::string::npos);
+    assert(events[3] == R"({"type":"completed","text":"LiteRT response: hello"})");
     assert(generation->usage().available);
     assert(generation->usage().total_tokens == 7);
+
+    auto stopped_generation = model->start_generation(request, {});
+    std::vector<std::string> stopped_events;
+    stopped_generation->read([&](const std::string &event) {
+        stopped_events.push_back(event);
+        return false;
+    });
+    assert(stopped_events.size() == 1);
+    assert(stopped_events[0] == R"({"type":"text_delta","text":"LiteRT "})");
+    assert(raw_session->prompts.size() == 2);
 
     auto image_request = local_agent::parse_generation_request(
         R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})"

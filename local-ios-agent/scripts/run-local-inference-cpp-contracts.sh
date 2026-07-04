@@ -28,6 +28,16 @@ RELEASE_CXXFLAGS=(
   -I inference/backends/litert
 )
 
+LITERT_VENDOR_CXXFLAGS=()
+if [[ -n "${LOCAL_AGENT_LITERT_LM_CXXFLAGS:-}" ]]; then
+  read -r -a LITERT_VENDOR_CXXFLAGS <<< "$LOCAL_AGENT_LITERT_LM_CXXFLAGS"
+fi
+
+LITERT_VENDOR_LDFLAGS=()
+if [[ -n "${LOCAL_AGENT_LITERT_LM_LDFLAGS:-}" ]]; then
+  read -r -a LITERT_VENDOR_LDFLAGS <<< "$LOCAL_AGENT_LITERT_LM_LDFLAGS"
+fi
+
 COMMON_SOURCES=(
   inference/c_api/local_agent_inference.cpp
   inference/core/json_value.cpp
@@ -129,6 +139,25 @@ COMMON_SOURCES=(
   inference/backends/litert/litert_engine.cpp \
   -o "$BUILD_DIR/litert_backend_contract"
 "$BUILD_DIR/litert_backend_contract"
+
+if [[ -n "${LOCAL_AGENT_LITERT_LM_INCLUDE_DIR:-}" ]]; then
+  "$CXX_BIN" "${CXXFLAGS[@]}" \
+    -DLOCAL_AGENT_ENABLE_LITERT \
+    -DLOCAL_AGENT_ENABLE_LITERT_VENDOR \
+    -I "$LOCAL_AGENT_LITERT_LM_INCLUDE_DIR" \
+    "${LITERT_VENDOR_CXXFLAGS[@]}" \
+    inference/tests/engine_registry_contract.cpp \
+    inference/core/engine_registry.cpp \
+    inference/core/token_stream.cpp \
+    inference/backends/mock/mock_inference_engine.cpp \
+    inference/backends/litert/litert_engine.cpp \
+    inference/backends/litert/litert_lm_api.cpp \
+    "${LITERT_VENDOR_LDFLAGS[@]}" \
+    -o "$BUILD_DIR/engine_registry_litert_vendor_contract"
+  "$BUILD_DIR/engine_registry_litert_vendor_contract" --expect-litert-visible
+else
+  echo "skipping LiteRT-LM vendor contract; set LOCAL_AGENT_LITERT_LM_INCLUDE_DIR and LOCAL_AGENT_LITERT_LM_LDFLAGS to enable it"
+fi
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/mock_backend_contract.cpp \

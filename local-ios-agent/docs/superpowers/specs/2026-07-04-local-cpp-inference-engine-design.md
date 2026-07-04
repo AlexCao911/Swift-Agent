@@ -153,7 +153,7 @@ local-ios-agent/inference/
 
 `mock/` is a test adapter. It should be compiled only for tests, debug builds, or internal smoke tooling. It must not appear as a user-selectable release engine.
 
-`litert/` contains the LiteRT adapter boundary (`LiteRTInferenceEngine`, `LiteRTSession`, and generation mapping). Builds without a vendor bridge may compile the adapter boundary for tests, but must not expose `litert` through the public engine registry. The `litert` engine becomes user-selectable only when the vendor runtime bridge is linked and a smoke test passes.
+`litert/` contains the LiteRT adapter (`LiteRTInferenceEngine`, `LiteRTSession`, `litert_lm_api.cpp`, and generation mapping). Builds without a vendor bridge may compile the adapter boundary for tests, but must not expose `litert` through the public engine registry. The `litert` engine becomes user-selectable only when the LiteRT-LM vendor runtime bridge is linked and a smoke test passes.
 
 ## Engine Registry
 
@@ -603,17 +603,17 @@ map llama errors
 Responsibilities:
 
 ```text
-parse LiteRT-specific runtime options
-load supported model package
-run generation API
-stream or chunk outputs if supported
-cancel generation when API supports it
+parse LiteRT-LM runtime options
+load supported LiteRT-LM model package
+create LiteRT-LM Engine and short-lived Conversation sessions
+stream message deltas through the common token event stream
+cancel asynchronous generation through LiteRT-LM task groups
 map LiteRT errors
 ```
 
-If LiteRT does not expose the same streaming semantics as llama.cpp, the adapter still emits the common token event stream. It can buffer internally.
+The production `litert` adapter targets LiteRT-LM's LLM/chat API, not generic tensor-only LiteRT invocation. Generic LiteRT `CompiledModel` is still useful for non-LLM workloads, but it does not provide tokenizer, sampler, or conversation behavior and is not the app-facing local LLM engine.
 
-LiteRT adapter-boundary tests may use an injected test `LiteRTSession`, but test sessions must not be registered as product engines. Public `litert` exposure requires a linked vendor bridge, capability metadata, and a smoke test. `LOCAL_AGENT_ENABLE_LITERT` alone is not enough; registry exposure also requires the vendor-linked build macro.
+LiteRT adapter-boundary tests may use an injected test `LiteRTSession`, but test sessions must not be registered as product engines. Public `litert` exposure requires the linked LiteRT-LM bridge, capability metadata, and a smoke test. `LOCAL_AGENT_ENABLE_LITERT` alone is not enough; registry exposure also requires `LOCAL_AGENT_ENABLE_LITERT_VENDOR` and the vendor source/link flags.
 
 ### Mock Adapter
 
@@ -817,7 +817,7 @@ add last_error JSON
 ### Phase 4: Add LiteRT Adapter
 
 ```text
-add LiteRT adapter boundary
+add LiteRT-LM-backed LiteRT adapter
 keep non-vendor builds hidden from public registry
 pin LiteRT dependency in a separate vendor-linking change
 add model format compatibility
@@ -855,7 +855,7 @@ Swift Model Center, active local model selection, cloud provider configuration, 
 - First v2 multimodal generation accepts image input through explicit buffers only.
 - Engine adapters do not leak vendor headers through the public C ABI.
 - llama.cpp and LiteRT can coexist behind the same internal `InferenceEngine` interface.
-- llama.cpp is the first production local engine; LiteRT is the second production local engine only after vendor runtime linking and smoke coverage.
+- llama.cpp is the first production local engine; LiteRT is the second production local engine through LiteRT-LM after vendor runtime linking and smoke coverage.
 - Adding a new local engine requires an adapter and registry entry, not Rust changes.
 - Swift can later list compiled engines and call local generation without knowing vendor APIs.
 - Rust remains unaware of C++ engine details.

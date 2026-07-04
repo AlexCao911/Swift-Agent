@@ -34,10 +34,10 @@ int main() {
     assert(mock_config.model_format == "mock");
 
     local_agent::ModelLoadConfig litert_config = local_agent::parse_model_load_config(
-        R"({"engine":"litert","model_path":"/tmp/model.tflite"})"
+        R"({"engine":"litert","model_path":"/tmp/model.litertlm"})"
     );
     assert(litert_config.engine == "litert");
-    assert(litert_config.model_format == "litert");
+    assert(litert_config.model_format == "litert_lm");
 
     bool rejected_empty_model_path = false;
     try {

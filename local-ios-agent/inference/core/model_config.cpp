@@ -22,7 +22,7 @@ std::string default_model_format(const std::string &engine) {
         return "gguf";
     }
     if (engine == "litert") {
-        return "litert";
+        return "litert_lm";
     }
     return "";
 }

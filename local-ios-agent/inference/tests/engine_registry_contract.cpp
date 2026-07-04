@@ -8,6 +8,7 @@
 
 int main(int argc, char **argv) {
     bool expect_litert_hidden = argc > 1 && std::string(argv[1]) == "--expect-litert-hidden";
+    bool expect_litert_visible = argc > 1 && std::string(argv[1]) == "--expect-litert-visible";
     auto test_registry = local_agent::EngineRegistry::test();
     auto test_descriptors = test_registry.list();
     assert(std::any_of(test_descriptors.begin(), test_descriptors.end(), [](const auto &descriptor) {
@@ -25,6 +26,19 @@ int main(int argc, char **argv) {
             return descriptor.engine_id == "litert";
         }));
         assert(production_registry.find("litert") == nullptr);
+    }
+    if (expect_litert_visible) {
+        const auto *litert = production_registry.find("litert");
+        assert(litert != nullptr);
+        assert(!litert->test_only);
+        assert(litert->capabilities.supports_streaming);
+        assert(std::find(
+            litert->capabilities.supported_model_formats.begin(),
+            litert->capabilities.supported_model_formats.end(),
+            "litert_lm"
+        ) != litert->capabilities.supported_model_formats.end());
+        std::unique_ptr<local_agent::InferenceEngine> litert_engine = production_registry.create("litert");
+        assert(litert_engine != nullptr);
     }
 
     const auto *mock = test_registry.find("mock");

@@ -5,6 +5,7 @@
 #include "model_config.h"
 #include "token_stream.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -15,13 +16,16 @@ struct LiteRTGenerationOutput {
     UsageReport usage;
 };
 
+using LiteRTTokenEmit = std::function<bool(const std::string &)>;
+
 class LiteRTSession {
 public:
     virtual ~LiteRTSession() = default;
     virtual void load(const ModelLoadConfig &config) = 0;
-    virtual LiteRTGenerationOutput generate(
+    virtual LiteRTGenerationOutput stream_generate(
         const ModelLoadConfig &config,
-        const GenerationRequest &request
+        const GenerationRequest &request,
+        const LiteRTTokenEmit &emit
     ) = 0;
     virtual void cancel() = 0;
 };

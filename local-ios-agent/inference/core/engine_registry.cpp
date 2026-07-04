@@ -87,7 +87,7 @@ EngineDescriptor litert_descriptor() {
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
     descriptor.capabilities.supports_token_usage = false;
-    descriptor.capabilities.supported_model_formats = {"litert", "tflite"};
+    descriptor.capabilities.supported_model_formats = {"litert_lm", "litertlm", "task", "tflite"};
     return descriptor;
 }
 

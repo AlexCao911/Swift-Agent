@@ -15,9 +15,10 @@ public:
         throw std::runtime_error("LiteRT vendor runtime is not linked in this build");
     }
 
-    LiteRTGenerationOutput generate(
+    LiteRTGenerationOutput stream_generate(
         const ModelLoadConfig &,
-        const GenerationRequest &
+        const GenerationRequest &,
+        const LiteRTTokenEmit &
     ) override {
         throw std::runtime_error("LiteRT vendor runtime is not linked in this build");
     }
