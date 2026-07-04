@@ -13,7 +13,7 @@
 - Keep C++ local inference only. Do not add cloud HTTP, API keys, provider routing, agent profiles, tool calls, model downloads, model library persistence, or UI.
 - Treat this as a breaking local inference refactor. Do not preserve v1 `local_agent_backend_*` behavior.
 - The public C ABI after this plan is v2 only: engine handle, model handle, generation handle, string free, last error, and image input.
-- Rust must not become the target owner for local engine selection or local model loading. Existing Rust direct-C++ local inference build/link ownership is not retired in this C++-only phase; it moves in the later Swift/Rust HostInference takeover.
+- Rust must not become the target owner for local engine selection or local model loading. Existing Rust direct-C++ local inference feature flags are retired in this C++ phase and fail fast if enabled; app-facing local inference moves in the later Swift/Rust HostInference takeover.
 - Engines are compile-time linked and signed with the app. The registry must not model runtime-downloaded dylibs/frameworks.
 - `mock` is test/debug-only. Release-capability checks must prove the public registry does not expose `mock`.
 - `llama_cpp` and `litert` are production engine ids. LiteRT source scaffolding may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT vendor runtime is linked.
@@ -21,7 +21,7 @@
 - Callback `const char *token_json` is borrowed and valid only for the callback invocation.
 - C++ token events must not include agent-level tool call events. Use `text_delta`, `reasoning_delta`, `structured_delta`, `usage`, `completed`, and `error`.
 - Multimodal v2 buffer input copies bytes before `local_agent_generation_start` returns. C++ must not retain caller-owned image pointers.
-- Rust direct C++ local inference remains active until a later Swift/Rust HostInference takeover gives Swift an app-facing local route. Do not edit Rust build/link ownership in this C++-only plan.
+- Rust direct C++ local inference feature flags are disabled with an explicit retirement message until a later Swift/Rust HostInference takeover gives Swift an app-facing local route.
 
 ---
 
@@ -1447,7 +1447,7 @@ git commit -m "feat: add litert local inference adapter scaffold"
 
 ## Task 11: Record Swift/Rust Bridge Takeover Boundary
 
-- [ ] Add a short note to this plan's completion handoff that Rust direct C++ local inference remains active until Swift HostInferenceRuntime owns the v2 local route.
+- [ ] Add a short note to this plan's completion handoff that Rust direct C++ local inference feature flags fail fast until Swift HostInferenceRuntime owns the v2 local route.
 - [ ] Do not edit `local-ios-agent/rust-core/build.rs` in this C++-only implementation plan.
 - [ ] Do not remove Rust local inference feature wiring in this C++-only implementation plan.
 - [ ] Name the follow-up plan: Swift/Rust HostInference takeover.
@@ -1455,7 +1455,7 @@ git commit -m "feat: add litert local inference adapter scaffold"
 Boundary note to preserve in the final handoff:
 
 ```text
-This C++ refactor defines the v2 local inference boundary and may remove the public v1 C ABI from the C++ library. It does not remove Rust's existing direct local inference path from active product builds. Rust build/link ownership should be retired only in the later Swift/Rust HostInference takeover, in the same change that gives Swift an app-facing LocalCppInferenceClient.
+This C++ refactor defines the v2 local inference boundary, removes the public v1 C ABI from the C++ library, and disables Rust's old direct local inference feature flags with a clear retirement message. The app-facing replacement route belongs to the later Swift/Rust HostInference takeover, in the same change that gives Swift a LocalCppInferenceClient.
 ```
 
 Verification command:
@@ -1516,5 +1516,6 @@ git commit -m "test: verify local cpp inference engine boundary"
 - Token events include text, reasoning, structured, usage, completed, and error forms; no tool-call event names exist in C++.
 - LiteRT has a compile-gated adapter scaffold and registry descriptor path.
 - v1 `local_agent_backend_*` ABI is removed from the public header and C API implementation.
-- Rust direct local C++ inference build/link ownership is unchanged in this C++ phase and explicitly deferred to the Swift/Rust HostInference takeover.
+- Rust direct C++ local inference feature flags fail fast with a retirement message; Swift/Rust HostInference takeover remains the follow-up for the app-facing local route.
+- Filesystem naming cleanup from `inference/backends` to a future `local-inference/adapters` shape is intentionally deferred to a separate path-migration change.
 - C++ local inference remains behind Swift's local route and is not an app-level inference router.

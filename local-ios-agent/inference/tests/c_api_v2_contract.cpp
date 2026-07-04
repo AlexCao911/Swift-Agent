@@ -19,6 +19,8 @@ int main() {
     char *error_json = nullptr;
     assert(local_agent_last_error(nullptr, &error_json) == LOCAL_AGENT_STATUS_OK);
     assert(std::string(error_json).find("\"code\":\"engine_unavailable\"") != std::string::npos);
+    assert(std::string(error_json).find("\"engine\":\"missing_engine\"") != std::string::npos);
+    assert(std::string(error_json).find("\"recoverable\":false") != std::string::npos);
     local_agent_string_free(error_json);
 
     char *engine_list_json = nullptr;
@@ -89,6 +91,26 @@ int main() {
         return event.find("image_rgb_first_byte=255") != std::string::npos;
     }));
     assert(local_agent_generation_release(image_generation) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *metadata_without_buffer = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})",
+        nullptr,
+        0,
+        &metadata_without_buffer
+    ) == LOCAL_AGENT_STATUS_INVALID_ARGUMENT);
+    assert(metadata_without_buffer == nullptr);
+
+    LocalAgentGenerationHandle *buffer_without_metadata = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"describe"}]})",
+        &image,
+        1,
+        &buffer_without_metadata
+    ) == LOCAL_AGENT_STATUS_INVALID_ARGUMENT);
+    assert(buffer_without_metadata == nullptr);
 
     assert(local_agent_model_unload(model) == LOCAL_AGENT_STATUS_OK);
     assert(local_agent_engine_release(engine) == LOCAL_AGENT_STATUS_OK);

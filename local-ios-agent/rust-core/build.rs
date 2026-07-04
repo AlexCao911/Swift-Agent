@@ -14,6 +14,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_CPP_MTMD_HEADERS");
     println!("cargo:rerun-if-env-changed=LLAMA_CPP_MTMD_LIBRARY");
     println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+    if env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_some() {
+        panic!(
+            "link-mock-local-inference is retired by the local C++ inference v2 ABI; use the later Swift/Rust HostInference takeover instead"
+        );
+    }
+    if env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_LOCAL_INFERENCE").is_some()
+        || env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_MTMD_LOCAL_INFERENCE").is_some()
+    {
+        panic!(
+            "Rust direct local inference linking is retired by the local C++ inference v2 ABI; use the later Swift/Rust HostInference takeover instead"
+        );
+    }
     if env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_none() {
         return;
     }

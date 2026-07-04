@@ -1340,7 +1340,7 @@ fn bridge_config_surfaces_unlinked_local_llm_provider() {
     assert!(
         error
             .to_string()
-            .contains("on-device backend is not linked"),
+            .contains("Rust direct on-device C ABI linking is retired"),
         "{error}"
     );
 }

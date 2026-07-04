@@ -12,6 +12,7 @@ crate-type = ["rlib", "staticlib"]
 [features]
 default = []
 builtin-openai-compatible = []
+# Retired migration markers: build.rs fails fast if these are enabled.
 link-mock-local-inference = []
 link-llama-cpp-local-inference = ["link-mock-local-inference"]
 link-llama-cpp-mtmd-local-inference = ["link-llama-cpp-local-inference"]

@@ -298,7 +298,7 @@ fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
 #[cfg(not(feature = "link-mock-local-inference"))]
 fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
     Err(AgentError::Provider(
-        "on-device backend is not linked; enable link-mock-local-inference or provide C ABI functions".into(),
+        "Rust direct on-device C ABI linking is retired; provide test C ABI functions directly or use the later Swift/Rust HostInference takeover".into(),
     ))
 }
 

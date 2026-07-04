@@ -21,11 +21,14 @@ std::string default_model_format(const std::string &engine) {
     if (engine == "llama_cpp") {
         return "gguf";
     }
+    if (engine == "litert") {
+        return "litert";
+    }
     return "";
 }
 
 void validate_supported_engine(const std::string &engine) {
-    if (engine != "mock" && engine != "llama_cpp") {
+    if (engine != "mock" && engine != "llama_cpp" && engine != "litert") {
         throw std::invalid_argument("unsupported inference engine: " + engine);
     }
 }

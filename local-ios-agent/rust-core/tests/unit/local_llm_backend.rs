@@ -396,7 +396,7 @@ fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
 
     assert!(error
         .to_string()
-        .contains("on-device backend is not linked"));
+        .contains("Rust direct on-device C ABI linking is retired"));
 }
 
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);

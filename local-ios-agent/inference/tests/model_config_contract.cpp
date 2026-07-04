@@ -33,6 +33,12 @@ int main() {
     );
     assert(mock_config.model_format == "mock");
 
+    local_agent::ModelLoadConfig litert_config = local_agent::parse_model_load_config(
+        R"({"engine":"litert","model_path":"/tmp/model.tflite"})"
+    );
+    assert(litert_config.engine == "litert");
+    assert(litert_config.model_format == "litert");
+
     bool rejected_empty_model_path = false;
     try {
         local_agent::parse_model_load_config(R"({"engine":"llama_cpp","model_path":""})");
