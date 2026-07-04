@@ -1,107 +1,39 @@
-#include "local_agent_inference.h"
+#include "generation_request.h"
+#include "mock_inference_engine.h"
 
 #include <cassert>
 #include <string>
 #include <vector>
 
-struct CollectedTokens {
-    std::vector<std::string> tokens;
-};
-
-struct CancelAfterFirstToken {
-    std::vector<std::string> tokens;
-    LocalAgentBackendStream **stream;
-};
-
-static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
-    auto *collected = static_cast<CollectedTokens *>(user_data);
-    collected->tokens.emplace_back(token_json);
-    return LOCAL_AGENT_STATUS_OK;
-}
-
-static LocalAgentStatus cancel_after_first_token(const char *token_json, void *user_data) {
-    auto *state = static_cast<CancelAfterFirstToken *>(user_data);
-    state->tokens.emplace_back(token_json);
-    if (state->tokens.size() == 1) {
-        assert(state->stream != nullptr);
-        assert(*state->stream != nullptr);
-        return LOCAL_AGENT_STATUS_CANCELLED;
-    }
-    return LOCAL_AGENT_STATUS_OK;
-}
-
 int main() {
-    LocalAgentBackend *backend = nullptr;
-    assert(local_agent_backend_init(&backend) == LOCAL_AGENT_STATUS_OK);
-    assert(backend != nullptr);
+    local_agent::ModelLoadConfig config;
+    config.engine = "mock";
+    config.model_id = "mock.local";
+    config.model_format = "mock";
+    config.model_path = "/tmp/mock.gguf";
+    config.context_tokens = 128;
 
-    LocalAgentBackendStream *unloaded_stream = nullptr;
-    CollectedTokens unloaded_tokens;
-    assert(local_agent_backend_stream_chat(
-               backend,
-               "{\"messages\":[]}",
-               collect_token,
-               &unloaded_tokens,
-               &unloaded_stream
-           ) == LOCAL_AGENT_STATUS_ERROR);
-    assert(unloaded_stream == nullptr);
-    assert(unloaded_tokens.tokens.empty());
+    local_agent::MockInferenceEngine engine;
+    auto model = engine.load_model(config);
+    assert(model != nullptr);
+    assert(model->runtime_info().engine_id == "mock");
 
-    assert(local_agent_backend_load_model(
-               backend,
-               "{\"model_path\":\"mock.gguf\"}"
-           ) == LOCAL_AGENT_STATUS_OK);
+    auto request = local_agent::parse_generation_request(
+        R"({"messages":[{"role":"user","content":"hello"}],"sampling":{"max_new_tokens":8}})"
+    );
+    auto generation = model->start_generation(request, {});
 
-    LocalAgentBackendStream *split_stream = nullptr;
-    CollectedTokens split_collected;
-    assert(local_agent_backend_start_chat(
-               backend,
-               "{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}",
-               &split_stream
-           ) == LOCAL_AGENT_STATUS_OK);
-    assert(split_stream != nullptr);
-    assert(local_agent_backend_read_stream(
-               split_stream,
-               collect_token,
-               &split_collected
-           ) == LOCAL_AGENT_STATUS_OK);
-    assert(split_collected.tokens == (std::vector<std::string>{
-        "{\"type\":\"text_delta\",\"text\":\"On-device \"}",
-        "{\"type\":\"text_delta\",\"text\":\"mock response\"}",
-        "{\"type\":\"completed\",\"text\":\"On-device mock response\"}",
-    }));
-    assert(local_agent_backend_release_stream(split_stream) == LOCAL_AGENT_STATUS_OK);
+    std::vector<std::string> events;
+    generation->read([&](const std::string &event) {
+        events.push_back(event);
+        return true;
+    });
 
-    LocalAgentBackendStream *stream = nullptr;
-    CollectedTokens collected;
-    assert(local_agent_backend_stream_chat(
-               backend,
-               "{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}",
-               collect_token,
-               &collected,
-               &stream
-           ) == LOCAL_AGENT_STATUS_OK);
-    assert(stream != nullptr);
-    assert(collected.tokens == (std::vector<std::string>{
-        "{\"type\":\"text_delta\",\"text\":\"On-device \"}",
-        "{\"type\":\"text_delta\",\"text\":\"mock response\"}",
-        "{\"type\":\"completed\",\"text\":\"On-device mock response\"}",
-    }));
-    assert(local_agent_backend_release_stream(stream) == LOCAL_AGENT_STATUS_OK);
-
-    LocalAgentBackendStream *cancelled_stream = nullptr;
-    CancelAfterFirstToken cancellation{{}, &cancelled_stream};
-    assert(local_agent_backend_stream_chat(
-               backend,
-               "{\"messages\":[{\"role\":\"user\",\"content\":\"cancel\"}]}",
-               cancel_after_first_token,
-               &cancellation,
-               &cancelled_stream
-           ) == LOCAL_AGENT_STATUS_CANCELLED);
-    assert(cancelled_stream != nullptr);
-    assert(cancellation.tokens == (std::vector<std::string>{
-        "{\"type\":\"text_delta\",\"text\":\"On-device \"}",
-    }));
-    assert(local_agent_backend_release_stream(cancelled_stream) == LOCAL_AGENT_STATUS_OK);
-    assert(local_agent_backend_release(backend) == LOCAL_AGENT_STATUS_OK);
+    assert(events.size() == 4);
+    assert(events[0] == R"({"type":"text_delta","text":"On-device "})");
+    assert(events[1] == R"({"type":"text_delta","text":"mock response"})");
+    assert(events[2].find("\"type\":\"usage\"") != std::string::npos);
+    assert(events[3] == R"({"type":"completed","text":"On-device mock response"})");
+    assert(generation->usage().available);
+    return 0;
 }

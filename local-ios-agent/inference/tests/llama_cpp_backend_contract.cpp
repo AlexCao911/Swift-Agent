@@ -1,5 +1,6 @@
 #include "llama_cpp_engine.h"
 #include "model_config.h"
+#include "generation_request.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -33,18 +34,21 @@ public:
 };
 
 void assert_engine_does_not_complete_after_emit_stop() {
-    local_agent::ModelConfig config;
-    config.backend = "llama_cpp";
+    local_agent::ModelLoadConfig config;
+    config.engine = "llama_cpp";
+    config.model_format = "gguf";
     config.model_path = "fake.gguf";
-    config.max_context_tokens = 128;
-    config.generation.max_new_tokens = 8;
+    config.context_tokens = 128;
 
     local_agent::LlamaCppEngine engine(std::make_unique<FakeLlamaSession>());
-    engine.load(config);
-    auto stream = engine.start_chat(R"({"messages":[{"role":"user","content":"stop"}]})");
+    auto model = engine.load_model(config);
+    auto request = local_agent::parse_generation_request(
+        R"({"messages":[{"role":"user","content":"stop"}],"sampling":{"max_new_tokens":8}})"
+    );
+    auto generation = model->start_generation(request, {});
 
     std::vector<std::string> tokens;
-    engine.read_stream(*stream, [&](const std::string &token_json) {
+    generation->read([&](const std::string &token_json) {
         tokens.push_back(token_json);
         return false;
     });
@@ -64,22 +68,26 @@ int main() {
     const std::string mmproj_path = mmproj_path_env == nullptr ? "" : mmproj_path_env;
 
     std::string config_json = std::string(R"({
-      "backend":"llama_cpp",
+      "engine":"llama_cpp",
       "model_id":"local.gguf.simulator",
+      "model_format":"gguf",
       "model_path":")") + model_path + R"(",
       "chat_template":"gguf",
-      "max_context_tokens":512,
-      "generation":{"temperature":0.0,"top_p":1.0,"max_new_tokens":16,"seed":42},
-      "llama_cpp":{"n_gpu_layers":0,"n_threads":2,"mmproj_path":")" + mmproj_path + R"("}
+      "context_tokens":512,
+      "mmproj_path":")" + mmproj_path + R"(",
+      "runtime":{"n_gpu_layers":0,"n_threads":2}
     })";
 
-    local_agent::ModelConfig config = local_agent::parse_model_config(config_json.c_str());
+    local_agent::ModelLoadConfig config = local_agent::parse_model_load_config(config_json.c_str());
     local_agent::LlamaCppEngine engine;
-    engine.load(config);
+    auto model = engine.load_model(config);
 
-    auto stream = engine.start_chat(R"({"messages":[{"role":"user","content":"Say hi."}]})");
+    auto request = local_agent::parse_generation_request(
+        R"({"messages":[{"role":"user","content":"Say hi."}],"sampling":{"temperature":0.0,"top_p":1.0,"max_new_tokens":16,"seed":42}})"
+    );
+    auto generation = model->start_generation(request, {});
     std::vector<std::string> tokens;
-    engine.read_stream(*stream, [&](const std::string &token_json) {
+    generation->read([&](const std::string &token_json) {
         tokens.push_back(token_json);
         return true;
     });
@@ -89,16 +97,19 @@ int main() {
 
     if (!mmproj_path.empty()) {
         unsigned char white_pixel[3] = {255, 255, 255};
-        auto image_stream = engine.start_chat_with_image(
-            R"({"messages":[{"role":"user","content":"Describe this image."}]})",
-            local_agent::ImageInput{
+        auto image_request = local_agent::parse_generation_request(
+            R"({"messages":[{"role":"user","content":"Describe this image."}],"images":[{"format":"rgb8","width":1,"height":1}]})"
+        );
+        auto image_generation = model->start_generation(
+            image_request,
+            {local_agent::ImageInput{
                 std::vector<unsigned char>(white_pixel, white_pixel + 3),
                 1,
                 1
-            }
+            }}
         );
         std::vector<std::string> image_tokens;
-        engine.read_stream(*image_stream, [&](const std::string &token_json) {
+        image_generation->read([&](const std::string &token_json) {
             image_tokens.push_back(token_json);
             return true;
         });

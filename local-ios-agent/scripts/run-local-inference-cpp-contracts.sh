@@ -58,9 +58,20 @@ CXXFLAGS=(
 "$BUILD_DIR/engine_registry_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/mock_backend_contract.cpp \
+  inference/core/json_value.cpp \
+  inference/core/model_config.cpp \
+  inference/core/generation_request.cpp \
+  inference/core/token_stream.cpp \
+  inference/backends/mock/mock_inference_engine.cpp \
+  -o "$BUILD_DIR/mock_backend_contract"
+"$BUILD_DIR/mock_backend_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/llama_cpp_backend_contract.cpp \
   inference/core/json_value.cpp \
   inference/core/model_config.cpp \
+  inference/core/generation_request.cpp \
   inference/core/token_stream.cpp \
   inference/backends/llama_cpp/llama_cpp_api.cpp \
   inference/backends/llama_cpp/llama_cpp_engine.cpp \

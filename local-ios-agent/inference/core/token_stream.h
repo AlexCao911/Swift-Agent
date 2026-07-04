@@ -7,6 +7,13 @@
 
 namespace local_agent {
 
+struct UsageReport {
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
+    bool available = false;
+};
+
 class TokenStream {
 public:
     using Emit = std::function<bool(const std::string &)>;
@@ -14,6 +21,7 @@ public:
     void cancel();
     bool is_cancelled() const;
     bool emit_text_delta(const std::string &text, const Emit &emit);
+    bool emit_usage(const UsageReport &usage, const Emit &emit);
     bool emit_completed(const std::string &text, const Emit &emit);
 
 private:
