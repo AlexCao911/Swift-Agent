@@ -280,6 +280,65 @@ Generation config should be separated from model load config:
 
 Model load config changes require a model reload. Generation config can change per request.
 
+### Multimodal Input Boundary
+
+Generation JSON describes image metadata, but binary image bytes must cross the C ABI through explicit buffers or file references.
+
+Supported v2 forms:
+
+```text
+inline buffer
+  Swift passes pointer + byte_count + width + height + pixel_format for the lifetime of local_agent_generation_start.
+  C++ copies any bytes it needs before the function returns.
+
+file reference
+  Swift passes a sandbox-local file path plus declared media type.
+  C++ reads the file during generation start and owns any decoded buffers.
+```
+
+The first v2 implementation should keep parity with v1 and support an RGB buffer:
+
+```c
+typedef struct LocalAgentImageInput {
+    const uint8_t *bytes;
+    uint64_t byte_count;
+    uint32_t width;
+    uint32_t height;
+    const char *pixel_format; /* "rgb8" first */
+} LocalAgentImageInput;
+```
+
+Representative v2 generation start signature:
+
+```c
+LocalAgentStatus local_agent_generation_start(
+    LocalAgentModelHandle *model,
+    const char *generation_request_json,
+    const LocalAgentImageInput *images,
+    uint64_t image_count,
+    LocalAgentGenerationHandle **out_generation
+);
+```
+
+For buffer inputs:
+
+```text
+caller owns the input buffer
+buffer must remain valid until local_agent_generation_start returns
+C++ must not retain the caller pointer after return
+C++ must copy bytes if generation needs them later
+```
+
+For file inputs:
+
+```text
+caller owns the file
+path must remain valid until local_agent_generation_start returns
+C++ must open/read/copy what it needs before returning or report an error
+```
+
+Model config still owns model and mmproj paths. Generation request owns per-call images.
+
 ## Internal C++ Interfaces
 
 ### InferenceEngine
@@ -363,6 +422,69 @@ local_agent_last_error
 
 The v1 ABI can remain during migration. The v2 ABI should be additive so existing tests and app paths keep working while Swift adopts the new handle model.
 
+### C ABI Memory Ownership
+
+v2 must define ownership at every pointer boundary.
+
+Rules:
+
+```text
+Opaque handles
+  C++ allocates handles returned by create/load/start.
+  Caller releases them exactly once with the matching release function.
+  Release functions must tolerate null handles.
+  Passing a dangling already-released handle is invalid; Swift wrappers must guard against double release.
+
+Input strings
+  Caller owns const char * inputs.
+  Inputs must remain valid only for the duration of the C function call.
+  C++ copies any string it needs after the call returns.
+
+Output strings / JSON
+  C++ allocates returned char * buffers.
+  Caller must release them with local_agent_string_free.
+  Returned strings are UTF-8 and null-terminated.
+
+Callback token JSON
+  const char * passed to callback is owned by C++.
+  It is valid only during the callback invocation.
+  Callback must copy if it needs to retain the data.
+  Callback must not free the pointer.
+
+Output arrays
+  Prefer JSON strings for engine lists/capabilities in v2.
+  If a future array API is added, it must include explicit count and free function.
+```
+
+Required helper:
+
+```c
+void local_agent_string_free(char *value);
+```
+
+Representative v2 signatures:
+
+```c
+LocalAgentStatus local_agent_engine_list(char **out_json);
+LocalAgentStatus local_agent_engine_capabilities(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+);
+LocalAgentStatus local_agent_last_error(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+);
+```
+
+Every API that returns JSON must either:
+
+```text
+return it via char **out_json and require local_agent_string_free
+or emit it through a callback with callback-lifetime ownership
+```
+
+It must not return borrowed pointers to internal C++ strings.
+
 ## Token Events
 
 C++ should emit structured token events as JSON through the C ABI:
@@ -379,14 +501,15 @@ Other event types:
 ```text
 text_delta
 reasoning_delta
-tool_call_delta
-tool_call_completed
+structured_delta
 usage
 completed
 error
 ```
 
-The first implementation can support `text_delta`, `usage`, `completed`, and `error`. Tool-call event support depends on model formatting and can be added later without changing the engine ownership boundary.
+The first implementation can support `text_delta`, `usage`, `completed`, and `error`.
+
+C++ must not parse or normalize tool calls as an agent concept. If a local model emits structured text that may contain a tool call, C++ can forward it as `structured_delta` or plain text. Tool-call parsing and normalization belong to the Swift host inference layer or the Rust execution layer.
 
 ## Error Mapping
 
@@ -586,12 +709,30 @@ Rust must not call C++ directly as a product-level dependency. Rust should conti
 
 C++ must not include Rust headers or Rust domain identifiers.
 
+Current reality:
+
+```text
+rust-core/src/core/local_llm.rs still contains CAbiLocalInferenceBackend and LocalLLMProvider.
+That path is a legacy/compatibility adapter for the current migration phase.
+```
+
+This design does not require deleting that adapter. The intended end state is:
+
+```text
+Swift HostInferenceRuntime owns the C++ local inference client.
+Rust execution calls an abstract host LLM port.
+Rust no longer owns product-level local model loading or C++ engine selection.
+```
+
+Until the host inference port exists, the Rust C ABI adapter may remain for tests and compatibility.
+
 ## Migration Strategy
 
 ### Phase 1: Document and Harden v1
 
 ```text
 keep current v1 ABI
+document v1 callback lifetime as callback-only borrowed token_json
 add explicit engine descriptor for current backend
 add stricter model_config validation
 expand C++ contract tests
@@ -614,6 +755,9 @@ add EngineHandle
 add ModelHandle
 add GenerationHandle
 split model load from generation start
+add local_agent_string_free
+define callback and returned JSON ownership
+define image buffer/file input ownership
 add last_error JSON
 ```
 
@@ -640,12 +784,16 @@ Swift can then adopt v2 through a `LocalInferenceEngineClient`. That later Swift
 - Model weights remain downloadable host app data.
 - v1 C ABI remains compatible during migration.
 - v2 ABI separates engine, loaded model, and generation session.
+- v2 ABI defines ownership for every string, callback pointer, buffer, and handle.
+- v2 ABI includes `local_agent_string_free` for returned JSON/string buffers.
+- Multimodal generation defines whether image input crosses as buffer or file reference.
 - Engine adapters do not leak vendor headers through the public C ABI.
 - llama.cpp and LiteRT can coexist behind the same internal `InferenceEngine` interface.
 - llama.cpp and LiteRT are the first two production local engines.
 - Adding a new local engine requires an adapter and registry entry, not Rust changes.
 - Swift can list compiled engines and call local generation without knowing vendor APIs.
 - Rust remains unaware of C++ engine details.
+- Existing Rust C ABI local LLM code is treated as legacy/compatibility until Swift HostInferenceRuntime replaces it.
 
 ## Test Boundary
 
@@ -655,8 +803,12 @@ C/C++ contract tests:
 public header compiles as C and C++
 engine registry lists compiled engines
 capabilities JSON is stable
+returned JSON is released through local_agent_string_free
+callback token_json is copied before callback returns in Swift tests
+release functions tolerate null and double-release is rejected or guarded by wrapper tests
 model config validation rejects invalid engine
 model config validation rejects missing required paths
+image buffer generation copies input before start returns
 mock backend streams deterministic events
 generation cancel stops stream
 generation release is idempotent
@@ -678,10 +830,12 @@ LiteRT generation smoke when dependency is available
 Integration smoke:
 
 ```text
-Swift local inference client can list engines
-Swift local inference client can load mock model
-Swift local inference client can stream mock generation
-Swift local inference client can cancel generation
+debug/test Swift local inference client can list mock engine
+debug/test Swift local inference client can load mock model
+debug/test Swift local inference client can stream mock generation
+debug/test Swift local inference client can cancel generation
+release Swift local inference client registry does not expose mock
+release Swift local inference client can list compiled production engines
 ```
 
 ## Non-Goals
