@@ -70,7 +70,7 @@ Therefore:
 Compiled into the app
   llama.cpp adapter/runtime
   LiteRT adapter/runtime
-  mock/test engine
+  mock/test engine for debug and test builds only
   future Core ML / MLX / ExecuTorch adapters if used
 
 Downloadable after install
@@ -151,17 +151,24 @@ local-ios-agent/inference/
 └── tests/
 ```
 
-`litert/` can remain a placeholder adapter until the dependency is selected and linked.
+`mock/` is a test adapter. It should be compiled only for tests, debug builds, or internal smoke tooling. It must not appear as a user-selectable release engine.
+
+`litert/` can remain a placeholder adapter until the dependency is selected and linked, but it is the intended second production local engine after llama.cpp.
 
 ## Engine Registry
 
 C++ should expose a registry of engines compiled into the app:
 
 ```text
-mock
 llama_cpp
 litert
 future: coreml, mlx, executorch
+```
+
+Test/debug registries may also expose:
+
+```text
+mock
 ```
 
 The registry is not a plugin loader. It does not load runtime-downloaded dylibs or frameworks.
@@ -449,7 +456,9 @@ If LiteRT does not expose the same streaming semantics as llama.cpp, the adapter
 
 ### Mock Adapter
 
-The mock adapter remains mandatory for deterministic tests.
+The mock adapter is mandatory for deterministic tests, C ABI smoke tests, and early Swift bridge verification. It is not a product engine.
+
+Release builds should exclude mock from the public engine registry. If keeping the mock source in the repository is useful, guard it behind a test/debug build flag. Once llama.cpp and LiteRT both have stable smoke coverage, app-facing tests should stop relying on mock for product behavior and use mock only for low-level deterministic contracts.
 
 ## Vendor Policy
 
@@ -495,13 +504,13 @@ Xcode project / Swift package integration
 Each engine should have a build feature or product variant:
 
 ```text
-mock
+mock_test
 llama_cpp
 llama_cpp_mtmd
 litert
 ```
 
-Release builds may choose which engines to include to control binary size. The C++ engine registry must report only engines compiled into the current app binary.
+Release builds may choose which production engines to include to control binary size. The C++ engine registry must report only engines compiled into the current app binary, and release registries must not report `mock_test`.
 
 Engine update workflow:
 
@@ -592,7 +601,8 @@ expand C++ contract tests
 
 ```text
 add EngineRegistry
-register mock and llama_cpp
+register mock in test/debug registry
+register llama_cpp in production registry
 add capabilities endpoint
 keep v1 load/start API working through registry
 ```
@@ -614,6 +624,7 @@ pin LiteRT dependency
 add litert adapter
 add model format compatibility
 add tests and smoke coverage
+enable litert as the second production engine
 ```
 
 ### Phase 5: Swift Adoption
@@ -625,11 +636,13 @@ Swift can then adopt v2 through a `LocalInferenceEngineClient`. That later Swift
 - C++ layer is local inference only.
 - C++ does not download engines or model weights.
 - Users can only select engines compiled into the app.
+- Release builds do not expose mock as a selectable engine.
 - Model weights remain downloadable host app data.
 - v1 C ABI remains compatible during migration.
 - v2 ABI separates engine, loaded model, and generation session.
 - Engine adapters do not leak vendor headers through the public C ABI.
 - llama.cpp and LiteRT can coexist behind the same internal `InferenceEngine` interface.
+- llama.cpp and LiteRT are the first two production local engines.
 - Adding a new local engine requires an adapter and registry entry, not Rust changes.
 - Swift can list compiled engines and call local generation without knowing vendor APIs.
 - Rust remains unaware of C++ engine details.
