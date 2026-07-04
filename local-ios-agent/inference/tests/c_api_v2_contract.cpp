@@ -2,12 +2,36 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
     auto *events = static_cast<std::vector<std::string> *>(user_data);
     events->emplace_back(token_json);
+    return LOCAL_AGENT_STATUS_OK;
+}
+
+struct AsyncEvents {
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::vector<std::string> events;
+    bool saw_blocking_event = false;
+};
+
+static LocalAgentStatus collect_async_token(const char *token_json, void *user_data) {
+    auto *async_events = static_cast<AsyncEvents *>(user_data);
+    {
+        std::lock_guard<std::mutex> lock(async_events->mutex);
+        async_events->events.emplace_back(token_json);
+        if (async_events->events.back().find("blocking_until_cancel") != std::string::npos) {
+            async_events->saw_blocking_event = true;
+        }
+    }
+    async_events->condition.notify_all();
     return LOCAL_AGENT_STATUS_OK;
 }
 
@@ -56,6 +80,16 @@ int main() {
     ) == LOCAL_AGENT_STATUS_OK);
     assert(generation != nullptr);
 
+    LocalAgentGenerationHandle *concurrent_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"second"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &concurrent_generation
+    ) == LOCAL_AGENT_STATUS_ERROR);
+    assert(concurrent_generation == nullptr);
+
     std::vector<std::string> events;
     assert(local_agent_generation_read(generation, collect_token, &events) == LOCAL_AGENT_STATUS_OK);
     assert(events.front().find("\"type\":\"text_delta\"") != std::string::npos);
@@ -64,7 +98,124 @@ int main() {
     }));
     assert(events.back().find("\"type\":\"completed\"") != std::string::npos);
 
+    std::vector<std::string> repeated_events;
+    assert(local_agent_generation_read(generation, collect_token, &repeated_events) == LOCAL_AGENT_STATUS_ERROR);
+    assert(repeated_events.empty());
+
     assert(local_agent_generation_release(generation) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *next_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"after terminal"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &next_generation
+    ) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_generation_release(next_generation) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *blocking_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"block_until_cancel"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &blocking_generation
+    ) == LOCAL_AGENT_STATUS_OK);
+
+    AsyncEvents blocking_events;
+    LocalAgentStatus blocking_read_status = LOCAL_AGENT_STATUS_ERROR;
+    std::thread blocking_read([&]() {
+        blocking_read_status = local_agent_generation_read(
+            blocking_generation,
+            collect_async_token,
+            &blocking_events
+        );
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(blocking_events.mutex);
+        assert(blocking_events.condition.wait_for(lock, std::chrono::seconds(2), [&]() {
+            return blocking_events.saw_blocking_event;
+        }));
+    }
+
+    assert(local_agent_generation_cancel(blocking_generation) == LOCAL_AGENT_STATUS_CANCELLED);
+
+    LocalAgentGenerationHandle *after_cancel_before_unwind = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"must wait for read unwind"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &after_cancel_before_unwind
+    ) == LOCAL_AGENT_STATUS_ERROR);
+    assert(after_cancel_before_unwind == nullptr);
+
+    blocking_read.join();
+    assert(blocking_read_status == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_generation_release(blocking_generation) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *after_cancel_unwound = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"after cancel unwind"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &after_cancel_unwound
+    ) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_generation_release(after_cancel_unwound) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *release_blocking_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"block_until_cancel"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &release_blocking_generation
+    ) == LOCAL_AGENT_STATUS_OK);
+
+    AsyncEvents release_blocking_events;
+    LocalAgentStatus release_blocking_read_status = LOCAL_AGENT_STATUS_ERROR;
+    std::thread release_blocking_read([&]() {
+        release_blocking_read_status = local_agent_generation_read(
+            release_blocking_generation,
+            collect_async_token,
+            &release_blocking_events
+        );
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(release_blocking_events.mutex);
+        assert(release_blocking_events.condition.wait_for(lock, std::chrono::seconds(2), [&]() {
+            return release_blocking_events.saw_blocking_event;
+        }));
+    }
+
+    assert(local_agent_generation_release(release_blocking_generation) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *after_release_before_unwind = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"must wait for released read unwind"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &after_release_before_unwind
+    ) == LOCAL_AGENT_STATUS_ERROR);
+    assert(after_release_before_unwind == nullptr);
+
+    release_blocking_read.join();
+    assert(release_blocking_read_status == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentGenerationHandle *after_release_unwound = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"after release unwind"}],"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &after_release_unwound
+    ) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_generation_release(after_release_unwound) == LOCAL_AGENT_STATUS_OK);
 
     uint8_t pixel[3] = {255, 128, 64};
     LocalAgentImageInput image = {

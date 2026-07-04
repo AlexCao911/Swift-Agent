@@ -9,6 +9,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -50,11 +51,16 @@ struct LocalAgentModelState {
     std::shared_ptr<LocalAgentEngineState> engine_state;
     std::unique_ptr<local_agent::LoadedModel> model;
     local_agent::ModelRuntimeInfo runtime_info;
+    std::mutex generation_mutex;
+    bool generation_active = false;
 };
 
 struct LocalAgentGenerationState {
     std::shared_ptr<LocalAgentModelState> model_state;
     std::unique_ptr<local_agent::GenerationSession> generation;
+    std::mutex lifecycle_mutex;
+    bool reading = false;
+    bool terminal = false;
 };
 
 thread_local LocalAgentError thread_last_error;
@@ -168,6 +174,23 @@ void set_engine_error(
         set_error(engine_state->last_error, code, message, engine_id, recoverable);
     }
     set_thread_error(code, std::move(message), std::move(engine_id), recoverable);
+}
+
+bool reserve_active_generation(const std::shared_ptr<LocalAgentModelState> &model_state) {
+    std::lock_guard<std::mutex> lock(model_state->generation_mutex);
+    if (model_state->generation_active) {
+        return false;
+    }
+    model_state->generation_active = true;
+    return true;
+}
+
+void clear_active_generation(const std::shared_ptr<LocalAgentModelState> &model_state) {
+    if (!model_state) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(model_state->generation_mutex);
+    model_state->generation_active = false;
 }
 
 LocalAgentStatus status_from_exception(
@@ -441,18 +464,39 @@ LocalAgentStatus local_agent_generation_start(
             local_agent::parse_generation_request(generation_request_json);
         validate_image_metadata_matches_buffers(request.images, images, image_count);
         std::vector<local_agent::ImageInput> image_inputs = copy_image_inputs(images, image_count);
-        auto generation = model->state->model->start_generation(request, image_inputs);
-        if (!generation) {
-            throw std::runtime_error("model returned null generation session");
+        if (!reserve_active_generation(model->state)) {
+            set_engine_error(
+                model->state->engine_state,
+                LocalAgentErrorCode::generation_failed,
+                "model already has an active generation",
+                true
+            );
+            return LOCAL_AGENT_STATUS_ERROR;
+        }
+
+        std::unique_ptr<local_agent::GenerationSession> generation;
+        try {
+            generation = model->state->model->start_generation(request, image_inputs);
+            if (!generation) {
+                throw std::runtime_error("model returned null generation session");
+            }
+        } catch (...) {
+            clear_active_generation(model->state);
+            throw;
         }
 
         auto state = std::make_shared<LocalAgentGenerationState>();
         state->model_state = model->state;
         state->generation = std::move(generation);
 
-        auto *handle = new LocalAgentGenerationHandle();
-        handle->state = std::move(state);
-        *out_generation = handle;
+        try {
+            auto *handle = new LocalAgentGenerationHandle();
+            handle->state = std::move(state);
+            *out_generation = handle;
+        } catch (...) {
+            clear_active_generation(model->state);
+            throw;
+        }
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
         return status_from_exception(model->state->engine_state, LocalAgentErrorCode::generation_failed);
@@ -469,21 +513,55 @@ LocalAgentStatus local_agent_generation_read(
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
 
+    auto state = generation->state;
+    {
+        std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
+        if (state->terminal) {
+            set_engine_error(
+                state->model_state->engine_state,
+                LocalAgentErrorCode::stream_interrupted,
+                "generation stream has already reached a terminal state",
+                true
+            );
+            return LOCAL_AGENT_STATUS_ERROR;
+        }
+        if (state->reading) {
+            set_engine_error(
+                state->model_state->engine_state,
+                LocalAgentErrorCode::stream_interrupted,
+                "generation stream is already being read",
+                true
+            );
+            return LOCAL_AGENT_STATUS_ERROR;
+        }
+        state->reading = true;
+    }
+
+    auto mark_terminal = [&]() {
+        {
+            std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
+            state->reading = false;
+            state->terminal = true;
+        }
+        clear_active_generation(state->model_state);
+    };
+
     LocalAgentStatus callback_status = LOCAL_AGENT_STATUS_OK;
     auto emit = [&](const std::string &token_json) -> bool {
         callback_status = callback(token_json.c_str(), user_data);
         if (callback_status != LOCAL_AGENT_STATUS_OK) {
-            generation->state->generation->cancel();
+            state->generation->cancel();
             return false;
         }
         return true;
     };
 
     try {
-        generation->state->generation->read(emit);
+        state->generation->read(emit);
+        mark_terminal();
         if (callback_status != LOCAL_AGENT_STATUS_OK) {
             set_engine_error(
-                generation->state->model_state->engine_state,
+                state->model_state->engine_state,
                 LocalAgentErrorCode::generation_cancelled,
                 "token callback stopped generation"
             );
@@ -491,8 +569,9 @@ LocalAgentStatus local_agent_generation_read(
         }
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
+        mark_terminal();
         return status_from_exception(
-            generation->state->model_state->engine_state,
+            state->model_state->engine_state,
             LocalAgentErrorCode::generation_failed
         );
     }
@@ -503,18 +582,45 @@ LocalAgentStatus local_agent_generation_cancel(LocalAgentGenerationHandle *gener
         set_thread_error(LocalAgentErrorCode::invalid_argument, "generation handle must not be null");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
+    auto state = generation->state;
+    bool clear_active = false;
+    {
+        std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
+        state->terminal = true;
+        clear_active = !state->reading;
+    }
     set_engine_error(
-        generation->state->model_state->engine_state,
+        state->model_state->engine_state,
         LocalAgentErrorCode::generation_cancelled,
         "generation cancelled"
     );
-    generation->state->generation->cancel();
+    state->generation->cancel();
+    if (clear_active) {
+        clear_active_generation(state->model_state);
+    }
     return LOCAL_AGENT_STATUS_CANCELLED;
 }
 
 LocalAgentStatus local_agent_generation_release(LocalAgentGenerationHandle *generation) {
     if (generation == nullptr) {
         return LOCAL_AGENT_STATUS_OK;
+    }
+    auto state = generation->state;
+    if (state) {
+        bool clear_active = false;
+        bool cancel_reading = false;
+        {
+            std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
+            state->terminal = true;
+            clear_active = !state->reading;
+            cancel_reading = state->reading;
+        }
+        if (cancel_reading) {
+            state->generation->cancel();
+        }
+        if (clear_active) {
+            clear_active_generation(state->model_state);
+        }
     }
     delete generation;
     return LOCAL_AGENT_STATUS_OK;

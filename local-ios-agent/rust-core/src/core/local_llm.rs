@@ -21,6 +21,12 @@ pub enum LocalAgentStatus {
     InvalidArgument = 3,
 }
 
+// Retired v1 C ABI compatibility surface.
+//
+// The local C++ inference v2 ABI is now app-owned and will be reached through
+// the Swift/Rust HostInference boundary. These declarations remain only so
+// older tests and injected compatibility backends can be understood while
+// build.rs fails fast for direct-link local inference Cargo features.
 #[repr(C)]
 pub struct CAbiLocalAgentBackend {
     _private: [u8; 0],
@@ -142,6 +148,8 @@ struct CallbackState<'a> {
     error: &'a mut Option<AgentError>,
 }
 
+// Retired v1 symbol imports. Enabling this feature is intentionally rejected in
+// build.rs before linking; do not add new product code against these symbols.
 #[cfg(feature = "link-mock-local-inference")]
 extern "C" {
     fn local_agent_backend_init(out_backend: *mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;

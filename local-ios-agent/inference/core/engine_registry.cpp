@@ -72,7 +72,7 @@ EngineDescriptor llama_cpp_descriptor() {
     descriptor.capabilities.supports_vision = true;
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
-    descriptor.capabilities.supports_token_usage = true;
+    descriptor.capabilities.supports_token_usage = false;
     descriptor.capabilities.max_context_tokens = 0;
     descriptor.capabilities.supported_model_formats = {"gguf"};
     return descriptor;

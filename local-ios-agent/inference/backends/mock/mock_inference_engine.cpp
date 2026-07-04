@@ -1,6 +1,8 @@
 #include "mock_inference_engine.h"
 
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace local_agent {
@@ -8,10 +10,21 @@ namespace {
 
 class MockGenerationSession final : public GenerationSession {
 public:
-    explicit MockGenerationSession(std::vector<ImageInput> images)
-        : images_(std::move(images)) {}
+    explicit MockGenerationSession(std::vector<ImageInput> images, bool block_until_cancel)
+        : images_(std::move(images)),
+          block_until_cancel_(block_until_cancel) {}
 
     void read(const TokenStream::Emit &emit) override {
+        if (block_until_cancel_) {
+            if (!stream_.emit_structured_delta("blocking_until_cancel", emit)) {
+                return;
+            }
+            while (!stream_.is_cancelled()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            return;
+        }
         if (!stream_.emit_text_delta("On-device ", emit)) {
             return;
         }
@@ -45,6 +58,7 @@ private:
     TokenStream stream_;
     UsageReport usage_;
     std::vector<ImageInput> images_;
+    bool block_until_cancel_ = false;
 };
 
 class MockLoadedModel final : public LoadedModel {
@@ -68,7 +82,13 @@ public:
         if (request.messages.empty()) {
             throw std::invalid_argument("mock generation requires at least one message");
         }
-        return std::make_unique<MockGenerationSession>(images);
+        bool block_until_cancel = false;
+        for (const auto &message : request.messages) {
+            if (message.content == "block_until_cancel") {
+                block_until_cancel = true;
+            }
+        }
+        return std::make_unique<MockGenerationSession>(images, block_until_cancel);
     }
 
 private:

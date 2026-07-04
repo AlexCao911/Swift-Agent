@@ -19,6 +19,15 @@ CXXFLAGS=(
   -I inference/backends/litert
 )
 
+RELEASE_CXXFLAGS=(
+  -std=c++17
+  -I inference/include
+  -I inference/core
+  -I inference/backends/mock
+  -I inference/backends/llama_cpp
+  -I inference/backends/litert
+)
+
 COMMON_SOURCES=(
   inference/c_api/local_agent_inference.cpp
   inference/core/json_value.cpp
@@ -70,6 +79,39 @@ COMMON_SOURCES=(
   -o "$BUILD_DIR/engine_registry_contract"
 "$BUILD_DIR/engine_registry_contract"
 
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
+  -c inference/core/engine_registry.cpp \
+  -o "$BUILD_DIR/engine_registry_llama.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/backends/llama_cpp/llama_cpp_engine.cpp \
+  -o "$BUILD_DIR/llama_cpp_engine.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/backends/llama_cpp/llama_cpp_api.cpp \
+  -o "$BUILD_DIR/llama_cpp_api.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/backends/llama_cpp/llama_cpp_prompt.cpp \
+  -o "$BUILD_DIR/llama_cpp_prompt.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/core/generation_request.cpp \
+  -o "$BUILD_DIR/generation_request_for_llama.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/core/token_stream.cpp \
+  -o "$BUILD_DIR/token_stream_for_llama.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  -c inference/core/json_value.cpp \
+  -o "$BUILD_DIR/json_value_for_llama.o"
+"$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
+  inference/tests/engine_registry_llama_contract.cpp \
+  "$BUILD_DIR/engine_registry_llama.o" \
+  "$BUILD_DIR/llama_cpp_engine.o" \
+  "$BUILD_DIR/llama_cpp_api.o" \
+  "$BUILD_DIR/llama_cpp_prompt.o" \
+  "$BUILD_DIR/generation_request_for_llama.o" \
+  "$BUILD_DIR/token_stream_for_llama.o" \
+  "$BUILD_DIR/json_value_for_llama.o" \
+  -o "$BUILD_DIR/engine_registry_llama_contract"
+"$BUILD_DIR/engine_registry_llama_contract"
+
 "$CXX_BIN" "${CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LITERT_SCAFFOLD \
   inference/tests/engine_registry_contract.cpp \
   inference/core/engine_registry.cpp \
@@ -113,15 +155,6 @@ else
     exit "$status"
   fi
 fi
-
-RELEASE_CXXFLAGS=(
-  -std=c++17
-  -I inference/include
-  -I inference/core
-  -I inference/backends/mock
-  -I inference/backends/llama_cpp
-  -I inference/backends/litert
-)
 
 "$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" \
   inference/tests/c_api_release_registry_contract.cpp \
