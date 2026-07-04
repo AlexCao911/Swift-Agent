@@ -4,6 +4,8 @@
 #error "litert_lm_api.cpp must only be compiled with LOCAL_AGENT_ENABLE_LITERT_VENDOR"
 #endif
 
+#include "litert_active_generation.h"
+
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -14,6 +16,7 @@
 #include "nlohmann/json.hpp"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -24,6 +27,19 @@ namespace {
 
 std::runtime_error litert_error(const std::string &context, const absl::Status &status) {
     return std::runtime_error(context + ": " + std::string(status.message()));
+}
+
+bool is_cancelled_status(const absl::Status &status) {
+    return status.code() == absl::StatusCode::kCancelled;
+}
+
+absl::Status wait_until_generation_quiesced(litert::lm::Engine &engine) {
+    for (;;) {
+        absl::Status status = engine.WaitUntilDone(litert::lm::Engine::kDefaultTimeout);
+        if (status.ok() || is_cancelled_status(status)) {
+            return status;
+        }
+    }
 }
 
 std::string normalized_litert_role(const std::string &role) {
@@ -149,8 +165,7 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
         engine_ = std::move(*engine);
-        active_conversation_ = nullptr;
-        active_task_group_id_.clear();
+        active_generation_.finish();
         cancelled_.store(false);
     }
 
@@ -189,14 +204,16 @@ public:
         if (!conversation.ok()) {
             throw litert_error("LiteRT-LM failed to create conversation", conversation.status());
         }
+        std::shared_ptr<litert::lm::Conversation> conversation_owner(std::move(*conversation));
 
         cancelled_.store(false);
         const std::string task_group_id = next_task_group_id();
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            active_conversation_ = conversation->get();
-            active_task_group_id_ = task_group_id;
-        }
+        active_generation_.start([conversation_owner, task_group_id]() {
+            if (!task_group_id.empty()) {
+                conversation_owner->CancelGroup(task_group_id);
+            }
+            conversation_owner->CancelProcess();
+        });
 
         std::string completed_text;
         std::mutex completed_mutex;
@@ -208,10 +225,9 @@ public:
         }
         args.task_group_id = task_group_id;
 
-        litert::lm::Conversation *conversation_raw = conversation->get();
-        absl::Status start_status = (*conversation)->SendMessageAsync(
+        absl::Status start_status = conversation_owner->SendMessageAsync(
             to_litert_message(request),
-            [&, conversation_raw, task_group_id](absl::StatusOr<litert::lm::Message> message) {
+            [&](absl::StatusOr<litert::lm::Message> message) {
                 if (!message.ok()) {
                     std::lock_guard<std::mutex> lock(completed_mutex);
                     callback_status = message.status();
@@ -230,26 +246,35 @@ public:
                 }
                 if (!emit(delta)) {
                     cancelled_.store(true);
-                    conversation_raw->CancelGroup(task_group_id);
+                    active_generation_.cancel();
                 }
             },
             args
         );
         if (!start_status.ok()) {
-            clear_active_conversation();
+            active_generation_.finish();
             throw litert_error("LiteRT-LM failed to start generation", start_status);
         }
 
         absl::Status wait_status = engine->WaitUntilDone(litert::lm::Engine::kDefaultTimeout);
-        clear_active_conversation();
+        if (!wait_status.ok() && !is_cancelled_status(wait_status)) {
+            absl::Status original_status = wait_status;
+            cancelled_.store(true);
+            active_generation_.cancel();
+            wait_status = wait_until_generation_quiesced(*engine);
+            active_generation_.finish();
+            throw litert_error("LiteRT-LM generation did not finish", original_status);
+        }
+        active_generation_.finish();
 
-        if (!wait_status.ok() && !cancelled_.load()) {
+        if (!wait_status.ok() && !(cancelled_.load() && is_cancelled_status(wait_status))) {
             throw litert_error("LiteRT-LM generation did not finish", wait_status);
         }
 
         {
             std::lock_guard<std::mutex> lock(completed_mutex);
-            if (!callback_status.ok() && !cancelled_.load()) {
+            if (!callback_status.ok()
+                && !(cancelled_.load() && is_cancelled_status(callback_status))) {
                 throw litert_error("LiteRT-LM generation callback failed", callback_status);
             }
             LiteRTGenerationOutput output;
@@ -260,27 +285,13 @@ public:
 
     void cancel() override {
         cancelled_.store(true);
-        litert::lm::Conversation *conversation = nullptr;
-        std::string task_group_id;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            conversation = active_conversation_;
-            task_group_id = active_task_group_id_;
-        }
-        if (conversation == nullptr) {
-            return;
-        }
-        if (!task_group_id.empty()) {
-            conversation->CancelGroup(task_group_id);
-        }
-        conversation->CancelProcess();
+        active_generation_.cancel();
     }
 
 private:
     std::mutex mutex_;
     std::unique_ptr<litert::lm::Engine> engine_;
-    litert::lm::Conversation *active_conversation_ = nullptr;
-    std::string active_task_group_id_;
+    LiteRTActiveGeneration active_generation_;
     std::atomic<int> next_task_group_sequence_{1};
     std::atomic<bool> cancelled_{false};
 
@@ -289,11 +300,6 @@ private:
         return "local_agent_litert_generation_" + std::to_string(sequence);
     }
 
-    void clear_active_conversation() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        active_conversation_ = nullptr;
-        active_task_group_id_.clear();
-    }
 };
 
 } // namespace

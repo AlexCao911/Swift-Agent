@@ -29,7 +29,9 @@ backends/llama_cpp/*
 backends/litert/*
   LiteRT engine adapter. Non-vendor builds keep this hidden from the public
   registry; vendor builds compile `litert_lm_api.cpp` and use LiteRT-LM
-  Engine/Conversation APIs for real local LLM generation.
+  Engine/Conversation APIs for real local LLM generation. Active generation
+  teardown must wait for in-flight cancellation callbacks before releasing a
+  LiteRT-LM Conversation.
 ```
 
 ## Forbidden Dependencies

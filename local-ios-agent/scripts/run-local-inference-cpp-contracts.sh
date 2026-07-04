@@ -131,6 +131,12 @@ COMMON_SOURCES=(
 "$BUILD_DIR/engine_registry_litert_contract" --expect-litert-hidden
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/litert_active_generation_contract.cpp \
+  inference/backends/litert/litert_active_generation.cpp \
+  -o "$BUILD_DIR/litert_active_generation_contract"
+"$BUILD_DIR/litert_active_generation_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/litert_backend_contract.cpp \
   inference/core/json_value.cpp \
   inference/core/generation_request.cpp \
@@ -150,11 +156,35 @@ if [[ -n "${LOCAL_AGENT_LITERT_LM_INCLUDE_DIR:-}" ]]; then
     inference/core/engine_registry.cpp \
     inference/core/token_stream.cpp \
     inference/backends/mock/mock_inference_engine.cpp \
+    inference/backends/litert/litert_active_generation.cpp \
     inference/backends/litert/litert_engine.cpp \
     inference/backends/litert/litert_lm_api.cpp \
     "${LITERT_VENDOR_LDFLAGS[@]}" \
     -o "$BUILD_DIR/engine_registry_litert_vendor_contract"
   "$BUILD_DIR/engine_registry_litert_vendor_contract" --expect-litert-visible
+
+  if [[ -n "${LOCAL_AGENT_LITERT_LM_MODEL_PATH:-}" ]]; then
+    "$CXX_BIN" "${CXXFLAGS[@]}" \
+      -DLOCAL_AGENT_ENABLE_LITERT \
+      -DLOCAL_AGENT_ENABLE_LITERT_VENDOR \
+      -I "$LOCAL_AGENT_LITERT_LM_INCLUDE_DIR" \
+      "${LITERT_VENDOR_CXXFLAGS[@]}" \
+      inference/tests/litert_lm_vendor_smoke.cpp \
+      inference/c_api/local_agent_inference.cpp \
+      inference/core/json_value.cpp \
+      inference/core/model_config.cpp \
+      inference/core/generation_request.cpp \
+      inference/core/engine_registry.cpp \
+      inference/core/token_stream.cpp \
+      inference/backends/litert/litert_active_generation.cpp \
+      inference/backends/litert/litert_engine.cpp \
+      inference/backends/litert/litert_lm_api.cpp \
+      "${LITERT_VENDOR_LDFLAGS[@]}" \
+      -o "$BUILD_DIR/litert_lm_vendor_smoke"
+    "$BUILD_DIR/litert_lm_vendor_smoke"
+  else
+    echo "skipping LiteRT-LM model smoke; set LOCAL_AGENT_LITERT_LM_MODEL_PATH to enable it"
+  fi
 else
   echo "skipping LiteRT-LM vendor contract; set LOCAL_AGENT_LITERT_LM_INCLUDE_DIR and LOCAL_AGENT_LITERT_LM_LDFLAGS to enable it"
 fi

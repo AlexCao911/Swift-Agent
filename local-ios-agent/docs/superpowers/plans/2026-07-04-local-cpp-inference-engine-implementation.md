@@ -1334,8 +1334,10 @@ git commit -m "refactor: remove legacy local inference entry points"
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_engine.cpp`.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_api.h/.cpp` as the adapter session boundary.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_lm_api.cpp` as the real LiteRT-LM vendor bridge.
+- [ ] Add `local-ios-agent/inference/backends/litert/litert_active_generation.h/.cpp` to serialize cancellation and active Conversation teardown.
 - [ ] Compile adapter-boundary tests with an injected test `LiteRTSession`.
 - [ ] Add optional vendor compile/link verification using `LOCAL_AGENT_LITERT_LM_INCLUDE_DIR`, `LOCAL_AGENT_LITERT_LM_CXXFLAGS`, and `LOCAL_AGENT_LITERT_LM_LDFLAGS`.
+- [ ] Add optional real model smoke using `LOCAL_AGENT_LITERT_LM_MODEL_PATH`.
 - [ ] Register public `litert` only when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are both defined by a build that also links the vendor runtime bridge.
 - [ ] Add registry tests proving `litert` is absent with no LiteRT macro and also absent when only `LOCAL_AGENT_ENABLE_LITERT` is defined.
 
@@ -1378,6 +1380,8 @@ With LOCAL_AGENT_ENABLE_LITERT and LOCAL_AGENT_ENABLE_LITERT_VENDOR:
   load_model creates a real LiteRT-LM Engine.
   generation creates a short-lived LiteRT-LM Conversation and streams SendMessageAsync deltas.
   cancellation calls LiteRT-LM task-group cancellation.
+  cancellation and Conversation teardown are serialized by LiteRTActiveGeneration.
+  non-OK WaitUntilDone states do not return until the LiteRT task is quiesced.
 ```
 
 Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are enabled:
@@ -1418,6 +1422,12 @@ Add a LiteRT-specific runner section:
 "$BUILD_DIR/engine_registry_litert_contract" --expect-litert-hidden
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/litert_active_generation_contract.cpp \
+  inference/backends/litert/litert_active_generation.cpp \
+  -o "$BUILD_DIR/litert_active_generation_contract"
+"$BUILD_DIR/litert_active_generation_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/litert_backend_contract.cpp \
   inference/core/json_value.cpp \
   inference/core/generation_request.cpp \
@@ -1437,11 +1447,33 @@ if [[ -n "${LOCAL_AGENT_LITERT_LM_INCLUDE_DIR:-}" ]]; then
     inference/core/engine_registry.cpp \
     inference/core/token_stream.cpp \
     inference/backends/mock/mock_inference_engine.cpp \
+    inference/backends/litert/litert_active_generation.cpp \
     inference/backends/litert/litert_engine.cpp \
     inference/backends/litert/litert_lm_api.cpp \
     ${LOCAL_AGENT_LITERT_LM_LDFLAGS:-} \
     -o "$BUILD_DIR/engine_registry_litert_vendor_contract"
   "$BUILD_DIR/engine_registry_litert_vendor_contract" --expect-litert-visible
+
+  if [[ -n "${LOCAL_AGENT_LITERT_LM_MODEL_PATH:-}" ]]; then
+    "$CXX_BIN" "${CXXFLAGS[@]}" \
+      -DLOCAL_AGENT_ENABLE_LITERT \
+      -DLOCAL_AGENT_ENABLE_LITERT_VENDOR \
+      -I "$LOCAL_AGENT_LITERT_LM_INCLUDE_DIR" \
+      ${LOCAL_AGENT_LITERT_LM_CXXFLAGS:-} \
+      inference/tests/litert_lm_vendor_smoke.cpp \
+      inference/c_api/local_agent_inference.cpp \
+      inference/core/json_value.cpp \
+      inference/core/model_config.cpp \
+      inference/core/generation_request.cpp \
+      inference/core/engine_registry.cpp \
+      inference/core/token_stream.cpp \
+      inference/backends/litert/litert_active_generation.cpp \
+      inference/backends/litert/litert_engine.cpp \
+      inference/backends/litert/litert_lm_api.cpp \
+      ${LOCAL_AGENT_LITERT_LM_LDFLAGS:-} \
+      -o "$BUILD_DIR/litert_lm_vendor_smoke"
+    "$BUILD_DIR/litert_lm_vendor_smoke"
+  fi
 fi
 ```
 

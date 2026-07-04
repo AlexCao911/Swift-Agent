@@ -608,12 +608,14 @@ load supported LiteRT-LM model package
 create LiteRT-LM Engine and short-lived Conversation sessions
 stream message deltas through the common token event stream
 cancel asynchronous generation through LiteRT-LM task groups
+guard active Conversation lifetime while cancellation is in flight
+wait for LiteRT-LM tasks to quiesce before releasing callback-captured state
 map LiteRT errors
 ```
 
 The production `litert` adapter targets LiteRT-LM's LLM/chat API, not generic tensor-only LiteRT invocation. Generic LiteRT `CompiledModel` is still useful for non-LLM workloads, but it does not provide tokenizer, sampler, or conversation behavior and is not the app-facing local LLM engine.
 
-LiteRT adapter-boundary tests may use an injected test `LiteRTSession`, but test sessions must not be registered as product engines. Public `litert` exposure requires the linked LiteRT-LM bridge, capability metadata, and a smoke test. `LOCAL_AGENT_ENABLE_LITERT` alone is not enough; registry exposure also requires `LOCAL_AGENT_ENABLE_LITERT_VENDOR` and the vendor source/link flags.
+LiteRT adapter-boundary tests may use an injected test `LiteRTSession`, but test sessions must not be registered as product engines. Public `litert` exposure requires the linked LiteRT-LM bridge, capability metadata, and a smoke test. `LOCAL_AGENT_ENABLE_LITERT` alone is not enough; registry exposure also requires `LOCAL_AGENT_ENABLE_LITERT_VENDOR` and the vendor source/link flags. A real model smoke is enabled with `LOCAL_AGENT_LITERT_LM_MODEL_PATH`; it must load a model, emit text deltas, emit completed, and verify callback cancellation.
 
 ### Mock Adapter
 
@@ -878,6 +880,7 @@ model config validation rejects missing required paths
 image buffer generation copies input before start returns
 mock backend streams deterministic events
 generation cancel stops stream
+LiteRT active generation finish waits for in-flight cancel callbacks
 release functions tolerate null handles
 last_error returns structured JSON
 v1 local_agent_backend_* symbols are absent from the public header and C API implementation
@@ -891,7 +894,7 @@ llama.cpp prompt formatting
 llama.cpp model load smoke
 llama.cpp image/mmproj validation
 LiteRT capability reporting
-LiteRT generation smoke when dependency is available
+LiteRT generation smoke when dependency and `LOCAL_AGENT_LITERT_LM_MODEL_PATH` are available
 ```
 
 Swift adoption acceptance, covered by the later Swift app design:
