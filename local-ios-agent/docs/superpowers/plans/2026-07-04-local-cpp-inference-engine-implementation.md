@@ -4,7 +4,7 @@
 
 **Goal:** Replace the current local C++ inference ABI with a clean v2 local-only engine boundary using opaque handles, explicit memory ownership, compiled-engine registry, model/generation separation, deterministic test coverage, and a LiteRT adapter scaffold.
 
-**Architecture:** Swift remains the app-level inference router. Swift chooses `LocalCppInferenceClient` for downloaded local model files and `CloudInferenceClient` for cloud providers. C++ owns only local compiled engine execution: registry, capabilities, model load/unload, generation sessions, token events, cancellation, and stable local errors. The old v1 `local_agent_backend_*` ABI and Rust direct local-LLM C ABI path are migration leftovers and are removed or disabled by this breaking refactor instead of preserved.
+**Architecture:** Swift remains the app-level inference router. Swift chooses `LocalCppInferenceClient` for downloaded local model files and `CloudInferenceClient` for cloud providers. C++ owns only local compiled engine execution: registry, capabilities, model load/unload, generation sessions, token events, cancellation, and stable local errors. The old v1 `local_agent_backend_*` ABI is removed from the C++ public boundary. Rust direct local-LLM C ABI ownership is a migration leftover that is explicitly retired later, in the Swift/Rust HostInference takeover.
 
 **Tech Stack:** C++17, C ABI, clang/clang++, existing `local-ios-agent/inference` tree, mock deterministic backend, llama.cpp adapter, LiteRT scaffold behind build flag, shell contract runner.
 
@@ -13,7 +13,7 @@
 - Keep C++ local inference only. Do not add cloud HTTP, API keys, provider routing, agent profiles, tool calls, model downloads, model library persistence, or UI.
 - Treat this as a breaking local inference refactor. Do not preserve v1 `local_agent_backend_*` behavior.
 - The public C ABI after this plan is v2 only: engine handle, model handle, generation handle, string free, last error, and image input.
-- Rust must not select local engines or own local model loading. Existing Rust direct-C++ local inference code may be disabled, feature-gated away, or removed from active builds.
+- Rust must not become the target owner for local engine selection or local model loading. Existing Rust direct-C++ local inference build/link ownership is not retired in this C++-only phase; it moves in the later Swift/Rust HostInference takeover.
 - Engines are compile-time linked and signed with the app. The registry must not model runtime-downloaded dylibs/frameworks.
 - `mock` is test/debug-only. Release-capability checks must prove the public registry does not expose `mock`.
 - `llama_cpp` and `litert` are production engine ids. LiteRT source scaffolding may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT vendor runtime is linked.
@@ -1461,7 +1461,7 @@ This C++ refactor defines the v2 local inference boundary and may remove the pub
 Verification command:
 
 ```bash
-rg -n "remove rust local inference build glue|Remove Rust Local C\\+\\+ Build Glue|refactor: remove rust local inference build glue" local-ios-agent/docs/superpowers/plans/2026-07-04-local-cpp-inference-engine-implementation.md
+rg -n "r[e]move rust local inference build glue|R[e]move Rust Local C[+][+] Build Glue|r[e]factor: r[e]move rust local inference build glue" local-ios-agent/docs/superpowers/plans/2026-07-04-local-cpp-inference-engine-implementation.md
 ```
 
 Expected output:
