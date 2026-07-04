@@ -9,9 +9,11 @@ int main() {
     std::vector<std::string> tokens;
     stream.emit_text_delta("hello", [&](const std::string &json) {
         tokens.push_back(json);
+        return true;
     });
     stream.emit_completed("hello", [&](const std::string &json) {
         tokens.push_back(json);
+        return true;
     });
     assert(tokens.size() == 2);
     assert(tokens[0] == R"({"type":"text_delta","text":"hello"})");
