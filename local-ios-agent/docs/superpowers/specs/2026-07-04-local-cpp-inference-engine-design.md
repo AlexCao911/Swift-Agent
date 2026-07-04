@@ -143,7 +143,6 @@ local-ios-agent/inference/
 │   ├── generation_request.h/.cpp
 │   ├── model_config.h/.cpp
 │   ├── engine_capabilities.h
-│   ├── local_agent_error.h
 │   └── token_stream.h/.cpp
 ├── backends/
 │   ├── mock/
@@ -154,7 +153,7 @@ local-ios-agent/inference/
 
 `mock/` is a test adapter. It should be compiled only for tests, debug builds, or internal smoke tooling. It must not appear as a user-selectable release engine.
 
-`litert/` can contain scaffold code before the dependency is selected and linked, but scaffold-only builds must not expose `litert` through the public engine registry. The `litert` engine becomes user-selectable only when the vendor runtime is linked and a smoke test passes.
+`litert/` contains the LiteRT adapter boundary (`LiteRTInferenceEngine`, `LiteRTSession`, and generation mapping). Builds without a vendor bridge may compile the adapter boundary for tests, but must not expose `litert` through the public engine registry. The `litert` engine becomes user-selectable only when the vendor runtime bridge is linked and a smoke test passes.
 
 ## Engine Registry
 
@@ -614,7 +613,7 @@ map LiteRT errors
 
 If LiteRT does not expose the same streaming semantics as llama.cpp, the adapter still emits the common token event stream. It can buffer internally.
 
-Scaffold-only LiteRT code is allowed for adapter shape tests, but scaffold-only builds must not register `litert` in the public engine registry. Public `litert` exposure requires linked vendor runtime, capability metadata, and a smoke test.
+LiteRT adapter-boundary tests may use an injected test `LiteRTSession`, but test sessions must not be registered as product engines. Public `litert` exposure requires a linked vendor bridge, capability metadata, and a smoke test. `LOCAL_AGENT_ENABLE_LITERT` alone is not enough; registry exposure also requires the vendor-linked build macro.
 
 ### Mock Adapter
 
@@ -818,8 +817,8 @@ add last_error JSON
 ### Phase 4: Add LiteRT Adapter
 
 ```text
-add LiteRT scaffold adapter
-keep scaffold hidden from public registry
+add LiteRT adapter boundary
+keep non-vendor builds hidden from public registry
 pin LiteRT dependency in a separate vendor-linking change
 add model format compatibility
 add tests and smoke coverage

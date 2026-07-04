@@ -13,8 +13,9 @@
 #include "llama_cpp_engine.h"
 #endif
 
-#ifdef LOCAL_AGENT_ENABLE_LITERT
+#if defined(LOCAL_AGENT_ENABLE_LITERT) && defined(LOCAL_AGENT_ENABLE_LITERT_VENDOR)
 #include "litert_engine.h"
+#define LOCAL_AGENT_HAS_LITERT 1
 #endif
 
 namespace local_agent {
@@ -139,7 +140,7 @@ EngineRegistry EngineRegistry::production() {
 #ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP
     descriptors.push_back(llama_cpp_descriptor());
 #endif
-#ifdef LOCAL_AGENT_ENABLE_LITERT
+#ifdef LOCAL_AGENT_HAS_LITERT
     descriptors.push_back(litert_descriptor());
 #endif
     return EngineRegistry(std::move(descriptors));
@@ -183,7 +184,7 @@ std::unique_ptr<InferenceEngine> EngineRegistry::create(const std::string &engin
         return std::make_unique<LlamaCppEngine>();
     }
 #endif
-#ifdef LOCAL_AGENT_ENABLE_LITERT
+#ifdef LOCAL_AGENT_HAS_LITERT
     if (engine_id == "litert") {
         return std::make_unique<LiteRTInferenceEngine>();
     }

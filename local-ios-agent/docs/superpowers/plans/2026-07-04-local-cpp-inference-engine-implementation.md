@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the current local C++ inference ABI with a clean v2 local-only engine boundary using opaque handles, explicit memory ownership, compiled-engine registry, model/generation separation, deterministic test coverage, and a LiteRT adapter scaffold.
+**Goal:** Replace the current local C++ inference ABI with a clean v2 local-only engine boundary using opaque handles, explicit memory ownership, compiled-engine registry, model/generation separation, deterministic test coverage, and a vendor-gated LiteRT adapter boundary.
 
 **Architecture:** Swift remains the app-level inference router. Swift chooses `LocalCppInferenceClient` for downloaded local model files and `CloudInferenceClient` for cloud providers. C++ owns only local compiled engine execution: registry, capabilities, model load/unload, generation sessions, token events, cancellation, and stable local errors. The old v1 `local_agent_backend_*` ABI is removed from the C++ public boundary. Rust direct local-LLM C ABI ownership is a migration leftover that is explicitly retired later, in the Swift/Rust HostInference takeover.
 
-**Tech Stack:** C++17, C ABI, clang/clang++, existing `local-ios-agent/inference` tree, mock deterministic backend, llama.cpp adapter, LiteRT scaffold behind build flag, shell contract runner.
+**Tech Stack:** C++17, C ABI, clang/clang++, existing `local-ios-agent/inference` tree, mock deterministic backend, llama.cpp adapter, LiteRT adapter boundary with vendor-gated registry exposure, shell contract runner.
 
 ## Global Constraints
 
@@ -16,7 +16,7 @@
 - Rust must not become the target owner for local engine selection or local model loading. Existing Rust direct-C++ local inference feature flags are retired in this C++ phase and fail fast if enabled; app-facing local inference moves in the later Swift/Rust HostInference takeover.
 - Engines are compile-time linked and signed with the app. The registry must not model runtime-downloaded dylibs/frameworks.
 - `mock` is test/debug-only. Release-capability checks must prove the public registry does not expose `mock`.
-- `llama_cpp` and `litert` are production engine ids. LiteRT source scaffolding may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT vendor runtime is linked.
+- `llama_cpp` and `litert` are production engine ids. LiteRT adapter-boundary code may compile in tests, but public `litert` registry exposure is allowed only when the LiteRT vendor runtime bridge is linked.
 - All returned `char *` JSON/string buffers are allocated by C++ and released by `local_agent_string_free`.
 - Callback `const char *token_json` is borrowed and valid only for the callback invocation.
 - C++ token events must not include agent-level tool call events. Use `text_delta`, `reasoning_delta`, `structured_delta`, `usage`, `completed`, and `error`.
@@ -89,8 +89,6 @@ local-ios-agent/inference/
 │   ├── json_value.h
 │   ├── json_value.cpp
 │   ├── loaded_model.h
-│   ├── local_agent_error.h
-│   ├── local_agent_error.cpp
 │   ├── model_config.h
 │   ├── model_config.cpp
 │   ├── token_event.h
@@ -330,12 +328,11 @@ git commit -m "refactor: replace local inference c abi with v2 declarations"
 
 ## Task 3: Add Error And String Ownership Primitives
 
-- [ ] Add `local-ios-agent/inference/core/local_agent_error.h`.
-- [ ] Add `local-ios-agent/inference/core/local_agent_error.cpp`.
+- [ ] Add stable local error primitives inside `local-ios-agent/inference/c_api/local_agent_inference.cpp`.
 - [ ] Implement `local_agent_string_free`.
 - [ ] Add stable error JSON generation and thread-local fallback error for calls that happen before an engine handle exists.
 
-Core interface:
+Core C ABI implementation shape:
 
 ```cpp
 namespace local_agent {
@@ -361,14 +358,6 @@ struct LocalAgentError {
     std::string engine;
     bool recoverable = false;
 };
-
-const char *error_code_string(LocalAgentErrorCode code);
-std::string error_json(const LocalAgentError &error);
-LocalAgentError map_current_exception(const std::string &engine_id);
-char *copy_c_string(const std::string &value);
-
-void set_thread_last_error(LocalAgentError error);
-LocalAgentError thread_last_error();
 
 } // namespace local_agent
 ```
@@ -408,9 +397,7 @@ local inference C++ contracts passed
 Commit:
 
 ```bash
-git add local-ios-agent/inference/core/local_agent_error.h \
-  local-ios-agent/inference/core/local_agent_error.cpp \
-  local-ios-agent/inference/c_api/local_agent_inference.cpp \
+git add local-ios-agent/inference/c_api/local_agent_inference.cpp \
   local-ios-agent/inference/include/local_agent_inference.h
 git commit -m "feat: add local inference error and string ownership primitives"
 ```
@@ -468,8 +455,8 @@ Registry behavior:
 ```text
 LOCAL_AGENT_ENABLE_TEST_ENGINES registers mock with test_only=true.
 LOCAL_AGENT_ENABLE_LLAMA_CPP registers llama_cpp.
-LOCAL_AGENT_ENABLE_LITERT registers litert only in vendor-linked builds.
-LOCAL_AGENT_ENABLE_LITERT_SCAFFOLD compiles LiteRT source but does not register litert.
+LOCAL_AGENT_ENABLE_LITERT plus LOCAL_AGENT_ENABLE_LITERT_VENDOR registers litert in vendor-linked builds.
+LOCAL_AGENT_ENABLE_LITERT alone does not register litert.
 production() never registers mock.
 test() registers mock when LOCAL_AGENT_ENABLE_TEST_ENGINES is defined.
 create("mock") fails unless mock was registered.
@@ -1338,21 +1325,27 @@ git add local-ios-agent/inference/c_api/local_agent_inference.cpp \
 git commit -m "refactor: remove legacy local inference entry points"
 ```
 
-## Task 10: Add LiteRT Adapter Scaffold Behind Build Flag
+## Task 10: Add LiteRT Adapter Boundary Behind Vendor Gate
 
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_engine.h`.
 - [ ] Add `local-ios-agent/inference/backends/litert/litert_engine.cpp`.
-- [ ] Compile scaffold tests with `LOCAL_AGENT_ENABLE_LITERT_SCAFFOLD`.
-- [ ] Register public `litert` only when `LOCAL_AGENT_ENABLE_LITERT` is defined by a build that also links the vendor runtime.
-- [ ] Add registry tests proving `litert` is absent with no LiteRT macro and also absent with scaffold-only macro.
+- [ ] Add `local-ios-agent/inference/backends/litert/litert_api.h/.cpp` as the adapter session boundary.
+- [ ] Compile adapter-boundary tests with an injected test `LiteRTSession`.
+- [ ] Register public `litert` only when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are both defined by a build that also links the vendor runtime bridge.
+- [ ] Add registry tests proving `litert` is absent with no LiteRT macro and also absent when only `LOCAL_AGENT_ENABLE_LITERT` is defined.
 
-Adapter scaffold:
+Adapter boundary:
 
 ```cpp
 namespace local_agent {
 
+class LiteRTSession;
+
 class LiteRTInferenceEngine final : public InferenceEngine {
 public:
+    LiteRTInferenceEngine();
+    explicit LiteRTInferenceEngine(std::unique_ptr<LiteRTSession> session);
+
     EngineCapabilities capabilities() const override;
     std::unique_ptr<LoadedModel> load_model(const ModelLoadConfig &config) override;
 };
@@ -1360,25 +1353,27 @@ public:
 } // namespace local_agent
 ```
 
-Scaffold behavior:
+Registry behavior:
 
 ```text
 Without LOCAL_AGENT_ENABLE_LITERT:
   litert is not registered and not user-selectable.
 
-With LOCAL_AGENT_ENABLE_LITERT_SCAFFOLD:
-  litert source compiles for adapter-shape tests.
+With LOCAL_AGENT_ENABLE_LITERT only:
+  litert source compiles for adapter-boundary tests.
   litert is not registered in EngineRegistry::production().
   litert is not returned by local_agent_engine_list.
   load_model is not reachable through the public registry.
 
-With LOCAL_AGENT_ENABLE_LITERT:
+With LOCAL_AGENT_ENABLE_LITERT and LOCAL_AGENT_ENABLE_LITERT_VENDOR:
   vendor LiteRT headers and library are linked.
+  vendor bridge supplies make_litert_session().
+  unavailable fallback litert_api.cpp is not compiled.
   litert registers descriptor metadata in the public production registry.
   load_model attempts real LiteRT model loading and maps vendor failures to stable local errors.
 ```
 
-Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` is enabled:
+Registry descriptor when `LOCAL_AGENT_ENABLE_LITERT` and `LOCAL_AGENT_ENABLE_LITERT_VENDOR` are enabled:
 
 ```text
 engine_id: litert
@@ -1390,7 +1385,7 @@ supports_vision: false
 supports_token_usage: false
 ```
 
-Extend `engine_registry_contract.cpp` for scaffold-hidden verification:
+Extend `engine_registry_contract.cpp` for non-vendor hidden verification:
 
 ```cpp
 bool expect_litert_hidden = argc > 1 && std::string(argv[1]) == "--expect-litert-hidden";
@@ -1407,19 +1402,23 @@ if (expect_litert_hidden) {
 Add a LiteRT-specific runner section:
 
 ```bash
-"$CXX_BIN" "${CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LITERT_SCAFFOLD \
+"$CXX_BIN" "${CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LITERT \
   inference/tests/engine_registry_contract.cpp \
-  inference/core/model_config.cpp \
   inference/core/token_stream.cpp \
   inference/core/engine_registry.cpp \
-  inference/core/local_agent_error.cpp \
   inference/backends/mock/mock_inference_engine.cpp \
-  inference/backends/llama_cpp/llama_cpp_api.cpp \
-  inference/backends/llama_cpp/llama_cpp_engine.cpp \
-  inference/backends/llama_cpp/llama_cpp_prompt.cpp \
-  inference/backends/litert/litert_engine.cpp \
   -o "$BUILD_DIR/engine_registry_litert_contract"
 "$BUILD_DIR/engine_registry_litert_contract" --expect-litert-hidden
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/litert_backend_contract.cpp \
+  inference/core/json_value.cpp \
+  inference/core/generation_request.cpp \
+  inference/core/token_stream.cpp \
+  inference/backends/litert/litert_api.cpp \
+  inference/backends/litert/litert_engine.cpp \
+  -o "$BUILD_DIR/litert_backend_contract"
+"$BUILD_DIR/litert_backend_contract"
 ```
 
 Verification command:
@@ -1438,11 +1437,13 @@ Commit:
 
 ```bash
 git add local-ios-agent/inference/backends/litert/litert_engine.h \
+  local-ios-agent/inference/backends/litert/litert_api.h \
+  local-ios-agent/inference/backends/litert/litert_api.cpp \
   local-ios-agent/inference/backends/litert/litert_engine.cpp \
   local-ios-agent/inference/core/engine_registry.cpp \
   local-ios-agent/inference/tests/engine_registry_contract.cpp \
   local-ios-agent/scripts/run-local-inference-cpp-contracts.sh
-git commit -m "feat: add litert local inference adapter scaffold"
+git commit -m "feat: add litert local inference adapter boundary"
 ```
 
 ## Task 11: Record Swift/Rust Bridge Takeover Boundary
@@ -1514,7 +1515,7 @@ git commit -m "test: verify local cpp inference engine boundary"
 - Request-scoped prompt/image state lives in `GenerationSession`, not `InferenceEngine`.
 - v2 image buffers are copied before `local_agent_generation_start` returns.
 - Token events include text, reasoning, structured, usage, completed, and error forms; no tool-call event names exist in C++.
-- LiteRT has a compile-gated adapter scaffold and registry descriptor path.
+- LiteRT has a vendor-gated adapter boundary and registry descriptor path.
 - v1 `local_agent_backend_*` ABI is removed from the public header and C API implementation.
 - Rust direct C++ local inference feature flags fail fast with a retirement message; Swift/Rust HostInference takeover remains the follow-up for the app-facing local route.
 - Filesystem naming cleanup from `inference/backends` to a future `local-inference/adapters` shape is intentionally deferred to a separate path-migration change.
