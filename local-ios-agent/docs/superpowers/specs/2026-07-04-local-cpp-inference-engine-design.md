@@ -668,6 +668,22 @@ This metadata is not part of the C ABI, but it should be available to build/rele
 
 Swift calls C++ through a stable local inference client.
 
+### Routing Boundary
+
+C++ is never the top-level inference router. It is only the local inference engine implementation behind Swift's local route.
+
+The app-level route belongs above C++:
+
+```text
+Swift HostInferenceClient / InferenceRouting
+  -> LocalCppInferenceClient when active model/provider is local
+  -> CloudInferenceClient when active model/provider is cloud
+```
+
+`CloudInferenceClient` must never enter the C++ layer. Cloud provider config, API keys, endpoint selection, HTTP streaming, retry, rate limit handling, and cloud response normalization stay in Swift host code or later Swift app design documents.
+
+This prevents the C++ library from becoming a generic "all inference" facade. Its public contract remains local model inference only.
+
 Swift provides:
 
 ```text
@@ -778,6 +794,8 @@ Swift can then adopt v2 through a `LocalInferenceEngineClient`. That later Swift
 ## Acceptance Checklist
 
 - C++ layer is local inference only.
+- C++ is not the app-level inference router.
+- CloudInferenceClient never enters C++.
 - C++ does not download engines or model weights.
 - Users can only select engines compiled into the app.
 - Release builds do not expose mock as a selectable engine.
