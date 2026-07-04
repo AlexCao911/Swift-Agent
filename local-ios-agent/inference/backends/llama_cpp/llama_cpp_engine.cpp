@@ -90,6 +90,9 @@ public:
     LlamaCppLoadedModel(ModelLoadConfig config, std::unique_ptr<LlamaCppSession> session)
         : config_(std::move(config)),
           session_(std::move(session)) {
+        if (!session_) {
+            throw std::invalid_argument("LlamaCppLoadedModel session must not be null");
+        }
         session_->load(to_llama_model_config(config_));
     }
 
@@ -122,8 +125,7 @@ private:
 
 } // namespace
 
-LlamaCppEngine::LlamaCppEngine()
-    : session_(make_llama_cpp_session()) {}
+LlamaCppEngine::LlamaCppEngine() = default;
 
 LlamaCppEngine::LlamaCppEngine(std::unique_ptr<LlamaCppSession> session)
     : session_(std::move(session)) {
@@ -152,7 +154,10 @@ std::unique_ptr<LoadedModel> LlamaCppEngine::load_model(const ModelLoadConfig &c
     if (config.model_path.empty()) {
         throw std::invalid_argument("llama.cpp model_path must not be empty");
     }
-    return std::make_unique<LlamaCppLoadedModel>(config, std::move(session_));
+    std::unique_ptr<LlamaCppSession> session = session_
+        ? std::move(session_)
+        : make_llama_cpp_session();
+    return std::make_unique<LlamaCppLoadedModel>(config, std::move(session));
 }
 
 } // namespace local_agent
