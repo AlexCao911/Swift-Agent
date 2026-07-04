@@ -8,12 +8,23 @@ namespace {
 
 class MockGenerationSession final : public GenerationSession {
 public:
+    explicit MockGenerationSession(std::vector<ImageInput> images)
+        : images_(std::move(images)) {}
+
     void read(const TokenStream::Emit &emit) override {
         if (!stream_.emit_text_delta("On-device ", emit)) {
             return;
         }
         if (!stream_.emit_text_delta("mock response", emit)) {
             return;
+        }
+        if (!images_.empty() && !images_.front().rgb_data.empty()) {
+            if (!stream_.emit_structured_delta(
+                    "image_rgb_first_byte=" + std::to_string(images_.front().rgb_data.front()),
+                    emit
+                )) {
+                return;
+            }
         }
         usage_ = UsageReport{1, 2, 3, true};
         if (!stream_.emit_usage(usage_, emit)) {
@@ -33,6 +44,7 @@ public:
 private:
     TokenStream stream_;
     UsageReport usage_;
+    std::vector<ImageInput> images_;
 };
 
 class MockLoadedModel final : public LoadedModel {
@@ -56,10 +68,7 @@ public:
         if (request.messages.empty()) {
             throw std::invalid_argument("mock generation requires at least one message");
         }
-        if (!images.empty()) {
-            throw std::invalid_argument("mock generation does not support image buffers");
-        }
-        return std::make_unique<MockGenerationSession>();
+        return std::make_unique<MockGenerationSession>(images);
     }
 
 private:

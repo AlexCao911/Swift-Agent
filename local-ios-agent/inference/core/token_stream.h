@@ -21,6 +21,7 @@ public:
     void cancel();
     bool is_cancelled() const;
     bool emit_text_delta(const std::string &text, const Emit &emit);
+    bool emit_structured_delta(const std::string &text, const Emit &emit);
     bool emit_usage(const UsageReport &usage, const Emit &emit);
     bool emit_completed(const std::string &text, const Emit &emit);
 

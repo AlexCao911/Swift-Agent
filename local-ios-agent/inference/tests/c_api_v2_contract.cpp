@@ -63,6 +63,33 @@ int main() {
     assert(events.back().find("\"type\":\"completed\"") != std::string::npos);
 
     assert(local_agent_generation_release(generation) == LOCAL_AGENT_STATUS_OK);
+
+    uint8_t pixel[3] = {255, 128, 64};
+    LocalAgentImageInput image = {
+        pixel,
+        3,
+        1,
+        1,
+        "rgb8"
+    };
+
+    LocalAgentGenerationHandle *image_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})",
+        &image,
+        1,
+        &image_generation
+    ) == LOCAL_AGENT_STATUS_OK);
+    pixel[0] = 0;
+
+    std::vector<std::string> image_events;
+    assert(local_agent_generation_read(image_generation, collect_token, &image_events) == LOCAL_AGENT_STATUS_OK);
+    assert(std::any_of(image_events.begin(), image_events.end(), [](const std::string &event) {
+        return event.find("image_rgb_first_byte=255") != std::string::npos;
+    }));
+    assert(local_agent_generation_release(image_generation) == LOCAL_AGENT_STATUS_OK);
+
     assert(local_agent_model_unload(model) == LOCAL_AGENT_STATUS_OK);
     assert(local_agent_engine_release(engine) == LOCAL_AGENT_STATUS_OK);
     assert(local_agent_generation_release(nullptr) == LOCAL_AGENT_STATUS_OK);

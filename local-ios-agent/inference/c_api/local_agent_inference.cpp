@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -128,6 +129,40 @@ local_agent::EngineRegistry active_registry() {
 #else
     return local_agent::EngineRegistry::production();
 #endif
+}
+
+std::vector<local_agent::ImageInput> copy_image_inputs(
+    const LocalAgentImageInput *images,
+    uint64_t image_count
+) {
+    std::vector<local_agent::ImageInput> copied;
+    if (image_count == 0) {
+        return copied;
+    }
+    if (images == nullptr) {
+        throw std::invalid_argument("image_count requires image input array");
+    }
+    copied.reserve(static_cast<size_t>(image_count));
+    for (uint64_t index = 0; index < image_count; index += 1) {
+        const auto &image = images[index];
+        if (image.bytes == nullptr || image.pixel_format == nullptr) {
+            throw std::invalid_argument("image input requires bytes and pixel_format");
+        }
+        if (std::string(image.pixel_format) != "rgb8") {
+            throw std::invalid_argument("only rgb8 image input is supported");
+        }
+        const uint64_t expected = static_cast<uint64_t>(image.width) *
+            static_cast<uint64_t>(image.height) * 3;
+        if (image.width == 0 || image.height == 0 || image.byte_count != expected) {
+            throw std::invalid_argument("rgb8 image byte_count does not match dimensions");
+        }
+        local_agent::ImageInput copied_image;
+        copied_image.width = image.width;
+        copied_image.height = image.height;
+        copied_image.rgb_data.assign(image.bytes, image.bytes + image.byte_count);
+        copied.push_back(std::move(copied_image));
+    }
+    return copied;
 }
 
 } // namespace
@@ -296,15 +331,11 @@ LocalAgentStatus local_agent_generation_start(
         set_thread_error("invalid_argument", "model and generation_request_json are required");
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
-    if (image_count > 0 || images != nullptr) {
-        set_engine_error(model->state->engine_state, "invalid_argument", "image buffers are not enabled in this task");
-        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
-    }
-
     try {
         local_agent::GenerationRequest request =
             local_agent::parse_generation_request(generation_request_json);
-        auto generation = model->state->model->start_generation(request, {});
+        std::vector<local_agent::ImageInput> image_inputs = copy_image_inputs(images, image_count);
+        auto generation = model->state->model->start_generation(request, image_inputs);
         if (!generation) {
             throw std::runtime_error("model returned null generation session");
         }
