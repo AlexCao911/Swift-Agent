@@ -7,34 +7,42 @@ static LocalAgentStatus collect_token(const char *token_json, void *user_data) {
 }
 
 int main(void) {
-    LocalAgentBackend *backend = 0;
-    LocalAgentBackendStream *stream = 0;
+    LocalAgentStatus status = LOCAL_AGENT_STATUS_OK;
     local_agent_token_callback callback = collect_token;
+    char *json = 0;
+    LocalAgentImageInput image = {0};
+    LocalAgentEngineHandle *engine = 0;
+    LocalAgentModelHandle *model = 0;
+    LocalAgentGenerationHandle *generation = 0;
 
-    LocalAgentStatus status = local_agent_backend_init(&backend);
-    status = local_agent_backend_load_model(backend, "{\"model\":\"mock\"}");
-    status = local_agent_backend_stream_chat(
-        backend,
+    status = local_agent_engine_list(&json);
+    local_agent_string_free(json);
+    status = local_agent_engine_create("mock", &engine);
+    status = local_agent_engine_capabilities(engine, &json);
+    local_agent_string_free(json);
+    status = local_agent_model_load(
+        engine,
+        "{\"engine\":\"mock\",\"model_path\":\"/tmp/mock.gguf\"}",
+        &model
+    );
+    status = local_agent_generation_start(
+        model,
         "{\"messages\":[]}",
-        callback,
+        &image,
         0,
-        &stream
+        &generation
     );
-    status = local_agent_backend_release_stream(stream);
-    stream = 0;
-    status = local_agent_backend_start_chat(
-        backend,
-        "{\"messages\":[]}",
-        &stream
-    );
-    status = local_agent_backend_read_stream(
-        stream,
+    status = local_agent_generation_read(
+        generation,
         callback,
         0
     );
-    status = local_agent_backend_cancel(stream);
-    status = local_agent_backend_release_stream(stream);
-    status = local_agent_backend_release(backend);
+    status = local_agent_generation_cancel(generation);
+    status = local_agent_generation_release(generation);
+    status = local_agent_model_unload(model);
+    status = local_agent_last_error(engine, &json);
+    local_agent_string_free(json);
+    status = local_agent_engine_release(engine);
 
     return (int)status;
 }

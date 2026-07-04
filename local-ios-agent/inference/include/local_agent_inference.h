@@ -14,62 +14,78 @@ typedef enum LocalAgentStatus {
     LOCAL_AGENT_STATUS_INVALID_ARGUMENT = 3
 } LocalAgentStatus;
 
-typedef struct LocalAgentBackend LocalAgentBackend;
-typedef struct LocalAgentBackendStream LocalAgentBackendStream;
+typedef struct LocalAgentEngineHandle LocalAgentEngineHandle;
+typedef struct LocalAgentModelHandle LocalAgentModelHandle;
+typedef struct LocalAgentGenerationHandle LocalAgentGenerationHandle;
+
+typedef struct LocalAgentImageInput {
+    const uint8_t *bytes;
+    uint64_t byte_count;
+    uint32_t width;
+    uint32_t height;
+    const char *pixel_format;
+} LocalAgentImageInput;
 
 typedef LocalAgentStatus (*local_agent_token_callback)(
     const char *token_json,
     void *user_data
 );
 
-LocalAgentStatus local_agent_backend_init(
-    LocalAgentBackend **out_backend
+void local_agent_string_free(char *value);
+
+LocalAgentStatus local_agent_engine_list(
+    char **out_json
 );
 
-LocalAgentStatus local_agent_backend_load_model(
-    LocalAgentBackend *backend,
-    const char *model_config_json
+LocalAgentStatus local_agent_engine_create(
+    const char *engine_id,
+    LocalAgentEngineHandle **out_engine
 );
 
-LocalAgentStatus local_agent_backend_stream_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    local_agent_token_callback callback,
-    void *user_data,
-    LocalAgentBackendStream **out_stream
+LocalAgentStatus local_agent_engine_capabilities(
+    LocalAgentEngineHandle *engine,
+    char **out_json
 );
 
-LocalAgentStatus local_agent_backend_start_chat(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    LocalAgentBackendStream **out_stream
+LocalAgentStatus local_agent_engine_release(
+    LocalAgentEngineHandle *engine
 );
 
-LocalAgentStatus local_agent_backend_start_chat_with_image(
-    LocalAgentBackend *backend,
-    const char *prompt_json,
-    const unsigned char *rgb_data,
-    uint32_t width,
-    uint32_t height,
-    LocalAgentBackendStream **out_stream
+LocalAgentStatus local_agent_model_load(
+    LocalAgentEngineHandle *engine,
+    const char *model_config_json,
+    LocalAgentModelHandle **out_model
 );
 
-LocalAgentStatus local_agent_backend_read_stream(
-    LocalAgentBackendStream *stream,
+LocalAgentStatus local_agent_model_unload(
+    LocalAgentModelHandle *model
+);
+
+LocalAgentStatus local_agent_generation_start(
+    LocalAgentModelHandle *model,
+    const char *generation_request_json,
+    const LocalAgentImageInput *images,
+    uint64_t image_count,
+    LocalAgentGenerationHandle **out_generation
+);
+
+LocalAgentStatus local_agent_generation_read(
+    LocalAgentGenerationHandle *generation,
     local_agent_token_callback callback,
     void *user_data
 );
 
-LocalAgentStatus local_agent_backend_cancel(
-    LocalAgentBackendStream *stream
+LocalAgentStatus local_agent_generation_cancel(
+    LocalAgentGenerationHandle *generation
 );
 
-LocalAgentStatus local_agent_backend_release_stream(
-    LocalAgentBackendStream *stream
+LocalAgentStatus local_agent_generation_release(
+    LocalAgentGenerationHandle *generation
 );
 
-LocalAgentStatus local_agent_backend_release(
-    LocalAgentBackend *backend
+LocalAgentStatus local_agent_last_error(
+    LocalAgentEngineHandle *engine,
+    char **out_json
 );
 
 #ifdef __cplusplus
