@@ -19,20 +19,25 @@ typedef struct LocalAgentModelHandle LocalAgentModelHandle;
 typedef struct LocalAgentGenerationHandle LocalAgentGenerationHandle;
 
 typedef struct LocalAgentImageInput {
+    /* Borrowed by the caller only for local_agent_generation_start; bytes are copied before return. */
     const uint8_t *bytes;
     uint64_t byte_count;
     uint32_t width;
     uint32_t height;
+    /* First v2 implementation accepts "rgb8". */
     const char *pixel_format;
 } LocalAgentImageInput;
 
 typedef LocalAgentStatus (*local_agent_token_callback)(
+    /* Borrowed and valid only for the callback invocation. */
     const char *token_json,
     void *user_data
 );
 
+/* Frees strings returned through char ** out parameters. Passing null is allowed. */
 void local_agent_string_free(char *value);
 
+/* Returned char * must be released with local_agent_string_free. */
 LocalAgentStatus local_agent_engine_list(
     char **out_json
 );
@@ -47,6 +52,7 @@ LocalAgentStatus local_agent_engine_capabilities(
     char **out_json
 );
 
+/* Release functions accept null. Passing an already released non-null raw handle is invalid. */
 LocalAgentStatus local_agent_engine_release(
     LocalAgentEngineHandle *engine
 );
@@ -85,6 +91,7 @@ LocalAgentStatus local_agent_generation_release(
 
 LocalAgentStatus local_agent_last_error(
     LocalAgentEngineHandle *engine,
+    /* Returned char * must be released with local_agent_string_free. */
     char **out_json
 );
 
