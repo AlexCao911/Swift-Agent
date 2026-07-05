@@ -935,6 +935,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
         let callbackBox = RuntimeEventCallbackBox(
             continuation: continuation,
             initialRunId: initialRunId,
+            dropPolicy: .allowDroppedEvents,
             onCancelRun: { [self] runId in
                 Task.detached { [self] in
                     _ = try? await self.cancel(runId: runId)
@@ -995,7 +996,10 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
             throwing: Error.self,
             bufferingPolicy: .bufferingOldest(runtimeEventStreamBufferLimit)
         )
-        let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
+        let callbackBox = RuntimeEventCallbackBox(
+            continuation: continuation,
+            dropPolicy: .failOnDroppedEvents
+        )
         continuation.onTermination = { @Sendable _ in
             callbackBox.terminate(cancelRun: false)
         }
@@ -1066,8 +1070,14 @@ private struct SendMessageRequest: Encodable {
     }
 }
 
+private enum RuntimeEventDropPolicy {
+    case allowDroppedEvents
+    case failOnDroppedEvents
+}
+
 private final class RuntimeEventCallbackBox: @unchecked Sendable {
     private let continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation
+    private let dropPolicy: RuntimeEventDropPolicy
     private let onCancelRun: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var terminated = false
@@ -1078,10 +1088,12 @@ private final class RuntimeEventCallbackBox: @unchecked Sendable {
     init(
         continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation,
         initialRunId: String? = nil,
+        dropPolicy: RuntimeEventDropPolicy,
         onCancelRun: (@Sendable (String) -> Void)? = nil
     ) {
         self.continuation = continuation
         self.latestRunId = initialRunId
+        self.dropPolicy = dropPolicy
         self.onCancelRun = onCancelRun
     }
 
@@ -1135,7 +1147,16 @@ private final class RuntimeEventCallbackBox: @unchecked Sendable {
             case .enqueued(_):
                 return 0
             case .dropped(_):
-                return 0
+                switch dropPolicy {
+                case .allowDroppedEvents:
+                    return 0
+                case .failOnDroppedEvents:
+                    continuation.finish(throwing: RuntimeBridgeError(
+                        kind: "ffi",
+                        message: "runtime event stream buffer overflow"
+                    ))
+                    return 1
+                }
             case .terminated:
                 return 1
             @unknown default:

@@ -398,6 +398,40 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func observeEventsOverflowFails() async throws {
+        let probe = RuntimeCFunctionProbe()
+        probe.observeEventsToEmit = runtimeEventStreamBufferLimit + 1
+        probe.observeFailsOnCallbackError = true
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+
+        let stream = client!.stream(
+            .observeEvents,
+            ObserveExecutionEventsRequestDTO(runId: "run_agent_os", fromSequence: 0)
+        )
+
+        for _ in 0..<100
+        where !probe.observeCallbackReturnValues.contains(where: { $0 != 0 })
+            && probe.observeCallbackReturnValues.count < runtimeEventStreamBufferLimit + 1 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        // Unlike turn streams, observeEvents has no final result fallback. If
+        // the bounded buffer overflows, lifecycle events must not be reported
+        // to Rust as successfully delivered.
+        do {
+            for try await _ in stream {}
+            Issue.record("Expected observeEvents overflow to surface a bridge error")
+        } catch let error as RuntimeBridgeError {
+            #expect(error.kind == "ffi")
+            #expect(error.message.contains("runtime event stream buffer overflow"))
+        }
+
+        #expect(probe.observeCallbackReturnValues.contains { $0 != 0 })
+
+        client = nil
+    }
+
+    @Test
     func mockRuntimeClientSupportsSplitConversationAndExecutionContracts() async throws {
         let frameRef = conversationRunFrameRef()
         let event = RuntimeEventDTO(
@@ -605,6 +639,9 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var buildAgentJson: String?
     var prepareUserTurnJson: String?
     var observeEventsJson: String?
+    var observeEventsToEmit: Int?
+    // Simulates Rust returning an error envelope after Swift reports callback failure.
+    var observeFailsOnCallbackError = false
     var commitAssistantResultJson: String?
     var approveToolJson: String?
     var cancelRunJson: String?
@@ -618,6 +655,14 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var deletedSessionId: String?
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+    private let lock = NSLock()
+    private var observeCallbackStatuses: [CInt] = []
+
+    var observeCallbackReturnValues: [CInt] {
+        lock.lock()
+        defer { lock.unlock() }
+        return observeCallbackStatuses
+    }
 
     func table() -> RustRuntimeCFunctionTable {
         RustRuntimeCFunctionTable(
@@ -1007,9 +1052,15 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         _ userData: UnsafeMutableRawPointer?
     ) -> UnsafeMutablePointer<CChar>? {
         observeEventsJson = String(cString: requestJson!)
-        for eventJson in Self.executionEventJsonLines {
-            _ = eventJson.withCString { pointer in
+        for eventJson in observeEventJsonLines() {
+            let status = eventJson.withCString { pointer in
                 callback?(pointer, userData)
+            }
+            lock.lock()
+            observeCallbackStatuses.append(status ?? 0)
+            lock.unlock()
+            if status != 0 && observeFailsOnCallbackError {
+                return makeCString(#"{"error":{"kind":"ffi","message":"event stream callback returned non-zero"}}"#)
             }
         }
         return makeCString("null")
@@ -1094,6 +1145,31 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         }
         """
     ]
+
+    private func observeEventJsonLines() -> [String] {
+        guard let observeEventsToEmit else {
+            return Self.executionEventJsonLines
+        }
+        return (0..<observeEventsToEmit).map { index in
+            let sequence = index + 1
+            let isFinal = index == observeEventsToEmit - 1
+            let kind = isFinal ? "execution.event" : "assistant_text_delta"
+            let payload = isFinal ? "run.completed" : "delta.\(sequence)"
+            return """
+            {
+              "id": "event_\(sequence)",
+              "session_id": "session_1",
+              "parent_id": null,
+              "run_id": "run_agent_os",
+              "sequence": \(sequence),
+              "depth": 0,
+              "kind": "\(kind)",
+              "payload": "\(payload)",
+              "blob_refs": []
+            }
+            """
+        }
+    }
 
     private static let executionEventsJson = "[\(executionEventJsonLines.joined(separator: ","))]"
 }
