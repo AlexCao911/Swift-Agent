@@ -1,7 +1,12 @@
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, MutexGuard,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -167,6 +172,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
     execution: ExecutionService<InMemoryConversationFrameRepository>,
     conversation_commits: ConversationCommitService,
+    ffi_tainted: AtomicBool,
 }
 
 impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
@@ -200,6 +206,21 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             conversation,
             execution,
             conversation_commits,
+            ffi_tainted: AtomicBool::new(false),
+        }
+    }
+
+    fn mark_ffi_tainted(&self) {
+        self.ffi_tainted.store(true, Ordering::SeqCst);
+    }
+
+    fn ensure_ffi_usable(&self) -> Result<(), AgentError> {
+        if self.ffi_tainted.load(Ordering::SeqCst) {
+            Err(AgentError::Ffi(
+                "runtime bridge is tainted after a caught Rust panic; recreate the runtime".into(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -550,6 +571,20 @@ impl RuntimeJsonBridge {
                 )?,
                 app_services,
             ))),
+        }
+    }
+
+    fn mark_ffi_tainted(&self) {
+        match self {
+            Self::InMemory(runtime) => runtime.mark_ffi_tainted(),
+            Self::Sqlite(runtime) => runtime.mark_ffi_tainted(),
+        }
+    }
+
+    fn ensure_ffi_usable(&self) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.ensure_ffi_usable(),
+            Self::Sqlite(runtime) => runtime.ensure_ffi_usable(),
         }
     }
 
@@ -961,27 +996,32 @@ pub extern "C" fn local_agent_runtime_bridge_new() -> *mut RuntimeJsonBridge {
 pub unsafe extern "C" fn local_agent_runtime_bridge_new_with_config(
     config_json: *const c_char,
 ) -> *mut RuntimeJsonBridge {
-    let Ok(config_json) = c_str_arg(config_json, "config_json") else {
-        return std::ptr::null_mut();
-    };
-    match RuntimeJsonBridge::from_config_json(config_json) {
-        Ok(bridge) => Box::into_raw(Box::new(bridge)),
-        Err(_) => std::ptr::null_mut(),
+    match catch_unwind(AssertUnwindSafe(|| {
+        let config_json = c_str_arg(config_json, "config_json")?;
+        RuntimeJsonBridge::from_config_json(config_json)
+            .map(|bridge| Box::into_raw(Box::new(bridge)))
+    })) {
+        Ok(Ok(runtime)) => runtime,
+        Ok(Err(_)) | Err(_) => std::ptr::null_mut(),
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_free(runtime: *mut RuntimeJsonBridge) {
-    if !runtime.is_null() {
-        drop(Box::from_raw(runtime));
-    }
+    c_void_boundary(AssertUnwindSafe(|| {
+        if !runtime.is_null() {
+            drop(Box::from_raw(runtime));
+        }
+    }));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_string_free(value: *mut c_char) {
-    if !value.is_null() {
-        drop(CString::from_raw(value));
-    }
+    c_void_boundary(AssertUnwindSafe(|| {
+        if !value.is_null() {
+            drop(CString::from_raw(value));
+        }
+    }));
 }
 
 #[no_mangle]
@@ -2147,11 +2187,63 @@ fn execution_event_kind_json(code: &str) -> &'static str {
 }
 
 fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {
-    let json = match run() {
-        Ok(json) => json,
-        Err(error) => error_payload(&error),
+    let json = match catch_unwind(AssertUnwindSafe(run)) {
+        Ok(Ok(json)) => json,
+        Ok(Err(error)) => error_payload(&error),
+        Err(payload) => error_payload(&panic_agent_error(payload.as_ref())),
     };
     into_c_string(json)
+}
+
+unsafe fn c_runtime_result(
+    runtime: *const RuntimeJsonBridge,
+    run: impl FnOnce() -> Result<String, AgentError>,
+) -> *mut c_char {
+    let json = match catch_unwind(AssertUnwindSafe(|| {
+        let bridge = bridge_ref(runtime)?;
+        bridge.ensure_ffi_usable()?;
+        run()
+    })) {
+        Ok(Ok(json)) => json,
+        Ok(Err(error)) => error_payload(&error),
+        Err(payload) => {
+            if let Some(bridge) = runtime.as_ref() {
+                bridge.mark_ffi_tainted();
+            }
+            error_payload(&panic_agent_error(payload.as_ref()))
+        }
+    };
+    into_c_string(json)
+}
+
+fn c_void_boundary(run: impl FnOnce()) {
+    let _ = catch_unwind(AssertUnwindSafe(run));
+}
+
+fn panic_agent_error(payload: &(dyn Any + Send)) -> AgentError {
+    #[cfg(debug_assertions)]
+    {
+        AgentError::Ffi(format!(
+            "rust ffi panic: {}",
+            panic_payload_message(payload)
+        ))
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = payload;
+        AgentError::Ffi("rust ffi panic".into())
+    }
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(value) = payload.downcast_ref::<String>() {
+        return value.clone();
+    }
+    if let Some(value) = payload.downcast_ref::<&'static str>() {
+        return (*value).to_string();
+    }
+    "non-string panic payload".to_string()
 }
 
 fn dispatch_stream_event(
@@ -2237,6 +2329,7 @@ fn agent_error_kind(error: &AgentError) -> &'static str {
         AgentError::ToolExecution(_) => "tool_execution",
         AgentError::PolicyDenied(_) => "policy_denied",
         AgentError::Cancelled(_) => "cancelled",
+        AgentError::Ffi(message) if message.starts_with("rust ffi panic") => "panic",
         AgentError::Ffi(_) => "ffi",
         AgentError::Unknown(_) => "unknown",
     }
@@ -2376,6 +2469,56 @@ fn event_kind_json(kind: &EventKind) -> &'static str {
         EventKind::BranchSummaryCreated => "branch_summary_created",
         EventKind::RunCancelled => "run_cancelled",
         EventKind::RunFailed => "run_failed",
+    }
+}
+
+#[cfg(test)]
+mod ffi_boundary_tests {
+    use super::*;
+    use serde_json::Value;
+    use std::ffi::CStr;
+
+    unsafe fn take_c_string(ptr: *mut c_char) -> String {
+        assert!(!ptr.is_null());
+        let value = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+        local_agent_runtime_bridge_string_free(ptr);
+        value
+    }
+
+    #[test]
+    fn c_result_converts_panic_to_error_envelope() {
+        let json = unsafe {
+            take_c_string(c_result(|| -> Result<String, AgentError> {
+                panic!("ffi test panic");
+            }))
+        };
+        let value: Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["error"]["kind"], "panic");
+        assert!(value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("rust ffi panic"));
+    }
+
+    #[test]
+    fn panic_payload_message_handles_string_str_and_non_string_payloads() {
+        let string_payload = Box::new(String::from("owned panic"));
+        let str_payload = Box::new("borrowed panic");
+        let non_string_payload = Box::new(42_u32);
+
+        assert_eq!(
+            panic_payload_message(string_payload.as_ref()),
+            "owned panic"
+        );
+        assert_eq!(
+            panic_payload_message(str_payload.as_ref()),
+            "borrowed panic"
+        );
+        assert_eq!(
+            panic_payload_message(non_string_payload.as_ref()),
+            "non-string panic payload"
+        );
     }
 }
 
