@@ -273,6 +273,7 @@ fn ffi_reachable_modules_do_not_unwrap_poisoned_locks() {
         "src/conversation/commit_service.rs",
         "src/execution/event_log.rs",
         "src/execution/completed_run_registry.rs",
+        "src/execution/inference_settings.rs",
         "src/execution/execution_service.rs",
     ];
 
