@@ -482,6 +482,46 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeClientDecodesPanicErrorEnvelope() async throws {
+        let probe = RuntimeCFunctionProbe()
+        probe.createSessionResponse = #"{"error":{"kind":"panic","message":"rust ffi panic: ffi test panic"}}"#
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+
+        do {
+            _ = try await client?.createSession()
+            Issue.record("Expected createSession to throw")
+        } catch let error as RuntimeBridgeError {
+            #expect(error.kind == "panic")
+            #expect(error.message.contains("rust ffi panic"))
+        }
+
+        client = nil
+
+        #expect(probe.freedStrings == 1)
+        #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
+    func rustRuntimeClientTurnsNullNormalResponseIntoFfiError() async throws {
+        let probe = RuntimeCFunctionProbe()
+        probe.createSessionResponse = nil
+        var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())
+
+        do {
+            _ = try await client?.createSession()
+            Issue.record("Expected createSession to throw")
+        } catch let error as RuntimeBridgeError {
+            #expect(error.kind == "ffi")
+            #expect(error.message == "runtime bridge returned a null string")
+        }
+
+        client = nil
+
+        #expect(probe.freedStrings == 0)
+        #expect(probe.freedRuntimeHandles == 1)
+    }
+
+    @Test
     func runtimeBridgeErrorUsesBridgeMessageAsLocalizedDescription() {
         let error = RuntimeBridgeError(
             kind: "provider",
@@ -548,7 +588,7 @@ struct RustRuntimeClientContractTests {
 }
 
 private final class RuntimeCFunctionProbe: @unchecked Sendable {
-    var createSessionResponse = #""session_1""#
+    var createSessionResponse: String? = #""session_1""#
     var freedStrings = 0
     var freedRuntimeHandles = 0
     var registeredSchemaJson: String?
@@ -636,7 +676,10 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     }
 
     func createSession(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
-        makeCString(createSessionResponse)
+        guard let createSessionResponse else {
+            return nil
+        }
+        return makeCString(createSessionResponse)
     }
 
     func sessionIds(_ runtime: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {

@@ -4,6 +4,8 @@ import Foundation
 import CLocalAgentRuntime
 #endif
 
+internal let runtimeEventStreamBufferLimit = 512
+
 public struct RuntimeBridgeError: LocalizedError, Equatable, Sendable, CustomStringConvertible {
     public var kind: String
     public var message: String
@@ -851,7 +853,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
     ) -> AgentTurnStreamDTO {
         do {
             let json = try encode(result)
-            return makeTurnStream { callback, userData in
+            return makeTurnStream(initialRunId: runId) { callback, userData in
                 runId.withCString { runIdPointer in
                     json.withCString { resultPointer in
                         self.functions.submitToolResultStreaming(
@@ -919,6 +921,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
     }
 
     private func makeTurnStream(
+        initialRunId: String? = nil,
         call: @escaping @Sendable (
             RustRuntimeCFunctionTable.RuntimeEventCallback?,
             UnsafeMutableRawPointer?
@@ -926,10 +929,25 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
     ) -> AgentTurnStreamDTO {
         let (events, continuation) = AsyncThrowingStream.makeStream(
             of: RuntimeEventDTO.self,
-            throwing: Error.self
+            throwing: Error.self,
+            bufferingPolicy: .bufferingOldest(runtimeEventStreamBufferLimit)
         )
-        let result = Task.detached { [self] in
-            let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
+        let callbackBox = RuntimeEventCallbackBox(
+            continuation: continuation,
+            initialRunId: initialRunId
+        )
+        continuation.onTermination = { @Sendable termination in
+            let runId = callbackBox.terminate()
+            if case .cancelled = termination {
+                continuation.finish(throwing: CancellationError())
+                if let runId {
+                    Task.detached { [self] in
+                        _ = try? await self.cancel(runId: runId)
+                    }
+                }
+            }
+        }
+        let result = Task.detached { [self, callbackBox] in
             let opaqueCallbackBox = Unmanaged.passRetained(callbackBox).toOpaque()
             defer {
                 Unmanaged<RuntimeEventCallbackBox>
@@ -972,10 +990,14 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
     ) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
         let (events, continuation) = AsyncThrowingStream.makeStream(
             of: RuntimeEventDTO.self,
-            throwing: Error.self
+            throwing: Error.self,
+            bufferingPolicy: .bufferingOldest(runtimeEventStreamBufferLimit)
         )
-        Task.detached { [self] in
-            let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
+        let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
+        continuation.onTermination = { @Sendable _ in
+            _ = callbackBox.terminate()
+        }
+        Task.detached { [self, callbackBox] in
             let opaqueCallbackBox = Unmanaged.passRetained(callbackBox).toOpaque()
             defer {
                 Unmanaged<RuntimeEventCallbackBox>
@@ -1044,12 +1066,33 @@ private struct SendMessageRequest: Encodable {
 
 private final class RuntimeEventCallbackBox: @unchecked Sendable {
     private let continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation
+    private let lock = NSLock()
+    private var terminated = false
+    private var latestRunId: String?
 
-    init(continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation) {
+    init(
+        continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation,
+        initialRunId: String? = nil
+    ) {
         self.continuation = continuation
+        self.latestRunId = initialRunId
+    }
+
+    func terminate() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        terminated = true
+        return latestRunId
     }
 
     func yield(eventJson: UnsafePointer<CChar>?) -> CInt {
+        lock.lock()
+        if terminated {
+            lock.unlock()
+            return 1
+        }
+        lock.unlock()
+
         guard let eventJson else {
             continuation.finish(throwing: RuntimeBridgeError(
                 kind: "ffi",
@@ -1064,8 +1107,18 @@ private final class RuntimeEventCallbackBox: @unchecked Sendable {
                 RuntimeEventDTO.self,
                 from: Data(eventText.utf8)
             )
-            continuation.yield(event)
-            return 0
+            lock.lock()
+            latestRunId = event.runId ?? latestRunId
+            lock.unlock()
+
+            switch continuation.yield(event) {
+            case .enqueued(_):
+                return 0
+            case .dropped(_), .terminated:
+                return 1
+            @unknown default:
+                return 1
+            }
         } catch {
             continuation.finish(throwing: error)
             return 1
