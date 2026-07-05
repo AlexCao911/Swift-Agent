@@ -60,10 +60,12 @@ impl ConversationCommitService {
         persist: impl FnOnce(&CompletedRunRecord) -> Result<String, ConversationCommitError>,
     ) -> Result<AssistantCommitRecord, ConversationCommitError> {
         let key = idempotency_key(run_id, final_message_id);
-        let mut commits = self
-            .commits
-            .lock()
-            .expect("conversation commit state poisoned");
+        let mut commits = self.commits.lock().map_err(|_| {
+            ConversationCommitError::new(
+                "conversation_commit.lock_poisoned",
+                "conversation commit state lock poisoned",
+            )
+        })?;
         if let Some(existing) = commits.get(&key) {
             if existing.conversation_run_frame_ref() != expected_frame_ref {
                 return Err(ConversationCommitError::new(
@@ -104,10 +106,10 @@ impl ConversationCommitService {
     }
 
     pub fn commit_count(&self) -> usize {
-        self.commits
-            .lock()
-            .expect("conversation commit state poisoned")
-            .len()
+        let Ok(commits) = self.commits.lock() else {
+            return 0;
+        };
+        commits.len()
     }
 }
 

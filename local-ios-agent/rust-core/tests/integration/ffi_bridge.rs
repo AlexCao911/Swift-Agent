@@ -263,6 +263,31 @@ fn c_abi_streaming_callback_non_zero_returns_ffi_error_envelope() {
     }
 }
 
+#[test]
+fn ffi_reachable_modules_do_not_unwrap_poisoned_locks() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let files = [
+        "src/conversation/runtime_branch_reader.rs",
+        "src/conversation/frame_repository.rs",
+        "src/conversation/commit_service.rs",
+        "src/execution/event_log.rs",
+        "src/execution/completed_run_registry.rs",
+        "src/execution/execution_service.rs",
+    ];
+
+    for file in files {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        assert!(
+            !text.contains(".expect(\"") || !text.contains("poisoned"),
+            "{file} must not use expect on poisoned FFI-reachable locks"
+        );
+        assert!(
+            !text.contains(".lock().unwrap()"),
+            "{file} must not unwrap FFI-reachable lock acquisition"
+        );
+    }
+}
+
 fn decode(json: &str) -> Value {
     serde_json::from_str(json).unwrap()
 }

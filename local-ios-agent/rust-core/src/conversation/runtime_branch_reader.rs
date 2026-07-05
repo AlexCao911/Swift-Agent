@@ -34,7 +34,7 @@ where
         let events = self
             .runtime
             .lock()
-            .expect("runtime branch reader poisoned")
+            .map_err(|_| AgentError::Ffi("runtime branch reader lock poisoned".into()))?
             .active_branch_events(session_id, branch_head_id.cloned())?;
         let resolved_head = events.last().map(|event| event.id.clone());
         Ok((resolved_head, events))

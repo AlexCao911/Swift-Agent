@@ -309,14 +309,14 @@ impl ActiveExecutionRunRegistry {
     fn record(&self, run_id: &str, frame_ref: ConversationRunFrameRef, plan: ExecutionPlan) {
         self.inner
             .lock()
-            .expect("active execution run registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(run_id.to_string(), ActiveExecutionRun { frame_ref, plan });
     }
 
     fn get(&self, run_id: &str) -> Option<ActiveExecutionRun> {
         self.inner
             .lock()
-            .expect("active execution run registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(run_id)
             .cloned()
     }

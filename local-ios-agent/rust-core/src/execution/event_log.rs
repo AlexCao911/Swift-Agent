@@ -78,7 +78,7 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
             let mut inner = self
                 .inner
                 .lock()
-                .expect("execution event repository poisoned");
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let events = inner.entry(run_id.clone()).or_default();
             let sequence = events.last().map(|event| event.sequence + 1).unwrap_or(1);
             let event = ExecutionEvent {
@@ -93,7 +93,7 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
 
         self.subscribers
             .lock()
-            .expect("execution event subscriber registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .entry(run_id)
             .or_default()
             .retain(|sender| sender.send(event.clone()).is_ok());
@@ -103,7 +103,7 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
     fn replay_after(&self, run_id: &str, from_sequence: u64) -> Vec<ExecutionEvent> {
         self.inner
             .lock()
-            .expect("execution event repository poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(run_id)
             .cloned()
             .unwrap_or_default()
@@ -116,7 +116,7 @@ impl ExecutionEventRepository for InMemoryExecutionEventRepository {
         let (sender, receiver) = mpsc::channel();
         self.subscribers
             .lock()
-            .expect("execution event subscriber registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .entry(run_id.to_string())
             .or_default()
             .push(sender);

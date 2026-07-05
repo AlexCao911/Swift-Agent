@@ -21,19 +21,17 @@ pub struct InMemoryConversationFrameRepository {
 
 impl ConversationFrameRepository for InMemoryConversationFrameRepository {
     fn put(&self, frame: ConversationRunFrame) {
-        self.inner
-            .lock()
-            .expect("conversation frame repository poisoned")
-            .insert(frame.frame_ref().frame_id().clone(), frame);
+        let Ok(mut frames) = self.inner.lock() else {
+            return;
+        };
+        frames.insert(frame.frame_ref().frame_id().clone(), frame);
     }
 
     fn get(&self, frame_ref: &ConversationRunFrameRef) -> Option<ConversationRunFrame> {
-        let frame = self
-            .inner
-            .lock()
-            .expect("conversation frame repository poisoned")
-            .get(frame_ref.frame_id())
-            .cloned();
+        let Ok(frames) = self.inner.lock() else {
+            return None;
+        };
+        let frame = frames.get(frame_ref.frame_id()).cloned();
         frame.filter(|frame| frame.frame_ref() == frame_ref)
     }
 }

@@ -41,14 +41,14 @@ impl CompletedRunRegistry {
         };
         self.inner
             .lock()
-            .expect("completed run registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(idempotency_key(run_id, final_message_id), record);
     }
 
     pub fn get(&self, run_id: &str, final_message_id: &str) -> Option<CompletedRunRecord> {
         self.inner
             .lock()
-            .expect("completed run registry poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&idempotency_key(run_id, final_message_id))
             .cloned()
     }
