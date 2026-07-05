@@ -30,9 +30,10 @@ struct RustRuntimeClientStreamingTests {
     }
 
     @Test
-    func streamBufferOverflowFinishesWithBridgeError() async throws {
+    func streamBufferOverflowDropsEventsWithoutFailingRun() async throws {
         let probe = StreamingRuntimeCFunctionProbe()
         probe.eventsToEmit = runtimeEventStreamBufferLimit + 2
+        probe.waitForFinalResult = false
         let client = try RustRuntimeClient(functions: probe.table())
 
         let stream = client.sendMessageStream(
@@ -41,15 +42,52 @@ struct RustRuntimeClientStreamingTests {
             text: "overflow"
         )
 
-        do {
-            _ = try await stream.result.value
-            Issue.record("Expected stream result to throw after callback returned non-zero")
-        } catch let error as RuntimeBridgeError {
-            #expect(error.kind == "ffi")
-            #expect(error.message.contains("stream event callback returned non-zero"))
+        let result = try await stream.result.value
+
+        #expect(result.state == .completed)
+        #expect(probe.callbackReturnValues.count == runtimeEventStreamBufferLimit + 2)
+        #expect(probe.callbackReturnValues.allSatisfy { $0 == 0 })
+    }
+
+    @Test
+    func cancellingBeforeFirstEventCancelsRunWhenRunIdArrives() async throws {
+        let probe = StreamingRuntimeCFunctionProbe()
+        probe.waitBeforeFirstEvent = true
+        let client = try RustRuntimeClient(functions: probe.table())
+
+        let stream = client.sendMessageStream(
+            sessionId: "session_1",
+            parentEventId: nil,
+            text: "cancel-before-first-event"
+        )
+
+        let consumer = Task<Void, Error> {
+            for try await _ in stream.events {}
         }
 
-        #expect(probe.callbackReturnValues.contains { $0 != 0 })
+        consumer.cancel()
+        probe.allowFirstEvent()
+
+        do {
+            _ = try await stream.result.value
+        } catch {
+            // The cancelled Swift stream may make the legacy Rust streaming call
+            // return its callback-aborted error. The important contract here is
+            // that the run id is still routed to cancel.
+        }
+
+        for _ in 0..<100 where !probe.cancelledRunIds.contains("run_1") {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(probe.cancelledRunIds == ["run_1"])
+
+        do {
+            try await consumer.value
+            Issue.record("Expected consumer task to be cancelled")
+        } catch {
+            #expect(error is CancellationError)
+        }
     }
 
     @Test
@@ -100,14 +138,18 @@ struct RustRuntimeClientStreamingTests {
 private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
     private let finalResultGate = DispatchSemaphore(value: 0)
+    private let firstEventGate = DispatchSemaphore(value: 0)
     private let secondEventGate = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var returnedFinalResult = false
     private var callbackStatuses: [CInt] = []
+    private var cancelRequests: [String] = []
 
     var sentMessageJson: String?
     var eventsToEmit = 1
+    var waitBeforeFirstEvent = false
     var waitBeforeSecondEvent = false
+    var waitForFinalResult = true
 
     var didReturnFinalResult: Bool {
         lock.lock()
@@ -121,8 +163,18 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
         return callbackStatuses
     }
 
+    var cancelledRunIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelRequests
+    }
+
     func allowFinalResult() {
         finalResultGate.signal()
+    }
+
+    func allowFirstEvent() {
+        firstEventGate.signal()
     }
 
     func allowSecondEvent() {
@@ -152,8 +204,12 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
             submitToolResult: { _, _, _ in Self.makeCString(Self.turnJson(state: "completed")) },
             submitToolResultStreaming: { _, _, _, _, _ in Self.makeCString(Self.turnJson(state: "completed")) },
             submitApprovalResponse: { _, _ in Self.makeCString(Self.turnJson(state: "completed")) },
-            cancel: { _, _ in
-                Self.makeCString("""
+            cancel: { _, runIdPointer in
+                let runId = String(cString: runIdPointer!)
+                self.lock.lock()
+                self.cancelRequests.append(runId)
+                self.lock.unlock()
+                return Self.makeCString("""
                 {
                   "id": "entry_cancelled",
                   "session_id": "session_1",
@@ -216,6 +272,9 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
     ) -> UnsafeMutablePointer<CChar>? {
         sentMessageJson = String(cString: inputJson!)
         for index in 0..<eventsToEmit {
+            if waitBeforeFirstEvent && index == 0 {
+                _ = firstEventGate.wait(timeout: .now() + 2)
+            }
             if waitBeforeSecondEvent && index == 1 {
                 _ = secondEventGate.wait(timeout: .now() + 2)
             }
@@ -234,7 +293,9 @@ private final class StreamingRuntimeCFunctionProbe: @unchecked Sendable {
                 return Self.makeCString(#"{"error":{"kind":"ffi","message":"stream event callback returned non-zero"}}"#)
             }
         }
-        _ = finalResultGate.wait(timeout: .now() + 2)
+        if waitForFinalResult {
+            _ = finalResultGate.wait(timeout: .now() + 2)
+        }
         lock.lock()
         returnedFinalResult = true
         lock.unlock()

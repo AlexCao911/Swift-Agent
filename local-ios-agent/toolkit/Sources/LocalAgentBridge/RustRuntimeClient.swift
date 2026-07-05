@@ -934,17 +934,19 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
         )
         let callbackBox = RuntimeEventCallbackBox(
             continuation: continuation,
-            initialRunId: initialRunId
+            initialRunId: initialRunId,
+            onCancelRun: { [self] runId in
+                Task.detached { [self] in
+                    _ = try? await self.cancel(runId: runId)
+                }
+            }
         )
         continuation.onTermination = { @Sendable termination in
-            let runId = callbackBox.terminate()
             if case .cancelled = termination {
+                callbackBox.terminate(cancelRun: true)
                 continuation.finish(throwing: CancellationError())
-                if let runId {
-                    Task.detached { [self] in
-                        _ = try? await self.cancel(runId: runId)
-                    }
-                }
+            } else {
+                callbackBox.terminate(cancelRun: false)
             }
         }
         let result = Task.detached { [self, callbackBox] in
@@ -995,7 +997,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
         )
         let callbackBox = RuntimeEventCallbackBox(continuation: continuation)
         continuation.onTermination = { @Sendable _ in
-            _ = callbackBox.terminate()
+            callbackBox.terminate(cancelRun: false)
         }
         Task.detached { [self, callbackBox] in
             let opaqueCallbackBox = Unmanaged.passRetained(callbackBox).toOpaque()
@@ -1066,33 +1068,39 @@ private struct SendMessageRequest: Encodable {
 
 private final class RuntimeEventCallbackBox: @unchecked Sendable {
     private let continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation
+    private let onCancelRun: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var terminated = false
+    private var cancelRequested = false
     private var latestRunId: String?
+    private var cancellationDispatchedRunId: String?
 
     init(
         continuation: AsyncThrowingStream<RuntimeEventDTO, Error>.Continuation,
-        initialRunId: String? = nil
+        initialRunId: String? = nil,
+        onCancelRun: (@Sendable (String) -> Void)? = nil
     ) {
         self.continuation = continuation
         self.latestRunId = initialRunId
+        self.onCancelRun = onCancelRun
     }
 
-    func terminate() -> String? {
+    func terminate(cancelRun: Bool) {
+        let runIdToCancel: String?
         lock.lock()
-        defer { lock.unlock() }
         terminated = true
-        return latestRunId
+        if cancelRun {
+            cancelRequested = true
+        }
+        runIdToCancel = pendingCancellationRunIdLocked()
+        lock.unlock()
+
+        if let runIdToCancel {
+            onCancelRun?(runIdToCancel)
+        }
     }
 
     func yield(eventJson: UnsafePointer<CChar>?) -> CInt {
-        lock.lock()
-        if terminated {
-            lock.unlock()
-            return 1
-        }
-        lock.unlock()
-
         guard let eventJson else {
             continuation.finish(throwing: RuntimeBridgeError(
                 kind: "ffi",
@@ -1107,14 +1115,28 @@ private final class RuntimeEventCallbackBox: @unchecked Sendable {
                 RuntimeEventDTO.self,
                 from: Data(eventText.utf8)
             )
+
+            let shouldReject: Bool
+            let runIdToCancel: String?
             lock.lock()
             latestRunId = event.runId ?? latestRunId
+            shouldReject = terminated
+            runIdToCancel = pendingCancellationRunIdLocked()
             lock.unlock()
+
+            if let runIdToCancel {
+                onCancelRun?(runIdToCancel)
+            }
+            if shouldReject {
+                return 1
+            }
 
             switch continuation.yield(event) {
             case .enqueued(_):
                 return 0
-            case .dropped(_), .terminated:
+            case .dropped(_):
+                return 0
+            case .terminated:
                 return 1
             @unknown default:
                 return 1
@@ -1123,6 +1145,17 @@ private final class RuntimeEventCallbackBox: @unchecked Sendable {
             continuation.finish(throwing: error)
             return 1
         }
+    }
+
+    private func pendingCancellationRunIdLocked() -> String? {
+        guard cancelRequested,
+              let latestRunId,
+              cancellationDispatchedRunId != latestRunId
+        else {
+            return nil
+        }
+        cancellationDispatchedRunId = latestRunId
+        return latestRunId
     }
 }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard,
 };
 
 use crate::context::{PromptFrame, PromptMessage};
@@ -36,26 +36,63 @@ pub struct ProviderCancellationRegistry {
 }
 
 impl ProviderCancellationRegistry {
+    fn lock(&self) -> MutexGuard<'_, HashMap<RunId, CancellationToken>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn insert(&self, run_id: RunId, token: CancellationToken) {
-        self.inner.lock().unwrap().insert(run_id, token);
+        self.lock().insert(run_id, token);
     }
 
     pub fn remove(&self, run_id: &RunId) {
-        self.inner.lock().unwrap().remove(run_id);
+        self.lock().remove(run_id);
     }
 
     pub fn contains(&self, run_id: &RunId) -> bool {
-        self.inner.lock().unwrap().contains_key(run_id)
+        self.lock().contains_key(run_id)
     }
 
     pub fn signal(&self, run_id: &RunId) -> bool {
-        let token = self.inner.lock().unwrap().get(run_id).cloned();
+        let token = self.lock().get(run_id).cloned();
         if let Some(token) = token {
             token.cancel();
             true
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_registry_tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn registry_recovers_after_poisoned_lock() {
+        let registry = ProviderCancellationRegistry::default();
+        let poisoned = registry.clone();
+        let _ = thread::spawn(move || {
+            let _guard = poisoned
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("poison provider cancellation registry");
+        })
+        .join();
+
+        let run_id = RunId("run_poisoned".to_string());
+        let token = CancellationToken::default();
+        registry.insert(run_id.clone(), token.clone());
+
+        assert!(registry.contains(&run_id));
+        assert!(registry.signal(&run_id));
+        assert!(token.is_cancelled());
+
+        registry.remove(&run_id);
+        assert!(!registry.contains(&run_id));
     }
 }
 

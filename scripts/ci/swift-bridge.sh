@@ -6,6 +6,8 @@ CI_HOME="$ROOT/.ci-home"
 CLANG_CACHE="$ROOT/local-ios-agent/toolkit/.build/clang-module-cache"
 SWIFT_SCRATCH="$ROOT/local-ios-agent/toolkit/.build/ci"
 
+"$ROOT/local-ios-agent/scripts/check-rust-ffi-panic-strategy.sh" "$ROOT/local-ios-agent"
+
 cd "$ROOT/local-ios-agent/rust-core"
 cargo build
 

@@ -268,6 +268,7 @@ fn ffi_reachable_modules_do_not_unwrap_poisoned_locks() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let files = [
         "src/conversation/runtime_branch_reader.rs",
+        "src/core/provider.rs",
         "src/conversation/frame_repository.rs",
         "src/conversation/commit_service.rs",
         "src/execution/event_log.rs",
