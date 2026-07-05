@@ -1028,21 +1028,23 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_string_free(value: *mut c_ch
 pub unsafe extern "C" fn local_agent_runtime_bridge_create_session(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.create_session_json())
+    c_runtime_result(runtime, || bridge_ref(runtime)?.create_session_json())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_session_ids(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.session_ids_json())
+    c_runtime_result(runtime, || bridge_ref(runtime)?.session_ids_json())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_conversation_summaries(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.conversation_summaries_json())
+    c_runtime_result(runtime, || {
+        bridge_ref(runtime)?.conversation_summaries_json()
+    })
 }
 
 #[no_mangle]
@@ -1051,7 +1053,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_fork_session(
     session_id: *const c_char,
     leaf_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let session_id = c_str_arg(session_id, "session_id")?;
         let leaf_id = c_str_arg(leaf_id, "leaf_id")?;
         bridge_ref(runtime)?.fork_session_json(session_id, leaf_id)
@@ -1064,7 +1066,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_active_branch(
     session_id: *const c_char,
     leaf_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let session_id = c_str_arg(session_id, "session_id")?;
         let leaf_id = optional_c_str_arg(leaf_id, "leaf_id")?;
         bridge_ref(runtime)?.active_branch_json(session_id, leaf_id)
@@ -1076,7 +1078,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_archive_session(
     runtime: *mut RuntimeJsonBridge,
     session_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let session_id = c_str_arg(session_id, "session_id")?;
         bridge_ref(runtime)?.archive_session_json(session_id)
     })
@@ -1088,7 +1090,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_rename_session(
     session_id: *const c_char,
     title: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let session_id = c_str_arg(session_id, "session_id")?;
         let title = c_str_arg(title, "title")?;
         bridge_ref(runtime)?.rename_session_json(session_id, title)
@@ -1100,7 +1102,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_update_runtime_options(
     runtime: *mut RuntimeJsonBridge,
     options_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let options_json = c_str_arg(options_json, "options_json")?;
         bridge_ref(runtime)?.update_runtime_options_json(options_json)
     })
@@ -1111,7 +1113,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_delete_session(
     runtime: *mut RuntimeJsonBridge,
     session_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let session_id = c_str_arg(session_id, "session_id")?;
         bridge_ref(runtime)?.delete_session_json(session_id)
     })
@@ -1122,7 +1124,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_register_tool_schema(
     runtime: *mut RuntimeJsonBridge,
     schema_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let schema_json = c_str_arg(schema_json, "schema_json")?;
         bridge_ref(runtime)?.register_tool_schema_json(schema_json)
     })
@@ -1133,7 +1135,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_permission_state(
     runtime: *mut RuntimeJsonBridge,
     state_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let state_json = c_str_arg(state_json, "state_json")?;
         bridge_ref(runtime)?.set_permission_state_json(state_json)
     })
@@ -1144,7 +1146,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_send_message(
     runtime: *mut RuntimeJsonBridge,
     input_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let input_json = c_str_arg(input_json, "input_json")?;
         bridge_ref(runtime)?.send_message_json(input_json)
     })
@@ -1157,7 +1159,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_send_message_streaming(
     on_event: RuntimeEventCallback,
     user_data: *mut c_void,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let input_json = c_str_arg(input_json, "input_json")?;
         bridge_ref(runtime)?.send_message_streaming_json(input_json, |event_json| {
             dispatch_stream_event(on_event, user_data, event_json)
@@ -1169,14 +1171,18 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_send_message_streaming(
 pub unsafe extern "C" fn local_agent_runtime_bridge_pending_tool_requests(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.pending_tool_requests_json())
+    c_runtime_result(runtime, || {
+        bridge_ref(runtime)?.pending_tool_requests_json()
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_pending_approval_requests(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.pending_approval_requests_json())
+    c_runtime_result(runtime, || {
+        bridge_ref(runtime)?.pending_approval_requests_json()
+    })
 }
 
 #[no_mangle]
@@ -1185,7 +1191,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result(
     run_id: *const c_char,
     result_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let run_id = c_str_arg(run_id, "run_id")?;
         let result_json = c_str_arg(result_json, "result_json")?;
         bridge_ref(runtime)?.submit_tool_result_json(run_id, result_json)
@@ -1200,7 +1206,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result_streaming
     on_event: RuntimeEventCallback,
     user_data: *mut c_void,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let run_id = c_str_arg(run_id, "run_id")?;
         let result_json = c_str_arg(result_json, "result_json")?;
         bridge_ref(runtime)?.submit_tool_result_streaming_json(run_id, result_json, |event_json| {
@@ -1214,7 +1220,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_approval_response(
     runtime: *mut RuntimeJsonBridge,
     response_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let response_json = c_str_arg(response_json, "response_json")?;
         bridge_ref(runtime)?.submit_approval_response_json(response_json)
     })
@@ -1225,7 +1231,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_cancel(
     runtime: *mut RuntimeJsonBridge,
     run_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let run_id = c_str_arg(run_id, "run_id")?;
         bridge_ref(runtime)?.cancel_json(run_id)
     })
@@ -1235,21 +1241,23 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_cancel(
 pub unsafe extern "C" fn local_agent_runtime_bridge_latest_prompt_debug_snapshot(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.latest_prompt_debug_snapshot_json())
+    c_runtime_result(runtime, || {
+        bridge_ref(runtime)?.latest_prompt_debug_snapshot_json()
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_provider_profiles(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.provider_profiles_json())
+    c_runtime_result(runtime, || bridge_ref(runtime)?.provider_profiles_json())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_active_provider(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
-    c_result(|| bridge_ref(runtime)?.active_provider_json())
+    c_runtime_result(runtime, || bridge_ref(runtime)?.active_provider_json())
 }
 
 #[no_mangle]
@@ -1257,7 +1265,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_provider(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.set_provider_json(request_json)
     })
@@ -1268,7 +1276,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_start_run(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.start_run_json(request_json)
     })
@@ -1279,7 +1287,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_list_agent_profiles(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.list_agent_profiles_json(request_json)
     })
@@ -1290,7 +1298,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_build_agent(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.build_agent_json(request_json)
     })
@@ -1301,7 +1309,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_prepare_user_turn(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.prepare_user_turn_json(request_json)
     })
@@ -1312,7 +1320,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_observe_events(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.observe_events_json(request_json)
     })
@@ -1325,7 +1333,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_observe_events_streaming(
     on_event: RuntimeEventCallback,
     user_data: *mut c_void,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.observe_events_stream_json(request_json, |event_json| {
             dispatch_stream_event(on_event, user_data, &event_json)
@@ -1339,7 +1347,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_commit_assistant_result(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.commit_assistant_result_json(request_json)
     })
@@ -1350,7 +1358,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_approve_tool(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.approve_tool_json(request_json)
     })
@@ -1361,7 +1369,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_cancel_run(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
         bridge_ref(runtime)?.cancel_run_json(request_json)
     })
@@ -1372,7 +1380,7 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_load_debug_archive(
     runtime: *mut RuntimeJsonBridge,
     run_id: *const c_char,
 ) -> *mut c_char {
-    c_result(|| {
+    c_runtime_result(runtime, || {
         let run_id = c_str_arg(run_id, "run_id")?;
         bridge_ref(runtime)?.load_debug_archive_json(run_id)
     })
@@ -2186,6 +2194,7 @@ fn execution_event_kind_json(code: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn c_result(run: impl FnOnce() -> Result<String, AgentError>) -> *mut c_char {
     let json = match catch_unwind(AssertUnwindSafe(run)) {
         Ok(Ok(json)) => json,
@@ -2519,6 +2528,41 @@ mod ffi_boundary_tests {
             panic_payload_message(non_string_payload.as_ref()),
             "non-string panic payload"
         );
+    }
+
+    #[test]
+    fn caught_panic_taints_runtime_and_follow_up_call_returns_stable_error() {
+        let runtime = Box::into_raw(Box::new(RuntimeJsonBridge::new(AgentRuntime::new(
+            AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            },
+        ))));
+
+        unsafe {
+            let panic_json = take_c_string(c_runtime_result(
+                runtime,
+                || -> Result<String, AgentError> {
+                    panic!("taint this runtime");
+                },
+            ));
+            let panic_value: Value = serde_json::from_str(&panic_json).unwrap();
+            assert_eq!(panic_value["error"]["kind"], "panic");
+
+            let follow_up_json = take_c_string(local_agent_runtime_bridge_session_ids(runtime));
+            let follow_up_value: Value = serde_json::from_str(&follow_up_json).unwrap();
+            assert_eq!(follow_up_value["error"]["kind"], "ffi");
+            assert!(follow_up_value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("tainted"));
+
+            local_agent_runtime_bridge_free(runtime);
+        }
     }
 }
 

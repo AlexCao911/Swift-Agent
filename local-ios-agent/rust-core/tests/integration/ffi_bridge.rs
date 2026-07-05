@@ -152,6 +152,14 @@ unsafe extern "C" fn observe_stream_event(
     0
 }
 
+unsafe extern "C" fn reject_stream_event(
+    event_json: *const c_char,
+    _user_data: *mut c_void,
+) -> i32 {
+    assert!(!event_json.is_null());
+    1
+}
+
 unsafe extern "C" fn collect_execution_event(
     event_json: *const c_char,
     user_data: *mut c_void,
@@ -213,6 +221,43 @@ fn c_abi_streaming_send_message_emits_events_during_provider_callback() {
 
         assert_eq!(decode(&result)["state"], "completed");
         assert!(observed_delta.load(Ordering::SeqCst));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_release_functions_accept_null() {
+    unsafe {
+        local_agent_runtime_bridge_string_free(std::ptr::null_mut());
+        local_agent_runtime_bridge_free(std::ptr::null_mut());
+    }
+}
+
+#[test]
+fn c_abi_streaming_callback_non_zero_returns_ffi_error_envelope() {
+    unsafe {
+        let runtime = Box::into_raw(Box::new(bridge()));
+        let session = take_bridge_string(local_agent_runtime_bridge_create_session(runtime));
+        let session_id = decode(&session).as_str().unwrap().to_string();
+        let input = CString::new(format!(
+            r#"{{"session_id":"{session_id}","parent_event_id":null,"text":"hello"}}"#
+        ))
+        .unwrap();
+
+        let result = take_bridge_string(local_agent_runtime_bridge_send_message_streaming(
+            runtime,
+            input.as_ptr(),
+            Some(reject_stream_event),
+            std::ptr::null_mut(),
+        ));
+        let result = decode(&result);
+
+        assert_eq!(result["error"]["kind"], "ffi");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stream event callback returned non-zero"));
 
         local_agent_runtime_bridge_free(runtime);
     }
