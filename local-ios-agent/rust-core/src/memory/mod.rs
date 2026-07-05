@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod blob;
 pub mod branch_summary;
+pub mod context_policy;
 pub mod contribution;
 pub mod event_store;
 pub mod http_connector;
@@ -16,6 +17,7 @@ pub mod sqlite;
 pub use audit::AuditRow;
 pub use blob::BlobRecord;
 pub use branch_summary::BranchSummaryRecord;
+pub use context_policy::{MemoryExtractionPolicy, MemoryInjectionPolicy, MemorySelectionPolicy};
 pub use contribution::{
     Confidence, MemoryContribution, MemoryContributionBuilder, MemoryContributionId, Provenance,
     ProvenanceSourceKind, SensitivityLevel,
@@ -24,7 +26,7 @@ pub use event_store::EventStore;
 pub use http_connector::HttpMemoryConnectorSpec;
 pub use in_memory::InMemoryEventStore;
 pub use long_term::LongTermMemoryRecord;
-pub use memory_candidate::MemoryCandidate;
+pub use memory_candidate::{MemoryCandidate, MemoryReviewState};
 pub use profile::MemoryExternalWriteFailedEvent;
 pub use profile::{MemoryAuditEvent, MemoryProfile, RetentionPolicy};
 pub use provider::{

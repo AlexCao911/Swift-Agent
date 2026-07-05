@@ -3,6 +3,7 @@ pub mod assembler;
 pub mod branch_projector;
 pub mod budget;
 pub mod compaction;
+pub mod contribution;
 pub mod debug_snapshot;
 pub mod graph;
 pub mod injection_policy;
@@ -25,6 +26,7 @@ pub use assembler::{
 pub use branch_projector::BranchProjector;
 pub use budget::ContextBudget;
 pub use compaction::CompactionCandidate;
+pub use contribution::{ContextContribution, ContextContributionBundle};
 pub use debug_snapshot::PromptDebugSnapshot;
 pub use graph::ContextGraph;
 pub use injection_policy::ContextInjectionPolicy;

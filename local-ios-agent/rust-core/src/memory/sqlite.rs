@@ -338,10 +338,10 @@ impl SqliteEventStore {
 
         let rows = statement
             .query_map([], |row| {
-                Ok(MemoryCandidate {
-                    text: row.get(0)?,
-                    confirmed: row.get::<_, i64>(1)? != 0,
-                })
+                Ok(MemoryCandidate::persisted(
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? != 0,
+                ))
             })
             .map_err(storage_error)?;
 

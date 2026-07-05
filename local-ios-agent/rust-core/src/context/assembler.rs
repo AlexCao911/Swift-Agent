@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::context::{
-    ContextArchive, ContextBudget, ContextGraph, ContextPolicy, ContextPreview, ContextSegment,
-    ContextSensitivity, ModelInputMessage, ModelInputMessages, ModelInputRole, PromptMessage,
-    SegmentSource,
+    ContextArchive, ContextBudget, ContextContributionBundle, ContextGraph, ContextPolicy,
+    ContextPreview, ContextSegment, ContextSensitivity, ModelInputMessage, ModelInputMessages,
+    ModelInputRole, PromptMessage, SegmentSource,
 };
 use crate::memory::{
     MemoryContribution, ProvenanceSourceKind, SensitivityLevel as MemorySensitivity,
@@ -55,6 +55,11 @@ impl ContextAssembler {
 
     pub fn with_segment(mut self, segment: ContextSegment) -> Self {
         self.segments.push(segment);
+        self
+    }
+
+    pub fn with_contributions(mut self, bundle: ContextContributionBundle) -> Self {
+        self.segments.extend(bundle.segments());
         self
     }
 

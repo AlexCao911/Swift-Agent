@@ -137,7 +137,7 @@ impl Provenance {
 }
 
 impl Confidence {
-    fn new(value: f32) -> Result<Self, AgentError> {
+    pub fn new(value: f32) -> Result<Self, AgentError> {
         if !(0.0..=1.0).contains(&value) || value.is_nan() {
             return Err(AgentError::Storage(format!(
                 "memory contribution confidence must be between 0.0 and 1.0: {value}"

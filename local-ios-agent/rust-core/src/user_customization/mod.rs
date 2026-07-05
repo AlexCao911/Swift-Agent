@@ -13,6 +13,7 @@ pub mod component_version;
 pub mod readiness;
 pub mod safety_review;
 pub mod settings_schema;
+pub mod skill_package;
 pub mod user_component;
 
 pub use agent_profile::{
@@ -45,5 +46,9 @@ pub use safety_review::{SafetyReview, SafetyReviewFinding};
 pub use settings_schema::{
     SettingsControlKind, SettingsFieldDescriptor, SettingsOptionDescriptor, SettingsValueRange,
     UserSettingsSchema,
+};
+pub use skill_package::{
+    InMemorySkillRepository, SkillActivation, SkillActivationInput, SkillPackage,
+    SkillPackageManifest, SkillRepository, SkillSandboxPolicy,
 };
 pub use user_component::{UserComponent, UserComponentDraft, UserComponentId};

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::user_customization::skill_package::SkillPackageManifest;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
@@ -105,8 +107,19 @@ impl ComponentContent {
     }
 
     pub fn skill(markdown: impl Into<String>) -> Self {
+        Self::skill_package(
+            SkillPackageManifest::new("skill.legacy.markdown", "0.0.0", "Legacy Skill"),
+            markdown,
+        )
+    }
+
+    pub fn skill_package(
+        manifest: SkillPackageManifest,
+        instructions_markdown: impl Into<String>,
+    ) -> Self {
         Self::Skill(SkillComponentContent {
-            markdown: markdown.into(),
+            manifest,
+            markdown: instructions_markdown.into(),
         })
     }
 
@@ -180,7 +193,23 @@ pub struct InstructionComponentContent {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SkillComponentContent {
+    #[serde(default = "default_skill_manifest")]
+    pub manifest: SkillPackageManifest,
     pub markdown: String,
+}
+
+impl SkillComponentContent {
+    pub fn manifest(&self) -> &SkillPackageManifest {
+        &self.manifest
+    }
+
+    pub fn instructions_markdown(&self) -> &str {
+        &self.markdown
+    }
+}
+
+fn default_skill_manifest() -> SkillPackageManifest {
+    SkillPackageManifest::new("skill.legacy.markdown", "0.0.0", "Legacy Skill")
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

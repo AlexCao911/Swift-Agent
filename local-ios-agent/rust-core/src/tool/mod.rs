@@ -22,4 +22,6 @@ pub use recipe_compiler::{
 pub use registry::ToolRegistry;
 pub use result::{RetentionPolicy, Sensitivity, ToolResult};
 pub use router::{ToolRouteOutcome, ToolRouter};
-pub use schema::{ToolCall, ToolSchema};
+pub use schema::{
+    HostPlatform, ToolCall, ToolCapabilityDescriptor, ToolSchema, ToolSchemaMetadata,
+};

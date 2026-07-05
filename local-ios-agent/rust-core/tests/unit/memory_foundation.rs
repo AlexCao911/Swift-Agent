@@ -74,10 +74,7 @@ fn sqlite_persists_confirmed_memory_candidate() {
 
     assert_eq!(
         reopened.memory_candidates().unwrap(),
-        vec![MemoryCandidate {
-            text: "likes local agents".into(),
-            confirmed: true,
-        }]
+        vec![MemoryCandidate::new("likes local agents").confirm()]
     );
 }
 
