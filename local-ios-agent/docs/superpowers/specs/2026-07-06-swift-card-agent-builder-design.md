@@ -38,6 +38,8 @@ Useful system capability surfaces:
 - Document Picker / Files integration: allow user-selected files to become tool inputs.
 - PhotosUI / PhotoKit: user-selected images as tool or context inputs.
 - EventKit / Reminders: calendar and reminder tools.
+- MapKit / Core Location / Apple Maps handoff: place search, geocoding, routing handoff, and map display.
+- SafariServices / WebKit / URLSession: user-visible web opening, in-app web viewing, and bounded URL fetching.
 - Contacts, CoreLocation, AVFoundation, Speech, VisionKit, UserNotifications: optional native tool families gated by permissions.
 - App Clips: future public mini-app/acquisition surface, not the first implementation path for the local agent product.
 
@@ -69,6 +71,22 @@ References:
 - AVFoundation capture authorization: https://developer.apple.com/documentation/avfoundation/requesting-authorization-to-capture-and-save-media
 - Speech recognition: https://developer.apple.com/documentation/speech/sfspeechrecognizer
 - VisionKit: https://developer.apple.com/documentation/visionkit
+- MapKit: https://developer.apple.com/documentation/mapkit
+- MKLocalSearch: https://developer.apple.com/documentation/mapkit/mklocalsearch
+- MKMapItem `openInMaps`: https://developer.apple.com/documentation/mapkit/mkmapitem/openinmaps(launchoptions:)
+- SafariServices / SFSafariViewController: https://developer.apple.com/documentation/safariservices/sfsafariviewcontroller
+- WebKit / WKWebView: https://developer.apple.com/documentation/webkit/wkwebview
+- URLSession: https://developer.apple.com/documentation/foundation/urlsession
+
+Verified Apple DocC details that affect tool design:
+
+- `MKLocalSearch` is for map-based address and point-of-interest searches and is available across iOS, iPadOS, macOS, Mac Catalyst, tvOS, visionOS, and watchOS.
+- `MKMapItem.openInMaps(launchOptions:)` opens the Maps app to display a map item.
+- `SFSafariViewController` provides a visible standard web-browsing interface.
+- `WKWebView` displays interactive web content for an in-app browser.
+- `URLSession` coordinates network data transfer tasks.
+- `AppIntent`, `AppEntity`, and `AppShortcutsProvider` are available from iOS 16 era platforms and are the right surface for app-owned actions discoverable by Shortcuts/Siri/system experiences.
+- EventKit calendar access is not one permission: full event access, write-only event access, and user-confirmed event editing have different privacy and UX implications.
 
 ### Tool Design Principles From Apple APIs
 
@@ -176,6 +194,9 @@ Each manifest must declare:
 - permission scope
 - required Info.plist privacy keys or entitlements
 - whether foreground UI is required
+- OS/platform availability
+- region/service availability policy
+- fallback behavior when the service is unavailable or restricted
 - risk level: read-only, confirmation required, destructive
 - approval policy: never, per-call, per-session, or always-deny-until-configured
 - sensitivity of returned data
@@ -279,7 +300,9 @@ First implementation families:
 | Files | `files.pick_document`, `files.read_attachment`, `files.summarize_metadata` | UIDocumentPicker / file importer / UTType | User-mediated | Build first as attachment-based tools. |
 | Photos | `photos.pick_images`, `photos.describe_attachment_metadata` | PhotosUI / `PhotosPicker` | User-mediated | Build first as selected-photo attachment tools. |
 | Share Input | `share.capture_input`, `share.list_recent_captures` | Share Extension / app groups | User-mediated or extension input | Build after Files/Photos. |
-| App Actions | `agent.start_chat`, `agent.capture_text`, `agent.open_builder` | App Intents / AppEntity / AppShortcutsProvider | System action adapter | Build as thin outward adapters, not model-only tools. |
+| App Actions / Shortcuts | `agent.start_chat`, `agent.capture_text`, `agent.continue_conversation`, `agent.open_builder` | App Intents / AppEntity / AppShortcutsProvider | System action adapter | Compatibility-priority. Build as app-owned outward adapters, not arbitrary shortcut execution. |
+| Maps | `maps.search_places`, `maps.geocode`, `maps.reverse_geocode`, `maps.open_place_in_maps`, `maps.open_route_in_maps` | MapKit / `MKLocalSearch` / `CLGeocoder` / `MKMapItem.openInMaps` | Background for search/geocode; user-visible system action for open-in-Maps | Compatibility-priority with service availability fallback. |
+| Web | `web.open_url`, `web.fetch_url_text`, `web.summarize_attachment_or_url_metadata` | SFSafariViewController / WKWebView / URLSession | User-visible for open/browse; background only for bounded fetch with approval | Compatibility-priority with network policy, content limits, and regional fallback. |
 | Notifications | `notifications.schedule_local`, `notifications.cancel_scheduled` | UserNotifications | Background after permission and confirmation | Later, because side effects need clear approval UX. |
 | Contacts | `contacts.search`, `contacts.get_contact` | Contacts / `CNContactStore` | Background after permission | Later; high privacy sensitivity. |
 | Location | `location.current`, `location.reverse_geocode` | CoreLocation | User-mediated or background with strict permission | Later; high sensitivity and context leakage risk. |
@@ -288,7 +311,7 @@ First implementation families:
 | Clipboard | `clipboard.import_text`, `clipboard.copy_text` | UIPasteboard | User-mediated | Later; only through explicit user action. |
 | App Meta | `native.list_tools`, `native.permission_status` | App-local services | Background | Keep. Existing tools are useful for debug and builder readiness. |
 
-Later families:
+Later privacy-sensitive families:
 
 - Contacts.
 - Location.
@@ -297,16 +320,22 @@ Later families:
 - Vision document scan.
 - HealthKit or HomeKit only if the product has a clear user-facing need.
 
-Deferred or prohibited first-stage tools:
+Hidden or unsafe variants that must not enter the first-stage catalog:
 
-- arbitrary execution of user Shortcuts
 - arbitrary file-system browsing
 - silent clipboard reads
 - silent camera or microphone capture
-- arbitrary URL opening as a model side effect
 - health or home automation controls
+- hidden execution of user-created Shortcuts without a visible user action
+- hidden URL opening or navigation as a model side effect
 
-These may become explicit user-mediated actions later, but they should not enter the initial agent tool catalog.
+These are different from the compatible tool families above. They may become explicit user-mediated actions later, but they should not enter the initial agent tool catalog as hidden model side effects.
+
+Compatibility-first families:
+
+- App-owned Shortcuts/App Intents are first-class system action adapters.
+- Maps tools are first-class as long as they expose service availability and fallback clearly.
+- Web tools are first-class when split into user-visible open/browse actions and bounded, approved fetch/read actions.
 
 ### Permission Gateway
 
@@ -319,7 +348,39 @@ NativePermissionGateway
   openSettings(scope)
 ```
 
-The gateway translates high-level scopes such as `calendar.events`, `reminders`, `photos.selected`, or `files.user_selected` into Apple authorization APIs and Info.plist requirements.
+The gateway translates high-level scopes into Apple authorization APIs and Info.plist requirements. These scopes should be specific enough to match Apple's privacy prompts instead of collapsing a whole framework into one bucket.
+
+Initial scopes:
+
+```text
+calendar.events.read_full
+  EventKit full access, for search/read tools.
+  Requires NSCalendarsFullAccessUsageDescription.
+
+calendar.events.write_only
+  EventKit write-only access, for direct create/update tools that do not read existing events.
+  Requires NSCalendarsWriteOnlyAccessUsageDescription.
+
+calendar.events.user_confirmed_create
+  Uses EventKitUI edit flow where the user confirms saving in system UI.
+  Prefer for low-friction event creation when the app does not need to inspect existing calendars.
+
+reminders.full
+  EventKit reminders full access, for search/read/write reminder tools.
+  Requires NSRemindersFullAccessUsageDescription.
+
+files.user_selected
+  User-mediated document picker; returns attachment references.
+
+photos.user_selected
+  User-mediated PhotosPicker selection; returns attachment references.
+
+web.fetch.approved
+  Bounded network fetch with user/agent policy approval and content-size limits.
+
+maps.search
+  MapKit search/geocode capability with service-availability fallback.
+```
 
 Agent Builder uses the same gateway to show readiness badges before a user publishes an agent.
 
@@ -344,6 +405,9 @@ First system-level tool adapters:
 - File import/read through user-selected documents.
 - Photo import through PhotosUI user selection.
 - Share input capture through Share Extension.
+- Maps search/geocode/open-in-Maps through MapKit.
+- Web open/browse/fetch through SafariServices/WebKit/URLSession.
+- App-owned Shortcut/App Intent actions for agent capture, start chat, and continue conversation.
 - Permission/status inspection through app-local metadata.
 
 First App Entities:
@@ -619,6 +683,9 @@ Apple system API
 - Reminder create/search through EventKit reminders.
 - Files document picker and attachment read path.
 - Photos picker and image attachment path.
+- Maps search/geocode and open-in-Maps handoff.
+- Web open URL and bounded fetch/read path.
+- App-owned Shortcuts/App Intents for agent capture/start/continue actions.
 - App meta tools for tool listing and permission status.
 
 ### Phase 3: Agent Builder Cards
@@ -656,9 +723,12 @@ Apple system API
 - Tool cards show permission, risk, and availability.
 - Tool cards show whether a tool is background, user-mediated, or a system action adapter.
 - Tool cards, Rust schema export, and runtime approval policy derive from the same `NativeToolManifest`.
+- Tool cards show OS, region/service availability, and fallback behavior.
+- EventKit calendar tools use distinct read-full, write-only, and user-confirmed-create permission scopes.
 - Files and Photos tools return attachment references, not arbitrary raw paths.
 - User-mediated tools route through one interaction broker instead of presenting UI from random tool code.
 - Attachment-producing tools and attachment-consuming tools compose through `NativeAttachmentStore`.
+- Shortcuts/App Intents, Maps, and Web are treated as compatibility-priority tool families, not blanket-deferred capabilities.
 - Context cards can be reordered/configured through presets.
 - Context Pipeline has a Rust-backed preview with ordered segments, token estimates, and privacy warnings.
 - Agent Builder exposes a clear draft lifecycle from editing to published.
