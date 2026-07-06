@@ -108,6 +108,78 @@ System action adapter
 
 This prevents a model tool call from silently crossing iOS privacy or UI boundaries. A user-mediated tool may produce a pending interaction event; the app presents the picker or permission sheet; the selected result is returned to Rust as a normal tool result.
 
+### Tool Design Doctrine
+
+The toolkit should be designed scientifically: every tool should have a clear source capability, one manifest, one execution path, one permission model, one audit story, and one fallback story.
+
+The design principles are:
+
+```text
+Most basic tools
+  Prove the agent can safely inspect and act on local system information.
+  Examples: native.list_tools, native.permission_status, calendar.search_events, reminders.create.
+
+Most important tools
+  Support Tool Belt and Context Pipeline directly.
+  Examples: files.pick_document -> files.read_attachment, photos.pick_images -> attachment metadata.
+
+Most clever tools
+  Compose multiple safe capabilities through attachments instead of giving the model raw platform access.
+  Example: share.capture_input -> attachment_id -> vision.extract_text_from_attachment -> context preview.
+
+Most interesting tools
+  Make agents touchable outside the main app through app-owned system actions.
+  Examples: agent.capture_text, agent.start_chat, agent.continue_conversation.
+```
+
+The important distinction is composition, not API count. A tool family becomes powerful when its output is a clean input to another family:
+
+```text
+User-mediated capture
+  -> NativeAttachmentStore
+  -> attachment-consuming analysis tool
+  -> structured result
+  -> ContextPreviewService
+  -> Context Pipeline injection decision
+```
+
+Tool design rules:
+
+- Prefer explicit user-mediated capture over silent data access.
+- Prefer attachment references over raw file paths, photo-library paths, or security-scoped URLs in model-visible output.
+- Prefer app-owned App Intents and Shortcuts over arbitrary execution of user-created Shortcuts.
+- Prefer visible Safari/Maps handoff for navigation-style actions; allow background URL or map search only when bounded, approved, and auditable.
+- Prefer narrow permission scopes that match Apple's privacy prompts.
+- Prefer runtime availability and fallback over deleting a capability because one region, device, or OS version may not support it.
+- Keep tool cards, schema export, runtime approval, permission readiness, and audit metadata derived from the same manifest.
+
+The toolkit should be decomposed into small, testable roles:
+
+```text
+NativeToolManifest
+  Describes capability, schema, permission, risk, approval, availability, fallback, and audit policy.
+
+NativeToolExecutor
+  Runs background tools and dispatches user-mediated tools through the interaction broker.
+
+NativeInteractionBroker
+  Owns foreground UI flows such as pickers, scanners, camera, microphone, permission repair, and app handoff.
+
+NativeAttachmentStore
+  Owns selected files, photos, scans, audio, shared input, metadata, retention, and byte access.
+
+NativePermissionGateway
+  Maps high-level scopes to Apple authorization APIs and Info.plist requirements.
+
+SystemActionAdapter
+  Owns app-provided App Intents, App Shortcuts, entities, widgets, and system-facing actions.
+
+ContextPreviewService
+  Shows what tool schemas, tool results, memory, skill, and attachment-derived content would contribute to model context.
+```
+
+No layer should bypass another layer. Views render cards; they do not execute tools. Tools execute through the toolkit; they do not present random UI. Rust assembles final context; Swift previews and explains it.
+
 ## Architecture
 
 ```text
@@ -205,6 +277,8 @@ Each manifest must declare:
 - audit label and result summary policy
 
 `NativeToolSchema` can remain as the bridge-facing projection, but Swift code should not hand-maintain separate card, schema, and approval definitions.
+
+Manifest fields are not UI decoration. They are contract inputs for Builder rendering, Rust bridge schema export, runtime approval, permission readiness, test fixtures, and audit output.
 
 ### NativeTool
 
@@ -720,6 +794,7 @@ Apple system API
 - User can create or edit an agent from cards.
 - Tool Belt and Context Pipeline are the visual center of the builder.
 - Native tools are listed from `LocalNativeToolkit`, not hardcoded in views.
+- Tool architecture keeps manifest, executor, interaction broker, attachment store, permission gateway, system action adapter, and context preview as separate roles.
 - Tool cards show permission, risk, and availability.
 - Tool cards show whether a tool is background, user-mediated, or a system action adapter.
 - Tool cards, Rust schema export, and runtime approval policy derive from the same `NativeToolManifest`.
@@ -735,3 +810,4 @@ Apple system API
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
 - iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
+- ViewModels do not execute system tools directly or assemble final model context.
