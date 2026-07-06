@@ -19,17 +19,22 @@ Prompt, memory, skills, model settings, and runtime options matter, but they are
 
 ## Research Notes
 
-### Apple System Surfaces
+### Apple System Capability APIs
 
-The app should use App Intents and Shortcuts as system entry points, not as the internal tool runtime. Apple positions App Intents as the way to expose app actions and content to Shortcuts, Siri, Spotlight, widgets, and controls. The first pass should expose a small set of useful verbs and narrow entities, not mirror every app screen.
+The next Swift stage should be understood as two parallel workstreams:
 
-Useful system surfaces:
+```text
+1. Tools Toolkit: wrap iOS system capabilities as safe, permissioned agent tools.
+2. App Product: build the visible Conversation Workspace and card-based Agent Builder.
+```
 
-- App Intents: start chat, open an agent, open Agent Builder, continue a conversation, capture text into an agent.
-- App Shortcuts: discoverable user-facing shortcuts for the above actions.
-- Siri and Spotlight: route into high-value app actions and app entities.
-- Widgets and controls: later reuse the same intent/entity layer for quick entry points.
-- Share Extension: later feed selected text/files/URLs into an agent.
+App Intents, Shortcuts, Siri, Spotlight, widgets, extensions, and Apple framework APIs are not just "entry points" into the app. In this design, they are system capability surfaces that Swift can wrap into tool families when the platform allows it.
+
+Useful system capability surfaces:
+
+- App Intents / App Shortcuts: expose selected app actions to Shortcuts/Siri and, where useful, model a shortcut-facing action surface.
+- Siri / Spotlight / widgets / controls: discover or trigger high-value app actions through the same thin intent layer.
+- Share Extension: receive selected text/files/URLs as tool or conversation inputs.
 - Document Picker / Files integration: allow user-selected files to become tool inputs.
 - PhotosUI / PhotoKit: user-selected images as tool or context inputs.
 - EventKit / Reminders: calendar and reminder tools.
@@ -39,10 +44,10 @@ Useful system surfaces:
 Important boundary:
 
 ```text
-System Intent Surface != Agent Tool Runtime
+System Capability APIs -> Swift Tools Toolkit -> Rust tool result
 ```
 
-System intents let the user or OS invoke app actions. Agent tools are actions the model may request during a run and must pass app permission, approval, and audit rules.
+The model does not call Apple APIs directly. Swift wraps allowed system capabilities as tool adapters, applies permission and approval rules, and returns structured results to Rust.
 
 References:
 
@@ -82,11 +87,11 @@ Swift App
     Tool executor
     Rust tool schema export
 
-  System Intent Surface
-    App Intents
-    App Shortcuts
-    AppEntity / EntityQuery
-    one app routing handoff
+  System Capability Toolkit
+    App Intents / Shortcuts adapters
+    Share / Files / Photos adapters
+    Calendar / Reminders adapters
+    permission and approval UX
 ```
 
 Rust remains the agent kernel. It owns conversation frames, execution snapshots, final context assembly, tool routing semantics, security metadata, and durable run behavior.
@@ -166,9 +171,11 @@ The gateway translates high-level scopes such as `calendar.events`, `reminders`,
 
 Agent Builder uses the same gateway to show readiness badges before a user publishes an agent.
 
-### System Intent Surface
+### System Capability Toolkit
 
-App Intents should stay thin and call app/domain services. They should not become a second tool runtime.
+System capability adapters should stay thin and call app/domain services. They should not become business logic containers.
+
+Some adapters expose app actions outward through App Intents and Shortcuts. Other adapters wrap iOS frameworks inward as model-callable native tools. Both should share permission, schema, availability, and audit metadata through `LocalNativeToolkit`.
 
 First App Intents:
 
@@ -177,6 +184,15 @@ First App Intents:
 - Continue Conversation.
 - Capture Text to Agent.
 - Open Model Center.
+
+First system-level tool adapters:
+
+- Calendar search through EventKit.
+- Reminder creation through EventKit reminders.
+- File import/read through user-selected documents.
+- Photo import through PhotosUI user selection.
+- Share input capture through Share Extension.
+- Permission/status inspection through app-local metadata.
 
 First App Entities:
 
@@ -326,14 +342,14 @@ Conversation Workspace
   -> Rust commits final assistant result
 ```
 
-### System Shortcut
+### System Capability Action
 
 ```text
-Shortcut / Siri / Spotlight
-  -> AppIntent
-  -> AppIntentRouter
-  -> Main app route
-  -> Conversation Workspace or Agent Builder
+Apple system API
+  -> Swift system adapter
+  -> LocalNativeToolkit permission/approval
+  -> NativeTool result or app route
+  -> Rust execution or Swift app workflow
 ```
 
 ## What Not To Build Now
@@ -369,11 +385,12 @@ Shortcut / Siri / Spotlight
 - Show pipeline preview in Swift without letting Swift assemble final model input.
 - Add presets: Focused, Full Context, Private.
 
-### Phase 4: System Intents Refresh
+### Phase 4: System Capability Adapters
 
-- Replace page-heavy shortcuts with action-first intents.
+- Replace page-heavy shortcuts with action-first intents where an outward system action is useful.
 - Add `AgentEntity` and `ConversationEntity`.
 - Add Open Agent Builder, Start Chat with Agent, Continue Conversation, Capture Text to Agent.
+- Keep the same toolkit metadata shape for inward native tools and outward App Intent actions.
 
 ### Phase 5: Tool Expansion
 
@@ -390,4 +407,4 @@ Shortcut / Siri / Spotlight
 - Context cards can be reordered/configured through presets.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
-- App Intents expose useful actions, not a mirror of every screen.
+- iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
