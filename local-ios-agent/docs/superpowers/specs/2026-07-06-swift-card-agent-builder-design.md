@@ -139,7 +139,7 @@ The existing `LocalNativeToolkit` is the right home for platform tools. It shoul
 ```text
 LocalNativeToolkit
   NativeTool
-  NativeToolSchema
+  NativeToolManifest
   NativeToolCatalog
   NativeToolExecutor
   NativePermissionGateway
@@ -149,11 +149,22 @@ LocalNativeToolkit
   NativeToolTestHarness
 ```
 
-### NativeTool
+### NativeToolManifest
 
-A native tool is a model-callable host action.
+`NativeToolManifest` is the single source of truth for a tool's product card, Rust schema export, and runtime approval behavior.
 
-Each tool must declare:
+```text
+NativeToolManifest
+  -> Tool Card rendering
+  -> Rust tool schema export
+  -> Runtime approval policy
+  -> Native permission readiness
+  -> Audit and retention metadata
+```
+
+This avoids a dangerous split where Builder shows one risk or permission policy while runtime execution uses another.
+
+Each manifest must declare:
 
 - stable tool name
 - user-facing title and description
@@ -166,9 +177,25 @@ Each tool must declare:
 - required Info.plist privacy keys or entitlements
 - whether foreground UI is required
 - risk level: read-only, confirmation required, destructive
+- approval policy: never, per-call, per-session, or always-deny-until-configured
 - sensitivity of returned data
 - retention policy for results
 - availability on current platform/device
+- audit label and result summary policy
+
+`NativeToolSchema` can remain as the bridge-facing projection, but Swift code should not hand-maintain separate card, schema, and approval definitions.
+
+### NativeTool
+
+A native tool is a model-callable host action.
+
+Each `NativeTool` must expose its manifest and implement execution:
+
+```text
+NativeTool
+  manifest: NativeToolManifest
+  execute(argumentsJson) -> ToolResultDTO
+```
 
 The model never calls iOS frameworks directly. Rust requests a tool call; Swift receives the tool request; `LocalNativeToolkit` executes the platform adapter; the result returns to Rust as a structured tool result.
 
@@ -210,6 +237,36 @@ Each attachment should record:
 - sensitivity
 
 The model receives metadata and a stable attachment id. Swift and Rust resolve the actual bytes only through approved tool paths.
+
+The intended composition pattern is:
+
+```text
+user-mediated input tool
+  -> attachment_id + metadata
+  -> attachment-consuming tool
+  -> structured result
+  -> optional context pipeline injection
+```
+
+Examples:
+
+```text
+photos.pick_images
+  -> attachment_id
+vision.extract_text_from_attachment(attachment_id)
+  -> extracted text
+Context Pipeline
+  -> inject selected extracted content
+```
+
+```text
+files.pick_document
+  -> attachment_id
+files.read_attachment(attachment_id)
+  -> text or metadata
+Context Pipeline
+  -> inject selected file excerpt
+```
 
 ### Tool Families From Apple APIs
 
@@ -335,6 +392,7 @@ Tool cards:
 - describe what the agent can do
 - show required permission
 - show risk level
+- show approval policy from the same `NativeToolManifest` used at runtime
 - expose configuration such as confirmation policy
 - preview input/output schema
 - support a test action
@@ -371,6 +429,38 @@ The first version should ship with presets:
 
 Custom freeform context pipelines can come later.
 
+### ContextPreviewService
+
+Context preview is a core Agent Builder capability, not an optional debug add-on. Users need to understand what a configured Context Pipeline will cause the model to see.
+
+Swift should not assemble final model input locally. Instead, it asks Rust for a preview:
+
+```text
+ContextPreviewService
+  input:
+    agent draft
+    sample user message
+    optional sample conversation id / branch
+
+  output:
+    ordered context segments
+    source labels
+    token estimate
+    sensitivity labels
+    privacy warnings
+    omitted segment reasons
+    assembly trace id
+```
+
+The preview is allowed to be approximate, but the ordering, source labels, and policy warnings must come from the same Rust context assembly policy used during execution.
+
+Builder uses this service for:
+
+- Context Pipeline preview panel.
+- Card-level token and privacy warnings.
+- Publish readiness validation.
+- Debugging why memory, skill, or tool schema did or did not enter context.
+
 ### Supporting Cards
 
 Supporting cards include:
@@ -406,9 +496,62 @@ CardInspectorViewModel
 
 AgentValidationService
   combines Rust draft validation, native permission readiness, model readiness
+
+ContextPreviewService
+  requests Rust-backed preview/trace for a draft and sample user message
 ```
 
 The existing `AgentBuilderViewModel` can evolve from readiness-only into the screen coordinator, but it should not absorb tool execution, permission implementation, or context assembly.
+
+### Agent Draft Lifecycle
+
+Agent Builder needs a clear draft state machine. Without it, users cannot tell whether they are editing a saved draft, a valid unpublished draft, or an agent already used by an active conversation.
+
+```text
+empty
+  -> editing
+
+editing
+  -> dirty
+  -> validating
+
+dirty
+  -> validating
+
+validating
+  -> invalid
+  -> readyToPublish
+
+invalid
+  -> editing
+
+readyToPublish
+  -> publishing
+
+publishing
+  -> published
+  -> publishFailed
+
+publishFailed
+  -> editing
+
+published
+  -> editing
+```
+
+State meanings:
+
+- `empty`: no local draft has been loaded or created.
+- `editing`: draft is loaded and matches the last local save point.
+- `dirty`: user changed one or more cards after the last save/validation.
+- `validating`: Rust/profile validation, toolkit permission readiness, and model readiness are running.
+- `invalid`: draft has blocking validation issues.
+- `readyToPublish`: draft passes validation and can become the active agent profile.
+- `publishing`: publish request is in flight.
+- `published`: draft has become a published agent profile revision.
+- `publishFailed`: publish failed and the user can retry or edit.
+
+Published conversations should reference the published profile revision they started with. Editing an agent should create a new draft/revision instead of mutating the profile under an active run.
 
 ## Data Flow
 
@@ -421,6 +564,7 @@ User edits cards
        Rust validateDraft
        Native permission readiness
        Model/runtime readiness
+       ContextPreviewService policy warnings
   -> Publish AgentProfile
   -> Conversation Workspace can start run with profile id
 ```
@@ -462,7 +606,7 @@ Apple system API
 
 ### Phase 1: Native Toolkit Catalog
 
-- Extend tool schema metadata for card rendering.
+- Introduce `NativeToolManifest` as the single source for card rendering, schema export, approval policy, readiness, and audit metadata.
 - Add permission gateway abstraction.
 - Add platform availability and readiness reporting.
 - Add tool mode metadata: background, user-mediated, system action adapter.
@@ -482,11 +626,12 @@ Apple system API
 - Build card-based Agent Builder screen.
 - Render Tool Belt and Context Pipeline as the main canvas.
 - Add inspector for selected card.
+- Add draft lifecycle states: empty, editing, dirty, validating, invalid, readyToPublish, publishing, published, publishFailed.
 - Save draft locally and validate through Rust bridge.
 
 ### Phase 4: Context Preview
 
-- Add Rust-backed context preview/trace endpoint if needed.
+- Add Rust-backed `ContextPreviewService` as a first-class Builder service.
 - Show pipeline preview in Swift without letting Swift assemble final model input.
 - Add presets: Focused, Full Context, Private.
 
@@ -510,9 +655,13 @@ Apple system API
 - Native tools are listed from `LocalNativeToolkit`, not hardcoded in views.
 - Tool cards show permission, risk, and availability.
 - Tool cards show whether a tool is background, user-mediated, or a system action adapter.
+- Tool cards, Rust schema export, and runtime approval policy derive from the same `NativeToolManifest`.
 - Files and Photos tools return attachment references, not arbitrary raw paths.
 - User-mediated tools route through one interaction broker instead of presenting UI from random tool code.
+- Attachment-producing tools and attachment-consuming tools compose through `NativeAttachmentStore`.
 - Context cards can be reordered/configured through presets.
+- Context Pipeline has a Rust-backed preview with ordered segments, token estimates, and privacy warnings.
+- Agent Builder exposes a clear draft lifecycle from editing to published.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
 - iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
