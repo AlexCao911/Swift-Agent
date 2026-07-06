@@ -53,10 +53,42 @@ References:
 
 - Apple App Intents: https://developer.apple.com/documentation/appintents
 - Making actions and content discoverable: https://developer.apple.com/documentation/appintents/making-actions-and-content-discoverable-and-widely-available
+- AppIntent `openAppWhenRun`: https://developer.apple.com/documentation/appintents/appintent/openappwhenrun
 - App Clips: https://developer.apple.com/documentation/appclip
 - EventKit: https://developer.apple.com/documentation/eventkit
+- EKEventStore: https://developer.apple.com/documentation/eventkit/ekeventstore
 - PhotosUI: https://developer.apple.com/documentation/photosui
+- PhotosPicker: https://developer.apple.com/documentation/photosui/photospicker
 - File Provider: https://developer.apple.com/documentation/fileprovider
+- UIDocumentPickerViewController: https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller
+- App extensions: https://developer.apple.com/documentation/technologyoverviews/app-extensions
+- Uniform Type Identifiers: https://developer.apple.com/documentation/UniformTypeIdentifiers
+- Contacts: https://developer.apple.com/documentation/contacts/cncontactstore
+- Core Location: https://developer.apple.com/documentation/corelocation/cllocationmanager
+- User Notifications: https://developer.apple.com/documentation/usernotifications/unusernotificationcenter
+- AVFoundation capture authorization: https://developer.apple.com/documentation/avfoundation/requesting-authorization-to-capture-and-save-media
+- Speech recognition: https://developer.apple.com/documentation/speech/sfspeechrecognizer
+- VisionKit: https://developer.apple.com/documentation/visionkit
+
+### Tool Design Principles From Apple APIs
+
+Apple's APIs imply three tool modes. The toolkit should encode this explicitly instead of pretending every tool is a silent background function.
+
+```text
+Background tool
+  Runs without presenting UI after permission and approval are satisfied.
+  Example: calendar.search_events.
+
+User-mediated tool
+  Requires foreground UI or a system picker.
+  Example: files.pick_document, photos.pick_images, vision.scan_document.
+
+System action adapter
+  Exposes or routes a Local Agent action through App Intents, Shortcuts, Siri, Spotlight, widgets, or controls.
+  Example: Start Chat with Agent, Capture Text to Agent.
+```
+
+This prevents a model tool call from silently crossing iOS privacy or UI boundaries. A user-mediated tool may produce a pending interaction event; the app presents the picker or permission sheet; the selected result is returned to Rust as a normal tool result.
 
 ## Architecture
 
@@ -111,6 +143,8 @@ LocalNativeToolkit
   NativeToolCatalog
   NativeToolExecutor
   NativePermissionGateway
+  NativeInteractionBroker
+  NativeAttachmentStore
   NativeToolSchemaExport
   NativeToolTestHarness
 ```
@@ -126,7 +160,11 @@ Each tool must declare:
 - JSON input schema
 - output shape
 - capability id
+- backing Apple framework or app service
+- tool mode: background, user-mediated, or system action adapter
 - permission scope
+- required Info.plist privacy keys or entitlements
+- whether foreground UI is required
 - risk level: read-only, confirmation required, destructive
 - sensitivity of returned data
 - retention policy for results
@@ -134,18 +172,64 @@ Each tool must declare:
 
 The model never calls iOS frameworks directly. Rust requests a tool call; Swift receives the tool request; `LocalNativeToolkit` executes the platform adapter; the result returns to Rust as a structured tool result.
 
-### Tool Families
+### NativeInteractionBroker
+
+Some Apple APIs require user interaction by design. The toolkit should not hide this behind a fake synchronous call.
+
+```text
+Rust tool call
+  -> Swift detects user-mediated tool
+  -> NativeInteractionBroker creates pending interaction
+  -> App presents picker/sheet/camera/document UI
+  -> NativeAttachmentStore persists selected input if needed
+  -> Swift returns structured ToolResultDTO to Rust
+```
+
+The broker is the right home for:
+
+- file pickers
+- photo pickers
+- document scanners
+- camera or microphone capture
+- share-extension handoff
+- permission repair flows
+
+### NativeAttachmentStore
+
+User-selected files, images, audio, and scanned documents should be represented as app-local attachment references instead of raw paths passed through the model.
+
+Each attachment should record:
+
+- attachment id
+- source family: files, photos, share, camera, scanner, audio
+- content type / UTI
+- original display name
+- sandbox location or security-scoped bookmark when applicable
+- size and lightweight metadata
+- retention policy
+- sensitivity
+
+The model receives metadata and a stable attachment id. Swift and Rust resolve the actual bytes only through approved tool paths.
+
+### Tool Families From Apple APIs
 
 First implementation families:
 
-- Calendar: search events, inspect event details.
-- Reminders: create reminder, search reminders.
-- Files: import/read user-selected files, summarize file metadata.
-- Photos: import user-selected images.
-- Share Input: receive text/URL/file from share sheet into a conversation or agent.
-- Notifications: schedule local reminder-style notification after explicit approval.
-- Clipboard: read/write only through explicit user action or visible confirmation.
-- App Meta: list enabled native tools, permission status, runtime availability.
+| Family | Candidate tools | Apple APIs | Mode | First-stage status |
+|---|---|---|---|---|
+| Calendar | `calendar.search_events`, `calendar.get_event` | EventKit / `EKEventStore` | Background after permission | Build first. Existing search tool is the seed. |
+| Reminders | `reminders.create`, `reminders.search`, `reminders.complete` | EventKit reminders / `EKEventStore` | Background after permission and approval | Build first. Existing create tool is the seed. |
+| Files | `files.pick_document`, `files.read_attachment`, `files.summarize_metadata` | UIDocumentPicker / file importer / UTType | User-mediated | Build first as attachment-based tools. |
+| Photos | `photos.pick_images`, `photos.describe_attachment_metadata` | PhotosUI / `PhotosPicker` | User-mediated | Build first as selected-photo attachment tools. |
+| Share Input | `share.capture_input`, `share.list_recent_captures` | Share Extension / app groups | User-mediated or extension input | Build after Files/Photos. |
+| App Actions | `agent.start_chat`, `agent.capture_text`, `agent.open_builder` | App Intents / AppEntity / AppShortcutsProvider | System action adapter | Build as thin outward adapters, not model-only tools. |
+| Notifications | `notifications.schedule_local`, `notifications.cancel_scheduled` | UserNotifications | Background after permission and confirmation | Later, because side effects need clear approval UX. |
+| Contacts | `contacts.search`, `contacts.get_contact` | Contacts / `CNContactStore` | Background after permission | Later; high privacy sensitivity. |
+| Location | `location.current`, `location.reverse_geocode` | CoreLocation | User-mediated or background with strict permission | Later; high sensitivity and context leakage risk. |
+| Speech | `speech.transcribe_audio_attachment`, `speech.record_and_transcribe` | Speech / AVFoundation | User-mediated | Later; recording requires foreground UX. |
+| Vision | `vision.scan_document`, `vision.extract_text_from_image` | VisionKit / Vision | User-mediated for scan; background for existing image attachment | Later, useful for document workflows. |
+| Clipboard | `clipboard.import_text`, `clipboard.copy_text` | UIPasteboard | User-mediated | Later; only through explicit user action. |
+| App Meta | `native.list_tools`, `native.permission_status` | App-local services | Background | Keep. Existing tools are useful for debug and builder readiness. |
 
 Later families:
 
@@ -155,6 +239,17 @@ Later families:
 - Speech transcription.
 - Vision document scan.
 - HealthKit or HomeKit only if the product has a clear user-facing need.
+
+Deferred or prohibited first-stage tools:
+
+- arbitrary execution of user Shortcuts
+- arbitrary file-system browsing
+- silent clipboard reads
+- silent camera or microphone capture
+- arbitrary URL opening as a model side effect
+- health or home automation controls
+
+These may become explicit user-mediated actions later, but they should not enter the initial agent tool catalog.
 
 ### Permission Gateway
 
@@ -370,33 +465,43 @@ Apple system API
 - Extend tool schema metadata for card rendering.
 - Add permission gateway abstraction.
 - Add platform availability and readiness reporting.
+- Add tool mode metadata: background, user-mediated, system action adapter.
+- Add required system API metadata: framework, permission scope, Info.plist keys, entitlements.
 - Keep existing calendar/reminder/meta tools as first real examples.
 
-### Phase 2: Agent Builder Cards
+### Phase 2: First System Tool Adapters
+
+- Calendar search and event detail through EventKit.
+- Reminder create/search through EventKit reminders.
+- Files document picker and attachment read path.
+- Photos picker and image attachment path.
+- App meta tools for tool listing and permission status.
+
+### Phase 3: Agent Builder Cards
 
 - Build card-based Agent Builder screen.
 - Render Tool Belt and Context Pipeline as the main canvas.
 - Add inspector for selected card.
 - Save draft locally and validate through Rust bridge.
 
-### Phase 3: Context Preview
+### Phase 4: Context Preview
 
 - Add Rust-backed context preview/trace endpoint if needed.
 - Show pipeline preview in Swift without letting Swift assemble final model input.
 - Add presets: Focused, Full Context, Private.
 
-### Phase 4: System Capability Adapters
+### Phase 5: App Intents and System Action Adapters
 
 - Replace page-heavy shortcuts with action-first intents where an outward system action is useful.
 - Add `AgentEntity` and `ConversationEntity`.
 - Add Open Agent Builder, Start Chat with Agent, Continue Conversation, Capture Text to Agent.
 - Keep the same toolkit metadata shape for inward native tools and outward App Intent actions.
 
-### Phase 5: Tool Expansion
+### Phase 6: Tool Expansion
 
-- Add Files and Photos tools with user-selected inputs.
 - Add Share Extension capture path.
 - Add notification/clipboard tools only with explicit user confirmation.
+- Add Contacts, Location, Speech, and Vision only after the permission UX and attachment model are stable.
 
 ## Acceptance Criteria
 
@@ -404,6 +509,9 @@ Apple system API
 - Tool Belt and Context Pipeline are the visual center of the builder.
 - Native tools are listed from `LocalNativeToolkit`, not hardcoded in views.
 - Tool cards show permission, risk, and availability.
+- Tool cards show whether a tool is background, user-mediated, or a system action adapter.
+- Files and Photos tools return attachment references, not arbitrary raw paths.
+- User-mediated tools route through one interaction broker instead of presenting UI from random tool code.
 - Context cards can be reordered/configured through presets.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
