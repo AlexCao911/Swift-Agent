@@ -17,6 +17,7 @@
 - `ToolResultDTO.structuredJson` must carry trust/provenance/context policy through `ToolResultEnvelopeV1`.
 - External web/file/OCR/share/speech/vision content must be labelled `untrusted_external_content`.
 - `web.fetch_url_text` must use `WebFetchPolicyV1`: no cookies/auth headers, no JS, no private network by default, bounded redirects, bounded MIME/size/time.
+- `WebFetchPolicyV1` private-network blocking is host-string based in this plan. It blocks IPv4 private ranges and common IPv6 local ranges, but does not validate DNS-resolved IP addresses; DNS rebinding and split-horizon DNS remain known risks for a later network-layer hardening pass.
 - User-mediated tools must persist a durable `pending_user_interaction` record before presenting system UI.
 - Production run start must fail when no `profile_revision_id` is selected; only explicit seed/mock clients may use revision `1`.
 - Avoid full visual node editor work in this plan.
@@ -150,6 +151,13 @@ func exportsManifestMetadataV1() throws {
     #expect(object["permission_scope"] as? String == "calendar.events.read_full")
     #expect(object["approval_policy"] as? String == "per_call")
     #expect(object["context_trust_level"] as? String == "trusted_tool_result")
+
+    let availability = try #require(object["availability"] as? [String: Any])
+    let audit = try #require(object["audit"] as? [String: Any])
+    #expect(availability["os_minimum"] as? String == "iOS 17.0")
+    #expect(availability["region_policy"] as? String == "available_with_service_fallback")
+    #expect(audit["result_summary_policy"] as? String == "metadata_only")
+    #expect(audit["resultSummaryPolicy"] == nil)
 }
 ```
 
@@ -293,6 +301,11 @@ public struct NativeToolAudit: Codable, Sendable, Equatable {
         self.label = label
         self.resultSummaryPolicy = resultSummaryPolicy
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case label
+        case resultSummaryPolicy = "result_summary_policy"
+    }
 }
 
 public struct NativeToolManifest: Sendable, Equatable {
@@ -367,6 +380,12 @@ public struct NativeToolSchemaMetadataV1: Codable, Sendable, Equatable {
         public var state: String
         public var osMinimum: String
         public var regionPolicy: String
+
+        private enum CodingKeys: String, CodingKey {
+            case state
+            case osMinimum = "os_minimum"
+            case regionPolicy = "region_policy"
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -448,7 +467,9 @@ private static func metadataJSON(for schema: NativeToolSchema) -> String? {
     )
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    let data = try! encoder.encode(metadata)
+    guard let data = try? encoder.encode(metadata) else {
+        return nil
+    }
     return String(decoding: data, as: UTF8.self)
 }
 
@@ -677,7 +698,7 @@ struct NativeToolResultEnvelopeTests {
     }
 
     @Test
-    func validatorKeepsConservativeSensitivityAndRetention() throws {
+    func validatorKeepsConservativeSensitivity() throws {
         let result = NativeToolResultBuilder.success(
             manifestId: "native.files.read_attachment.v1",
             toolName: "files.read_attachment",
@@ -704,7 +725,7 @@ struct NativeToolResultEnvelopeTests {
             structuredJson: result.structuredJson,
             auditText: result.auditText,
             sensitivity: .public,
-            retention: .session,
+            retention: .runOnly,
             isError: false
         )
 
@@ -712,6 +733,43 @@ struct NativeToolResultEnvelopeTests {
 
         #expect(validated.sensitivity == .private)
         #expect(validated.retention == .runOnly)
+    }
+
+    @Test
+    func validatorRejectsRetentionMismatch() throws {
+        let result = NativeToolResultBuilder.success(
+            manifestId: "native.files.read_attachment.v1",
+            toolName: "files.read_attachment",
+            toolCallId: "call_1",
+            displayText: "Read file",
+            modelText: "File text",
+            resultKind: "attachment_text",
+            resultPayload: ["attachment_id": .string("att_1")],
+            sourceKind: "attachment",
+            sourceId: "att_1",
+            displayName: "notes.txt",
+            attachmentIds: ["att_1"],
+            trustLevel: .untrustedExternalContent,
+            sensitivity: .private,
+            retention: .runOnly,
+            modelTextPolicy: "summarize_or_quote_only",
+            sourceLabel: "File",
+            auditSummary: "Read attachment",
+            auditRedaction: "metadata_only"
+        )
+        let mismatched = ToolResultDTO(
+            displayText: result.displayText,
+            modelText: result.modelText,
+            structuredJson: result.structuredJson,
+            auditText: result.auditText,
+            sensitivity: result.sensitivity,
+            retention: .session,
+            isError: false
+        )
+
+        #expect(throws: NativeToolResultEnvelopeValidationError.self) {
+            try NativeToolResultEnvelopeValidator.validate(mismatched)
+        }
     }
 }
 ```
@@ -800,7 +858,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
     case number(Double)
     case array([JSONValue])
     case object([String: JSONValue])
-    case stringArray([String])
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -815,7 +872,10 @@ public enum JSONValue: Codable, Sendable, Equatable {
         } else if let value = try? container.decode([String: JSONValue].self) {
             self = .object(value)
         } else {
-            self = .stringArray(try container.decode([String].self))
+            throw DecodingError.typeMismatch(
+                JSONValue.self,
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "unsupported JSON value")
+            )
         }
     }
 
@@ -831,8 +891,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .array(let value):
             try container.encode(value)
         case .object(let value):
-            try container.encode(value)
-        case .stringArray(let value):
             try container.encode(value)
         }
     }
@@ -927,8 +985,12 @@ public enum NativeToolResultBuilder {
     private static func encode<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = try! encoder.encode(value)
-        return String(decoding: data, as: UTF8.self)
+        do {
+            let data = try encoder.encode(value)
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return #"{"schema_version":1,"result":{"kind":"encoding_failed"}}"#
+        }
     }
 }
 
@@ -949,6 +1011,7 @@ private extension ToolResultDTO {
 public enum NativeToolResultEnvelopeValidationError: Error, Equatable {
     case invalidStructuredJson
     case isErrorMismatch
+    case retentionMismatch
 }
 
 public enum NativeToolResultEnvelopeValidator {
@@ -962,13 +1025,16 @@ public enum NativeToolResultEnvelopeValidator {
         guard envelopeIsError == result.isError else {
             throw NativeToolResultEnvelopeValidationError.isErrorMismatch
         }
+        guard envelope.provenance.retention == result.retention else {
+            throw NativeToolResultEnvelopeValidationError.retentionMismatch
+        }
         return ToolResultDTO(
             displayText: result.displayText,
             modelText: result.modelText,
             structuredJson: result.structuredJson,
             auditText: result.auditText,
             sensitivity: moreSensitive(result.sensitivity, envelope.provenance.sensitivity),
-            retention: moreRestrictive(result.retention, envelope.provenance.retention),
+            retention: result.retention,
             isError: result.isError
         )
     }
@@ -986,24 +1052,6 @@ public enum NativeToolResultEnvelopeValidator {
             2
         } else {
             2
-        }
-    }
-
-    private static func moreRestrictive(_ lhs: RetentionPolicyDTO, _ rhs: RetentionPolicyDTO) -> RetentionPolicyDTO {
-        retentionRank(rhs) >= retentionRank(lhs) ? rhs : lhs
-    }
-
-    private static func retentionRank(_ value: RetentionPolicyDTO) -> Int {
-        if value == .session {
-            0
-        } else if value == .memoryCandidate {
-            1
-        } else if value == .auditOnly {
-            2
-        } else if value == .runOnly {
-            3
-        } else {
-            3
         }
     }
 }
@@ -1104,6 +1152,17 @@ struct WebFetchPolicyTests {
 
         #expect(WebFetchPolicyV1.default.validate(localhost) == .denied(code: "web_fetch.private_network_denied"))
         #expect(WebFetchPolicyV1.default.validate(privateLan) == .denied(code: "web_fetch.private_network_denied"))
+    }
+
+    @Test
+    func rejectsIPv6LocalHosts() throws {
+        let loopback = URLRequest(url: try #require(URL(string: "https://[::1]/admin")))
+        let uniqueLocal = URLRequest(url: try #require(URL(string: "https://[fd00::1]/status")))
+        let linkLocal = URLRequest(url: try #require(URL(string: "https://[fe80::1]/status")))
+
+        #expect(WebFetchPolicyV1.default.validate(loopback) == .denied(code: "web_fetch.private_network_denied"))
+        #expect(WebFetchPolicyV1.default.validate(uniqueLocal) == .denied(code: "web_fetch.private_network_denied"))
+        #expect(WebFetchPolicyV1.default.validate(linkLocal) == .denied(code: "web_fetch.private_network_denied"))
     }
 
     @Test
@@ -1219,9 +1278,21 @@ public struct WebFetchPolicyV1: Sendable, Equatable {
     }
 
     private func isPrivateHost(_ host: String) -> Bool {
-        let lower = host.lowercased()
+        let lower = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         if lower == "localhost" || lower.hasSuffix(".local") {
             return true
+        }
+        if lower == "::1" || lower == "0:0:0:0:0:0:0:1" {
+            return true
+        }
+        if lower.hasPrefix("fc") || lower.hasPrefix("fd") {
+            return true
+        }
+        if lower.hasPrefix("fe8") || lower.hasPrefix("fe9") || lower.hasPrefix("fea") || lower.hasPrefix("feb") {
+            return true
+        }
+        if lower.hasPrefix("::ffff:") {
+            return isPrivateHost(String(lower.dropFirst("::ffff:".count)))
         }
         if lower.hasPrefix("127.") || lower.hasPrefix("10.") || lower.hasPrefix("192.168.") {
             return true
@@ -1951,6 +2022,21 @@ Pass `manifest: manifest` when constructing `NativeToolSchema`.
 
 - [ ] **Step 4: Return envelope-shaped results**
 
+Build meta tool summaries in sorted order:
+
+```swift
+let toolSummaries = catalog.schemas
+    .map { schema in
+        ToolSummary(
+            name: schema.name,
+            riskLevel: schema.riskLevel,
+            permissionScope: schema.permissionScope?.name
+        )
+    }
+    .sorted { $0.name < $1.name }
+let toolCount = toolSummaries.count
+```
+
 For successful meta tool results, return:
 
 ```swift
@@ -2277,9 +2363,9 @@ struct AgentProfileRevisionDTOTests {
 Add these runtime tests to `AgentRuntimeServiceTests.swift`:
 
 ```swift
-@Test("coordinator path requires selected profile revision")
+@Test("coordinator path passes seed profile revision")
 @MainActor
-func coordinatorPathRequiresSelectedProfileRevision() async throws {
+func coordinatorPathPassesSeedProfileRevision() async throws {
     let coordinator = RecordingChatInteractionCoordinator()
     let service = AgentRuntimeService(
         runtimeClient: ScriptedRuntimeClient(),
@@ -2287,11 +2373,28 @@ func coordinatorPathRequiresSelectedProfileRevision() async throws {
         coordinator: coordinator
     )
 
+    _ = try await service.sendMessage(
+        "hello",
+        state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+    )
+
+    #expect(coordinator.agentProfileRevisionIds == [1])
+}
+
+@Test("coordinator path rejects explicitly missing profile revision")
+@MainActor
+func coordinatorPathRejectsExplicitlyMissingProfileRevision() async throws {
+    let coordinator = RecordingChatInteractionCoordinator()
+    let service = AgentRuntimeService(
+        runtimeClient: ScriptedRuntimeClient(),
+        toolDriver: MinimalHostToolDriver(),
+        coordinator: coordinator
+    )
+    var state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+    state.selectedAgentProfileRevisionId = nil
+
     await #expect(throws: AgentRuntimeServiceError.missingAgentProfileRevision) {
-        _ = try await service.sendMessage(
-            "hello",
-            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
-        )
+        _ = try await service.sendMessage("hello", state: state)
     }
 
     #expect(coordinator.sentMessages.isEmpty)
@@ -2396,7 +2499,9 @@ public struct AgentProfileDTO: Codable, Equatable, Sendable {
 In `AgentViewState.swift`, add:
 
 ```swift
-var selectedAgentProfileRevisionId: UInt64?
+// Development seed profile revision for the current hard-coded profile_1.
+// Replace this with the published Agent Builder revision once Builder persistence lands.
+var selectedAgentProfileRevisionId: UInt64? = 1
 ```
 
 - [ ] **Step 4: Update mocks and coordinator**
@@ -2733,8 +2838,7 @@ Expected: LocalAgentApp and LocalAgentAppTests build and pass.
 Run:
 
 ```bash
-cd /Users/alexandercou/Projects/Alex-agent
-git status --short
+git -C "$(git rev-parse --show-toplevel)" status --short
 ```
 
 Expected: only pre-existing untracked files remain, or no output if the workspace is clean.
