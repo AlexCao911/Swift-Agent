@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import LocalAgentBridge
 @testable import LocalNativeToolkit
@@ -27,10 +28,12 @@ struct NativeToolExecutorTests {
         let executor = NativeToolExecutor(catalog: try NativeToolCatalog(tools: []))
 
         let result = await executor.execute(request(toolName: "missing.tool"))
+        let payload = try envelopePayload(from: result)
 
         #expect(result.isError)
-        #expect(result.modelText.contains("Unknown native tool `missing.tool`"))
-        #expect(result.structuredJson == #"{"error":"unknown_tool","tool_name":"missing.tool"}"#)
+        #expect(result.modelText.contains("Tool error `unknown_tool`"))
+        #expect(payload["kind"] as? String == "error")
+        #expect(payload["code"] as? String == "unknown_tool")
     }
 
     @Test
@@ -45,11 +48,19 @@ struct NativeToolExecutorTests {
             toolName: "debug.echo",
             argumentsJson: #"["not","object"]"#
         ))
+        let payload = try envelopePayload(from: result)
 
         #expect(result.isError)
-        #expect(result.modelText.contains("Invalid arguments for native tool `debug.echo`"))
-        #expect(result.structuredJson == #"{"error":"invalid_arguments","tool_name":"debug.echo"}"#)
+        #expect(result.modelText.contains("Tool error `invalid_arguments`"))
+        #expect(payload["kind"] as? String == "error")
+        #expect(payload["code"] as? String == "invalid_arguments")
         #expect(await recorder.arguments == [])
+    }
+
+    private func envelopePayload(from result: ToolResultDTO) throws -> [String: Any] {
+        let data = try #require(result.structuredJson.data(using: .utf8))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try #require(object["result"] as? [String: Any])
     }
 
     private func request(

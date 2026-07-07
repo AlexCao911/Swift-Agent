@@ -11,18 +11,20 @@ public struct NativeToolExecutor: Sendable {
     public func execute(_ request: ToolExecutionRequestDTO) async -> ToolResultDTO {
         guard let tool = catalog.tools.first(where: { $0.schema.name == request.toolName }) else {
             return Self.errorResult(
+                code: "unknown_tool",
+                toolName: request.toolName,
+                toolCallId: request.toolCallId,
                 displayText: "Unknown native tool: \(request.toolName)",
-                modelText: "Unknown native tool `\(request.toolName)`.",
-                structuredJson: Self.errorPayload("unknown_tool", toolName: request.toolName),
                 auditText: "Unknown native tool: \(request.toolName)"
             )
         }
 
         guard Self.argumentsAreJSONObject(request.argumentsJson) else {
             return Self.errorResult(
+                code: "invalid_arguments",
+                toolName: request.toolName,
+                toolCallId: request.toolCallId,
                 displayText: "Invalid arguments for native tool: \(request.toolName)",
-                modelText: "Invalid arguments for native tool `\(request.toolName)`: expected a JSON object.",
-                structuredJson: Self.errorPayload("invalid_arguments", toolName: request.toolName),
                 auditText: "Invalid arguments for native tool: \(request.toolName)"
             )
         }
@@ -40,29 +42,20 @@ public struct NativeToolExecutor: Sendable {
         return value is [String: Any]
     }
 
-    private static func errorPayload(_ error: String, toolName: String) -> String {
-        #"{"error":\#(jsonStringLiteral(error)),"tool_name":\#(jsonStringLiteral(toolName))}"#
-    }
-
-    private static func jsonStringLiteral(_ value: String) -> String {
-        let data = try! JSONEncoder().encode(value)
-        return String(decoding: data, as: UTF8.self)
-    }
-
     private static func errorResult(
+        code: String,
+        toolName: String,
+        toolCallId: String,
         displayText: String,
-        modelText: String,
-        structuredJson: String,
         auditText: String
     ) -> ToolResultDTO {
-        ToolResultDTO(
+        NativeToolResultBuilder.error(
+            manifestId: "native.executor.v1",
+            toolName: toolName,
+            toolCallId: toolCallId,
+            code: code,
             displayText: displayText,
-            modelText: modelText,
-            structuredJson: structuredJson,
-            auditText: auditText,
-            sensitivity: .public,
-            retention: .runOnly,
-            isError: true
+            auditSummary: auditText
         )
     }
 }
