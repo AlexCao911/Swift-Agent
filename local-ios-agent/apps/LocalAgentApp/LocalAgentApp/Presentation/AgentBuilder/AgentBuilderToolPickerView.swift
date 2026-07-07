@@ -2,17 +2,32 @@ import SwiftUI
 
 struct AgentBuilderToolPickerView: View {
     var tools: [AgentBuilderToolCard]
-    var selectedToolIds: [String]
     var onToggle: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var selectedToolIds: Set<String>
+
+    init(
+        tools: [AgentBuilderToolCard],
+        selectedToolIds: [String],
+        onToggle: @escaping (String) -> Void
+    ) {
+        self.tools = tools
+        self.onToggle = onToggle
+        _selectedToolIds = State(initialValue: Set(selectedToolIds))
+    }
 
     var body: some View {
         NavigationStack {
             List(filteredTools) { tool in
                 Button {
                     if tool.isAvailable {
+                        if selectedToolIds.contains(tool.id) {
+                            selectedToolIds.remove(tool.id)
+                        } else {
+                            selectedToolIds.insert(tool.id)
+                        }
                         onToggle(tool.id)
                     }
                 } label: {

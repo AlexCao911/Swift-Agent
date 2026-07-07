@@ -112,10 +112,13 @@ struct AgentBuilderBottomBar: View {
                 .disabled(lifecycle != .readyToPublish)
 
             if let publishedSelection {
-                Button("Use revision \(publishedSelection.profileRevisionId)") {
+                Button {
                     onUseInChat(publishedSelection)
+                } label: {
+                    Label("Use", systemImage: "arrow.right.circle")
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Use published revision \(publishedSelection.profileRevisionId) in Chat")
             }
         }
         .padding(.horizontal)

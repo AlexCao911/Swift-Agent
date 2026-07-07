@@ -30,7 +30,9 @@ final class AgentBuilderViewModel {
     var preview: BuilderContextPreviewResult?
     var lifecycle: AgentDraftLifecycleState = .empty
     var publishedAgentSelection: PublishedAgentSelection?
-    var publishedProfileRevisionId: UInt64?
+    var publishedProfileRevisionId: UInt64? {
+        publishedAgentSelection?.profileRevisionId
+    }
 
     init(
         profileId: String,
@@ -105,7 +107,6 @@ final class AgentBuilderViewModel {
     func markEdited() {
         draftVersion += 1
         publishedAgentSelection = nil
-        publishedProfileRevisionId = nil
         switch lifecycle {
         case .validating, .invalid, .readyToPublish, .editing, .published, .publishFailed, .empty:
             lifecycle = .dirty
@@ -144,7 +145,6 @@ final class AgentBuilderViewModel {
                 profileRevisionId: profile.profileRevisionId,
                 displayName: profile.displayName
             )
-            publishedProfileRevisionId = profile.profileRevisionId
             lifecycle = .published(profileRevisionId: profile.profileRevisionId)
         } catch {
             guard version == draftVersion else {
