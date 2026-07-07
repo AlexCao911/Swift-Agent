@@ -1,6 +1,6 @@
 public protocol ExecutionBridgeClient: Sendable {
     func listAgentProfiles() async throws -> [AgentProfileDTO]
-    func buildAgent(templateId: String) async throws -> AgentProfileDTO
+    func buildAgent(_ request: BuildAgentRequestDTO) async throws -> AgentProfileDTO
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error>
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws
@@ -9,6 +9,12 @@ public protocol ExecutionBridgeClient: Sendable {
     func cancelRun(runId: String) async throws -> RuntimeEventDTO
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel
     func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws
+}
+
+public extension ExecutionBridgeClient {
+    func buildAgent(templateId: String) async throws -> AgentProfileDTO {
+        try await buildAgent(BuildAgentRequestDTO(templateId: templateId))
+    }
 }
 
 public struct RustExecutionBridgeClient: ExecutionBridgeClient {
@@ -31,10 +37,10 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
         )
     }
 
-    public func buildAgent(templateId: String) async throws -> AgentProfileDTO {
+    public func buildAgent(_ request: BuildAgentRequestDTO) async throws -> AgentProfileDTO {
         try await gateway.request(
             .buildAgent,
-            BuildAgentRequestDTO(templateId: templateId),
+            request,
             as: AgentProfileDTO.self
         )
     }

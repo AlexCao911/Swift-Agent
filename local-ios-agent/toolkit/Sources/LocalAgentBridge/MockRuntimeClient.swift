@@ -69,6 +69,7 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient,
     public private(set) var startedExecutionRequests: [StartExecutionRequestDTO] = []
     public private(set) var approvedTools: [ToolApprovalSubmission] = []
     public private(set) var builtAgentTemplateIds: [String] = []
+    public private(set) var builtAgentRequests: [BuildAgentRequestDTO] = []
     public private(set) var updatedRuntimeOptions: [RuntimeOptionsDTO] = []
 
     public init(
@@ -286,10 +287,11 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient,
         storedAgentProfiles
     }
 
-    public func buildAgent(templateId: String) async throws -> AgentProfileDTO {
-        builtAgentTemplateIds.append(templateId)
+    public func buildAgent(_ request: BuildAgentRequestDTO) async throws -> AgentProfileDTO {
+        builtAgentRequests.append(request)
+        builtAgentTemplateIds.append(request.templateId)
         return storedAgentProfiles.first ?? AgentProfileDTO(
-            profileId: "profile_mock",
+            profileId: request.profileId ?? "profile_mock",
             profileRevisionId: 1,
             displayName: "Mock Agent"
         )

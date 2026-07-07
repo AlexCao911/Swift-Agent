@@ -263,13 +263,16 @@ public struct ObserveExecutionEventsRequestDTO: Codable, Equatable, Sendable {
 }
 
 public struct BuildAgentRequestDTO: Codable, Equatable, Sendable {
+    public var profileId: String?
     public var templateId: String
 
-    public init(templateId: String) {
+    public init(profileId: String? = nil, templateId: String) {
+        self.profileId = profileId
         self.templateId = templateId
     }
 
     private enum CodingKeys: String, CodingKey {
+        case profileId = "profile_id"
         case templateId = "template_id"
     }
 }
@@ -678,13 +681,16 @@ public struct CheckpointDTO: Codable, Equatable, Sendable {
 
 public struct AgentBuilderDraftDTO: Codable, Equatable, Sendable {
     public var profileId: String
+    public var templateId: String
 
-    public init(profileId: String) {
+    public init(profileId: String, templateId: String = "template_1") {
         self.profileId = profileId
+        self.templateId = templateId
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileId = "profile_id"
+        case templateId = "template_id"
     }
 }
 
