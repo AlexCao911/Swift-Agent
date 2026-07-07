@@ -11,10 +11,7 @@ Done in the current MVP branch:
 
 Remaining:
 
-- Make publish card-backed instead of template-backed.
-- Wire prompt/persona, context policy, memory policy, and selected tools into the published revision.
-- Add context preview backed by Rust context trace.
-- Add validation copy for unsupported cards and missing permissions.
+- Tracked below under "Agent Builder Card-Backed Publish".
 
 ## Native Toolkit Real Adapters
 
@@ -31,21 +28,57 @@ Done in the current MVP branch:
 
 Remaining:
 
-- Add polished tool approval and pending interaction cards in Chat.
+- Tracked below under "Native Toolkit Additional Adapters" and "Conversation Workspace Polish".
+
+## App Product Frontend
+
+Done in the current MVP branch:
+
+- AppShell owns product routing across Chat, Agents, Tools, Models, and Settings.
+- Builder handoff updates Chat with exact `profile_id` and `profile_revision_id`.
+- Conversation Workspace shows active agent revision and synchronizes runtime selection before send.
+- Inline run cards project approval, pending interaction, permission repair, missing model, and waiting-tool states.
+- Context Inspector shows context sources, trust labels, token estimates, and untrusted external-content warnings.
+- Tool Center shows manifest-derived tool rows, permission readiness, approval policy, and mode filters.
+- Model Center shows active model, local/cloud readiness, and explicit setup blockers.
+- Settings shows privacy summaries for tools, attachments, memory, model/provider, and debug mode.
+- Debug/Trace surface is behind the advanced debug toggle.
+
+Remaining:
+
+### Agent Builder Card-Backed Publish
+
+- Publish card-backed revisions instead of template-backed revisions.
+- Wire prompt/persona, context policy, memory policy, selected tools, and skills into the published profile revision.
+- Add Rust-backed context preview/trace for Builder.
+- Add validation copy for unsupported cards, missing permissions, and publish-blocking configuration.
+
+### Native Toolkit Additional Adapters
+
 - Register file/photo picker tools in the production catalog once Chat can present pending interaction cards.
 - Connect real file/photo picker presentation to the pending interaction broker.
 - Add Share Extension target once Chat capture review exists.
 - Add VisionKit scan, OCR, Speech transcription, Maps/geocoding, and Shortcut metadata adapters.
 - Harden `web.fetch_url_text` beyond host-literal checks with resolved-address private-network protection.
 
-## App Product Frontend
+### Model Download And Provider Setup
 
-Next main line:
+- Add local model catalog, download state, storage management, and engine/model compatibility checks.
+- Add cloud provider API-key setup, validation, and per-provider readiness.
+- Persist active model/provider selection and connect it to runtime defaults.
 
-- Build the full workspace shell after Builder-first and first toolkit slice are stable.
-- Add agent selector, Tool Center, Model Center, Settings, Permissions, Privacy, and Debug/Trace surfaces.
-- Polish Chat for approvals, run state, external-content trust labels, context inspector, branch/fork/edit flows, and pending user interaction recovery.
-- Add local model download/selection UI and cloud provider API-key setup.
+### Conversation Workspace Polish
+
+- Add polished approval actions, pending interaction recovery, and user-cancel flows in Chat.
+- Finish session/branch/fork/edit affordances for everyday use.
+- Surface external-content trust warnings in assistant responses, not only in Context Inspector.
+- Add agent selector and visible revision drift indicators for old conversations.
+
+### Release Hardening
+
+- Add onboarding, permissions/privacy review, data export/reset behavior, and debug-safe defaults.
+- Run full iOS build/test/manual smoke on a machine with Xcode and simulator.
+- Audit accessibility, Dynamic Type, and VoiceOver ordering on all product surfaces.
 
 ## Rust Follow-Ups
 
