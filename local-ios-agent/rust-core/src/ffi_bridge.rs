@@ -11,7 +11,9 @@ use std::sync::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::app_service::{AgentOSApplicationService, AgentOSApplicationServiceConfig};
+use crate::app_service::{
+    AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
+};
 use crate::context::{InferenceOptions, ModelInputMessages, PromptFrame, TokenizerAdapter};
 use crate::conversation::{
     ConversationCommitError, ConversationCommitService, ConversationFrameId,
@@ -291,7 +293,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let request: BuildAgentRequestJson = from_json(request_json)?;
         let profile = self
             .app_services
-            .build_agent_from_template(request.profile_id.as_deref(), &request.template_id)
+            .build_agent_from_template(
+                request.profile_id.as_deref(),
+                &request.template_id,
+                request.card_draft_input(),
+            )
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&AgentProfileJson::from(&profile))
     }
@@ -1422,6 +1428,27 @@ struct EmptyAgentOSResponseJson {}
 struct BuildAgentRequestJson {
     profile_id: Option<String>,
     template_id: String,
+    display_name: Option<String>,
+    system_prompt: Option<String>,
+    persona: Option<String>,
+    response_style: Option<String>,
+    #[serde(default)]
+    selected_tool_ids: Vec<String>,
+    #[serde(default)]
+    context_step_ids: Vec<String>,
+}
+
+impl BuildAgentRequestJson {
+    fn card_draft_input(&self) -> AgentBuilderCardDraftInput {
+        AgentBuilderCardDraftInput {
+            display_name: self.display_name.clone(),
+            system_prompt: self.system_prompt.clone(),
+            persona: self.persona.clone(),
+            response_style: self.response_style.clone(),
+            selected_tool_ids: self.selected_tool_ids.clone(),
+            context_step_ids: self.context_step_ids.clone(),
+        }
+    }
 }
 
 #[derive(Serialize)]

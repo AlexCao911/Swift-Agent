@@ -450,6 +450,58 @@ fn c_abi_build_agent_publishes_profile_that_start_run_can_resolve() {
 }
 
 #[test]
+fn c_abi_build_agent_accepts_card_backed_builder_fields() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let build_request = CString::new(
+            json!({
+                "profile_id": "profile.builder.card_backed",
+                "template_id": "template_1",
+                "display_name": "Research Agent",
+                "system_prompt": "You are careful.",
+                "persona": "Researcher",
+                "response_style": "Concise",
+                "selected_tool_ids": ["calendar.search_events", "web.fetch_url_text"],
+                "context_step_ids": ["system_prompt", "conversation_history", "tool_results"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let built = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            build_request.as_ptr(),
+        )));
+        assert!(built.get("error").is_none(), "{built}");
+        assert_eq!(built["profile_id"], "profile.builder.card_backed");
+        assert_eq!(built["profile_revision_id"], 1);
+        assert_eq!(built["display_name"], "Research Agent");
+
+        let prepared = prepare_c_user_turn(runtime, "use card-backed profile");
+        let start_request = CString::new(
+            json!({
+                "agent_profile_id": built["profile_id"],
+                "profile_revision_id": built["profile_revision_id"],
+                "user_intent": "use card-backed profile",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let handle = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            start_request.as_ptr(),
+        )));
+        assert!(handle["run_id"].as_str().unwrap().starts_with("run_"));
+        assert!(handle.get("error").is_none());
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
 fn c_abi_build_agent_publishes_new_revision_for_same_profile_id() {
     unsafe {
         let runtime = new_in_memory_c_bridge();

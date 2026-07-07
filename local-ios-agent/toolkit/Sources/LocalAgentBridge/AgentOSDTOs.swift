@@ -265,15 +265,70 @@ public struct ObserveExecutionEventsRequestDTO: Codable, Equatable, Sendable {
 public struct BuildAgentRequestDTO: Codable, Equatable, Sendable {
     public var profileId: String?
     public var templateId: String
+    public var displayName: String?
+    public var systemPrompt: String?
+    public var persona: String?
+    public var responseStyle: String?
+    public var selectedToolIds: [String]
+    public var contextStepIds: [String]
 
-    public init(profileId: String? = nil, templateId: String) {
+    public init(
+        profileId: String? = nil,
+        templateId: String,
+        displayName: String? = nil,
+        systemPrompt: String? = nil,
+        persona: String? = nil,
+        responseStyle: String? = nil,
+        selectedToolIds: [String] = [],
+        contextStepIds: [String] = []
+    ) {
         self.profileId = profileId
         self.templateId = templateId
+        self.displayName = displayName
+        self.systemPrompt = systemPrompt
+        self.persona = persona
+        self.responseStyle = responseStyle
+        self.selectedToolIds = selectedToolIds
+        self.contextStepIds = contextStepIds
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileId = "profile_id"
         case templateId = "template_id"
+        case displayName = "display_name"
+        case systemPrompt = "system_prompt"
+        case persona
+        case responseStyle = "response_style"
+        case selectedToolIds = "selected_tool_ids"
+        case contextStepIds = "context_step_ids"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(profileId, forKey: .profileId)
+        try container.encode(templateId, forKey: .templateId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(systemPrompt, forKey: .systemPrompt)
+        try container.encodeIfPresent(persona, forKey: .persona)
+        try container.encodeIfPresent(responseStyle, forKey: .responseStyle)
+        if !selectedToolIds.isEmpty {
+            try container.encode(selectedToolIds, forKey: .selectedToolIds)
+        }
+        if !contextStepIds.isEmpty {
+            try container.encode(contextStepIds, forKey: .contextStepIds)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.profileId = try container.decodeIfPresent(String.self, forKey: .profileId)
+        self.templateId = try container.decode(String.self, forKey: .templateId)
+        self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+        self.persona = try container.decodeIfPresent(String.self, forKey: .persona)
+        self.responseStyle = try container.decodeIfPresent(String.self, forKey: .responseStyle)
+        self.selectedToolIds = try container.decodeIfPresent([String].self, forKey: .selectedToolIds) ?? []
+        self.contextStepIds = try container.decodeIfPresent([String].self, forKey: .contextStepIds) ?? []
     }
 }
 
@@ -682,15 +737,54 @@ public struct CheckpointDTO: Codable, Equatable, Sendable {
 public struct AgentBuilderDraftDTO: Codable, Equatable, Sendable {
     public var profileId: String
     public var templateId: String
+    public var displayName: String?
+    public var systemPrompt: String?
+    public var persona: String?
+    public var responseStyle: String?
+    public var selectedToolIds: [String]
+    public var contextStepIds: [String]
 
-    public init(profileId: String, templateId: String = "template_1") {
+    public init(
+        profileId: String,
+        templateId: String = "template_1",
+        displayName: String? = nil,
+        systemPrompt: String? = nil,
+        persona: String? = nil,
+        responseStyle: String? = nil,
+        selectedToolIds: [String] = [],
+        contextStepIds: [String] = []
+    ) {
         self.profileId = profileId
         self.templateId = templateId
+        self.displayName = displayName
+        self.systemPrompt = systemPrompt
+        self.persona = persona
+        self.responseStyle = responseStyle
+        self.selectedToolIds = selectedToolIds
+        self.contextStepIds = contextStepIds
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileId = "profile_id"
         case templateId = "template_id"
+        case displayName = "display_name"
+        case systemPrompt = "system_prompt"
+        case persona
+        case responseStyle = "response_style"
+        case selectedToolIds = "selected_tool_ids"
+        case contextStepIds = "context_step_ids"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.profileId = try container.decode(String.self, forKey: .profileId)
+        self.templateId = try container.decodeIfPresent(String.self, forKey: .templateId) ?? "template_1"
+        self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+        self.persona = try container.decodeIfPresent(String.self, forKey: .persona)
+        self.responseStyle = try container.decodeIfPresent(String.self, forKey: .responseStyle)
+        self.selectedToolIds = try container.decodeIfPresent([String].self, forKey: .selectedToolIds) ?? []
+        self.contextStepIds = try container.decodeIfPresent([String].self, forKey: .contextStepIds) ?? []
     }
 }
 

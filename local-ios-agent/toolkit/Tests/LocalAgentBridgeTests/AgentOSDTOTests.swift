@@ -54,6 +54,75 @@ struct AgentOSDTOTests {
         #expect(!json.contains("credential_availability"))
     }
 
+    @Test("BuildAgentRequestDTO omits empty card-backed fields")
+    func buildAgentRequestOmitsEmptyCardBackedFields() throws {
+        let data = try JSONEncoder().encode(BuildAgentRequestDTO(
+            profileId: "profile_1",
+            templateId: "template_1"
+        ))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["profile_id"] as? String == "profile_1")
+        #expect(object["template_id"] as? String == "template_1")
+        #expect(object["selected_tool_ids"] == nil)
+        #expect(object["context_step_ids"] == nil)
+    }
+
+    @Test("BuildAgentRequestDTO encodes non-empty card-backed fields")
+    func buildAgentRequestEncodesNonEmptyCardBackedFields() throws {
+        let data = try JSONEncoder().encode(BuildAgentRequestDTO(
+            profileId: "profile_1",
+            templateId: "template_1",
+            displayName: "Research Agent",
+            systemPrompt: "Be careful.",
+            persona: "Researcher",
+            responseStyle: "Concise",
+            selectedToolIds: ["web.fetch_url_text"],
+            contextStepIds: ["system_prompt"]
+        ))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["display_name"] as? String == "Research Agent")
+        #expect(object["system_prompt"] as? String == "Be careful.")
+        #expect(object["persona"] as? String == "Researcher")
+        #expect(object["response_style"] as? String == "Concise")
+        #expect(object["selected_tool_ids"] as? [String] == ["web.fetch_url_text"])
+        #expect(object["context_step_ids"] as? [String] == ["system_prompt"])
+    }
+
+    @Test("BuildAgentRequestDTO decodes legacy template-backed request")
+    func buildAgentRequestDecodesLegacyTemplateBackedRequest() throws {
+        let json = """
+        {
+          "profile_id": "profile_1",
+          "template_id": "template_1"
+        }
+        """.data(using: .utf8)!
+
+        let request = try JSONDecoder().decode(BuildAgentRequestDTO.self, from: json)
+
+        #expect(request.profileId == "profile_1")
+        #expect(request.templateId == "template_1")
+        #expect(request.selectedToolIds.isEmpty)
+        #expect(request.contextStepIds.isEmpty)
+    }
+
+    @Test("AgentBuilderDraftDTO decodes legacy template-backed draft")
+    func agentBuilderDraftDecodesLegacyTemplateBackedDraft() throws {
+        let json = """
+        {
+          "profile_id": "profile_1"
+        }
+        """.data(using: .utf8)!
+
+        let draft = try JSONDecoder().decode(AgentBuilderDraftDTO.self, from: json)
+
+        #expect(draft.profileId == "profile_1")
+        #expect(draft.templateId == "template_1")
+        #expect(draft.selectedToolIds.isEmpty)
+        #expect(draft.contextStepIds.isEmpty)
+    }
+
     @Test("package preview snapshot and permission clients return UI models")
     func packageSnapshotAndPermissionClientsReturnUIModels() async throws {
         let packageClient = MockAgentPackageClient.previewing(profileName: "Research Assistant")

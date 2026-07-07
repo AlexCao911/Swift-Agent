@@ -91,7 +91,7 @@ final class AgentBuilderViewModel {
 
     func refreshReadiness() async {
         do {
-            let draft = AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
+            let draft = draftDTO()
             async let draftReadiness = builderClient.validateDraft(draft)
             async let permissionReadiness = permissionClient.readiness([])
             let draftResult = try await draftReadiness
@@ -134,7 +134,7 @@ final class AgentBuilderViewModel {
         lifecycle = .publishing
         do {
             let profile = try await builderClient.publishProfile(
-                AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
+                draftDTO()
             )
             guard version == draftVersion else {
                 lifecycle = .dirty
@@ -181,5 +181,10 @@ final class AgentBuilderViewModel {
                 ),
             ])
         )
+    }
+
+    private func draftDTO() -> AgentBuilderDraftDTO {
+        draft?.publishDTO(templateId: templateId)
+            ?? AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
     }
 }

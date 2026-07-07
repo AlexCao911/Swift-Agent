@@ -33,6 +33,55 @@ pub struct AgentOSApplicationService {
     model_catalog: InMemoryModelBindingCatalog,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AgentBuilderCardDraftInput {
+    pub display_name: Option<String>,
+    pub system_prompt: Option<String>,
+    pub persona: Option<String>,
+    pub response_style: Option<String>,
+    pub selected_tool_ids: Vec<String>,
+    pub context_step_ids: Vec<String>,
+}
+
+impl AgentBuilderCardDraftInput {
+    fn display_name(&self) -> String {
+        non_empty_trimmed(&self.display_name).unwrap_or_else(|| "Custom Agent".to_string())
+    }
+
+    fn persona_name(&self) -> String {
+        non_empty_trimmed(&self.persona).unwrap_or_else(|| self.display_name())
+    }
+
+    fn instruction_text(&self) -> Option<String> {
+        let mut lines = Vec::new();
+        if let Some(system_prompt) = non_empty_trimmed(&self.system_prompt) {
+            lines.push(format!("System prompt: {system_prompt}"));
+        }
+        if let Some(response_style) = non_empty_trimmed(&self.response_style) {
+            lines.push(format!("Response style: {response_style}"));
+        }
+        let context_steps = cleaned_list(&self.context_step_ids);
+        if !context_steps.is_empty() {
+            lines.push(format!("Context pipeline: {}", context_steps.join(", ")));
+        }
+
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
+
+    fn tool_recipe_name(&self) -> Option<String> {
+        let tool_ids = cleaned_list(&self.selected_tool_ids);
+        if tool_ids.is_empty() {
+            None
+        } else {
+            Some(format!("Selected tools: {}", tool_ids.join(", ")))
+        }
+    }
+}
+
 struct ModelSelectionStageOperation {
     catalog: InMemoryModelBindingCatalog,
     selection: ModelSelection,
@@ -97,6 +146,7 @@ impl AgentOSApplicationService {
         &self,
         profile_id: Option<&str>,
         template_id: &str,
+        card_draft: AgentBuilderCardDraftInput,
     ) -> RunSnapshotResult<AgentProfile> {
         let template = template_for_build_request(template_id)?;
         let explicit_profile_id = profile_id.is_some();
@@ -120,9 +170,10 @@ impl AgentOSApplicationService {
             AgentProfileVersion::initial()
         };
 
+        let display_name = card_draft.display_name();
         let persona_component_id = self
             .component_catalog
-            .create_draft(ComponentContent::persona("Custom Agent"));
+            .create_draft(ComponentContent::persona(card_draft.persona_name()));
         let persona_version = self
             .component_catalog
             .publish(persona_component_id)
@@ -136,7 +187,7 @@ impl AgentOSApplicationService {
         ensure_model_selection(&self.model_catalog, model_selection.clone())?;
         let model_catalog_for_publish =
             ModelBindingCatalog::default().with_selection(model_selection.clone());
-        let draft = AgentProfileDraft::new(profile_id, template.id().clone(), "Custom Agent")
+        let mut draft = AgentProfileDraft::new(profile_id, template.id().clone(), display_name)
             .bind(ComponentBinding::persona(
                 template
                     .slot_id_for_kind(AgentSlotKind::Persona)
@@ -155,6 +206,55 @@ impl AgentOSApplicationService {
                 AgentProfileLocalBindings::default()
                     .with_credential_ref("account.openai.default", "credential.openai.default"),
             );
+
+        if let Some(instruction_text) = card_draft.instruction_text() {
+            let instruction_component_id = self
+                .component_catalog
+                .create_draft(ComponentContent::instruction(instruction_text));
+            let instruction_version = self
+                .component_catalog
+                .publish(instruction_component_id)
+                .map_err(|error| {
+                    RunSnapshotError::new(
+                        "application_service.component_publish_failed",
+                        error.to_string(),
+                    )
+                })?;
+            draft = draft.bind(ComponentBinding::new(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Instruction)
+                    .expect("assistant template has instruction slot")
+                    .clone(),
+                AgentSlotKind::Instruction,
+                instruction_version,
+                Default::default(),
+            ));
+        }
+
+        if let Some(tool_recipe_name) = card_draft.tool_recipe_name() {
+            let tool_component_id = self
+                .component_catalog
+                .create_draft(ComponentContent::tool_recipe(tool_recipe_name));
+            let tool_version =
+                self.component_catalog
+                    .publish(tool_component_id)
+                    .map_err(|error| {
+                        RunSnapshotError::new(
+                            "application_service.component_publish_failed",
+                            error.to_string(),
+                        )
+                    })?;
+            draft = draft.bind(ComponentBinding::new(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Toolset)
+                    .expect("assistant template has toolset slot")
+                    .clone(),
+                AgentSlotKind::Toolset,
+                tool_version,
+                Default::default(),
+            ));
+        }
+
         let reference = AgentProfilePublisher::new(
             Box::new(InMemoryTransactionRunner::default()),
             self.profile_repository.clone(),
@@ -336,6 +436,23 @@ fn template_for_build_request(template_id: &str) -> RunSnapshotResult<AgentTempl
             format!("unknown agent template id: {template_id}"),
         )),
     }
+}
+
+fn non_empty_trimmed(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn cleaned_list(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn snapshot_service_from_repositories(

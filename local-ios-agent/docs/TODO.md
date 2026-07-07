@@ -7,6 +7,8 @@ Done in the current MVP branch:
 - Card-based Builder host is available before the full AppShell.
 - Builder can display manifest-backed tool cards.
 - Builder can publish a template-backed, Rust-resolvable profile revision.
+- Builder can publish a minimal card-backed, Rust-resolvable profile revision with prompt/persona,
+  selected tools, and enabled context step ids.
 - Chat handoff stores both `profile_id` and `profile_revision_id`.
 
 Remaining:
@@ -48,8 +50,8 @@ Remaining:
 
 ### Agent Builder Card-Backed Publish
 
-- Publish card-backed revisions instead of template-backed revisions.
-- Wire prompt/persona, context policy, memory policy, selected tools, and skills into the published profile revision.
+- Expand card-backed publish beyond the MVP prompt/persona/tool/context-step slice.
+- Wire full context policy, memory policy, selected tools, and skills into the published profile revision.
 - Add Rust-backed context preview/trace for Builder.
 - Add validation copy for unsupported cards, missing permissions, and publish-blocking configuration.
 

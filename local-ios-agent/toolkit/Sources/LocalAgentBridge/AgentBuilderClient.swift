@@ -35,7 +35,13 @@ public struct RustAgentBuilderClient: AgentBuilderClient {
     public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
         try await execution.buildAgent(BuildAgentRequestDTO(
             profileId: draft.profileId,
-            templateId: draft.templateId
+            templateId: draft.templateId,
+            displayName: draft.displayName,
+            systemPrompt: draft.systemPrompt,
+            persona: draft.persona,
+            responseStyle: draft.responseStyle,
+            selectedToolIds: draft.selectedToolIds,
+            contextStepIds: draft.contextStepIds
         ))
     }
 

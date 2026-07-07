@@ -850,8 +850,7 @@ struct AgentRuntimeServiceTests {
             }
         }
 
-        try await Task.sleep(nanoseconds: 120_000_000)
-        #expect(await observation.didObserveDeltaValue)
+        await observation.waitForDelta()
         #expect(await client.didReleaseFinalResult == false)
 
         await client.releaseFinalResult()

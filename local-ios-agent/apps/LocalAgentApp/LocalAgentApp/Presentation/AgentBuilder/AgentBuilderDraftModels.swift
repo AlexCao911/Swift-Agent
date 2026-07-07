@@ -1,4 +1,5 @@
 import Foundation
+import LocalAgentBridge
 
 struct AgentBuilderDraft: Equatable, Sendable, Identifiable {
     var id: String
@@ -52,6 +53,27 @@ struct AgentBuilderDraft: Equatable, Sendable, Identifiable {
 
     var selectedToolIds: [String] {
         cards.compactMap(\.payload.toolBelt?.selectedToolIds).first ?? []
+    }
+
+    func publishDTO(templateId: String) -> AgentBuilderDraftDTO {
+        let prompt = cards.compactMap(\.payload.prompt).first
+        let enabledContextStepIds = cards
+            .compactMap(\.payload.contextPipeline?.steps)
+            .flatMap { $0 }
+            .filter(\.isEnabled)
+            .sorted { $0.order < $1.order }
+            .map(\.id)
+
+        return AgentBuilderDraftDTO(
+            profileId: sourceProfileId,
+            templateId: templateId,
+            displayName: displayName,
+            systemPrompt: prompt?.systemPrompt,
+            persona: prompt?.persona,
+            responseStyle: prompt?.responseStyle,
+            selectedToolIds: selectedToolIds,
+            contextStepIds: enabledContextStepIds
+        )
     }
 
     mutating func touch() {

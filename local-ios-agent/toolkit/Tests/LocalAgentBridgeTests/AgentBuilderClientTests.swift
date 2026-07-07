@@ -24,6 +24,36 @@ struct AgentBuilderClientTests {
         #expect(profile.profileRevisionId == 1)
     }
 
+    @Test("publish profile forwards card backed draft fields")
+    func publishProfileForwardsCardBackedDraftFields() async throws {
+        let bridge = RecordingExecutionBridgeClient()
+        let client = RustAgentBuilderClient(execution: bridge)
+
+        _ = try await client.publishProfile(AgentBuilderDraftDTO(
+            profileId: "profile.draft.local",
+            templateId: "template.assistant.default",
+            displayName: "Research Agent",
+            systemPrompt: "You are careful.",
+            persona: "Researcher",
+            responseStyle: "Concise",
+            selectedToolIds: ["calendar.search_events", "web.fetch_url_text"],
+            contextStepIds: ["system_prompt", "conversation_history", "tool_results"]
+        ))
+
+        #expect(bridge.builtRequests == [
+            BuildAgentRequestDTO(
+                profileId: "profile.draft.local",
+                templateId: "template.assistant.default",
+                displayName: "Research Agent",
+                systemPrompt: "You are careful.",
+                persona: "Researcher",
+                responseStyle: "Concise",
+                selectedToolIds: ["calendar.search_events", "web.fetch_url_text"],
+                contextStepIds: ["system_prompt", "conversation_history", "tool_results"]
+            ),
+        ])
+    }
+
     @Test("validate draft reports unsupported template")
     func validateDraftReportsUnsupportedTemplate() async throws {
         let bridge = RecordingExecutionBridgeClient()

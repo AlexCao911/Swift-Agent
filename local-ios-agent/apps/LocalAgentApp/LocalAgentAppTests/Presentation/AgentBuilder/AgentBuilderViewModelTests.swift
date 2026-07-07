@@ -142,6 +142,34 @@ struct AgentBuilderViewModelTests {
         ))
     }
 
+    @Test("publish sends card-backed draft fields")
+    func publishSendsCardBackedDraftFields() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        viewModel.toggleTool("web.fetch_url_text")
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        let publishedDraft = await builderClient.publishedDrafts.last
+        #expect(publishedDraft?.displayName == "Assistant")
+        #expect(publishedDraft?.systemPrompt == AgentPromptDefaults.systemPrompt)
+        #expect(publishedDraft?.persona == "Helpful, concise, and careful.")
+        #expect(publishedDraft?.responseStyle == "Balanced")
+        #expect(publishedDraft?.selectedToolIds == ["web.fetch_url_text"])
+        #expect(publishedDraft?.contextStepIds == [
+            "system_prompt",
+            "conversation_history",
+            "tool_results",
+        ])
+    }
+
     @Test("editing after publish clears stale chat handoff selection")
     func editingAfterPublishClearsStaleSelection() async throws {
         let viewModel = AgentBuilderViewModel.fixtureReadyToPublish(publishedRevision: 9)
@@ -153,6 +181,31 @@ struct AgentBuilderViewModelTests {
 
         #expect(viewModel.lifecycle == .dirty)
         #expect(viewModel.publishedAgentSelection == nil)
+    }
+}
+
+private actor RecordingAgentBuilderClient: AgentBuilderClient {
+    private(set) var publishedDrafts: [AgentBuilderDraftDTO] = []
+
+    func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
+        AgentBuilderUIModel(
+            profileId: id,
+            displayName: "Assistant",
+            readiness: PermissionReadinessUIModel()
+        )
+    }
+
+    func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel {
+        ReadinessUIModel(issues: [])
+    }
+
+    func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
+        publishedDrafts.append(draft)
+        return AgentProfileDTO(
+            profileId: draft.profileId,
+            profileRevisionId: 11,
+            displayName: draft.displayName ?? "Assistant"
+        )
     }
 }
 
