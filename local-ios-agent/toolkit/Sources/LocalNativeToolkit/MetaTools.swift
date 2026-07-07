@@ -18,12 +18,17 @@ public struct NativeListToolsTool: NativeTool {
 
     public func execute(argumentsJson: String) async -> ToolResultDTO {
         let toolSummaries = catalogProvider().schemas
-            .filter { $0.availability == .available }
-            .map { schema in
-                ToolSummary(
-                    name: schema.name,
-                    riskLevel: schema.riskLevel,
-                    permissionScope: schema.permissionScope?.name
+            .compactMap { schema -> ToolSummary? in
+                guard let exported = NativeToolSchemaExport.export(schema),
+                      let metadataJson = exported.metadataJson,
+                      let metadata = Self.decodeMetadata(metadataJson)
+                else {
+                    return nil
+                }
+                return ToolSummary(
+                    name: exported.name,
+                    riskLevel: exported.riskLevel,
+                    permissionScope: metadata.permissionScope
                 )
             }
             .sorted { $0.name < $1.name }
@@ -92,6 +97,13 @@ public struct NativeListToolsTool: NativeTool {
             availability: .available,
             manifest: manifest
         )
+    }
+
+    private static func decodeMetadata(_ json: String) -> NativeToolSchemaMetadataV1? {
+        guard let data = json.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(NativeToolSchemaMetadataV1.self, from: data)
     }
 }
 
@@ -183,7 +195,7 @@ public struct NativePermissionStatusTool: NativeTool {
 
 private struct ToolSummary {
     var name: String
-    var riskLevel: NativeToolRiskLevel
+    var riskLevel: RiskLevelDTO
     var permissionScope: String?
 }
 
@@ -192,13 +204,15 @@ private struct NativePermissionStatusEntry {
     var state: String
 }
 
-private func riskLevelString(_ riskLevel: NativeToolRiskLevel) -> String {
+private func riskLevelString(_ riskLevel: RiskLevelDTO) -> String {
     switch riskLevel {
     case .readOnly:
         "read_only"
     case .confirm:
         "confirm"
     case .destructive:
+        "destructive"
+    default:
         "destructive"
     }
 }

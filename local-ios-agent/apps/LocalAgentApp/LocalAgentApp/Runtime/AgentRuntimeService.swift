@@ -108,7 +108,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
     }
 
     private let runtimeClient: any RuntimeClient
-    private let toolDriver: MinimalHostToolDriver
+    private let toolDriver: any HostToolDriving
     private let streamFlushNanoseconds: UInt64
     private let coordinator: (any ChatInteractionCoordinating)?
     private var activeRun: ActiveRun?
@@ -116,7 +116,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
 
     init(
         runtimeClient: any RuntimeClient,
-        toolDriver: MinimalHostToolDriver,
+        toolDriver: any HostToolDriving,
         streamFlushNanoseconds: UInt64 = 50_000_000,
         coordinator: (any ChatInteractionCoordinating)? = nil
     ) {
@@ -134,7 +134,9 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             return try await loadConversations(state: state)
         }
 
-        try await runtimeClient.registerToolSchema(toolDriver.schema)
+        for schema in await toolDriver.schemas() {
+            try await runtimeClient.registerToolSchema(schema)
+        }
         let sessionId = try await runtimeClient.createSession()
         hasPrepared = true
         var state = AgentViewState(phase: .ready, currentSessionId: sessionId)

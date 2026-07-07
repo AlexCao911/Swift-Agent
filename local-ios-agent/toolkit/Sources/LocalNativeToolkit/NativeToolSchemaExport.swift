@@ -3,22 +3,27 @@ import LocalAgentBridge
 
 public enum NativeToolSchemaExport {
     public static func exportSchemas(from catalog: NativeToolCatalog) -> [ToolSchemaDTO] {
-        catalog.schemas.compactMap { schema in
-            guard schema.availability == .available else {
-                return nil
-            }
-            let effectiveRisk = schema.manifest.map {
-                effectiveRiskLevel(schema.riskLevel, $0.riskLevel)
-            } ?? schema.riskLevel
+        catalog.schemas.compactMap { export($0) }
+    }
 
-            return ToolSchemaDTO(
-                name: schema.name,
-                description: schema.description,
-                parametersJsonSchema: schema.inputSchema.jsonString,
-                riskLevel: bridgeRiskLevel(for: effectiveRisk),
-                metadataJson: metadataJSON(for: schema)
-            )
+    public static func export(_ schema: NativeToolSchema) -> ToolSchemaDTO? {
+        guard schema.availability == .available,
+              let manifest = schema.manifest
+        else {
+            return nil
         }
+        let effectiveRisk = effectiveRiskLevel(schema.riskLevel, manifest.riskLevel)
+        guard let metadataJson = metadataJSON(for: schema) else {
+            return nil
+        }
+
+        return ToolSchemaDTO(
+            name: schema.name,
+            description: schema.description,
+            parametersJsonSchema: schema.inputSchema.jsonString,
+            riskLevel: bridgeRiskLevel(for: effectiveRisk),
+            metadataJson: metadataJson
+        )
     }
 
     public static func bridgeRiskLevel(for riskLevel: NativeToolRiskLevel) -> RiskLevelDTO {

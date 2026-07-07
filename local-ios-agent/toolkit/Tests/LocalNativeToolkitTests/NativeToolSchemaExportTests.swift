@@ -6,7 +6,55 @@ import LocalAgentBridge
 @Suite("Native tool schema export")
 struct NativeToolSchemaExportTests {
     @Test
-    func exportsAvailableNativeSchemasInBridgeDTOShape() throws {
+    func singleSchemaExportMatchesCatalogExport() throws {
+        let permissionStore = PermissionStore()
+        let catalog = try NativeToolCatalog(tools: [
+            NativePermissionStatusTool(permissionStore: permissionStore),
+        ])
+        let schema = try #require(catalog.schemas.first)
+
+        let single = try #require(NativeToolSchemaExport.export(schema))
+        let all = NativeToolSchemaExport.exportSchemas(from: catalog)
+
+        #expect(all == [single])
+        #expect(single.metadataJson?.contains(#""schema_version":1"#) == true)
+    }
+
+    @Test
+    func schemaWithoutManifestIsNotExported() {
+        let schema = NativeToolSchema(
+            name: "debug.unmanifested",
+            description: "A tool without a manifest.",
+            inputSchema: .object(),
+            riskLevel: .readOnly,
+            permissionScope: nil,
+            availability: .available,
+            manifest: nil
+        )
+
+        #expect(NativeToolSchemaExport.export(schema) == nil)
+    }
+
+    @Test
+    func exportsAvailableManifestBackedSchemasInBridgeDTOShape() throws {
+        let manifest = NativeToolManifest(
+            manifestId: "native.calendar.search_events.v1",
+            capabilityId: "calendar.events.search",
+            title: "Search Calendar",
+            description: "Search calendar events",
+            mode: .background,
+            permissionScope: NativePermissionScope("calendar.events.read_full"),
+            requiredPrivacyKeys: ["NSCalendarsFullAccessUsageDescription"],
+            requiresForegroundUI: false,
+            minimumOS: "iOS 17.0",
+            regionPolicy: "available_with_service_fallback",
+            fallback: NativeToolFallback(kind: .openSettings, message: "Calendar access is required."),
+            riskLevel: .confirm,
+            approvalPolicy: .perCall,
+            trustLevel: .trustedToolResult,
+            retention: .runOnly,
+            audit: NativeToolAudit(label: "Calendar Search", resultSummaryPolicy: .metadataOnly)
+        )
         let parameters = #"{"type":"object","properties":{"query":{"type":"string"}}}"#
         let catalog = try NativeToolCatalog(tools: [
             ExportStubTool(
@@ -14,19 +62,21 @@ struct NativeToolSchemaExportTests {
                     name: "calendar.search_events",
                     description: "Search calendar events",
                     inputSchema: JSONSchemaDTO(jsonString: parameters),
-                    riskLevel: .confirm,
-                    permissionScope: NativePermissionScope("calendar.events"),
-                    availability: .available
+                    riskLevel: .readOnly,
+                    permissionScope: NativePermissionScope("calendar.events.read_full"),
+                    availability: .available,
+                    manifest: manifest
                 )
             ),
             ExportStubTool(
                 schema: NativeToolSchema(
-                    name: "calendar.disabled",
-                    description: "Unavailable",
+                    name: "legacy.unmanifested",
+                    description: "Should not export",
                     inputSchema: .object(),
                     riskLevel: .readOnly,
                     permissionScope: nil,
-                    availability: .unavailable(reason: "disabled")
+                    availability: .available,
+                    manifest: nil
                 )
             ),
         ])
@@ -37,7 +87,7 @@ struct NativeToolSchemaExportTests {
         #expect(exported[0].description == "Search calendar events")
         #expect(exported[0].parametersJsonSchema == parameters)
         #expect(exported[0].riskLevel == .confirm)
-        #expect(exported[0].metadataJson == nil)
+        #expect(exported[0].metadataJson != nil)
 
         let encoded = try JSONEncoder().encode(exported[0])
         let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
@@ -46,7 +96,7 @@ struct NativeToolSchemaExportTests {
         #expect(object?["description"] as? String == "Search calendar events")
         #expect(object?["parameters_json_schema"] as? String == parameters)
         #expect(object?["risk_level"] as? String == "confirm")
-        #expect(object?["metadata_json"] == nil)
+        #expect(object?["metadata_json"] as? String != nil)
     }
 
     @Test
@@ -113,7 +163,7 @@ struct NativeToolSchemaExportTests {
     }
 
     @Test
-    func missingManifestDoesNotSynthesizeProductMetadata() throws {
+    func missingManifestDoesNotExportProductSchema() throws {
         let catalog = try NativeToolCatalog(tools: [
             ExportStubTool(
                 schema: NativeToolSchema(
@@ -129,8 +179,7 @@ struct NativeToolSchemaExportTests {
 
         let exported = NativeToolSchemaExport.exportSchemas(from: catalog)
 
-        #expect(exported.count == 1)
-        #expect(exported[0].metadataJson == nil)
+        #expect(exported.isEmpty)
     }
 
     @Test

@@ -22,19 +22,24 @@ enum AppBootstrapper {
             providers: providers,
             agentOS: agentOSConfiguration(environment: environment)
         ))
-        let toolDriver = MinimalHostToolDriver()
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
+        let permissionStore = PermissionStore()
+        let catalogBox = NativeCatalogBox(catalog: try NativeToolCatalog(tools: []))
+        let listTools = NativeListToolsTool(catalogProvider: { catalogBox.catalog })
+        let nativeCatalog = try NativeToolCatalog(tools: [
+            listTools,
+            NativePermissionStatusTool(permissionStore: permissionStore),
+            WebFetchURLTextTool(),
+        ])
+        catalogBox.catalog = nativeCatalog
+        let nativeToolkitClient = NativeToolkitClient(catalog: nativeCatalog)
+        let toolDriver = NativeHostToolDriver(toolkit: nativeToolkitClient)
         let coordinator = conversationExecutionCoordinator(
             environment: environment,
             client: client,
             executionBridge: executionBridge,
             toolDriver: toolDriver
         )
-        let permissionStore = PermissionStore()
-        let nativeCatalog = try NativeToolCatalog(tools: [
-            NativePermissionStatusTool(permissionStore: permissionStore),
-            WebFetchURLTextTool(),
-        ])
         let builderToolCatalogClient = NativeManifestToolCatalogClient(catalogProvider: {
             nativeCatalog
         })
@@ -45,6 +50,7 @@ enum AppBootstrapper {
                 toolDriver: toolDriver,
                 coordinator: coordinator
             ),
+            nativeToolkitClient: nativeToolkitClient,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: builderToolCatalogClient
@@ -55,7 +61,7 @@ enum AppBootstrapper {
         environment: [String: String],
         client: RustRuntimeClient,
         executionBridge: RustExecutionBridgeClient,
-        toolDriver: MinimalHostToolDriver
+        toolDriver: any HostToolDriving
     ) -> ChatInteractionCoordinator? {
         // Keep this feature gated until Rust execution uses the verified ReAct worker path.
         // The migration adapter must not become the default app path.
@@ -141,5 +147,13 @@ enum AppBootstrapper {
                 maxContextTokens: 2048
             ),
         ]
+    }
+}
+
+private final class NativeCatalogBox: @unchecked Sendable {
+    var catalog: NativeToolCatalog
+
+    init(catalog: NativeToolCatalog) {
+        self.catalog = catalog
     }
 }

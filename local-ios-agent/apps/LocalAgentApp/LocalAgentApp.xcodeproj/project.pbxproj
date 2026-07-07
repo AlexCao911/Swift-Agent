@@ -52,6 +52,10 @@
 		0C0000010000000000002008 /* AgentBuilderPublishReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */; };
 		0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */; };
 		0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210A /* BuilderFirstHostView.swift */; };
+		0C000001000000000000200B /* NativeToolkitClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210B /* NativeToolkitClient.swift */; };
+		0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210C /* NativeHostToolDriver.swift */; };
+		0C000001000000000000200D /* NativeToolkitClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210D /* NativeToolkitClientTests.swift */; };
+		0C000001000000000000200E /* NativeHostToolDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210E /* NativeHostToolDriverTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -130,6 +134,10 @@
 		0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderPublishReviewView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostViewModelTests.swift; sourceTree = "<group>"; };
 		0C000001000000000000210A /* BuilderFirstHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostView.swift; sourceTree = "<group>"; };
+		0C000001000000000000210B /* NativeToolkitClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeToolkitClient.swift; sourceTree = "<group>"; };
+		0C000001000000000000210C /* NativeHostToolDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHostToolDriver.swift; sourceTree = "<group>"; };
+		0C000001000000000000210D /* NativeToolkitClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeToolkitClientTests.swift; sourceTree = "<group>"; };
+		0C000001000000000000210E /* NativeHostToolDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHostToolDriverTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -254,6 +262,8 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000107 /* MinimalHostToolDriver.swift */,
+				0C000001000000000000210C /* NativeHostToolDriver.swift */,
+				0C000001000000000000210B /* NativeToolkitClient.swift */,
 			);
 			path = Tools;
 			sourceTree = "<group>";
@@ -376,6 +386,8 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */,
+				0C000001000000000000210E /* NativeHostToolDriverTests.swift */,
+				0C000001000000000000210D /* NativeToolkitClientTests.swift */,
 			);
 			path = Tools;
 			sourceTree = "<group>";
@@ -574,6 +586,8 @@
 				0B000001000000000000100B /* InferenceSettingsService.swift in Sources */,
 				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
 				0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */,
+				0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */,
+				0C000001000000000000200B /* NativeToolkitClient.swift in Sources */,
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
 				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
@@ -619,6 +633,8 @@
 				0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */,
 				0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */,
 				0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */,
+				0C000001000000000000200E /* NativeHostToolDriverTests.swift in Sources */,
+				0C000001000000000000200D /* NativeToolkitClientTests.swift in Sources */,
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,

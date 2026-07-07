@@ -14,6 +14,7 @@ struct LocalAgentApp: App {
                     runtimeClient: FailingRuntimeClient(error: error),
                     toolDriver: MinimalHostToolDriver()
                 ),
+                nativeToolkitClient: EmptyNativeToolkitClient(),
                 agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([
                     PermissionIssueDTO(
                         code: "app.bootstrap.failed",
@@ -51,4 +52,22 @@ private actor FailingRuntimeClient: RuntimeClient {
     func submitApprovalResponse(_ response: ApprovalProtocolResponseDTO) async throws -> AgentTurnResultDTO { throw error }
     func cancel(runId: String) async throws -> RuntimeEventDTO { throw error }
     func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? { throw error }
+}
+
+private actor EmptyNativeToolkitClient: NativeToolkitClientProtocol {
+    func registrationSnapshot() async -> NativeToolkitRegistrationSnapshot {
+        NativeToolkitRegistrationSnapshot(schemas: [], toolNames: [])
+    }
+
+    func execute(_ request: ToolExecutionRequestDTO) async -> ToolResultDTO {
+        ToolResultDTO(
+            displayText: "Native toolkit is unavailable.",
+            modelText: "Native toolkit is unavailable.",
+            structuredJson: #"{"error":"native_toolkit_unavailable"}"#,
+            auditText: "Native toolkit unavailable.",
+            sensitivity: .public,
+            retention: .runOnly,
+            isError: true
+        )
+    }
 }

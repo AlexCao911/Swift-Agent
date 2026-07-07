@@ -22,12 +22,12 @@ protocol ChatInteractionCoordinating: AnyObject, Sendable {
 final class ChatInteractionCoordinator: ChatInteractionCoordinating {
     private let conversation: any ConversationDomain
     private let execution: any ExecutionDomain
-    private let toolDriver: MinimalHostToolDriver
+    private let toolDriver: any HostToolDriving
 
     init(
         conversation: any ConversationDomain,
         execution: any ExecutionDomain,
-        toolDriver: MinimalHostToolDriver = MinimalHostToolDriver()
+        toolDriver: any HostToolDriving = MinimalHostToolDriver()
     ) {
         self.conversation = conversation
         self.execution = execution

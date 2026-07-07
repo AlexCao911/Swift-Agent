@@ -9,8 +9,8 @@ struct MetaToolsTests {
     func listToolsReturnsEnvelopeWithTrustedToolResultAndToolArray() async throws {
         let tool = NativeListToolsTool(catalogProvider: {
             try! NativeToolCatalog(tools: [
-                MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope"),
-                MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil),
+                MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope", manifestRiskLevel: .confirm),
+                MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil, manifestRiskLevel: .readOnly),
             ])
         })
 
@@ -33,8 +33,8 @@ struct MetaToolsTests {
     @Test
     func listToolsReportsAvailableSchemasAsPublicRunScopedResult() async throws {
         let catalog = try NativeToolCatalog(tools: [
-            MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope"),
-            MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil),
+            MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope", manifestRiskLevel: .confirm),
+            MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil, manifestRiskLevel: .readOnly),
         ])
         let tool = NativeListToolsTool(catalog: catalog)
 
@@ -77,10 +77,45 @@ struct MetaToolsTests {
         let tools = try #require(payload["tools"] as? [[String: Any]])
 
         #expect(tools.map { $0["name"] as? String } == [
-            "alpha.tool",
             "native.list_tools",
             "native.permission_status",
         ])
+    }
+
+    @Test
+    func listToolsOmitsManifestlessAvailableTools() async throws {
+        let catalog = try NativeToolCatalog(tools: [
+            MetaStubTool(name: "manifest.tool", riskLevel: .readOnly, permissionScope: nil, manifestRiskLevel: .readOnly),
+            MetaStubTool(name: "debug.unmanifested", riskLevel: .readOnly, permissionScope: nil, manifestRiskLevel: nil),
+        ])
+        let tool = NativeListToolsTool(catalog: catalog)
+
+        let result = await tool.execute(argumentsJson: "{}")
+        let object = try decodedJSONObject(result.structuredJson)
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
+
+        #expect(tools.map { $0["name"] as? String } == ["manifest.tool"])
+    }
+
+    @Test
+    func listToolsReportsExportedEffectiveRisk() async throws {
+        let catalog = try NativeToolCatalog(tools: [
+            MetaStubTool(
+                name: "confirm.tool",
+                riskLevel: .readOnly,
+                permissionScope: nil,
+                manifestRiskLevel: .confirm
+            ),
+        ])
+        let tool = NativeListToolsTool(catalog: catalog)
+
+        let result = await tool.execute(argumentsJson: "{}")
+        let object = try decodedJSONObject(result.structuredJson)
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
+
+        #expect(tools.first?["risk_level"] as? String == "confirm")
     }
 
     @Test
@@ -124,14 +159,40 @@ private final class CatalogBox: @unchecked Sendable {
 private struct MetaStubTool: NativeTool {
     var schema: NativeToolSchema
 
-    init(name: String, riskLevel: NativeToolRiskLevel, permissionScope: NativePermissionScope?) {
+    init(
+        name: String,
+        riskLevel: NativeToolRiskLevel,
+        permissionScope: NativePermissionScope?,
+        manifestRiskLevel: NativeToolRiskLevel? = nil
+    ) {
+        let manifest = manifestRiskLevel.map { manifestRiskLevel in
+            NativeToolManifest(
+                manifestId: "native.\(name).v1",
+                capabilityId: name,
+                title: name,
+                description: "Meta stub",
+                mode: .background,
+                permissionScope: permissionScope,
+                requiredPrivacyKeys: [],
+                requiresForegroundUI: false,
+                minimumOS: "iOS 17.0",
+                regionPolicy: "available_with_service_fallback",
+                fallback: NativeToolFallback(kind: .none, message: ""),
+                riskLevel: manifestRiskLevel,
+                approvalPolicy: .never,
+                trustLevel: .trustedToolResult,
+                retention: .runOnly,
+                audit: NativeToolAudit(label: name, resultSummaryPolicy: .metadataOnly)
+            )
+        }
         self.schema = NativeToolSchema(
             name: name,
             description: "Meta stub",
             inputSchema: .object(),
             riskLevel: riskLevel,
             permissionScope: permissionScope,
-            availability: .available
+            availability: .available,
+            manifest: manifest
         )
     }
 

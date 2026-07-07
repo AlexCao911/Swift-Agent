@@ -1,7 +1,7 @@
 import Foundation
 import LocalAgentBridge
 
-actor MinimalHostToolDriver {
+actor MinimalHostToolDriver: HostToolDriving {
     nonisolated static let debugEchoSchema = ToolSchemaDTO(
         name: "debug.echo",
         description: "Echo text back to the model.",
@@ -18,6 +18,10 @@ actor MinimalHostToolDriver {
 
     nonisolated var schema: ToolSchemaDTO {
         Self.debugEchoSchema
+    }
+
+    func schemas() async -> [ToolSchemaDTO] {
+        [schema]
     }
 
     func execute(_ request: ToolExecutionRequestDTO, continuationIndex: Int) async -> ToolResultDTO? {
