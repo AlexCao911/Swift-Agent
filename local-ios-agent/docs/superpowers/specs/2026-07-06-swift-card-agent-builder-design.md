@@ -17,31 +17,6 @@ Agent = Tool Belt + Context Pipeline
 
 Prompt, memory, skills, model settings, and runtime options matter, but they are supporting pieces around those two core surfaces.
 
-## Scope Window
-
-This document is the 20-day / post-6-day Swift app architecture target. It intentionally covers the full tool toolkit and card-based builder direction.
-
-The 6-day slice should be smaller:
-
-```text
-6-day slice
-  Agent.md-style editor
-  host capability toggles
-  NativeToolManifest seed
-  native.list_tools / native.permission_status
-  minimal calendar/reminder proof
-
-20-day target
-  card-based Agent Builder
-  attachment-backed Files/Photos
-  ContextPreviewService
-  app-owned Shortcuts/App Intents
-  Maps/Web compatibility-priority tools
-  richer tool inspector and draft lifecycle
-```
-
-Compatibility-priority means the architecture treats Shortcuts/App Intents, Maps, and Web as first-class tool families with fallbacks. It does not mean every family must ship in the 6-day slice.
-
 ## Research Notes
 
 ### Apple System Capability APIs
@@ -365,12 +340,16 @@ User-mediated tools may outlive the immediate Swift call stack. The broker must 
 
 ```text
 pending_user_interaction
+  pending interaction id
   run id
   tool call id
   interaction kind
   requested manifest id
   created at
   resumable payload summary
+  expiration policy
+  resume action
+  cancel action
 ```
 
 If the app is backgrounded, killed while a picker is open, or relaunched from a share extension, Swift should be able to recover the pending interaction, either resume it or fail it with a structured user-cancelled/system-interrupted result, then let Rust continue from the run snapshot.
@@ -390,10 +369,26 @@ Each attachment should record:
 - retention policy
 - sensitivity
 - trust level for context injection
+- bookmark status for file-backed attachments
+- recovery status when original access can no longer be resolved
 
 The model receives metadata and a stable attachment id. Swift and Rust resolve the actual bytes only through approved tool paths.
 
-For Files and Photos phase work, the store must also handle stale or invalid security-scoped bookmarks. A stale bookmark should trigger a repair flow through `NativeInteractionBroker` instead of returning a raw path or silently failing during execution.
+File-backed attachments should use explicit recovery states:
+
+```text
+available
+  Bytes can be resolved through app storage or a valid security-scoped bookmark.
+
+needs_user_reselection
+  The bookmark is stale, revoked, missing, or no longer resolves.
+  NativeInteractionBroker must ask the user to reselect the file before the tool can read bytes.
+
+unavailable
+  The user declined repair, the source no longer exists, or the app cannot legally access it.
+```
+
+Files and Photos tools must not return raw paths or opaque file errors when access fails. They should return attachment state and, when possible, route repair through `NativeInteractionBroker`.
 
 The intended composition pattern is:
 
@@ -901,13 +896,12 @@ Apple system API
 - User-mediated tools can recover or fail cleanly from pending interaction state after app interruption.
 - Attachment-producing tools and attachment-consuming tools compose through `NativeAttachmentStore`.
 - Attachment and external-content results carry trust levels into Context Preview and Rust context assembly.
-- Files/Photos attachment storage has a planned stale security-scoped bookmark repair path before phase-2 rollout.
+- Files/Photos attachment storage has explicit `available`, `needs_user_reselection`, and `unavailable` states for security-scoped bookmark failure and repair.
 - Shortcuts/App Intents, Maps, and Web are treated as compatibility-priority tool families, not blanket-deferred capabilities.
 - Context cards can be reordered/configured through presets.
 - Context Pipeline has a Rust-backed preview with ordered segments, trust levels, token estimates, and privacy warnings.
 - Agent Builder exposes a clear draft lifecycle from editing to published.
 - Published runs bind to an immutable profile revision id.
-- This document is a 20-day/post-6-day architecture target; the 6-day slice is explicitly smaller.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
 - iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
