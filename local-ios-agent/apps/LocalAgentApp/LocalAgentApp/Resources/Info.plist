@@ -20,6 +20,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string></string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Local Agent uses calendar access only when an enabled agent tool searches your events.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Local Agent can create calendar events only after you choose an agent action that needs it.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Local Agent uses reminders access only for enabled reminder tools.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIImageName</key>

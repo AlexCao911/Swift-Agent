@@ -2,6 +2,10 @@ import Foundation
 import LocalAgentBridge
 import LocalNativeToolkit
 
+#if canImport(EventKit) && os(iOS)
+import EventKit
+#endif
+
 enum AppBootstrapper {
     static func makeContainer(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -26,11 +30,10 @@ enum AppBootstrapper {
         let permissionStore = PermissionStore()
         let catalogBox = NativeCatalogBox(catalog: try NativeToolCatalog(tools: []))
         let listTools = NativeListToolsTool(catalogProvider: { catalogBox.catalog })
-        let nativeCatalog = try NativeToolCatalog(tools: [
-            listTools,
-            NativePermissionStatusTool(permissionStore: permissionStore),
-            WebFetchURLTextTool(),
-        ])
+        let nativeCatalog = try NativeToolCatalog(tools: nativeTools(
+            listTools: listTools,
+            permissionStore: permissionStore
+        ))
         catalogBox.catalog = nativeCatalog
         let nativeToolkitClient = NativeToolkitClient(catalog: nativeCatalog)
         let toolDriver = NativeHostToolDriver(toolkit: nativeToolkitClient)
@@ -96,6 +99,25 @@ enum AppBootstrapper {
         }
 
         return RustAgentOSConfiguration(seedDevelopmentProfile: true)
+    }
+
+    private static func nativeTools(
+        listTools: NativeListToolsTool,
+        permissionStore: PermissionStore
+    ) -> [any NativeTool] {
+        var tools: [any NativeTool] = [
+            listTools,
+            NativePermissionStatusTool(permissionStore: permissionStore),
+            WebFetchURLTextTool(),
+        ]
+
+        #if canImport(EventKit) && os(iOS)
+        let eventStore = EKEventStore()
+        tools.append(CalendarSearchEventsTool(calendar: EventKitCalendarAdapter(eventStore: eventStore)))
+        tools.append(RemindersCreateReminderTool(reminders: EventKitReminderAdapter(eventStore: eventStore)))
+        #endif
+
+        return tools
     }
 
     static func sqliteURL(fileManager: FileManager = .default) throws -> URL {
