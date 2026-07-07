@@ -2,11 +2,13 @@ use std::fmt;
 
 use crate::conversation::ConversationRunFrameRef;
 use crate::execution::ExecutionEventLog;
+use crate::user_customization::AgentProfileVersion;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartExecutionRequest {
     run_id: String,
     agent_profile_id: String,
+    profile_revision_id: AgentProfileVersion,
     user_intent: String,
     conversation_run_frame_ref: ConversationRunFrameRef,
 }
@@ -61,12 +63,14 @@ impl StartExecutionRequest {
     pub fn new(
         run_id: impl Into<String>,
         agent_profile_id: impl Into<String>,
+        profile_revision_id: AgentProfileVersion,
         user_intent: impl Into<String>,
         conversation_run_frame_ref: ConversationRunFrameRef,
     ) -> Self {
         Self {
             run_id: run_id.into(),
             agent_profile_id: agent_profile_id.into(),
+            profile_revision_id,
             user_intent: user_intent.into(),
             conversation_run_frame_ref,
         }
@@ -78,6 +82,10 @@ impl StartExecutionRequest {
 
     pub fn agent_profile_id(&self) -> &str {
         &self.agent_profile_id
+    }
+
+    pub fn profile_revision_id(&self) -> AgentProfileVersion {
+        self.profile_revision_id
     }
 
     pub fn user_intent(&self) -> &str {

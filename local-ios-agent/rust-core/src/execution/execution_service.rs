@@ -112,6 +112,7 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             .snapshot_service
             .resolve_and_persist(StartRunRequest::new(
                 request.agent_profile_id(),
+                request.profile_revision_id(),
                 request.user_intent(),
                 request.conversation_run_frame_ref().clone(),
             ))

@@ -9,6 +9,7 @@ use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
 use local_ios_agent_runtime::storage::InMemoryTransactionRunner;
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 use serde_json::json;
 
 fn frame_ref_fixture() -> ConversationRunFrameRef {
@@ -74,6 +75,7 @@ fn package_installed_run_snapshot_summary_matches_golden_and_is_redacted() {
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
+            AgentProfileVersion::initial(),
             "golden run",
             frame_ref_fixture(),
         ))

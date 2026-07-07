@@ -69,6 +69,7 @@ fn package_install_profile_resolves_to_persisted_run_snapshot() {
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
+            installed.profile().profile_version().unwrap(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -118,6 +119,7 @@ fn run_snapshot_denied_permission_stops_before_repository_commit() {
     let error = service
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
+            installed.profile().profile_version().unwrap(),
             "hello",
             frame_ref_fixture(),
         ))

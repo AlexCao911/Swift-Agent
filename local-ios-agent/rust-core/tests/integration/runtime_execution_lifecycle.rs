@@ -6,6 +6,7 @@ use local_ios_agent_runtime::core::{
 use local_ios_agent_runtime::execution::ExecutionPlanner;
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::runtime::{RecordingEffectDriver, RunMachine, RunState};
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 fn frame_ref_fixture() -> ConversationRunFrameRef {
     ConversationRunFrameRef::new(
@@ -21,6 +22,7 @@ fn resolved_snapshot_plans_and_executes_without_profile_or_package_state() {
     let snapshot = RunSnapshotService::fixture()
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "integration hello",
             frame_ref_fixture(),
         ))
@@ -53,6 +55,7 @@ fn core_runtime_public_plan_entry_delegates_to_run_machine() {
     let snapshot = RunSnapshotService::fixture()
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "core runtime plan entry",
             frame_ref_fixture(),
         ))

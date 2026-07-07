@@ -10,6 +10,7 @@ use local_ios_agent_runtime::runtime::{
     EffectKind, RecordingEffectDriver, RunMachine, RunMachinePersistence, RunState,
 };
 use local_ios_agent_runtime::security::PermissionState;
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 fn frame_ref_fixture() -> ConversationRunFrameRef {
     ConversationRunFrameRef::new(
@@ -38,6 +39,7 @@ fn planner_rejects_unready_snapshot_before_runtime_can_start() {
     let snapshot = RunSnapshotService::fixture_with_permission_state(PermissionState::Denied)
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello runtime",
             frame_ref_fixture(),
         ))
@@ -383,6 +385,7 @@ fn resolved_snapshot_fixture() -> ResolvedRunSnapshot {
     RunSnapshotService::fixture()
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello runtime",
             frame_ref_fixture(),
         ))

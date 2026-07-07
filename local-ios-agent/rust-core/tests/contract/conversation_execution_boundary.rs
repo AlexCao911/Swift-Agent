@@ -12,6 +12,7 @@ use local_ios_agent_runtime::execution::{
     InferenceSettingsService, RunLifecycleService, RuntimeOptions, StartExecutionRequest,
 };
 use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 #[derive(Clone)]
 struct FixtureExecutionModel;
@@ -584,6 +585,7 @@ fn execution_service_passes_plan_to_react_worker_trace() {
         .start_run(StartExecutionRequest::new(
             "run_plan_trace_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref,
         ))
@@ -689,6 +691,7 @@ fn execution_service_is_thin_facade() {
         .start_run(StartExecutionRequest::new(
             "run_facade_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref,
         ))
@@ -782,6 +785,7 @@ fn execution_service_uses_injected_worker_model_client() {
         .start_run(StartExecutionRequest::new(
             "run_injected_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello injected",
             frame_ref,
         ))
@@ -832,6 +836,7 @@ fn execution_start_loads_frame_resolves_snapshot_and_runs_react_worker() {
         .start_run(StartExecutionRequest::new(
             "run_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref,
         ))
@@ -869,6 +874,7 @@ fn execution_start_rejects_unissued_frame_ref() {
         .start_run(StartExecutionRequest::new(
             "run_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             missing_ref,
         ))
@@ -915,6 +921,7 @@ fn execution_start_rejects_tampered_frame_ref_with_real_frame_id() {
         .start_run(StartExecutionRequest::new(
             "run_1",
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             tampered_ref,
         ))

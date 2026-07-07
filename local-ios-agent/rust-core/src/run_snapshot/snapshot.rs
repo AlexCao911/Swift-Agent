@@ -14,6 +14,7 @@ pub struct RunUserIntent(String);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartRunRequest {
     agent_profile_id: AgentProfileId,
+    profile_revision_id: AgentProfileVersion,
     user_intent: RunUserIntent,
     conversation_run_frame_ref: ConversationRunFrameRef,
 }
@@ -85,11 +86,13 @@ impl RunUserIntent {
 impl StartRunRequest {
     pub fn new(
         agent_profile_id: impl Into<String>,
+        profile_revision_id: AgentProfileVersion,
         user_intent: impl Into<String>,
         conversation_run_frame_ref: ConversationRunFrameRef,
     ) -> Self {
         Self {
             agent_profile_id: AgentProfileId::new(agent_profile_id),
+            profile_revision_id,
             user_intent: RunUserIntent::new(user_intent),
             conversation_run_frame_ref,
         }
@@ -97,6 +100,10 @@ impl StartRunRequest {
 
     pub fn agent_profile_id(&self) -> &AgentProfileId {
         &self.agent_profile_id
+    }
+
+    pub fn profile_revision_id(&self) -> AgentProfileVersion {
+        self.profile_revision_id
     }
 
     pub fn user_intent(&self) -> &RunUserIntent {

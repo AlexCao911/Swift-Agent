@@ -3,6 +3,7 @@ use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::execution::ExecutionPlanner;
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::runtime::{RecordingEffectDriver, RunMachine};
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 fn frame_ref_fixture() -> ConversationRunFrameRef {
     ConversationRunFrameRef::new(
@@ -18,6 +19,7 @@ fn runtime_execution_trace_matches_golden_fixture() {
     let snapshot = RunSnapshotService::fixture()
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "golden runtime",
             frame_ref_fixture(),
         ))

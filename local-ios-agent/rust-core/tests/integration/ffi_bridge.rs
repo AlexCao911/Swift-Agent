@@ -375,6 +375,7 @@ unsafe fn start_c_agent_os_run(
     let request = CString::new(
         json!({
             "agent_profile_id": "profile_1",
+            "profile_revision_id": 1,
             "user_intent": user_intent,
             "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
             "options": {}
@@ -983,6 +984,7 @@ fn c_abi_start_run_requires_profile_from_configured_app_service_repository() {
         let request = CString::new(
             json!({
                 "agent_profile_id": "profile_1",
+                "profile_revision_id": 1,
                 "user_intent": "not seeded",
                 "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
                 "options": {}
@@ -1050,6 +1052,7 @@ fn c_abi_start_run_rejects_swift_supplied_trusted_host_state() {
         let request = CString::new(
             json!({
                 "agent_profile_id": "profile_1",
+                "profile_revision_id": 1,
                 "user_intent": "hello",
                 "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
                 "options": {},
@@ -1082,6 +1085,7 @@ fn c_abi_start_run_rejects_malformed_execution_options_instead_of_dropping_them(
         let request = CString::new(
             json!({
                 "agent_profile_id": "profile_1",
+                "profile_revision_id": 1,
                 "user_intent": "hello options",
                 "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
                 "options": {

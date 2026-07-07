@@ -40,6 +40,7 @@ use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
 };
+use crate::user_customization::AgentProfileVersion;
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
@@ -334,6 +335,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .start_run(StartExecutionRequest::new(
                 run_id,
                 request.agent_profile_id,
+                AgentProfileVersion::new(request.profile_revision_id),
                 request.user_intent,
                 frame_ref,
             ))
@@ -1485,6 +1487,7 @@ struct ConversationRunFrameRefJson {
 #[serde(deny_unknown_fields)]
 struct StartRunRequestJson {
     agent_profile_id: String,
+    profile_revision_id: u64,
     user_intent: String,
     conversation_run_frame_ref: ConversationRunFrameRefJson,
     #[serde(default)]

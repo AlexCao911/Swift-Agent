@@ -94,7 +94,9 @@ impl RunSnapshotResolver {
         input: RunSnapshotResolveInput,
     ) -> RunSnapshotResult<ResolvedRunSnapshot> {
         let (request, trusted_host_state) = input.into_parts();
-        let profile = self.sources.profile(request.agent_profile_id())?;
+        let profile = self
+            .sources
+            .profile(request.agent_profile_id(), request.profile_revision_id())?;
         let component_versions = self.resolve_components(profile.bindings())?;
         let model_binding = self.resolve_model_binding(&profile)?;
         let tool_bindings = self.resolve_tool_bindings(&component_versions);
@@ -347,7 +349,7 @@ impl RunSnapshotSourceCatalog {
         &self,
         request: &StartRunRequest,
     ) -> RunSnapshotResult<TrustedHostRunState> {
-        let profile = self.profile(request.agent_profile_id())?;
+        let profile = self.profile(request.agent_profile_id(), request.profile_revision_id())?;
         let permission_state = self
             .security
             .permission_state(&[CapabilityRequirement::new("run.start")]);
@@ -396,13 +398,20 @@ impl RunSnapshotSourceCatalog {
         ))
     }
 
-    fn profile(&self, profile_id: &AgentProfileId) -> RunSnapshotResult<AgentProfile> {
+    fn profile(
+        &self,
+        profile_id: &AgentProfileId,
+        profile_revision_id: AgentProfileVersion,
+    ) -> RunSnapshotResult<AgentProfile> {
         self.profile_repository
-            .profile(&AgentProfileReference::latest(profile_id.clone()))
+            .profile(&AgentProfileReference::pinned(
+                profile_id.clone(),
+                profile_revision_id,
+            ))
             .ok_or_else(|| {
                 RunSnapshotError::new(
-                    "snapshot.profile_missing",
-                    "agent profile could not be found for run snapshot resolution",
+                    "snapshot.profile_revision_missing",
+                    "agent profile revision could not be found for run snapshot resolution",
                 )
             })
     }

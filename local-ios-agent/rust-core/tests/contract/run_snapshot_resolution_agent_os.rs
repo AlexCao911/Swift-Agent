@@ -15,8 +15,8 @@ use local_ios_agent_runtime::storage::{
 };
 use local_ios_agent_runtime::user_customization::{
     AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings, AgentProfileModelBinding,
-    AgentProfilePublisher, AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService,
-    ComponentContent, InMemoryAgentProfileRepository,
+    AgentProfilePublisher, AgentProfileVersion, AgentSlotKind, AgentTemplate, ComponentBinding,
+    ComponentCatalogService, ComponentContent, InMemoryAgentProfileRepository,
 };
 
 struct ModelSelectionStage<'a> {
@@ -35,7 +35,12 @@ fn frame_ref_fixture() -> ConversationRunFrameRef {
 
 #[test]
 fn start_run_request_requires_conversation_run_frame_ref() {
-    let request = StartRunRequest::new("profile_1", "user asked a question", frame_ref_fixture());
+    let request = StartRunRequest::new(
+        "profile_1",
+        AgentProfileVersion::initial(),
+        "user asked a question",
+        frame_ref_fixture(),
+    );
 
     assert_eq!(request.agent_profile_id().as_str(), "profile_1");
     assert_eq!(request.user_intent().as_str(), "user asked a question");
@@ -46,11 +51,28 @@ fn start_run_request_requires_conversation_run_frame_ref() {
 }
 
 #[test]
+fn start_run_uses_pinned_profile_revision_not_latest() {
+    let service = RunSnapshotService::fixture_with_profile_version(2);
+
+    let error = service
+        .preview(StartRunRequest::new(
+            "profile_1",
+            AgentProfileVersion::new(1),
+            "hello",
+            frame_ref_fixture(),
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "snapshot.profile_revision_missing");
+}
+
+#[test]
 fn resolved_snapshot_pins_conversation_run_frame_ref() {
     let service = RunSnapshotService::fixture();
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -72,6 +94,7 @@ fn snapshot_preview_pins_component_versions_and_model_binding() {
     let preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -174,6 +197,7 @@ fn snapshot_service_consumes_published_profile_from_real_repositories() {
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             "profile.real",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -193,6 +217,7 @@ fn snapshot_service_persists_snapshot_before_runtime() {
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -208,6 +233,7 @@ fn snapshot_service_rejects_profile_changed_between_preview_and_persist() {
     let preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -218,7 +244,7 @@ fn snapshot_service_rejects_profile_changed_between_preview_and_persist() {
         .resolve_preview_and_persist(preview)
         .unwrap_err();
 
-    assert_eq!(error.code(), "snapshot.profile_version_conflict");
+    assert_eq!(error.code(), "snapshot.profile_revision_missing");
 }
 
 #[test]
@@ -227,6 +253,7 @@ fn snapshot_service_rejects_component_changed_between_preview_and_persist() {
     let preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -246,6 +273,7 @@ fn snapshot_service_rejects_model_changed_between_preview_and_persist() {
     let preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -265,6 +293,7 @@ fn snapshot_service_rejects_model_content_changed_at_same_catalog_version() {
     let preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -285,6 +314,7 @@ fn snapshot_service_allocates_snapshot_ids_at_persist_time() {
     let first_preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "first",
             frame_ref_fixture(),
         ))
@@ -292,6 +322,7 @@ fn snapshot_service_allocates_snapshot_ids_at_persist_time() {
     let second_preview = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "second",
             frame_ref_fixture(),
         ))
@@ -312,6 +343,7 @@ fn snapshot_service_captures_denied_permission_from_security_service() {
     let snapshot = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -335,6 +367,7 @@ fn snapshot_service_rejects_unresolvable_model_credential() {
     let error = service
         .preview(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -364,6 +397,7 @@ fn snapshot_service_rejects_missing_model_credential_binding() {
     let error = service
         .preview(StartRunRequest::new(
             "profile.real",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -397,6 +431,7 @@ fn snapshot_service_rejects_model_catalog_selection_that_differs_from_profile_pi
     let error = service
         .preview(StartRunRequest::new(
             "profile.real",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -412,6 +447,7 @@ fn snapshot_service_does_not_persist_permission_denied_snapshot() {
     let error = service
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -448,6 +484,7 @@ fn snapshot_service_rejects_component_kind_drift_at_resolution() {
     let error = service
         .preview(StartRunRequest::new(
             "profile.real",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
@@ -462,6 +499,7 @@ fn snapshot_service_pins_versions_inside_one_transaction() {
     let snapshot = service
         .resolve_and_persist(StartRunRequest::new(
             "profile_1",
+            AgentProfileVersion::initial(),
             "hello",
             frame_ref_fixture(),
         ))
