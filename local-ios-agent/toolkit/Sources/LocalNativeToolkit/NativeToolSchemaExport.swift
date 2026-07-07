@@ -7,13 +7,16 @@ public enum NativeToolSchemaExport {
             guard schema.availability == .available else {
                 return nil
             }
+            let effectiveRisk = schema.manifest.map {
+                effectiveRiskLevel(schema.riskLevel, $0.riskLevel)
+            } ?? schema.riskLevel
 
             return ToolSchemaDTO(
                 name: schema.name,
                 description: schema.description,
                 parametersJsonSchema: schema.inputSchema.jsonString,
-                riskLevel: bridgeRiskLevel(for: schema.riskLevel),
-                metadataJson: metadataJSON(for: schema.permissionScope)
+                riskLevel: bridgeRiskLevel(for: effectiveRisk),
+                metadataJson: metadataJSON(for: schema)
             )
         }
     }
@@ -29,21 +32,60 @@ public enum NativeToolSchemaExport {
         }
     }
 
-    private static func metadataJSON(for scope: NativePermissionScope?) -> String? {
-        guard let scope else {
+    private static func metadataJSON(for schema: NativeToolSchema) -> String? {
+        guard let manifest = schema.manifest else {
             return nil
         }
-
-        let metadata = NativeToolSchemaMetadata(nativePermissionScope: scope.name)
-        let data = try! JSONEncoder().encode(metadata)
+        let riskLevel = effectiveRiskLevel(schema.riskLevel, manifest.riskLevel)
+        let metadata = NativeToolSchemaMetadataV1(
+            schemaVersion: 1,
+            manifestId: manifest.manifestId,
+            capabilityId: manifest.capabilityId,
+            toolMode: manifest.mode,
+            permissionScope: manifest.permissionScope?.name,
+            approvalPolicy: manifest.approvalPolicy,
+            riskLevel: bridgeRiskLevel(for: riskLevel),
+            contextTrustLevel: manifest.trustLevel,
+            availability: NativeToolSchemaMetadataV1.Availability(
+                state: availabilityState(schema.availability),
+                osMinimum: manifest.minimumOS,
+                regionPolicy: manifest.regionPolicy
+            ),
+            fallback: manifest.fallback,
+            audit: manifest.audit
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(metadata) else {
+            return nil
+        }
         return String(decoding: data, as: UTF8.self)
     }
-}
 
-private struct NativeToolSchemaMetadata: Encodable {
-    var nativePermissionScope: String
+    private static func effectiveRiskLevel(
+        _ schemaRisk: NativeToolRiskLevel,
+        _ manifestRisk: NativeToolRiskLevel
+    ) -> NativeToolRiskLevel {
+        rank(manifestRisk) >= rank(schemaRisk) ? manifestRisk : schemaRisk
+    }
 
-    private enum CodingKeys: String, CodingKey {
-        case nativePermissionScope = "native_permission_scope"
+    private static func rank(_ risk: NativeToolRiskLevel) -> Int {
+        switch risk {
+        case .readOnly:
+            0
+        case .confirm:
+            1
+        case .destructive:
+            2
+        }
+    }
+
+    private static func availabilityState(_ availability: NativeToolAvailability) -> String {
+        switch availability {
+        case .available:
+            "available"
+        case .unavailable:
+            "unavailable"
+        }
     }
 }

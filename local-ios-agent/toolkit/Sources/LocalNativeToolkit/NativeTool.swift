@@ -84,6 +84,7 @@ public struct NativeToolSchema: Sendable, Equatable {
     public var riskLevel: NativeToolRiskLevel
     public var permissionScope: NativePermissionScope?
     public var availability: NativeToolAvailability
+    public var manifest: NativeToolManifest?
 
     public init(
         name: String,
@@ -91,7 +92,8 @@ public struct NativeToolSchema: Sendable, Equatable {
         inputSchema: JSONSchemaDTO,
         riskLevel: NativeToolRiskLevel,
         permissionScope: NativePermissionScope?,
-        availability: NativeToolAvailability
+        availability: NativeToolAvailability,
+        manifest: NativeToolManifest? = nil
     ) {
         self.name = name
         self.description = description
@@ -99,6 +101,7 @@ public struct NativeToolSchema: Sendable, Equatable {
         self.riskLevel = riskLevel
         self.permissionScope = permissionScope
         self.availability = availability
+        self.manifest = manifest
     }
 }
 
