@@ -22,6 +22,9 @@ struct WebFetchPolicyTests {
         var request = URLRequest(url: try #require(URL(string: "https://example.com/private")))
         request.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
         #expect(WebFetchPolicyV1.default.validate(request) == .denied(code: "web_fetch.credentials_denied"))
+
+        let userInfo = URLRequest(url: try #require(URL(string: "https://user:secret@example.com/private")))
+        #expect(WebFetchPolicyV1.default.validate(userInfo) == .denied(code: "web_fetch.credentials_denied"))
     }
 
     @Test

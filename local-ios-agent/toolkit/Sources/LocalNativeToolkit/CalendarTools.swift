@@ -86,7 +86,9 @@ public struct CalendarSearchEventsTool: NativeTool {
             toolCallId: "unknown",
             code: "calendar_search_failed",
             displayText: message,
-            auditSummary: message
+            auditSummary: message,
+            sensitivity: .private,
+            retention: manifest.retention
         )
     }
 

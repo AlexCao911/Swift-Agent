@@ -90,6 +90,10 @@ final class AgentBuilderViewModel {
             publishedProfileRevisionId = profile.profileRevisionId
             lifecycle = .published(profileRevisionId: profile.profileRevisionId)
         } catch {
+            guard version == draftVersion else {
+                lifecycle = .dirty
+                return
+            }
             lifecycle = .publishFailed(error.localizedDescription)
         }
     }

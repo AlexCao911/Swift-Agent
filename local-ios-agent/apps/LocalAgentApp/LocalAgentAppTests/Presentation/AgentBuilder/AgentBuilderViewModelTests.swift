@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import Testing
 @testable import LocalAgentApp
@@ -37,5 +38,52 @@ struct AgentBuilderViewModelTests {
 
         #expect(viewModel.publishedProfileRevisionId == 3)
         #expect(viewModel.lifecycle == .published(profileRevisionId: 3))
+    }
+
+    @Test("stale publish failure does not overwrite later edits")
+    func stalePublishFailureDoesNotOverwriteLaterEdits() async {
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: DelayedFailingAgentBuilderClient(),
+            permissionClient: MockPermissionClient(issues: [])
+        )
+
+        await viewModel.validateCurrentDraft()
+        let publishTask = Task { await viewModel.publishCurrentDraft() }
+        while viewModel.lifecycle != .publishing {
+            await Task.yield()
+        }
+
+        viewModel.markEdited()
+        await publishTask.value
+
+        #expect(viewModel.lifecycle == .dirty)
+    }
+}
+
+private actor DelayedFailingAgentBuilderClient: AgentBuilderClient {
+    func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
+        AgentBuilderUIModel(
+            profileId: id,
+            displayName: "Assistant",
+            readiness: PermissionReadinessUIModel()
+        )
+    }
+
+    func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel {
+        ReadinessUIModel(issues: [])
+    }
+
+    func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
+        try await Task.sleep(nanoseconds: 50_000_000)
+        throw AgentBuilderTestError.publishFailed
+    }
+}
+
+private enum AgentBuilderTestError: Error, LocalizedError {
+    case publishFailed
+
+    var errorDescription: String? {
+        "Publish failed"
     }
 }

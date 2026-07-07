@@ -629,6 +629,7 @@ scheme
 
 credentials
   Do not send cookies, app session state, Authorization headers, client certificates, or Keychain-backed credentials.
+  Reject URL userinfo credentials such as https://user:pass@example.com.
   Do not share WKWebView/Safari cookie storage.
 
 javascript
@@ -643,6 +644,7 @@ redirects
 network scope
   Deny localhost, loopback, link-local, private LAN ranges, and device-local addresses by default.
   A future developer/debug mode may allow explicit private-network fetch, but product agents must not use it silently.
+  First-stage implementation is host-string based. It blocks literal localhost/private IP hosts, but does not yet validate DNS-resolved remote addresses; DNS rebinding and split-horizon DNS hardening belong to a later network-layer pass.
 
 content type
   Allow text/html, text/plain, application/json, and well-known text-like types.
@@ -651,6 +653,7 @@ content type
 size and time
   Enforce response size, extracted text size, and timeout limits.
   Truncate with an explicit `truncated=true` flag when policy permits partial content.
+  First-stage implementation may reject oversize responses after URLSession returns data; streaming byte caps are a later hardening step.
 
 privacy and audit
   Persist source URL, final URL, MIME, byte count, redirect count, trust level, and fetch outcome.

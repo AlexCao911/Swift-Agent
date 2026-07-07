@@ -29,7 +29,11 @@ public struct NativeToolExecutor: Sendable {
             )
         }
 
-        return await tool.execute(argumentsJson: request.argumentsJson)
+        let result = await tool.execute(argumentsJson: request.argumentsJson)
+        return NativeToolResultEnvelopeValidator.replacingToolCallId(
+            result,
+            with: request.toolCallId
+        )
     }
 
     private static func argumentsAreJSONObject(_ argumentsJson: String) -> Bool {

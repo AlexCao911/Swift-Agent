@@ -6,7 +6,8 @@ use local_ios_agent_runtime::core::{
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
     local_agent_runtime_bridge_commit_assistant_result, local_agent_runtime_bridge_create_session,
-    local_agent_runtime_bridge_fork_session, local_agent_runtime_bridge_free,
+    local_agent_runtime_bridge_build_agent, local_agent_runtime_bridge_fork_session,
+    local_agent_runtime_bridge_free, local_agent_runtime_bridge_list_agent_profiles,
     local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
     local_agent_runtime_bridge_observe_events_streaming,
     local_agent_runtime_bridge_pending_approval_requests,
@@ -387,6 +388,30 @@ unsafe fn start_c_agent_os_run(
         runtime,
         request.as_ptr(),
     )))
+}
+
+#[test]
+fn c_abi_agent_profiles_include_revision_id() {
+    unsafe {
+        let runtime = new_seeded_agent_os_c_bridge();
+        let request = CString::new("{}").unwrap();
+
+        let profiles = decode(&take_bridge_string(
+            local_agent_runtime_bridge_list_agent_profiles(runtime, request.as_ptr()),
+        ));
+        assert_eq!(profiles[0]["profile_id"], "profile_1");
+        assert_eq!(profiles[0]["profile_revision_id"], 1);
+
+        let build_request = CString::new(json!({"template_id": "template_1"}).to_string()).unwrap();
+        let built = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            build_request.as_ptr(),
+        )));
+        assert_eq!(built["profile_id"], "profile.from_template.template_1");
+        assert_eq!(built["profile_revision_id"], 1);
+
+        local_agent_runtime_bridge_free(runtime);
+    }
 }
 
 #[test]

@@ -277,6 +277,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let _: EmptyAgentOSRequestJson = from_json(request_json)?;
         to_json(&vec![AgentProfileJson {
             profile_id: "profile_1".to_string(),
+            profile_revision_id: 1,
             display_name: "Development Agent".to_string(),
         }])
     }
@@ -285,6 +286,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let request: BuildAgentRequestJson = from_json(request_json)?;
         to_json(&AgentProfileJson {
             profile_id: format!("profile.from_template.{}", request.template_id),
+            profile_revision_id: 1,
             display_name: "Custom Agent".to_string(),
         })
     }
@@ -1419,6 +1421,7 @@ struct BuildAgentRequestJson {
 #[derive(Serialize)]
 struct AgentProfileJson {
     profile_id: String,
+    profile_revision_id: u64,
     display_name: String,
 }
 

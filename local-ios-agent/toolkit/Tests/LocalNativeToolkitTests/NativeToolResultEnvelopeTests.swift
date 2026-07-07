@@ -107,6 +107,26 @@ struct NativeToolResultEnvelopeTests {
     }
 
     @Test
+    func privateToolErrorCanKeepPrivateMetadata() throws {
+        let result = NativeToolResultBuilder.error(
+            manifestId: "native.calendar.search_events.v1",
+            toolName: "calendar.search_events",
+            toolCallId: "call_1",
+            code: "calendar_search_failed",
+            displayText: "Unable to search calendar events",
+            auditSummary: "Unable to search calendar events",
+            sensitivity: .private,
+            retention: .runOnly
+        )
+
+        let validated = try NativeToolResultEnvelopeValidator.validate(result)
+
+        #expect(validated.isError)
+        #expect(validated.sensitivity == .private)
+        #expect(validated.retention == .runOnly)
+    }
+
+    @Test
     func validatorRejectsErrorFlagMismatch() throws {
         let result = NativeToolResultBuilder.error(
             manifestId: "native.executor.v1",

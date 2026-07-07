@@ -77,14 +77,17 @@ struct NativeCapabilityToolsTests {
         #expect(tool.schema.name == "shortcuts.list_voice_shortcuts")
         #expect(tool.schema.riskLevel == .readOnly)
         #expect(tool.schema.permissionScope == NativePermissionScope("shortcuts"))
+        #expect(tool.schema.manifest?.manifestId == "native.shortcuts.list_voice_shortcuts.v1")
 
         let result = await tool.execute(argumentsJson: "{}")
         let object = try decodedJSONObject(result.structuredJson)
-        let shortcuts = try #require(object["shortcuts"] as? [[String: Any]])
+        let payload = try #require(object["result"] as? [String: Any])
+        let shortcuts = try #require(payload["shortcuts"] as? [[String: Any]])
 
         #expect(await facade.listCallCount == 1)
         #expect(result.isError == false)
         #expect(result.sensitivity == .private)
+        #expect(object["manifest_id"] as? String == "native.shortcuts.list_voice_shortcuts.v1")
         #expect(shortcuts.map { $0["phrase"] as? String } == ["focus time"])
     }
 

@@ -17,9 +17,11 @@ struct NativeToolExecutorTests {
             toolName: "debug.echo",
             argumentsJson: #"{"text":"hello"}"#
         ))
+        let envelope = try envelopeObject(from: result)
 
         #expect(result.isError == false)
         #expect(result.modelText == "executed debug.echo")
+        #expect(envelope["tool_call_id"] as? String == "call_1")
         #expect(await recorder.arguments == [#"{"text":"hello"}"#])
     }
 
@@ -58,9 +60,14 @@ struct NativeToolExecutorTests {
     }
 
     private func envelopePayload(from result: ToolResultDTO) throws -> [String: Any] {
+        let object = try envelopeObject(from: result)
+        return try #require(object["result"] as? [String: Any])
+    }
+
+    private func envelopeObject(from result: ToolResultDTO) throws -> [String: Any] {
         let data = try #require(result.structuredJson.data(using: .utf8))
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        return try #require(object["result"] as? [String: Any])
+        return object
     }
 
     private func request(
@@ -96,14 +103,25 @@ private struct RecordingTool: NativeTool {
 
     func execute(argumentsJson: String) async -> ToolResultDTO {
         await recorder.record(argumentsJson)
-        return ToolResultDTO(
+        return NativeToolResultBuilder.success(
+            manifestId: "native.debug.echo.v1",
+            toolName: schema.name,
+            toolCallId: "unknown",
             displayText: "executed \(schema.name)",
             modelText: "executed \(schema.name)",
-            structuredJson: #"{"ok":true}"#,
-            auditText: "executed \(schema.name)",
+            resultKind: "debug_echo",
+            resultPayload: ["ok": .bool(true)],
+            sourceKind: "tool",
+            sourceId: schema.name,
+            displayName: "Debug Echo",
+            attachmentIds: [],
+            trustLevel: .trustedToolResult,
             sensitivity: .public,
             retention: .runOnly,
-            isError: false
+            modelTextPolicy: "tool_status",
+            sourceLabel: "Tool",
+            auditSummary: "executed \(schema.name)",
+            auditRedaction: "metadata_only"
         )
     }
 }

@@ -5,6 +5,13 @@ public enum WebFetchPolicyDecision: Sendable, Equatable {
     case denied(code: String)
 }
 
+/// First-stage public web fetch guard.
+///
+/// The private-network check is intentionally host-string based: it blocks
+/// literal localhost/private IP hosts before URLSession connects, but it does
+/// not yet validate the resolved remote address after DNS. Treat this as a
+/// best-effort public HTTPS boundary until the fetcher owns resolved-address
+/// verification and streaming byte caps.
 public struct WebFetchPolicyV1: Sendable, Equatable {
     public var maxResponseBytes: Int
     public var maxExtractedTextCharacters: Int
@@ -38,6 +45,11 @@ public struct WebFetchPolicyV1: Sendable, Equatable {
         }
         guard scheme == "https" else {
             return .denied(code: "web_fetch.scheme_denied")
+        }
+        guard (url.user?.isEmpty ?? true),
+              (url.password?.isEmpty ?? true)
+        else {
+            return .denied(code: "web_fetch.credentials_denied")
         }
         guard request.value(forHTTPHeaderField: "Authorization") == nil,
               request.value(forHTTPHeaderField: "Cookie") == nil

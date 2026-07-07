@@ -103,7 +103,9 @@ public struct RemindersCreateReminderTool: NativeTool {
             toolCallId: "unknown",
             code: "reminder_create_failed",
             displayText: message,
-            auditSummary: message
+            auditSummary: message,
+            sensitivity: .private,
+            retention: manifest.retention
         )
     }
 

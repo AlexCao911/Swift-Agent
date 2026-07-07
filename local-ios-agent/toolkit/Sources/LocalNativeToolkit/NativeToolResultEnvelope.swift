@@ -172,7 +172,9 @@ public enum NativeToolResultBuilder {
         toolCallId: String,
         code: String,
         displayText: String,
-        auditSummary: String
+        auditSummary: String,
+        sensitivity: SensitivityDTO = .public,
+        retention: RetentionPolicyDTO = .runOnly
     ) -> ToolResultDTO {
         success(
             manifestId: manifestId,
@@ -187,8 +189,8 @@ public enum NativeToolResultBuilder {
             displayName: toolName,
             attachmentIds: [],
             trustLevel: .trustedToolResult,
-            sensitivity: .public,
-            retention: .runOnly,
+            sensitivity: sensitivity,
+            retention: retention,
             modelTextPolicy: "error_summary_only",
             sourceLabel: "Tool",
             auditSummary: auditSummary,
@@ -229,6 +231,24 @@ public enum NativeToolResultEnvelopeValidationError: Error, Equatable {
 }
 
 public enum NativeToolResultEnvelopeValidator {
+    static func replacingToolCallId(_ result: ToolResultDTO, with toolCallId: String) -> ToolResultDTO {
+        guard let data = result.structuredJson.data(using: .utf8),
+              var envelope = try? JSONDecoder().decode(ToolResultEnvelopeV1.self, from: data)
+        else {
+            return result
+        }
+        envelope.toolCallId = toolCallId
+        return ToolResultDTO(
+            displayText: result.displayText,
+            modelText: result.modelText,
+            structuredJson: encode(envelope),
+            auditText: result.auditText,
+            sensitivity: result.sensitivity,
+            retention: result.retention,
+            isError: result.isError
+        )
+    }
+
     public static func validate(_ result: ToolResultDTO) throws -> ToolResultDTO {
         guard let data = result.structuredJson.data(using: .utf8),
               let envelope = try? JSONDecoder().decode(ToolResultEnvelopeV1.self, from: data)
@@ -266,6 +286,17 @@ public enum NativeToolResultEnvelopeValidator {
             2
         } else {
             2
+        }
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            let data = try encoder.encode(value)
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return #"{"result":{"kind":"encoding_failed"},"schema_version":1}"#
         }
     }
 }
