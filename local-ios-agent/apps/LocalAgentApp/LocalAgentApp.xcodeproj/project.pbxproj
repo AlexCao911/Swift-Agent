@@ -65,6 +65,9 @@
 		0C0000010000000000002015 /* AppShellViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002115 /* AppShellViewModel.swift */; };
 		0C0000010000000000002016 /* AppShellViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002116 /* AppShellViewModelTests.swift */; };
 		0C0000010000000000002017 /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002117 /* AppShellView.swift */; };
+		0C0000010000000000002018 /* ConversationWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002118 /* ConversationWorkspaceView.swift */; };
+		0C0000010000000000002019 /* ConversationWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */; };
+		0C000001000000000000201A /* ConversationWorkspaceViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -156,6 +159,9 @@
 		0C0000010000000000002115 /* AppShellViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002116 /* AppShellViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModelTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002117 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002118 /* ConversationWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceViewModel.swift; sourceTree = "<group>"; };
+		0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceViewModelTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -344,6 +350,8 @@
 				0A000001000000000000011D /* ChatManagementSheets.swift */,
 				0A0000010000000000000109 /* ChatView.swift */,
 				0A0000010000000000000119 /* ConversationListView.swift */,
+				0C0000010000000000002118 /* ConversationWorkspaceView.swift */,
+				0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */,
 				0B0000010000000000001130 /* ConversationViewModel.swift */,
 				0A0000010000000000000118 /* MessageContentView.swift */,
 			);
@@ -469,6 +477,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000114 /* AgentViewModelTests.swift */,
+				0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */,
 				0B0000010000000000001131 /* ConversationViewModelTests.swift */,
 			);
 			path = Chat;
@@ -607,6 +616,8 @@
 				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
 				0B0000010000000000001030 /* ConversationViewModel.swift in Sources */,
 				0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */,
+				0C0000010000000000002018 /* ConversationWorkspaceView.swift in Sources */,
+				0C0000010000000000002019 /* ConversationWorkspaceViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
 				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
 				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
@@ -667,6 +678,7 @@
 				0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */,
 				0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */,
 				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
+				0C000001000000000000201A /* ConversationWorkspaceViewModelTests.swift in Sources */,
 				0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,

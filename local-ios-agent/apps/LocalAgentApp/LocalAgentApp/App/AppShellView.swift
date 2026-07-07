@@ -77,8 +77,9 @@ struct AppShellView: View {
     private func destination(for family: AppRouteFamily) -> some View {
         switch family {
         case .chat:
-            ChatView(
-                viewModel: chatViewModel,
+            ConversationWorkspaceView(
+                shellViewModel: viewModel,
+                chatViewModel: chatViewModel,
                 onOpenBuilder: {
                     viewModel.openBuilder(
                         profileId: viewModel.activeAgent?.profileId,
