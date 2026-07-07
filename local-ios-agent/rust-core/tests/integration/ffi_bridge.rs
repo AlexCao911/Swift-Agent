@@ -5,8 +5,8 @@ use local_ios_agent_runtime::core::{
 };
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
-    local_agent_runtime_bridge_commit_assistant_result, local_agent_runtime_bridge_create_session,
-    local_agent_runtime_bridge_build_agent, local_agent_runtime_bridge_fork_session,
+    local_agent_runtime_bridge_build_agent, local_agent_runtime_bridge_commit_assistant_result,
+    local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
     local_agent_runtime_bridge_free, local_agent_runtime_bridge_list_agent_profiles,
     local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
     local_agent_runtime_bridge_observe_events_streaming,
@@ -419,8 +419,7 @@ fn c_abi_agent_profiles_include_revision_id() {
 fn c_abi_build_agent_publishes_profile_that_start_run_can_resolve() {
     unsafe {
         let runtime = new_in_memory_c_bridge();
-        let build_request =
-            CString::new(json!({"template_id": "template_1"}).to_string()).unwrap();
+        let build_request = CString::new(json!({"template_id": "template_1"}).to_string()).unwrap();
         let built = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
             runtime,
             build_request.as_ptr(),
@@ -1037,10 +1036,9 @@ fn c_abi_list_agent_profiles_returns_latest_revision_per_profile() {
     unsafe {
         let runtime = new_in_memory_c_bridge();
 
-        let build_request = CString::new(
-            r#"{"profile_id":"profile.builder.list","template_id":"template_1"}"#,
-        )
-        .unwrap();
+        let build_request =
+            CString::new(r#"{"profile_id":"profile.builder.list","template_id":"template_1"}"#)
+                .unwrap();
         let _ = take_bridge_string(local_agent_runtime_bridge_build_agent(
             runtime,
             build_request.as_ptr(),

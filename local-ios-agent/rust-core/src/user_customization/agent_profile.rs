@@ -371,11 +371,7 @@ impl InMemoryAgentProfileRepository {
     }
 
     pub fn profiles(&self) -> Vec<AgentProfile> {
-        self.records()
-            .profiles
-            .values()
-            .cloned()
-            .collect()
+        self.records().profiles.values().cloned().collect()
     }
 
     pub fn latest_profiles(&self) -> Vec<AgentProfile> {

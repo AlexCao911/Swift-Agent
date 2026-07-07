@@ -108,10 +108,13 @@ impl AgentOSApplicationService {
         let profile_version = if explicit_profile_id {
             next_profile_version(&self.profile_repository, &profile_id)
         } else {
-            if let Some(profile) = self.profile_repository.profile(&AgentProfileReference::pinned(
-                profile_id.clone(),
-                AgentProfileVersion::initial(),
-            )) {
+            if let Some(profile) = self
+                .profile_repository
+                .profile(&AgentProfileReference::pinned(
+                    profile_id.clone(),
+                    AgentProfileVersion::initial(),
+                ))
+            {
                 return Ok(profile);
             }
             AgentProfileVersion::initial()
