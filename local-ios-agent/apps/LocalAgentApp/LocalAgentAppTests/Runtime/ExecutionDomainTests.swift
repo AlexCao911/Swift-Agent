@@ -19,7 +19,7 @@ struct ExecutionDomainTests {
         )
         let bridge = MockRuntimeClient(
             agentProfiles: [
-                AgentProfileDTO(profileId: "profile_1", displayName: "Planner"),
+                AgentProfileDTO(profileId: "profile_1", profileRevisionId: 1, displayName: "Planner"),
             ],
             executionEventsByRunId: ["run_mock": [event]],
             toolRequests: [
@@ -53,6 +53,7 @@ struct ExecutionDomainTests {
         let built = try await domain.buildAgent(templateId: "template_1")
         let handle = try await domain.startRun(StartExecutionRequestDTO(
             agentProfileId: "profile_1",
+            profileRevisionId: 1,
             userIntent: "continue",
             conversationRunFrameRef: frameRef
         ))

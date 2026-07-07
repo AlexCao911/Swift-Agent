@@ -32,6 +32,10 @@ public actor MockAgentPackageClient: AgentPackageClient {
     }
 
     public func installPackage(_ request: PackageInstallRequestDTO) async throws -> AgentProfileDTO {
-        AgentProfileDTO(profileId: "profile_1", displayName: preview.profileName)
+        AgentProfileDTO(
+            profileId: "profile_1",
+            profileRevisionId: 1,
+            displayName: preview.profileName
+        )
     }
 }

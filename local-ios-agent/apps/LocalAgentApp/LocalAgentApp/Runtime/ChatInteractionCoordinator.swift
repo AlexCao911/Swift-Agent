@@ -13,6 +13,7 @@ protocol ChatInteractionCoordinating: AnyObject, Sendable {
         sessionId: String?,
         parentEventId: String?,
         agentProfileId: String,
+        agentProfileRevisionId: UInt64,
         options: ExecutionOptionsDTO,
         onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
     ) async throws -> ChatInteractionResult
@@ -38,6 +39,7 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
         sessionId: String?,
         parentEventId: String?,
         agentProfileId: String,
+        agentProfileRevisionId: UInt64,
         options: ExecutionOptionsDTO,
         onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void = { _ in }
     ) async throws -> ChatInteractionResult {
@@ -52,6 +54,7 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
         let handle = try await execution.startRun(
             StartExecutionRequestDTO(
                 agentProfileId: agentProfileId,
+                profileRevisionId: agentProfileRevisionId,
                 userIntent: text,
                 conversationRunFrameRef: preparedTurn.conversationRunFrameRef,
                 options: options

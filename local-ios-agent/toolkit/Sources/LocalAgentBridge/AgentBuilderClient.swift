@@ -32,6 +32,10 @@ public actor MockAgentBuilderClient: AgentBuilderClient {
     }
 
     public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
-        AgentProfileDTO(profileId: draft.profileId, displayName: model.displayName)
+        AgentProfileDTO(
+            profileId: draft.profileId,
+            profileRevisionId: 1,
+            displayName: model.displayName
+        )
     }
 }

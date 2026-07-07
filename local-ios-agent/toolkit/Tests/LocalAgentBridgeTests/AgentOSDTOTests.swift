@@ -8,6 +8,7 @@ struct AgentOSDTOTests {
     func startExecutionRequestEncodesConversationRunFrameRefOnly() throws {
         let request = StartExecutionRequestDTO(
             agentProfileId: "profile_1",
+            profileRevisionId: 1,
             userIntent: "answer the user",
             conversationRunFrameRef: ConversationRunFrameRefDTO(
                 frameId: "frame_1",

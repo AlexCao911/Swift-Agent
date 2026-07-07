@@ -76,7 +76,11 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient,
         conversationSummaries: [ConversationSummaryDTO] = [],
         activeBranch: [RuntimeEventDTO] = [],
         agentProfiles: [AgentProfileDTO] = [
-            AgentProfileDTO(profileId: "profile_mock", displayName: "Mock Agent")
+            AgentProfileDTO(
+                profileId: "profile_mock",
+                profileRevisionId: 1,
+                displayName: "Mock Agent"
+            )
         ],
         executionEventsByRunId: [String: [RuntimeEventDTO]] = [:],
         turnResult: AgentTurnResultDTO = AgentTurnResultDTO(
@@ -286,6 +290,7 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient,
         builtAgentTemplateIds.append(templateId)
         return storedAgentProfiles.first ?? AgentProfileDTO(
             profileId: "profile_mock",
+            profileRevisionId: 1,
             displayName: "Mock Agent"
         )
     }

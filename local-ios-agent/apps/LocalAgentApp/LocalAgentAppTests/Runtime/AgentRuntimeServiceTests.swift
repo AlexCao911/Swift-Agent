@@ -239,6 +239,61 @@ struct AgentRuntimeServiceTests {
         #expect(sentState.draft == UserDraftViewState())
     }
 
+    @Test("coordinator path passes seed profile revision")
+    @MainActor
+    func coordinatorPathPassesSeedProfileRevision() async throws {
+        let coordinator = RecordingChatInteractionCoordinator()
+        let service = AgentRuntimeService(
+            runtimeClient: ScriptedRuntimeClient(),
+            toolDriver: MinimalHostToolDriver(),
+            coordinator: coordinator
+        )
+
+        _ = try await service.sendMessage(
+            "hello",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+
+        #expect(coordinator.agentProfileRevisionIds == [1])
+    }
+
+    @Test("coordinator path rejects missing profile revision")
+    @MainActor
+    func coordinatorPathRejectsMissingProfileRevision() async throws {
+        let coordinator = RecordingChatInteractionCoordinator()
+        let service = AgentRuntimeService(
+            runtimeClient: ScriptedRuntimeClient(),
+            toolDriver: MinimalHostToolDriver(),
+            coordinator: coordinator
+        )
+        var state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+        state.selectedAgentProfileRevisionId = nil
+
+        do {
+            _ = try await service.sendMessage("hello", state: state)
+            Issue.record("Expected missing profile revision error")
+        } catch AgentRuntimeServiceError.missingAgentProfileRevision {
+            #expect(coordinator.sentMessages.isEmpty)
+        }
+    }
+
+    @Test("coordinator path passes selected profile revision")
+    @MainActor
+    func coordinatorPathPassesSelectedProfileRevision() async throws {
+        let coordinator = RecordingChatInteractionCoordinator()
+        let service = AgentRuntimeService(
+            runtimeClient: ScriptedRuntimeClient(),
+            toolDriver: MinimalHostToolDriver(),
+            coordinator: coordinator
+        )
+        var state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+        state.selectedAgentProfileRevisionId = 7
+
+        _ = try await service.sendMessage("hello", state: state)
+
+        #expect(coordinator.agentProfileRevisionIds == [7])
+    }
+
     @Test("coordinator paused run is not marked completed")
     @MainActor
     func coordinatorPausedRunIsNotMarkedCompleted() async throws {
@@ -2026,6 +2081,7 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
 private final class RecordingChatInteractionCoordinator: ChatInteractionCoordinating, @unchecked Sendable {
     private(set) var sentMessages: [String] = []
     private(set) var agentProfileIds: [String] = []
+    private(set) var agentProfileRevisionIds: [UInt64] = []
     private(set) var parentEventIds: [String?] = []
     private(set) var options: [ExecutionOptionsDTO] = []
     private let eventsToEmit: [RuntimeEventDTO]
@@ -2044,11 +2100,13 @@ private final class RecordingChatInteractionCoordinator: ChatInteractionCoordina
         sessionId: String?,
         parentEventId: String?,
         agentProfileId: String,
+        agentProfileRevisionId: UInt64,
         options: ExecutionOptionsDTO,
         onEvent: @MainActor @Sendable @escaping (RuntimeEventDTO) async -> Void
     ) async throws -> ChatInteractionResult {
         sentMessages.append(text)
         agentProfileIds.append(agentProfileId)
+        agentProfileRevisionIds.append(agentProfileRevisionId)
         parentEventIds.append(parentEventId)
         self.options.append(options)
         for event in eventsToEmit {

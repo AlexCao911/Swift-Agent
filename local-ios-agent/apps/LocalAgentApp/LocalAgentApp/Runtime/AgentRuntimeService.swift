@@ -72,6 +72,7 @@ extension AgentRuntimeServicing {
 
 enum AgentRuntimeServiceError: Error, Equatable, Sendable {
     case duplicateRun
+    case missingAgentProfileRevision
     case missingPendingToolRequest(String)
 }
 
@@ -161,6 +162,9 @@ actor AgentRuntimeService: AgentRuntimeServicing {
         }
 
         if let coordinator {
+            guard let profileRevisionId = state.selectedAgentProfileRevisionId else {
+                throw AgentRuntimeServiceError.missingAgentProfileRevision
+            }
             try await applyRuntimeOptions(from: state)
             let collector = CoordinatorEventCollector(state: state)
             let result = try await coordinator.sendMessage(
@@ -168,6 +172,7 @@ actor AgentRuntimeService: AgentRuntimeServicing {
                 sessionId: state.currentSessionId,
                 parentEventId: state.draft.targetParentEventId,
                 agentProfileId: state.selectedAgentProfileId,
+                agentProfileRevisionId: profileRevisionId,
                 options: state.executionOptions,
                 onEvent: { event in
                     await collector.apply(event)

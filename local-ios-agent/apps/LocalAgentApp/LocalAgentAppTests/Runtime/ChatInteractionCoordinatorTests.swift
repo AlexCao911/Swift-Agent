@@ -43,11 +43,13 @@ struct ChatInteractionCoordinatorTests {
             sessionId: "session_1",
             parentEventId: nil,
             agentProfileId: "profile_1",
+            agentProfileRevisionId: 1,
             options: ExecutionOptionsDTO(),
             onEvent: { observed.append($0) }
         )
 
         #expect(execution.startedRequests.first?.conversationRunFrameRef == frameRef)
+        #expect(execution.startedRequests.first?.profileRevisionId == 1)
         #expect(await conversation.committedRequests.first?.runId == "run_1")
         #expect(await conversation.committedRequests.first?.finalMessageId == "assistant_1")
         #expect(observed.map(\.id) == ["user_turn_1", "event_1", "assistant_1"])
@@ -93,6 +95,7 @@ struct ChatInteractionCoordinatorTests {
                 sessionId: "session_1",
                 parentEventId: nil,
                 agentProfileId: "profile_1",
+                agentProfileRevisionId: 1,
                 options: ExecutionOptionsDTO()
             )
             Issue.record("Expected first commit to fail")
@@ -173,6 +176,7 @@ struct ChatInteractionCoordinatorTests {
             sessionId: "session_1",
             parentEventId: nil,
             agentProfileId: "profile_1",
+            agentProfileRevisionId: 1,
             options: ExecutionOptionsDTO(),
             onEvent: { observed.append($0) }
         )
@@ -291,7 +295,7 @@ private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
     }
 
     func buildAgent(templateId: String) async throws -> AgentProfileDTO {
-        AgentProfileDTO(profileId: templateId, displayName: templateId)
+        AgentProfileDTO(profileId: templateId, profileRevisionId: 1, displayName: templateId)
     }
 
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {

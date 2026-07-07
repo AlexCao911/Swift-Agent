@@ -286,6 +286,7 @@ struct RustRuntimeClientContractTests {
             .startRun,
             StartExecutionRequestDTO(
                 agentProfileId: "profile_1",
+                profileRevisionId: 1,
                 userIntent: "ship it",
                 conversationRunFrameRef: frameRef,
                 options: ExecutionOptionsDTO(modelId: "model_1", temperature: 0.2)
@@ -354,6 +355,7 @@ struct RustRuntimeClientContractTests {
         #expect(submitted.state == .completed)
         #expect(preparedRequest["parent_event_id"] as? String == "entry_parent")
         #expect((startRequest["conversation_run_frame_ref"] as? [String: Any])?["frame_id"] as? String == "frame_1")
+        #expect(startRequest["profile_revision_id"] as? Int == 1)
         let forbiddenFrameKey = ["conversation", "frame", "ref"].joined(separator: "_")
         #expect(startRequest[forbiddenFrameKey] == nil)
         #expect(commitRequest["run_id"] as? String == "run_agent_os")
@@ -458,7 +460,11 @@ struct RustRuntimeClientContractTests {
             ],
             activeBranch: [event],
             agentProfiles: [
-                AgentProfileDTO(profileId: "profile_1", displayName: "Planner")
+                AgentProfileDTO(
+                    profileId: "profile_1",
+                    profileRevisionId: 1,
+                    displayName: "Planner"
+                )
             ],
             executionEventsByRunId: ["run_mock": [event]]
         )
@@ -471,6 +477,7 @@ struct RustRuntimeClientContractTests {
         ))
         let handle = try await mock.startRun(StartExecutionRequestDTO(
             agentProfileId: "profile_1",
+            profileRevisionId: 1,
             userIntent: "continue",
             conversationRunFrameRef: frameRef
         ))
@@ -593,6 +600,7 @@ struct RustRuntimeClientContractTests {
             .startRun,
             StartExecutionRequestDTO(
                 agentProfileId: "profile_1",
+                profileRevisionId: 1,
                 userIntent: "live bridge run",
                 conversationRunFrameRef: prepared.conversationRunFrameRef
             ),
@@ -999,6 +1007,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         return makeCString("""
         [{
           "profile_id": "profile_1",
+          "profile_revision_id": 1,
           "display_name": "Planner"
         }]
         """)
@@ -1012,6 +1021,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         return makeCString("""
         {
           "profile_id": "profile_1",
+          "profile_revision_id": 1,
           "display_name": "Planner"
         }
         """)

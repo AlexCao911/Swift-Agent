@@ -245,6 +245,7 @@ struct AgentViewState: Equatable, Sendable {
     var lastAppliedExecutionSequenceByRunId: [String: UInt64]
     var promptLibrary: PromptLibraryViewState
     var modelSettings: ModelSettingsViewState
+    var selectedAgentProfileRevisionId: UInt64?
 
     init(
         phase: AppRuntimePhase = .booting,
@@ -258,7 +259,8 @@ struct AgentViewState: Equatable, Sendable {
         lastAppliedRuntimeSequence: UInt64 = 0,
         lastAppliedExecutionSequenceByRunId: [String: UInt64] = [:],
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
-        modelSettings: ModelSettingsViewState = ModelSettingsViewState()
+        modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
+        selectedAgentProfileRevisionId: UInt64? = 1
     ) {
         self.phase = phase
         self.messages = messages
@@ -272,6 +274,7 @@ struct AgentViewState: Equatable, Sendable {
         self.lastAppliedExecutionSequenceByRunId = lastAppliedExecutionSequenceByRunId
         self.promptLibrary = promptLibrary
         self.modelSettings = modelSettings
+        self.selectedAgentProfileRevisionId = selectedAgentProfileRevisionId
     }
 
     init(

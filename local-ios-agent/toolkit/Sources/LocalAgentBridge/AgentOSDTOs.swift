@@ -219,17 +219,20 @@ public struct ExecutionOptionsDTO: Codable, Equatable, Sendable {
 
 public struct StartExecutionRequestDTO: Codable, Equatable, Sendable {
     public var agentProfileId: String
+    public var profileRevisionId: UInt64
     public var userIntent: String
     public var conversationRunFrameRef: ConversationRunFrameRefDTO
     public var options: ExecutionOptionsDTO
 
     public init(
         agentProfileId: String,
+        profileRevisionId: UInt64,
         userIntent: String,
         conversationRunFrameRef: ConversationRunFrameRefDTO,
         options: ExecutionOptionsDTO = ExecutionOptionsDTO()
     ) {
         self.agentProfileId = agentProfileId
+        self.profileRevisionId = profileRevisionId
         self.userIntent = userIntent
         self.conversationRunFrameRef = conversationRunFrameRef
         self.options = options
@@ -237,6 +240,7 @@ public struct StartExecutionRequestDTO: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case agentProfileId = "agent_profile_id"
+        case profileRevisionId = "profile_revision_id"
         case userIntent = "user_intent"
         case conversationRunFrameRef = "conversation_run_frame_ref"
         case options
@@ -341,15 +345,18 @@ public struct EmptyAgentOSResponseDTO: Codable, Equatable, Sendable {
 
 public struct AgentProfileDTO: Codable, Equatable, Sendable {
     public var profileId: String
+    public var profileRevisionId: UInt64
     public var displayName: String
 
-    public init(profileId: String, displayName: String) {
+    public init(profileId: String, profileRevisionId: UInt64, displayName: String) {
         self.profileId = profileId
+        self.profileRevisionId = profileRevisionId
         self.displayName = displayName
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileId = "profile_id"
+        case profileRevisionId = "profile_revision_id"
         case displayName = "display_name"
     }
 }
