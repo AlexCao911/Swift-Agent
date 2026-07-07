@@ -20,10 +20,16 @@ final class AgentBuilderViewModel {
     private let templateId: String
     private let builderClient: any AgentBuilderClient
     private let permissionClient: any PermissionClient
+    private let toolCatalogClient: any AgentBuilderToolCatalogClient
     private var draftVersion: UInt64 = 0
 
+    var draft: AgentBuilderDraft?
+    var selectedCardId: String?
+    var toolCards: [AgentBuilderToolCard] = []
     var readiness: PermissionReadinessUIModel
+    var preview: BuilderContextPreviewResult?
     var lifecycle: AgentDraftLifecycleState = .empty
+    var publishedAgentSelection: PublishedAgentSelection?
     var publishedProfileRevisionId: UInt64?
 
     init(
@@ -31,13 +37,54 @@ final class AgentBuilderViewModel {
         templateId: String = "template_1",
         builderClient: any AgentBuilderClient,
         permissionClient: any PermissionClient,
+        toolCatalogClient: any AgentBuilderToolCatalogClient = StaticAgentBuilderToolCatalogClient(cards: []),
         readiness: PermissionReadinessUIModel = PermissionReadinessUIModel()
     ) {
         self.profileId = profileId
         self.templateId = templateId
         self.builderClient = builderClient
         self.permissionClient = permissionClient
+        self.toolCatalogClient = toolCatalogClient
         self.readiness = readiness
+    }
+
+    func load() async {
+        do {
+            _ = try await builderClient.loadTemplate(templateId)
+            let cards = try await toolCatalogClient.loadToolCards()
+            draft = AgentBuilderDraft.makeDefault(profileId: profileId)
+            selectedCardId = draft?.cards.first?.id
+            toolCards = cards
+            lifecycle = .editing
+        } catch {
+            readiness = PermissionReadinessUIModel(issues: [
+                PermissionIssueDTO(code: "builder.load_failed", message: error.localizedDescription),
+            ])
+            lifecycle = .invalid
+        }
+    }
+
+    func selectCard(_ cardId: String) {
+        selectedCardId = cardId
+    }
+
+    func toggleTool(_ toolId: String) {
+        guard var draft else {
+            return
+        }
+        draft.toggleTool(toolId)
+        self.draft = draft
+        markEdited()
+    }
+
+    func previewContext(sampleUserMessage: String) {
+        guard let draft else {
+            return
+        }
+        preview = BuilderContextPreviewResult.previewOnly(
+            draft: draft,
+            sampleUserMessage: sampleUserMessage
+        )
     }
 
     func refreshReadiness() async {
@@ -57,6 +104,8 @@ final class AgentBuilderViewModel {
 
     func markEdited() {
         draftVersion += 1
+        publishedAgentSelection = nil
+        publishedProfileRevisionId = nil
         switch lifecycle {
         case .validating, .invalid, .readyToPublish, .editing, .published, .publishFailed, .empty:
             lifecycle = .dirty
@@ -90,6 +139,11 @@ final class AgentBuilderViewModel {
                 lifecycle = .dirty
                 return
             }
+            publishedAgentSelection = PublishedAgentSelection(
+                profileId: profile.profileId,
+                profileRevisionId: profile.profileRevisionId,
+                displayName: profile.displayName
+            )
             publishedProfileRevisionId = profile.profileRevisionId
             lifecycle = .published(profileRevisionId: profile.profileRevisionId)
         } catch {
@@ -109,7 +163,8 @@ final class AgentBuilderViewModel {
             ]),
             permissionClient: MockPermissionClient(issues: [
                 PermissionIssueDTO(code: "permission.calendar.missing", message: "Calendar access is off"),
-            ])
+            ]),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
         )
     }
 
@@ -117,7 +172,14 @@ final class AgentBuilderViewModel {
         AgentBuilderViewModel(
             profileId: "profile_1",
             builderClient: MockAgentBuilderClient.readyToPublish(publishedRevision: publishedRevision),
-            permissionClient: MockPermissionClient(issues: [])
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [
+                AgentBuilderToolCard.unavailable(
+                    id: "web.fetch_url_text",
+                    name: "web.fetch_url_text",
+                    reason: "Preview tool metadata"
+                ),
+            ])
         )
     }
 }

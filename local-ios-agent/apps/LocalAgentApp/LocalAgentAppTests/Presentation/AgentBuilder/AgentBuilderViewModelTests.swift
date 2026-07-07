@@ -45,7 +45,8 @@ struct AgentBuilderViewModelTests {
         let viewModel = AgentBuilderViewModel(
             profileId: "profile_1",
             builderClient: DelayedFailingAgentBuilderClient(),
-            permissionClient: MockPermissionClient(issues: [])
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
         )
 
         await viewModel.validateCurrentDraft()
@@ -58,6 +59,78 @@ struct AgentBuilderViewModelTests {
         await publishTask.value
 
         #expect(viewModel.lifecycle == .dirty)
+    }
+
+    @Test("load creates draft and loads manifest-backed tool cards")
+    func loadCreatesDraftAndToolCards() async throws {
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: MockAgentBuilderClient.readyToPublish(),
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [
+                AgentBuilderToolCard.unavailable(
+                    id: "web.fetch_url_text",
+                    name: "web.fetch_url_text",
+                    reason: "test"
+                ),
+            ])
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.draft?.sourceProfileId == "profile_1")
+        #expect(viewModel.toolCards.map(\.name) == ["web.fetch_url_text"])
+        #expect(viewModel.lifecycle == .editing)
+    }
+
+    @Test("toggle tool marks draft dirty")
+    func toggleToolMarksDraftDirty() async throws {
+        let viewModel = AgentBuilderViewModel.fixtureReadyToPublish()
+
+        await viewModel.load()
+        viewModel.toggleTool("web.fetch_url_text")
+
+        #expect(viewModel.draft?.selectedToolIds == ["web.fetch_url_text"])
+        #expect(viewModel.lifecycle == .dirty)
+    }
+
+    @Test("preview context produces preview-only result")
+    func previewContextProducesPreviewOnlyResult() async throws {
+        let viewModel = AgentBuilderViewModel.fixtureReadyToPublish()
+
+        await viewModel.load()
+        viewModel.previewContext(sampleUserMessage: "Hello")
+
+        #expect(viewModel.preview?.isPreviewOnly == true)
+        #expect(viewModel.preview?.warnings.contains("Preview only: final model input is assembled by Rust execution.") == true)
+    }
+
+    @Test("publish stores exact profile selection")
+    func publishStoresExactProfileSelection() async throws {
+        let viewModel = AgentBuilderViewModel.fixtureReadyToPublish(publishedRevision: 9)
+
+        await viewModel.load()
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        #expect(viewModel.publishedAgentSelection == PublishedAgentSelection(
+            profileId: "profile_1",
+            profileRevisionId: 9,
+            displayName: "Assistant"
+        ))
+    }
+
+    @Test("editing after publish clears stale chat handoff selection")
+    func editingAfterPublishClearsStaleSelection() async throws {
+        let viewModel = AgentBuilderViewModel.fixtureReadyToPublish(publishedRevision: 9)
+
+        await viewModel.load()
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+        viewModel.toggleTool("web.fetch_url_text")
+
+        #expect(viewModel.lifecycle == .dirty)
+        #expect(viewModel.publishedAgentSelection == nil)
     }
 }
 
