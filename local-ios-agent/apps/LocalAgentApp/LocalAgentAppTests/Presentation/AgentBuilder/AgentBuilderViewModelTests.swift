@@ -61,6 +61,28 @@ struct AgentBuilderViewModelTests {
         #expect(viewModel.lifecycle == .dirty)
     }
 
+    @Test("editing during publish immediately returns draft to dirty")
+    func editingDuringPublishImmediatelyReturnsDraftToDirty() async {
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: DelayedFailingAgentBuilderClient(),
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.validateCurrentDraft()
+        let publishTask = Task { await viewModel.publishCurrentDraft() }
+        while viewModel.lifecycle != .publishing {
+            await Task.yield()
+        }
+
+        viewModel.markEdited()
+
+        #expect(viewModel.lifecycle == .dirty)
+        await publishTask.value
+        #expect(viewModel.lifecycle == .dirty)
+    }
+
     @Test("load creates draft and loads manifest-backed tool cards")
     func loadCreatesDraftAndToolCards() async throws {
         let viewModel = AgentBuilderViewModel(

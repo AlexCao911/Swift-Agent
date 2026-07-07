@@ -47,10 +47,30 @@ enum DebugTraceProjection {
 }
 
 struct DebugTraceView: View {
-    var snapshot: DebugTraceSnapshot
+    var routeRunId: String?
+    var activeAgent: ActiveAgentRevisionSelection?
+    var debugService: RunDebugService?
+
+    @State private var archive: RunDebugUIModel?
+    @State private var errorMessage: String?
+
+    private var snapshot: DebugTraceSnapshot {
+        DebugTraceProjection.project(
+            routeRunId: routeRunId,
+            activeAgent: activeAgent,
+            archive: archive
+        )
+    }
 
     var body: some View {
         List {
+            if let errorMessage {
+                Section {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            }
+
             Section("Run") {
                 LabeledContent("Run ID", value: snapshot.runId)
                 LabeledContent("Profile Revision", value: snapshot.profileRevisionLabel)
@@ -99,6 +119,29 @@ struct DebugTraceView: View {
             }
         }
         .navigationTitle("Debug")
+        .task(id: routeRunId) {
+            await loadArchiveIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func loadArchiveIfNeeded() async {
+        archive = nil
+        errorMessage = nil
+
+        guard let routeRunId else {
+            return
+        }
+        guard let debugService else {
+            errorMessage = "Debug archive service is unavailable."
+            return
+        }
+
+        do {
+            archive = try await debugService.loadDebugArchive(routeRunId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

@@ -121,11 +121,9 @@ struct AppShellView: View {
 
     private var debugDestination: some View {
         DebugTraceView(
-            snapshot: DebugTraceProjection.project(
-                routeRunId: debugRunId,
-                activeAgent: viewModel.activeAgent,
-                archive: nil
-            )
+            routeRunId: debugRunId,
+            activeAgent: viewModel.activeAgent,
+            debugService: container.runDebugService
         )
     }
 

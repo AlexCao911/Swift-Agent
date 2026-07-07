@@ -3,6 +3,7 @@ import LocalNativeToolkit
 
 struct AppContainer {
     let runtimeService: AgentRuntimeService
+    let runDebugService: RunDebugService?
     let nativeToolkitClient: any NativeToolkitClientProtocol
     let nativePermissionGateway: any NativePermissionGateway
     let agentBuilderClient: any AgentBuilderClient

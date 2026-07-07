@@ -19,6 +19,7 @@ struct LocalAgentApp: App {
                     runtimeClient: FailingRuntimeClient(error: error),
                     toolDriver: MinimalHostToolDriver()
                 ),
+                runDebugService: nil,
                 nativeToolkitClient: EmptyNativeToolkitClient(),
                 nativePermissionGateway: StoreBackedNativePermissionGateway(store: PermissionStore()),
                 agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([

@@ -108,9 +108,9 @@ final class AgentBuilderViewModel {
         draftVersion += 1
         publishedAgentSelection = nil
         switch lifecycle {
-        case .validating, .invalid, .readyToPublish, .editing, .published, .publishFailed, .empty:
+        case .validating, .invalid, .readyToPublish, .editing, .published, .publishFailed, .empty, .publishing:
             lifecycle = .dirty
-        case .dirty, .publishing:
+        case .dirty:
             break
         }
     }

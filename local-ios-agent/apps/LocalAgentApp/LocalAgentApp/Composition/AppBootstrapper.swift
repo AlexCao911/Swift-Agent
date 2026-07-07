@@ -64,6 +64,7 @@ enum AppBootstrapper {
                 toolDriver: toolDriver,
                 coordinator: coordinator
             ),
+            runDebugService: RunDebugService(bridge: executionBridge),
             nativeToolkitClient: nativeToolkitClient,
             nativePermissionGateway: nativePermissionGateway,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
