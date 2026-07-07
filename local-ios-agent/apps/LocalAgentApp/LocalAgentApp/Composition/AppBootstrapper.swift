@@ -123,6 +123,8 @@ enum AppBootstrapper {
             listTools,
             NativePermissionStatusTool(permissionStore: permissionStore),
             WebFetchURLTextTool(),
+            FilesPickDocumentTool(),
+            PhotosPickImagesTool(),
         ]
 
         #if canImport(EventKit) && os(iOS)

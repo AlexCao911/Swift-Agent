@@ -121,6 +121,38 @@ struct RustRuntimeAppIntegrationTests {
         #expect(!viewModel.toolCards.isEmpty)
     }
 
+    @Test("container exposes user mediated picker tools")
+    @MainActor
+    func containerExposesUserMediatedPickerTools() async throws {
+        let container = try AppBootstrapper.makeContainer(
+            environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
+            store: .inMemory
+        )
+        let viewModel = container.makeAgentBuilderViewModel()
+
+        await viewModel.load()
+        let builderToolIds = viewModel.toolCards.map(\.id)
+        #expect(builderToolIds.contains("files.pick_document"))
+        #expect(builderToolIds.contains("photos.pick_images"))
+
+        let snapshot = await container.nativeToolkitClient.registrationSnapshot()
+        #expect(snapshot.toolNames.contains("files.pick_document"))
+        #expect(snapshot.toolNames.contains("photos.pick_images"))
+
+        try await assertPendingInteractionTool(
+            container.nativeToolkitClient,
+            toolName: "files.pick_document",
+            toolCallId: "call_file_picker",
+            interactionKind: "file_picker"
+        )
+        try await assertPendingInteractionTool(
+            container.nativeToolkitClient,
+            toolName: "photos.pick_images",
+            toolCallId: "call_photo_picker",
+            interactionKind: "photos_picker"
+        )
+    }
+
     @Test("live RustRuntimeClient completes debug echo tool loop")
     func liveRuntimeCompletesDebugEchoToolLoop() async throws {
         let service = try makeLiveService()
@@ -145,4 +177,32 @@ struct RustRuntimeAppIntegrationTests {
             toolDriver: MinimalHostToolDriver()
         )
     }
+}
+
+private func decodedJSONObject(_ json: String) throws -> [String: Any] {
+    let data = try #require(json.data(using: .utf8))
+    return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func assertPendingInteractionTool(
+    _ client: NativeToolkitClientProtocol,
+    toolName: String,
+    toolCallId: String,
+    interactionKind: String
+) async throws {
+    let result = await client.execute(ToolExecutionRequestDTO(
+        runId: "run_1",
+        sessionId: "session_1",
+        toolCallEntryId: "entry_1",
+        toolCallId: toolCallId,
+        toolName: toolName,
+        argumentsJson: "{}"
+    ))
+
+    #expect(result.isError == false)
+    let envelope = try decodedJSONObject(result.structuredJson)
+    let resultPayload = try #require(envelope["result"] as? [String: Any])
+    #expect(envelope["tool_call_id"] as? String == toolCallId)
+    #expect(resultPayload["kind"] as? String == "pending_user_interaction")
+    #expect(resultPayload["interaction_kind"] as? String == interactionKind)
 }

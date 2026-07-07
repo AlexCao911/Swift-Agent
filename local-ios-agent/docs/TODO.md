@@ -29,6 +29,8 @@ Done in the current MVP branch:
 - `native.list_tools`, `native.permission_status`, and `web.fetch_url_text` use structured tool-result envelopes.
 - EventKit calendar search and reminder creation adapters are in place.
 - File/photo picker request types and pending-interaction broker contract are in place.
+- File/photo picker tools are registered in the production catalog and return pending interaction
+  envelopes through `NativeToolkitClient`.
 - Attachment read/describe tools return bounded data through opaque attachment ids.
 - App-owned App Intents route capture/open actions back into the app.
 
@@ -62,7 +64,6 @@ Remaining:
 
 ### Native Toolkit Additional Adapters
 
-- Register file/photo picker tools in the production catalog once Chat can present pending interaction cards.
 - Connect real file/photo picker presentation to the pending interaction broker.
 - Add Share Extension target once Chat capture review exists.
 - Add VisionKit scan, OCR, Speech transcription, Maps/geocoding, and Shortcut metadata adapters.
