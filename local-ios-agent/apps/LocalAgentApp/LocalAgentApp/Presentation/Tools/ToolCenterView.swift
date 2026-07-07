@@ -59,8 +59,8 @@ private struct ToolCenterRow: View {
 
             HStack(spacing: 8) {
                 Label(row.interactionLabel, systemImage: modeIcon)
-                Label(row.approvalPolicy.rawValue, systemImage: "checkmark.shield")
-                Label(permissionLabel, systemImage: permissionIcon)
+                ToolApprovalBadge(policy: row.approvalPolicy)
+                PermissionBadge(readiness: row.readiness)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -86,29 +86,4 @@ private struct ToolCenterRow: View {
         }
     }
 
-    private var permissionLabel: String {
-        switch row.readiness {
-        case .ready:
-            "Ready"
-        case .needsUserGrant:
-            "Needs permission"
-        case .denied:
-            "Permission denied"
-        case .unavailable(_, let reason):
-            reason
-        }
-    }
-
-    private var permissionIcon: String {
-        switch row.readiness {
-        case .ready:
-            "checkmark.circle"
-        case .needsUserGrant:
-            "questionmark.circle"
-        case .denied:
-            "lock"
-        case .unavailable:
-            "exclamationmark.triangle"
-        }
-    }
 }

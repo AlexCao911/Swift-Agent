@@ -113,40 +113,27 @@ struct AppShellView: View {
     }
 
     private var settingsDestination: some View {
-        List {
-            Section("Active Agent") {
-                if let activeAgent = viewModel.activeAgent {
-                    LabeledContent("Profile", value: activeAgent.profileId)
-                    LabeledContent("Revision", value: "\(activeAgent.profileRevisionId)")
-                    LabeledContent("Name", value: activeAgent.displayName)
-                } else {
-                    ContentUnavailableView(
-                        "No Active Agent",
-                        systemImage: "rectangle.3.group",
-                        description: Text("Publish or select an agent to start reliable runs.")
-                    )
-                }
-            }
-
-            Section("Advanced") {
-                Toggle("Show Debug", isOn: $viewModel.advancedDebugEnabled)
-                Button {
-                    viewModel.openDebug(runId: nil)
-                } label: {
-                    Label("Open Debug", systemImage: "ladybug")
-                }
-                .disabled(!viewModel.advancedDebugEnabled)
-            }
-        }
-        .navigationTitle("Settings")
+        PrivacySettingsView(
+            shellViewModel: viewModel,
+            toolCenterViewModel: toolCenterViewModel
+        )
     }
 
     private var debugDestination: some View {
-        ProductPlaceholderView(
-            title: "Debug",
-            systemImageName: "ladybug",
-            message: "Runtime traces stay behind the advanced debug affordance."
+        DebugTraceView(
+            snapshot: DebugTraceProjection.project(
+                routeRunId: debugRunId,
+                activeAgent: viewModel.activeAgent,
+                archive: nil
+            )
         )
+    }
+
+    private var debugRunId: String? {
+        if case .debug(let runId) = viewModel.route {
+            return runId
+        }
+        return nil
     }
 
     @MainActor
@@ -154,20 +141,5 @@ struct AppShellView: View {
         viewModel.usePublishedAgent(selection)
         BuilderFirstHostSelection.apply(selection, to: chatViewModel)
         viewModel.open(.chat(sessionId: nil))
-    }
-}
-
-private struct ProductPlaceholderView: View {
-    var title: String
-    var systemImageName: String
-    var message: String
-
-    var body: some View {
-        ContentUnavailableView(
-            title,
-            systemImage: systemImageName,
-            description: Text(message)
-        )
-        .navigationTitle(title)
     }
 }

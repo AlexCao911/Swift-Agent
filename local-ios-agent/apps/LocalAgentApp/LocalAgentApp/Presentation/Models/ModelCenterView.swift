@@ -25,6 +25,14 @@ struct ModelCenterView: View {
             Section("Cloud Providers") {
                 rows(for: .cloud)
             }
+
+            Section("Runtime Defaults") {
+                LabeledContent("Temperature", value: "Default")
+                LabeledContent("Context Budget", value: "Runtime policy")
+                Text("Provider setup and model downloads are explicit setup actions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("Models")
     }
@@ -145,47 +153,6 @@ private struct ModelCenterRow: View {
             "Cloud provider \(providerId)"
         case .unset:
             "Not configured"
-        }
-    }
-}
-
-private struct ModelReadinessBadge: View {
-    var readiness: ModelReadiness
-
-    var body: some View {
-        Label(label, systemImage: iconName)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(color)
-    }
-
-    private var label: String {
-        switch readiness {
-        case .ready:
-            "Ready"
-        case .missingConfiguration(let reason), .unavailable(let reason):
-            reason
-        }
-    }
-
-    private var iconName: String {
-        switch readiness {
-        case .ready:
-            "checkmark.circle"
-        case .missingConfiguration:
-            "exclamationmark.circle"
-        case .unavailable:
-            "xmark.octagon"
-        }
-    }
-
-    private var color: Color {
-        switch readiness {
-        case .ready:
-            .green
-        case .missingConfiguration:
-            .orange
-        case .unavailable:
-            .red
         }
     }
 }

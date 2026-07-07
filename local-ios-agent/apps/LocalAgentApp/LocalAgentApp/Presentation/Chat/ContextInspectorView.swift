@@ -189,12 +189,7 @@ private struct ContextInspectorSegmentRow: View {
                 Text(segment.title)
                     .font(.headline)
                 Spacer(minLength: 8)
-                Text(segment.trustLevel.rawValue)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color(.secondarySystemBackground), in: Capsule())
+                TrustLevelBadge(trustLevel: segment.trustLevel)
             }
 
             HStack(spacing: 8) {

@@ -78,6 +78,13 @@
 		0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002122 /* ModelCenterViewModel.swift */; };
 		0C0000010000000000002023 /* ModelCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002123 /* ModelCenterView.swift */; };
 		0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002124 /* ModelCenterViewModelTests.swift */; };
+		0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002125 /* PrivacySettingsView.swift */; };
+		0C0000010000000000002026 /* DebugTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002126 /* DebugTraceView.swift */; };
+		0C0000010000000000002027 /* StateBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002127 /* StateBadges.swift */; };
+		0C0000010000000000002028 /* ProductEmptyStates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002128 /* ProductEmptyStates.swift */; };
+		0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002129 /* PrivacySettingsProjectionTests.swift */; };
+		0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000212A /* DebugTraceProjectionTests.swift */; };
+		0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000212B /* StateBadgeDescriptorTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -182,6 +189,13 @@
 		0C0000010000000000002122 /* ModelCenterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002123 /* ModelCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002124 /* ModelCenterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModelTests.swift; sourceTree = "<group>"; };
+		0C0000010000000000002125 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002126 /* DebugTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002127 /* StateBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadges.swift; sourceTree = "<group>"; };
+		0C0000010000000000002128 /* ProductEmptyStates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductEmptyStates.swift; sourceTree = "<group>"; };
+		0C0000010000000000002129 /* PrivacySettingsProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsProjectionTests.swift; sourceTree = "<group>"; };
+		0C000001000000000000212A /* DebugTraceProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceProjectionTests.swift; sourceTree = "<group>"; };
+		0C000001000000000000212B /* StateBadgeDescriptorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadgeDescriptorTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -334,8 +348,11 @@
 			children = (
 				0A000001000000000000050A /* AgentBuilder */,
 				0A0000010000000000000507 /* Chat */,
+				0C0000010000000000002524 /* Debug */,
 				0C0000010000000000002521 /* Models */,
 				0A000001000000000000050B /* Runtime */,
+				0C0000010000000000002525 /* Settings */,
+				0C0000010000000000002526 /* Shared */,
 				0C0000010000000000002519 /* Tools */,
 			);
 			path = Presentation;
@@ -398,6 +415,31 @@
 				0C0000010000000000002122 /* ModelCenterViewModel.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002524 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002126 /* DebugTraceView.swift */,
+			);
+			path = Debug;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002525 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002125 /* PrivacySettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002526 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002128 /* ProductEmptyStates.swift */,
+				0C0000010000000000002127 /* StateBadges.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000508 /* Resources */ = {
@@ -491,8 +533,11 @@
 			children = (
 				0A0000010000000000000517 /* AgentBuilder */,
 				0A0000010000000000000515 /* Chat */,
+				0C0000010000000000002527 /* Debug */,
 				0C0000010000000000002522 /* Models */,
 				0A0000010000000000000518 /* Runtime */,
+				0C0000010000000000002528 /* Settings */,
+				0C0000010000000000002529 /* Shared */,
 				0C0000010000000000002520 /* Tools */,
 			);
 			path = Presentation;
@@ -531,6 +576,30 @@
 				0C0000010000000000002124 /* ModelCenterViewModelTests.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002527 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				0C000001000000000000212A /* DebugTraceProjectionTests.swift */,
+			);
+			path = Debug;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002528 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002129 /* PrivacySettingsProjectionTests.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002529 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				0C000001000000000000212B /* StateBadgeDescriptorTests.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000515 /* Chat */ = {
@@ -684,6 +753,10 @@
 				0C000001000000000000201B /* RunInlineCards.swift in Sources */,
 				0C0000010000000000002023 /* ModelCenterView.swift in Sources */,
 				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
+				0C0000010000000000002026 /* DebugTraceView.swift in Sources */,
+				0C0000010000000000002028 /* ProductEmptyStates.swift in Sources */,
+				0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */,
+				0C0000010000000000002027 /* StateBadges.swift in Sources */,
 				0C0000010000000000002021 /* ToolCenterView.swift in Sources */,
 				0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
@@ -752,6 +825,9 @@
 				0C000001000000000000201C /* RunInlineCardsTests.swift in Sources */,
 				0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */,
 				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
+				0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */,
+				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
+				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
