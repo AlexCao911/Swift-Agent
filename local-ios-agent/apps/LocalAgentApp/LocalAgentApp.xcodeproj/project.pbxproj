@@ -75,6 +75,9 @@
 		0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211F /* ToolCenterViewModel.swift */; };
 		0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002120 /* ToolCenterViewModelTests.swift */; };
 		0C0000010000000000002021 /* ToolCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002121 /* ToolCenterView.swift */; };
+		0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002122 /* ModelCenterViewModel.swift */; };
+		0C0000010000000000002023 /* ModelCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002123 /* ModelCenterView.swift */; };
+		0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002124 /* ModelCenterViewModelTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -176,6 +179,9 @@
 		0C000001000000000000211F /* ToolCenterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002120 /* ToolCenterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterViewModelTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002121 /* ToolCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002122 /* ModelCenterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModel.swift; sourceTree = "<group>"; };
+		0C0000010000000000002123 /* ModelCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002124 /* ModelCenterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModelTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -328,6 +334,7 @@
 			children = (
 				0A000001000000000000050A /* AgentBuilder */,
 				0A0000010000000000000507 /* Chat */,
+				0C0000010000000000002521 /* Models */,
 				0A000001000000000000050B /* Runtime */,
 				0C0000010000000000002519 /* Tools */,
 			);
@@ -382,6 +389,15 @@
 				0C000001000000000000211F /* ToolCenterViewModel.swift */,
 			);
 			path = Tools;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002521 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002123 /* ModelCenterView.swift */,
+				0C0000010000000000002122 /* ModelCenterViewModel.swift */,
+			);
+			path = Models;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000508 /* Resources */ = {
@@ -475,6 +491,7 @@
 			children = (
 				0A0000010000000000000517 /* AgentBuilder */,
 				0A0000010000000000000515 /* Chat */,
+				0C0000010000000000002522 /* Models */,
 				0A0000010000000000000518 /* Runtime */,
 				0C0000010000000000002520 /* Tools */,
 			);
@@ -506,6 +523,14 @@
 				0C0000010000000000002120 /* ToolCenterViewModelTests.swift */,
 			);
 			path = Tools;
+			sourceTree = "<group>";
+		};
+		0C0000010000000000002522 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002124 /* ModelCenterViewModelTests.swift */,
+			);
+			path = Models;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000515 /* Chat */ = {
@@ -657,6 +682,8 @@
 				0C0000010000000000002019 /* ConversationWorkspaceViewModel.swift in Sources */,
 				0C000001000000000000201D /* ContextInspectorView.swift in Sources */,
 				0C000001000000000000201B /* RunInlineCards.swift in Sources */,
+				0C0000010000000000002023 /* ModelCenterView.swift in Sources */,
+				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
 				0C0000010000000000002021 /* ToolCenterView.swift in Sources */,
 				0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
@@ -724,6 +751,7 @@
 				0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */,
 				0C000001000000000000201C /* RunInlineCardsTests.swift in Sources */,
 				0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */,
+				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,

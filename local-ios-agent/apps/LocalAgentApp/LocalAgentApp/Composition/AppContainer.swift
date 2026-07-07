@@ -46,4 +46,27 @@ struct AppContainer {
             permissionGateway: nativePermissionGateway
         )
     }
+
+    @MainActor
+    func makeModelCenterViewModel() -> ModelCenterViewModel {
+        ModelCenterViewModel(
+            profiles: [
+                ProviderProfileDTO(
+                    id: "mock",
+                    displayName: "Mock Model",
+                    kind: .mock,
+                    maxContextTokens: 4096
+                ),
+                ProviderProfileDTO(
+                    id: "local_llm",
+                    displayName: "Local LLM",
+                    kind: .localLLM,
+                    maxContextTokens: 2048
+                ),
+            ],
+            activeModel: nil,
+            localModelAvailability: ["local_llm": false],
+            cloudCredentialAvailability: ["mock": true]
+        )
+    }
 }

@@ -8,6 +8,7 @@ struct AppShellView: View {
     @State private var chatViewModel: AgentViewModel
     @State private var builderViewModel: AgentBuilderViewModel
     @State private var toolCenterViewModel: ToolCenterViewModel
+    @State private var modelCenterViewModel: ModelCenterViewModel
 
     private let primaryFamilies: [AppRouteFamily] = [.chat, .agents, .tools, .models, .settings]
 
@@ -18,6 +19,7 @@ struct AppShellView: View {
         _chatViewModel = State(initialValue: container.makeAgentViewModel())
         _builderViewModel = State(initialValue: container.makeAgentBuilderViewModel())
         _toolCenterViewModel = State(initialValue: container.makeToolCenterViewModel())
+        _modelCenterViewModel = State(initialValue: container.makeModelCenterViewModel())
     }
 
     var body: some View {
@@ -98,11 +100,7 @@ struct AppShellView: View {
         case .tools:
             ToolCenterView(viewModel: toolCenterViewModel)
         case .models:
-            ProductPlaceholderView(
-                title: "Models",
-                systemImageName: "cpu",
-                message: "Model Center will show local engines, cloud providers, setup status, and active model selection."
-            )
+            ModelCenterView(viewModel: modelCenterViewModel, shellViewModel: viewModel)
         case .settings:
             if case .debug = viewModel.route {
                 debugDestination
