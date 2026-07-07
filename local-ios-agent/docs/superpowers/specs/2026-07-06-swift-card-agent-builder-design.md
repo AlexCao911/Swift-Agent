@@ -17,6 +17,31 @@ Agent = Tool Belt + Context Pipeline
 
 Prompt, memory, skills, model settings, and runtime options matter, but they are supporting pieces around those two core surfaces.
 
+## Scope Window
+
+This document is the 20-day / post-6-day Swift app architecture target. It intentionally covers the full tool toolkit and card-based builder direction.
+
+The 6-day slice should be smaller:
+
+```text
+6-day slice
+  Agent.md-style editor
+  host capability toggles
+  NativeToolManifest seed
+  native.list_tools / native.permission_status
+  minimal calendar/reminder proof
+
+20-day target
+  card-based Agent Builder
+  attachment-backed Files/Photos
+  ContextPreviewService
+  app-owned Shortcuts/App Intents
+  Maps/Web compatibility-priority tools
+  richer tool inspector and draft lifecycle
+```
+
+Compatibility-priority means the architecture treats Shortcuts/App Intents, Maps, and Web as first-class tool families with fallbacks. It does not mean every family must ship in the 6-day slice.
+
 ## Research Notes
 
 ### Apple System Capability APIs
@@ -280,6 +305,33 @@ Each manifest must declare:
 
 Manifest fields are not UI decoration. They are contract inputs for Builder rendering, Rust bridge schema export, runtime approval, permission readiness, test fixtures, and audit output.
 
+Tool result trust is also part of the contract. Any tool that imports external material must label the result as untrusted content so Rust can keep it distinct from system instructions, user instructions, and trusted app metadata.
+
+Initial trust labels:
+
+```text
+system_instruction
+  App/Rust-authored control instructions.
+
+user_input
+  Text the user directly authored as a message, prompt, or builder input.
+  Imported file/web/OCR/share contents are not automatically user instructions.
+
+trusted_app_metadata
+  App-generated status such as permission state or tool availability.
+
+tool_schema
+  Tool definitions exposed to the model.
+
+external_untrusted_content
+  Web pages, OCR text, document text, shared page contents, map/place descriptions, and other imported material.
+
+tool_result
+  Structured result from a tool; may contain nested external_untrusted_content.
+```
+
+`web.fetch_url_text`, `vision.extract_text_from_attachment`, `files.read_attachment`, `share.capture_input`, and similar tools must mark imported text as `external_untrusted_content`. This is the main defense against indirect prompt injection. The Context Pipeline may summarize or quote it, but the model must not treat instructions inside that material as executable instructions.
+
 ### NativeTool
 
 A native tool is a model-callable host action.
@@ -316,6 +368,23 @@ The broker is the right home for:
 - share-extension handoff
 - permission repair flows
 
+User-mediated tools must align with Rust execution suspension. If the app enters the background, is killed, or loses the picker while an interaction is pending, the run must remain in a resumable `pending_user_interaction` / suspended state rather than silently failing or continuing without the selected input.
+
+Minimum recovery contract:
+
+```text
+pending interaction id
+  run id
+  tool call id
+  tool name
+  expected result shape
+  created at
+  expiration policy
+  resume / cancel action
+```
+
+The implementation plan should cross-check this with the Rust execution event stream and run snapshot recovery design before Files/Photos tools ship.
+
 ### NativeAttachmentStore
 
 User-selected files, images, audio, and scanned documents should be represented as app-local attachment references instead of raw paths passed through the model.
@@ -330,8 +399,12 @@ Each attachment should record:
 - size and lightweight metadata
 - retention policy
 - sensitivity
+- bookmark status for file-backed attachments
+- recovery status when the original security-scoped bookmark can no longer be resolved
 
 The model receives metadata and a stable attachment id. Swift and Rust resolve the actual bytes only through approved tool paths.
+
+Security-scoped bookmarks are a Phase 2 implementation detail, but the design must reserve the failure path now. If a bookmark expires, is revoked, or cannot be resolved, the attachment should become `needs_user_reselection` instead of exposing a stale path or failing with an opaque file error.
 
 The intended composition pattern is:
 
@@ -375,11 +448,11 @@ First implementation families:
 | Photos | `photos.pick_images`, `photos.describe_attachment_metadata` | PhotosUI / `PhotosPicker` | User-mediated | Build first as selected-photo attachment tools. |
 | Share Input | `share.capture_input`, `share.list_recent_captures` | Share Extension / app groups | User-mediated or extension input | Build after Files/Photos. |
 | App Actions / Shortcuts | `agent.start_chat`, `agent.capture_text`, `agent.continue_conversation`, `agent.open_builder` | App Intents / AppEntity / AppShortcutsProvider | System action adapter | Compatibility-priority. Build as app-owned outward adapters, not arbitrary shortcut execution. |
-| Maps | `maps.search_places`, `maps.geocode`, `maps.reverse_geocode`, `maps.open_place_in_maps`, `maps.open_route_in_maps` | MapKit / `MKLocalSearch` / `CLGeocoder` / `MKMapItem.openInMaps` | Background for search/geocode; user-visible system action for open-in-Maps | Compatibility-priority with service availability fallback. |
+| Maps | `maps.search_places`, `maps.geocode_address`, `maps.reverse_geocode_coordinate`, `maps.open_place_in_maps`, `maps.open_route_in_maps` | MapKit / `MKLocalSearch` / `CLGeocoder` / `MKMapItem.openInMaps` | Background for provided query/coordinate; user-visible system action for open-in-Maps | Compatibility-priority with service availability fallback. |
 | Web | `web.open_url`, `web.fetch_url_text`, `web.summarize_attachment_or_url_metadata` | SFSafariViewController / WKWebView / URLSession | User-visible for open/browse; background only for bounded fetch with approval | Compatibility-priority with network policy, content limits, and regional fallback. |
 | Notifications | `notifications.schedule_local`, `notifications.cancel_scheduled` | UserNotifications | Background after permission and confirmation | Later, because side effects need clear approval UX. |
 | Contacts | `contacts.search`, `contacts.get_contact` | Contacts / `CNContactStore` | Background after permission | Later; high privacy sensitivity. |
-| Location | `location.current`, `location.reverse_geocode` | CoreLocation | User-mediated or background with strict permission | Later; high sensitivity and context leakage risk. |
+| Location | `location.current_coordinate`, `location.current_place` | CoreLocation + optional geocoding | User-mediated or background with strict permission | Later; high sensitivity because it touches device location. |
 | Speech | `speech.transcribe_audio_attachment`, `speech.record_and_transcribe` | Speech / AVFoundation | User-mediated | Later; recording requires foreground UX. |
 | Vision | `vision.scan_document`, `vision.extract_text_from_image` | VisionKit / Vision | User-mediated for scan; background for existing image attachment | Later, useful for document workflows. |
 | Clipboard | `clipboard.import_text`, `clipboard.copy_text` | UIPasteboard | User-mediated | Later; only through explicit user action. |
@@ -454,6 +527,11 @@ web.fetch.approved
 
 maps.search
   MapKit search/geocode capability with service-availability fallback.
+  Does not imply device location access.
+
+location.current
+  CoreLocation device-location capability.
+  Only for tools that read the user's current location.
 ```
 
 Agent Builder uses the same gateway to show readiness badges before a user publishes an agent.
@@ -583,6 +661,7 @@ ContextPreviewService
   output:
     ordered context segments
     source labels
+    trust labels
     token estimate
     sensitivity labels
     privacy warnings
@@ -590,7 +669,7 @@ ContextPreviewService
     assembly trace id
 ```
 
-The preview is allowed to be approximate, but the ordering, source labels, and policy warnings must come from the same Rust context assembly policy used during execution.
+The preview is allowed to be approximate, but the ordering, source labels, trust labels, and policy warnings must come from the same Rust context assembly policy used during execution.
 
 Builder uses this service for:
 
@@ -662,9 +741,11 @@ validating
 
 invalid
   -> editing
+  -> dirty
 
 readyToPublish
   -> publishing
+  -> dirty
 
 publishing
   -> published
@@ -676,6 +757,14 @@ publishFailed
 published
   -> editing
 ```
+
+Async editing rules:
+
+- Edits in `invalid` or `readyToPublish` immediately move the draft to `dirty`.
+- Edits during `validating` cancel or invalidate the in-flight validation request and move the draft to `dirty`.
+- `validating` must be versioned by a local draft revision counter; stale validation responses are ignored.
+- `publishing` freezes the publish candidate. Editing controls should be disabled until publish resolves, or the app must explicitly cancel publish before returning to `dirty`.
+- `publishing` must send an immutable draft snapshot / local draft revision id, never a mutable reference to the current editor state.
 
 State meanings:
 
@@ -703,15 +792,15 @@ User edits cards
        Native permission readiness
        Model/runtime readiness
        ContextPreviewService policy warnings
-  -> Publish AgentProfile
-  -> Conversation Workspace can start run with profile id
+  -> Publish AgentProfileRevision
+  -> Conversation Workspace can start run with profile_revision_id
 ```
 
 ### Run Agent
 
 ```text
 Conversation Workspace
-  -> Rust prepare user turn
+  -> Rust prepare user turn with profile_revision_id
   -> Rust start execution
   -> Rust requests tool call
   -> Swift LocalNativeToolkit executes native tool
@@ -800,13 +889,19 @@ Apple system API
 - Tool cards, Rust schema export, and runtime approval policy derive from the same `NativeToolManifest`.
 - Tool cards show OS, region/service availability, and fallback behavior.
 - EventKit calendar tools use distinct read-full, write-only, and user-confirmed-create permission scopes.
+- Maps coordinate geocoding and device-location tools use distinct names and permission scopes.
+- Imported web/OCR/file/share content carries `external_untrusted_content` trust labels into context preview and assembly.
 - Files and Photos tools return attachment references, not arbitrary raw paths.
 - User-mediated tools route through one interaction broker instead of presenting UI from random tool code.
+- User-mediated tools can suspend and resume through a pending interaction id; app kill/background does not lose the run boundary.
 - Attachment-producing tools and attachment-consuming tools compose through `NativeAttachmentStore`.
+- Attachment bookmark failures have an explicit `needs_user_reselection` recovery path.
 - Shortcuts/App Intents, Maps, and Web are treated as compatibility-priority tool families, not blanket-deferred capabilities.
 - Context cards can be reordered/configured through presets.
-- Context Pipeline has a Rust-backed preview with ordered segments, token estimates, and privacy warnings.
+- Context Pipeline has a Rust-backed preview with ordered segments, trust labels, token estimates, and privacy warnings.
 - Agent Builder exposes a clear draft lifecycle from editing to published.
+- Published runs bind to a concrete `profile_revision_id`, not a mutable profile id alias.
+- This document is a 20-day/post-6-day architecture target; the 6-day slice is explicitly smaller.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
 - iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
