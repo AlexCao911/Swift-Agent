@@ -448,17 +448,27 @@ struct ChatView: View {
         }
 
         switch route.destination {
-        case .chat:
+        case let .openChat(conversationId):
+            if let conversationId {
+                await viewModel.selectConversation(conversationId)
+            }
             if route.startsNewChat {
                 await viewModel.startNewChat(prefilledText: route.prefilledText)
             }
-        case .conversations:
+        case .openConversationList:
             await viewModel.loadConversations()
             viewModel.state.conversations.isPresented = true
-        case .prompts:
+        case .openPromptLibrary:
             managementSheet = .prompts
-        case .settings:
+        case .openSettings:
             managementSheet = .settings
+        case .openBuilder:
+            onOpenBuilder?()
+        case let .captureText(text, _):
+            viewModel.state.draftText = text
+            if route.opensBuilder {
+                onOpenBuilder?()
+            }
         }
     }
 }
