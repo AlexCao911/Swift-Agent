@@ -43,6 +43,8 @@
 		0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000121 /* RuntimeProjectionModel.swift */; };
 		0C0000010000000000002000 /* AgentBuilderDraftModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002100 /* AgentBuilderDraftModels.swift */; };
 		0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002101 /* AgentBuilderDraftModelsTests.swift */; };
+		0C0000010000000000002002 /* AgentBuilderToolCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */; };
+		0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002103 /* AgentBuilderToolCatalogTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -112,6 +114,8 @@
 		0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModelTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002100 /* AgentBuilderDraftModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderDraftModels.swift; sourceTree = "<group>"; };
 		0C0000010000000000002101 /* AgentBuilderDraftModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderDraftModelsTests.swift; sourceTree = "<group>"; };
+		0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolCatalog.swift; sourceTree = "<group>"; };
+		0C0000010000000000002103 /* AgentBuilderToolCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolCatalogTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -255,6 +259,7 @@
 			isa = PBXGroup;
 			children = (
 				0C0000010000000000002100 /* AgentBuilderDraftModels.swift */,
+				0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */,
 				0A0000010000000000000120 /* AgentBuilderViewModel.swift */,
 			);
 			path = AgentBuilder;
@@ -369,6 +374,7 @@
 			isa = PBXGroup;
 			children = (
 				0C0000010000000000002101 /* AgentBuilderDraftModelsTests.swift */,
+				0C0000010000000000002103 /* AgentBuilderToolCatalogTests.swift */,
 				0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */,
 			);
 			path = AgentBuilder;
@@ -553,6 +559,7 @@
 				0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */,
 				0A000001000000000000001E /* ChatManagementSheets.swift in Sources */,
 				0C0000010000000000002000 /* AgentBuilderDraftModels.swift in Sources */,
+				0C0000010000000000002002 /* AgentBuilderToolCatalog.swift in Sources */,
 				0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */,
 				0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */,
 			);
@@ -575,6 +582,7 @@
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 				0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */,
+				0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */,
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,
