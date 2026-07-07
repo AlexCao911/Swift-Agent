@@ -27,7 +27,7 @@ struct LocalAgentApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ChatView(viewModel: container.makeAgentViewModel())
+            BuilderFirstHostView(container: container)
         }
     }
 }

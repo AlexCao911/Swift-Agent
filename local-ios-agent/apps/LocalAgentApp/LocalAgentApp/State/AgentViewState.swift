@@ -245,6 +245,7 @@ struct AgentViewState: Equatable, Sendable {
     var lastAppliedExecutionSequenceByRunId: [String: UInt64]
     var promptLibrary: PromptLibraryViewState
     var modelSettings: ModelSettingsViewState
+    var selectedAgentProfileId: String
     var selectedAgentProfileRevisionId: UInt64?
 
     init(
@@ -260,6 +261,7 @@ struct AgentViewState: Equatable, Sendable {
         lastAppliedExecutionSequenceByRunId: [String: UInt64] = [:],
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
+        selectedAgentProfileId: String = "profile_1",
         selectedAgentProfileRevisionId: UInt64? = 1
     ) {
         self.phase = phase
@@ -274,6 +276,7 @@ struct AgentViewState: Equatable, Sendable {
         self.lastAppliedExecutionSequenceByRunId = lastAppliedExecutionSequenceByRunId
         self.promptLibrary = promptLibrary
         self.modelSettings = modelSettings
+        self.selectedAgentProfileId = selectedAgentProfileId
         self.selectedAgentProfileRevisionId = selectedAgentProfileRevisionId
     }
 
@@ -287,7 +290,9 @@ struct AgentViewState: Equatable, Sendable {
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
-        modelSettings: ModelSettingsViewState = ModelSettingsViewState()
+        modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
+        selectedAgentProfileId: String = "profile_1",
+        selectedAgentProfileRevisionId: UInt64? = 1
     ) {
         self.init(
             phase: phase,
@@ -299,17 +304,15 @@ struct AgentViewState: Equatable, Sendable {
             conversations: conversations,
             lastTerminalReason: lastTerminalReason,
             promptLibrary: promptLibrary,
-            modelSettings: modelSettings
+            modelSettings: modelSettings,
+            selectedAgentProfileId: selectedAgentProfileId,
+            selectedAgentProfileRevisionId: selectedAgentProfileRevisionId
         )
     }
 
     var draftText: String {
         get { draft.text }
         set { draft.text = newValue }
-    }
-
-    var selectedAgentProfileId: String {
-        "profile_1"
     }
 
     var executionOptions: ExecutionOptionsDTO {

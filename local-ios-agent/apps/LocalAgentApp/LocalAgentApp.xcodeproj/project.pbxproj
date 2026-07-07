@@ -50,6 +50,8 @@
 		0C0000010000000000002006 /* AgentBuilderToolPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */; };
 		0C0000010000000000002007 /* AgentBuilderContextPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */; };
 		0C0000010000000000002008 /* AgentBuilderPublishReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */; };
+		0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */; };
+		0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210A /* BuilderFirstHostView.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -126,6 +128,8 @@
 		0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolPickerView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderContextPreviewView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderPublishReviewView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostViewModelTests.swift; sourceTree = "<group>"; };
+		0C000001000000000000210A /* BuilderFirstHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostView.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -196,6 +200,7 @@
 		0A0000010000000000000052 /* LocalAgentAppTests */ = {
 			isa = PBXGroup;
 			children = (
+				0C0000010000000000002509 /* App */,
 				0A0000010000000000000511 /* Runtime */,
 				0A0000010000000000000512 /* Tools */,
 				0A0000010000000000000513 /* State */,
@@ -205,9 +210,18 @@
 			path = LocalAgentAppTests;
 			sourceTree = "<group>";
 		};
+		0C0000010000000000002509 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
 		0A0000010000000000000501 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				0C000001000000000000210A /* BuilderFirstHostView.swift */,
 				0A0000010000000000000101 /* LocalAgentApp.swift */,
 			);
 			path = App;
@@ -559,6 +573,7 @@
 				0B000001000000000000100A /* RunDebugService.swift in Sources */,
 				0B000001000000000000100B /* InferenceSettingsService.swift in Sources */,
 				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
+				0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */,
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
 				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
@@ -603,6 +618,7 @@
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 				0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */,
 				0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */,
+				0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */,
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,

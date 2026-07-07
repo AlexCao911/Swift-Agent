@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var viewModel: AgentViewModel
+    var onOpenBuilder: (() -> Void)?
+
     @State private var scrollProxy: ScrollViewProxy?
     @State private var editingMessage: AgentMessageViewState?
     @State private var editText = ""
@@ -12,6 +14,11 @@ struct ChatView: View {
     @State private var isImportingFile = false
     @State private var intentRouter = AppIntentRouter.shared
     @State private var managementSheet: ChatManagementSheet?
+
+    init(viewModel: AgentViewModel, onOpenBuilder: (() -> Void)? = nil) {
+        self.viewModel = viewModel
+        self.onOpenBuilder = onOpenBuilder
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,6 +35,12 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Menu {
+                        if let onOpenBuilder {
+                            Button(action: onOpenBuilder) {
+                                Label("Agent Builder", systemImage: "square.stack.3d.up")
+                            }
+                        }
+
                         Button {
                             managementSheet = .prompts
                         } label: {
@@ -41,9 +54,23 @@ struct ChatView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text("Local Agent")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
+                            VStack(spacing: 2) {
+                                Text("Local Agent")
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+
+                                if let revision = viewModel.state.selectedAgentProfileRevisionId {
+                                    Text("\(viewModel.state.selectedAgentProfileId) r\(revision)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.quaternary, in: Capsule())
+                                        .accessibilityLabel(
+                                            "Active agent \(viewModel.state.selectedAgentProfileId), revision \(revision)"
+                                        )
+                                }
+                            }
                             
                             Image(systemName: "chevron.down")
                                 .font(.caption.weight(.semibold))
