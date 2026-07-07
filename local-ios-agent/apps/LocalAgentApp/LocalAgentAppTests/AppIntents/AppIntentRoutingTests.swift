@@ -53,4 +53,12 @@ struct AppIntentRoutingTests {
         #expect(route.destination == .openChat(conversationId: "session_7"))
         #expect(route.startsNewChat == false)
     }
+
+    @Test("agent.continue_conversation without id opens conversation list")
+    func continueConversationWithoutIdRoutesToConversationList() {
+        let route = AppIntentRoute.continueConversation(conversationId: "")
+
+        #expect(route.intentIdentifier == "agent.continue_conversation")
+        #expect(route.destination == .openConversationList)
+    }
 }

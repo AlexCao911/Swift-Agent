@@ -88,7 +88,7 @@ struct ContinueLocalAgentConversationIntent: AppIntent {
     var conversation: ConversationEntity
 
     init() {
-        conversation = ConversationEntity(id: "current", title: "Current Conversation")
+        conversation = ConversationEntity(id: "", title: "Choose Conversation")
     }
 
     init(conversation: ConversationEntity) {

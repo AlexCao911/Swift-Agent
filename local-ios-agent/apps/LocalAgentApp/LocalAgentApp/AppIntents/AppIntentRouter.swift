@@ -81,6 +81,12 @@ struct AppIntentRoute: Equatable, Identifiable, Sendable {
     }
 
     static func continueConversation(conversationId: String) -> AppIntentRoute {
+        guard !conversationId.isEmpty else {
+            return AppIntentRoute(
+                intentIdentifier: "agent.continue_conversation",
+                destination: .openConversationList
+            )
+        }
         AppIntentRoute(
             intentIdentifier: "agent.continue_conversation",
             destination: .openChat(conversationId: conversationId)
