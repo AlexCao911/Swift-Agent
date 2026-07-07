@@ -18,6 +18,16 @@ struct AgentBuilderView: View {
                                 card: card,
                                 selectedToolCount: draft.selectedToolIds.count,
                                 onSelect: { viewModel.selectCard(card.id) },
+                                onUpdatePrompt: { systemPrompt, persona, responseStyle in
+                                    viewModel.updatePrompt(
+                                        systemPrompt: systemPrompt,
+                                        persona: persona,
+                                        responseStyle: responseStyle
+                                    )
+                                },
+                                onSetContextStep: { stepId, isEnabled in
+                                    viewModel.setContextStep(stepId, isEnabled: isEnabled)
+                                },
                                 onConfigureTools: { isToolPickerPresented = true },
                                 onPreviewContext: {
                                     Task {

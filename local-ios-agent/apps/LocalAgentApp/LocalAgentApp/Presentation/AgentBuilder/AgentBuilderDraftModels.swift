@@ -110,6 +110,29 @@ struct AgentBuilderDraft: Equatable, Sendable, Identifiable {
         cards[index].payload = .toolBelt(payload)
         touch()
     }
+
+    @discardableResult
+    mutating func setContextStep(_ stepId: String, isEnabled: Bool) -> Bool {
+        guard let cardIndex = cards.firstIndex(where: { $0.kind == .contextPipeline }),
+              var payload = cards[cardIndex].payload.contextPipeline,
+              let stepIndex = payload.steps.firstIndex(where: { $0.id == stepId })
+        else {
+            return false
+        }
+
+        guard payload.steps[stepIndex].isEnabled != isEnabled else {
+            return false
+        }
+
+        guard isEnabled || payload.steps[stepIndex].budgetPolicy != "required" else {
+            return false
+        }
+
+        payload.steps[stepIndex].isEnabled = isEnabled
+        cards[cardIndex].payload = .contextPipeline(payload)
+        touch()
+        return true
+    }
 }
 
 struct PublishedAgentSelection: Equatable, Sendable, Identifiable {

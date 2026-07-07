@@ -79,6 +79,30 @@ final class AgentBuilderViewModel {
         markEdited()
     }
 
+    func updatePrompt(systemPrompt: String, persona: String, responseStyle: String) {
+        guard var draft else {
+            return
+        }
+        draft.updatePrompt(
+            systemPrompt: systemPrompt,
+            persona: persona,
+            responseStyle: responseStyle
+        )
+        self.draft = draft
+        markEdited()
+    }
+
+    func setContextStep(_ stepId: String, isEnabled: Bool) {
+        guard var draft else {
+            return
+        }
+        guard draft.setContextStep(stepId, isEnabled: isEnabled) else {
+            return
+        }
+        self.draft = draft
+        markEdited()
+    }
+
     func previewContext(sampleUserMessage: String) async {
         guard let draft else {
             return

@@ -116,6 +116,87 @@ struct AgentBuilderViewModelTests {
         #expect(viewModel.lifecycle == .dirty)
     }
 
+    @Test("editing prompt updates draft and published profile fields")
+    func editingPromptUpdatesDraftAndPublishedProfileFields() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        viewModel.updatePrompt(
+            systemPrompt: "Use precise citations.",
+            persona: "Research partner",
+            responseStyle: "Dense"
+        )
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        let prompt = viewModel.draft?.cards.compactMap(\.payload.prompt).first
+        #expect(prompt?.systemPrompt == "Use precise citations.")
+        #expect(prompt?.persona == "Research partner")
+        #expect(prompt?.responseStyle == "Dense")
+
+        let publishedDraft = await builderClient.publishedDrafts.last
+        #expect(publishedDraft?.systemPrompt == "Use precise citations.")
+        #expect(publishedDraft?.persona == "Research partner")
+        #expect(publishedDraft?.responseStyle == "Dense")
+    }
+
+    @Test("toggling context step updates draft and published context ids")
+    func togglingContextStepUpdatesDraftAndPublishedContextIds() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        viewModel.setContextStep("tool_results", isEnabled: false)
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        let steps = viewModel.draft?.cards
+            .compactMap(\.payload.contextPipeline?.steps)
+            .flatMap { $0 }
+        #expect(steps?.first(where: { $0.id == "tool_results" })?.isEnabled == false)
+
+        let publishedDraft = await builderClient.publishedDrafts.last
+        #expect(publishedDraft?.contextStepIds == [
+            "system_prompt",
+            "conversation_history",
+        ])
+    }
+
+    @Test("required context step remains in published context")
+    func requiredContextStepRemainsInPublishedContext() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        viewModel.setContextStep("system_prompt", isEnabled: false)
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        let steps = viewModel.draft?.cards
+            .compactMap(\.payload.contextPipeline?.steps)
+            .flatMap { $0 }
+        #expect(steps?.first(where: { $0.id == "system_prompt" })?.isEnabled == true)
+
+        let publishedDraft = await builderClient.publishedDrafts.last
+        #expect(publishedDraft?.contextStepIds.contains("system_prompt") == true)
+    }
+
     @Test("preview context produces preview-only result")
     func previewContextProducesPreviewOnlyResult() async throws {
         let viewModel = AgentBuilderViewModel.fixtureReadyToPublish()

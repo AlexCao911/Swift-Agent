@@ -4,58 +4,134 @@ struct AgentBuilderCardView: View {
     var card: AgentBuilderCardDraft
     var selectedToolCount: Int
     var onSelect: () -> Void
+    var onUpdatePrompt: (String, String, String) -> Void
+    var onSetContextStep: (String, Bool) -> Void
     var onConfigureTools: () -> Void
     var onPreviewContext: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: card.kind.systemImageName)
-                        .frame(width: 28, height: 28)
-                        .foregroundStyle(card.isEnabled ? .blue : .secondary)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(card.kind.title)
-                            .font(.headline)
-                        Text(summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer()
-                    statusBadge
-                }
-
-                if card.kind == .toolBelt {
-                    Button {
-                        onConfigureTools()
-                    } label: {
-                        Label("Choose Tools", systemImage: "wrench.and.screwdriver")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if card.kind == .contextPipeline {
-                    Button {
-                        onPreviewContext()
-                    } label: {
-                        Label("Preview Context", systemImage: "eye")
-                    }
-                    .buttonStyle(.bordered)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: onSelect) {
+                header
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(.quaternary)
+            .buttonStyle(.plain)
+
+            if case .prompt(let payload) = card.payload {
+                promptControls(payload)
+            }
+
+            if case .contextPipeline(let payload) = card.payload {
+                contextControls(payload)
+            }
+
+            if card.kind == .toolBelt {
+                Button {
+                    onConfigureTools()
+                } label: {
+                    Label("Choose Tools", systemImage: "wrench.and.screwdriver")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if card.kind == .contextPipeline {
+                Button {
+                    onPreviewContext()
+                } label: {
+                    Label("Preview Context", systemImage: "eye")
+                }
+                .buttonStyle(.bordered)
             }
         }
-        .buttonStyle(.plain)
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.quaternary)
+        }
         .disabled(!card.isEnabled && card.payload.disabled != nil)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: card.kind.systemImageName)
+                .frame(width: 28, height: 28)
+                .foregroundStyle(card.isEnabled ? .blue : .secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card.kind.title)
+                    .font(.headline)
+                Text(summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+            statusBadge
+        }
+    }
+
+    private func promptControls(_ payload: PromptPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Persona", text: Binding(
+                get: { payload.persona },
+                set: { value in
+                    onUpdatePrompt(payload.systemPrompt, value, payload.responseStyle)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+
+            TextField("Response style", text: Binding(
+                get: { payload.responseStyle },
+                set: { value in
+                    onUpdatePrompt(payload.systemPrompt, payload.persona, value)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+
+            TextField("System prompt", text: Binding(
+                get: { payload.systemPrompt },
+                set: { value in
+                    onUpdatePrompt(value, payload.persona, payload.responseStyle)
+                }
+            ), axis: .vertical)
+            .lineLimit(2...5)
+            .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func contextControls(_ payload: ContextPipelinePayload) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(payload.steps) { step in
+                Toggle(isOn: Binding(
+                    get: { step.isEnabled },
+                    set: { value in onSetContextStep(step.id, value) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(step.kind.title)
+                            .font(.subheadline)
+                        Text(budgetPolicyLabel(for: step))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(step.budgetPolicy == "required")
+            }
+        }
+    }
+
+    private func budgetPolicyLabel(for step: ContextStepDraft) -> String {
+        switch step.budgetPolicy {
+        case "required":
+            "Required"
+        case "budgeted":
+            "Budgeted"
+        case "disabled":
+            "Disabled"
+        default:
+            step.budgetPolicy
+        }
     }
 
     @ViewBuilder
