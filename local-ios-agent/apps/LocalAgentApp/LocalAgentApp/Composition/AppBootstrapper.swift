@@ -18,24 +18,32 @@ enum AppBootstrapper {
             runtimePolicy: AgentPromptDefaults.runtimePolicy,
             providerId: runtimeProviderId(environment: environment, providers: providers),
             store: runtimeStore,
-            providers: providers
+            providers: providers,
+            agentOS: agentOSConfiguration(environment: environment)
         ))
         let toolDriver = MinimalHostToolDriver()
+        let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let coordinator = conversationExecutionCoordinator(
             environment: environment,
             client: client,
+            executionBridge: executionBridge,
             toolDriver: toolDriver
         )
-        return AppContainer(runtimeService: AgentRuntimeService(
-            runtimeClient: client,
-            toolDriver: toolDriver,
-            coordinator: coordinator
-        ))
+        return AppContainer(
+            runtimeService: AgentRuntimeService(
+                runtimeClient: client,
+                toolDriver: toolDriver,
+                coordinator: coordinator
+            ),
+            agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
+            permissionClient: MockPermissionClient(issues: [])
+        )
     }
 
     private static func conversationExecutionCoordinator(
         environment: [String: String],
         client: RustRuntimeClient,
+        executionBridge: RustExecutionBridgeClient,
         toolDriver: MinimalHostToolDriver
     ) -> ChatInteractionCoordinator? {
         // Keep this feature gated until Rust execution uses the verified ReAct worker path.
@@ -45,7 +53,6 @@ enum AppBootstrapper {
         }
 
         let conversationBridge = RustConversationBridgeClient(gateway: client, legacyClient: client)
-        let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let conversationDomain = ConversationDomainAdapter(bridge: conversationBridge)
         let executionDomain = ExecutionDomainAdapter(
             profiles: AgentProfileService(bridge: executionBridge),
@@ -62,6 +69,16 @@ enum AppBootstrapper {
             toolDriver: toolDriver
         )
         return coordinator
+    }
+
+    private static func agentOSConfiguration(
+        environment: [String: String]
+    ) -> RustAgentOSConfiguration? {
+        guard environment["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR"] == "1" else {
+            return nil
+        }
+
+        return RustAgentOSConfiguration(seedDevelopmentProfile: true)
     }
 
     static func sqliteURL(fileManager: FileManager = .default) throws -> URL {

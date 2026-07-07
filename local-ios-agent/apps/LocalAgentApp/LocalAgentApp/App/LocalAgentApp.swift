@@ -9,10 +9,19 @@ struct LocalAgentApp: App {
         do {
             container = try AppBootstrapper.makeContainer()
         } catch {
-            container = AppContainer(runtimeService: AgentRuntimeService(
-                runtimeClient: FailingRuntimeClient(error: error),
-                toolDriver: MinimalHostToolDriver()
-            ))
+            container = AppContainer(
+                runtimeService: AgentRuntimeService(
+                    runtimeClient: FailingRuntimeClient(error: error),
+                    toolDriver: MinimalHostToolDriver()
+                ),
+                agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([
+                    PermissionIssueDTO(
+                        code: "app.bootstrap.failed",
+                        message: error.localizedDescription
+                    ),
+                ]),
+                permissionClient: MockPermissionClient(issues: [])
+            )
         }
     }
 

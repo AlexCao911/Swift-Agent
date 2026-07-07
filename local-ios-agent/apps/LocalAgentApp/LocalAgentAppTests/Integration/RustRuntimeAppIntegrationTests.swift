@@ -72,6 +72,40 @@ struct RustRuntimeAppIntegrationTests {
         #expect(usesCoordinator)
     }
 
+    @Test("feature-flagged coordinator starts with seeded profile revision")
+    func featureFlaggedCoordinatorStartsWithSeededProfileRevision() async throws {
+        let container = try AppBootstrapper.makeContainer(
+            environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
+            store: .inMemory
+        )
+
+        let service = container.runtimeService
+        var state = try await service.prepare()
+        state = try await service.sendMessage("hello", state: state)
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text).contains("hello"))
+    }
+
+    @Test("App container exposes Rust backed agent builder")
+    @MainActor
+    func appContainerExposesRustBackedAgentBuilder() async throws {
+        let container = try AppBootstrapper.makeContainer(
+            environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
+            store: .inMemory
+        )
+        let viewModel = container.makeAgentBuilderViewModel(
+            profileId: "profile.builder.integration",
+            templateId: "template_1"
+        )
+
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        #expect(viewModel.publishedProfileRevisionId == 1)
+        #expect(viewModel.lifecycle == .published(profileRevisionId: 1))
+    }
+
     @Test("live RustRuntimeClient completes debug echo tool loop")
     func liveRuntimeCompletesDebugEchoToolLoop() async throws {
         let service = try makeLiveService()

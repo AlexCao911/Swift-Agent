@@ -17,6 +17,7 @@ enum AgentDraftLifecycleState: Equatable, Sendable {
 @Observable
 final class AgentBuilderViewModel {
     private let profileId: String
+    private let templateId: String
     private let builderClient: any AgentBuilderClient
     private let permissionClient: any PermissionClient
     private var draftVersion: UInt64 = 0
@@ -27,11 +28,13 @@ final class AgentBuilderViewModel {
 
     init(
         profileId: String,
+        templateId: String = "template_1",
         builderClient: any AgentBuilderClient,
         permissionClient: any PermissionClient,
         readiness: PermissionReadinessUIModel = PermissionReadinessUIModel()
     ) {
         self.profileId = profileId
+        self.templateId = templateId
         self.builderClient = builderClient
         self.permissionClient = permissionClient
         self.readiness = readiness
@@ -39,7 +42,7 @@ final class AgentBuilderViewModel {
 
     func refreshReadiness() async {
         do {
-            let draft = AgentBuilderDraftDTO(profileId: profileId)
+            let draft = AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
             async let draftReadiness = builderClient.validateDraft(draft)
             async let permissionReadiness = permissionClient.readiness([])
             let draftResult = try await draftReadiness
@@ -81,7 +84,7 @@ final class AgentBuilderViewModel {
         lifecycle = .publishing
         do {
             let profile = try await builderClient.publishProfile(
-                AgentBuilderDraftDTO(profileId: profileId)
+                AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
             )
             guard version == draftVersion else {
                 lifecycle = .dirty
