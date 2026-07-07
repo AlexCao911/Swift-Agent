@@ -6,9 +6,11 @@ public protocol AgentBuilderClient: Sendable {
 
 public actor MockAgentBuilderClient: AgentBuilderClient {
     private let model: AgentBuilderUIModel
+    private let publishedRevision: UInt64
 
-    public init(model: AgentBuilderUIModel) {
+    public init(model: AgentBuilderUIModel, publishedRevision: UInt64 = 1) {
         self.model = model
+        self.publishedRevision = publishedRevision
     }
 
     public static func withReadinessIssues(_ issues: [PermissionIssueDTO]) -> Self {
@@ -17,6 +19,17 @@ public actor MockAgentBuilderClient: AgentBuilderClient {
             displayName: "Assistant",
             readiness: PermissionReadinessUIModel(issues: issues)
         ))
+    }
+
+    public static func readyToPublish(publishedRevision: UInt64 = 1) -> Self {
+        Self(
+            model: AgentBuilderUIModel(
+                profileId: "profile_1",
+                displayName: "Assistant",
+                readiness: PermissionReadinessUIModel()
+            ),
+            publishedRevision: publishedRevision
+        )
     }
 
     public func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
@@ -34,7 +47,7 @@ public actor MockAgentBuilderClient: AgentBuilderClient {
     public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
         AgentProfileDTO(
             profileId: draft.profileId,
-            profileRevisionId: 1,
+            profileRevisionId: publishedRevision,
             displayName: model.displayName
         )
     }
