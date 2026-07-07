@@ -16,10 +16,10 @@
 - `ToolSchemaDTO.metadata_json` must use a stable schema, not ad hoc keys.
 - `ToolResultDTO.structuredJson` must carry trust/provenance/context policy through `ToolResultEnvelopeV1`.
 - External web/file/OCR/share/speech/vision content must be labelled `untrusted_external_content`.
-- `web.fetch_url_text` must use `WebFetchPolicyV1`: no cookies/auth headers, no JS, no private network by default, bounded redirects, bounded MIME/size/time.
-- `WebFetchPolicyV1` private-network blocking is host-string based in this plan. It blocks IPv4 private ranges and common IPv6 local ranges, but does not validate DNS-resolved IP addresses; DNS rebinding and split-horizon DNS remain known risks for a later network-layer hardening pass.
+- `web.fetch_url_text` is a first-stage best-effort public HTTPS fetch: no cookies/auth headers, no JS, host-string private-network blocking, bounded redirects, URLSession timeout, and post-download response-size rejection.
+- `WebFetchPolicyV1` private-network blocking is host-string based in this plan. It blocks IPv4 private ranges and common IPv6 local ranges, but does not validate DNS-resolved IP addresses; DNS rebinding, split-horizon DNS, and transport-layer streaming byte caps remain known risks for a later network-layer hardening pass.
 - User-mediated tools must persist a durable `pending_user_interaction` record before presenting system UI.
-- Production run start must fail when no `profile_revision_id` is selected; only explicit seed/mock clients may use revision `1`.
+- Production run start must fail when selected state has no `profile_revision_id`; the current hard-coded `profile_1` seed may initialize selected revision to `1` until Builder persistence lands, but `AgentRuntimeService` must not synthesize a revision.
 - Avoid full visual node editor work in this plan.
 
 ---
@@ -57,10 +57,16 @@ Swift bridge/app files:
   Adds `profileRevisionId` to published profile and start-run DTOs.
 - Modify `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift`
   Makes mock publish return revision ids.
+- Modify `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentPackageClient.swift`
+  Makes mock package install return a seed revision id.
+- Modify `local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift`
+  Updates seeded agent profiles for the required revision field.
+- Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State/AgentViewState.swift`
+  Holds the currently selected profile revision id.
 - Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/ChatInteractionCoordinator.swift`
   Starts execution with profile revision id.
 - Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift`
-  Stores selected profile revision id and passes it to coordinator path.
+  Requires selected profile revision id and passes it to coordinator path.
 - Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation/AgentBuilder/AgentBuilderViewModel.swift`
   Adds minimal draft lifecycle and publish result state.
 
@@ -70,6 +76,8 @@ Rust files:
   Adds profile revision field to `StartRunRequest`.
 - Modify `local-ios-agent/rust-core/src/run_snapshot/resolver.rs`
   Resolves exact profile revision instead of latest for run start.
+- Modify `local-ios-agent/rust-core/src/execution/run_lifecycle.rs`
+  Carries profile revision in execution start requests.
 - Modify `local-ios-agent/rust-core/src/execution/execution_service.rs`
   Passes revision-pinned request to snapshot resolver.
 - Modify `local-ios-agent/rust-core/src/ffi_bridge.rs`
@@ -82,8 +90,18 @@ Tests:
 - Create `local-ios-agent/toolkit/Tests/LocalNativeToolkitTests/WebFetchPolicyTests.swift`
 - Create `local-ios-agent/toolkit/Tests/LocalNativeToolkitTests/NativeAttachmentStoreTests.swift`
 - Create `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/AgentProfileRevisionDTOTests.swift`
-- Modify `local-ios-agent/rust-core/tests/contract/run_snapshot_resolution_agent_os.rs`.
-- Modify `local-ios-agent/rust-core/tests/integration/ffi_bridge.rs`.
+- Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceTests.swift`
+- Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ExecutionDomainTests.swift`
+- Modify `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ChatInteractionCoordinatorTests.swift`
+- Modify `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift`
+- Modify `local-ios-agent/rust-core/tests/golden/lifecycle_debug_artifacts.rs`
+- Modify `local-ios-agent/rust-core/tests/golden/runtime_execution_trace.rs`
+- Modify `local-ios-agent/rust-core/tests/integration/runtime_execution_lifecycle.rs`
+- Modify `local-ios-agent/rust-core/tests/contract/runtime_execution_agent_os.rs`
+- Modify `local-ios-agent/rust-core/tests/integration/agent_lifecycle_profile_to_runtime.rs`
+- Modify `local-ios-agent/rust-core/tests/contract/run_snapshot_resolution_agent_os.rs`
+- Modify `local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs`
+- Modify `local-ios-agent/rust-core/tests/integration/ffi_bridge.rs`
 
 ---
 
@@ -190,12 +208,12 @@ func missingManifestDoesNotSynthesizeProductMetadata() throws {
 @Test
 func riskMismatchExportsMoreRestrictiveRisk() throws {
     let manifest = NativeToolManifest(
-        manifestId: "native.reminders.create.v1",
-        capabilityId: "reminders.create",
+        manifestId: "native.reminders.create_reminder.v1",
+        capabilityId: "reminders.create_reminder",
         title: "Create Reminder",
         description: "Create reminders",
         mode: .background,
-        permissionScope: NativePermissionScope("reminders.full"),
+        permissionScope: NativePermissionScope("reminders"),
         requiredPrivacyKeys: ["NSRemindersUsageDescription"],
         requiresForegroundUI: false,
         minimumOS: "iOS 17.0",
@@ -210,11 +228,11 @@ func riskMismatchExportsMoreRestrictiveRisk() throws {
     let catalog = try NativeToolCatalog(tools: [
         ExportStubTool(
             schema: NativeToolSchema(
-                name: "reminders.create",
+                name: "reminders.create_reminder",
                 description: "Create reminders",
                 inputSchema: .object(properties: ["title": .string()], required: ["title"]),
                 riskLevel: .readOnly,
-                permissionScope: NativePermissionScope("reminders.full"),
+                permissionScope: NativePermissionScope("reminders"),
                 availability: .available,
                 manifest: manifest
             )
@@ -616,12 +634,12 @@ struct NativeToolResultEnvelopeTests {
             toolName: "native.list_tools",
             toolCallId: "call_1",
             displayText: "2 tools available",
-            modelText: "Available tools: calendar.search_events, reminders.create",
+            modelText: "Available tools: calendar.search_events, reminders.create_reminder",
             resultKind: "native_tool_status",
             resultPayload: [
                 "tools": .array([
                     .object(["name": .string("calendar.search_events")]),
-                    .object(["name": .string("reminders.create")]),
+                    .object(["name": .string("reminders.create_reminder")]),
                 ]),
                 "permissions": .array([
                     .object(["scope": .string("calendar.events.read_full")]),
@@ -647,7 +665,7 @@ struct NativeToolResultEnvelopeTests {
 
         #expect(tools.map { $0["name"] as? String } == [
             "calendar.search_events",
-            "reminders.create",
+            "reminders.create_reminder",
         ])
     }
 
@@ -1313,6 +1331,8 @@ public struct WebFetchPolicyV1: Sendable, Equatable {
 }
 ```
 
+`maxResponseBytes` is an acceptance limit after `URLSession` returns data in this phase. It does not stop the transport mid-download. Add a follow-up issue for streaming byte caps before exposing web fetch to high-risk or unattended agents.
+
 - [ ] **Step 4: Add web fetch tool**
 
 Create `WebTools.swift`:
@@ -1646,11 +1666,35 @@ struct NativeAttachmentStoreTests {
             expiresAtMillis: nil
         )
 
-        await store.put(record)
-        let restored = await store.pending(runId: "run_1", toolCallId: "call_1")
+        try await store.put(record)
+        let restored = try await store.pending(runId: "run_1", toolCallId: "call_1")
 
         #expect(restored?.id == "pending_1")
         #expect(restored?.interactionKind == .photosPicker)
+    }
+
+    @Test
+    func pendingInteractionStoreMarksLifecycleStates() async throws {
+        let store = InMemoryPendingUserInteractionStore()
+        let record = PendingUserInteractionRecord(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: .photosPicker,
+            state: .requested,
+            resumablePayloadSummary: "Pick images",
+            expiresAtMillis: nil
+        )
+
+        try await store.put(record)
+        try await store.markState(.presentingSystemUI, id: "pending_1")
+        let presenting = try await store.pending(runId: "run_1", toolCallId: "call_1")
+        try await store.markState(.completed, id: "pending_1")
+        let completed = try await store.pending(runId: "run_1", toolCallId: "call_1")
+
+        #expect(presenting?.state == .presentingSystemUI)
+        #expect(completed?.state == .completed)
     }
 
     @Test
@@ -1696,10 +1740,11 @@ struct NativeAttachmentStoreTests {
             record,
             store: store
         ) {
-            persistedBeforePresentation = try await store.pending(
+            let stored = try await store.pending(
                 runId: "run_1",
                 toolCallId: "call_1"
-            ) != nil
+            )
+            persistedBeforePresentation = stored?.state == .presentingSystemUI
         }
 
         #expect(persistedBeforePresentation)
@@ -1846,6 +1891,7 @@ public struct PendingUserInteractionRecord: Codable, Sendable, Equatable, Identi
 public protocol PendingUserInteractionStore: Sendable {
     func put(_ record: PendingUserInteractionRecord) async throws
     func pending(runId: String, toolCallId: String) async throws -> PendingUserInteractionRecord?
+    func markState(_ state: PendingInteractionState, id: String) async throws
 }
 
 public actor InMemoryPendingUserInteractionStore: PendingUserInteractionStore {
@@ -1861,6 +1907,14 @@ public actor InMemoryPendingUserInteractionStore: PendingUserInteractionStore {
         records.values.first { record in
             record.runId == runId && record.toolCallId == toolCallId
         }
+    }
+
+    public func markState(_ state: PendingInteractionState, id: String) async throws {
+        guard var record = records[id] else {
+            return
+        }
+        record.state = state
+        records[id] = record
     }
 }
 
@@ -1897,6 +1951,14 @@ public actor FileBackedPendingUserInteractionStore: PendingUserInteractionStore 
         return nil
     }
 
+    public func markState(_ state: PendingInteractionState, id: String) async throws {
+        let url = fileURL(for: id)
+        let data = try Data(contentsOf: url)
+        var record = try decoder.decode(PendingUserInteractionRecord.self, from: data)
+        record.state = state
+        try await put(record)
+    }
+
     private func fileURL(for id: String) -> URL {
         directory.appending(path: "\(id).json")
     }
@@ -1909,7 +1971,16 @@ public enum PendingInteractionPresentationGate {
         present: () async throws -> Void
     ) async throws {
         try await store.put(record)
+        try await store.markState(.presentingSystemUI, id: record.id)
         try await present()
+    }
+
+    public static func complete(_ id: String, store: any PendingUserInteractionStore) async throws {
+        try await store.markState(.completed, id: id)
+    }
+
+    public static func cancelByUser(_ id: String, store: any PendingUserInteractionStore) async throws {
+        try await store.markState(.cancelledByUser, id: id)
     }
 }
 ```
@@ -2090,7 +2161,7 @@ Use the same pattern for Calendar and Reminder tools, with their manifest ids an
 
 ```swift
 "native.calendar.search_events.v1" -> "calendar.events.read_full"
-"native.reminders.create.v1" -> "reminders.full"
+"native.reminders.create_reminder.v1" -> "reminders"
 ```
 
 - [ ] **Step 5: Run focused native toolkit tests**
@@ -2122,9 +2193,16 @@ git commit -m "feat: envelope native tool outputs"
 **Files:**
 - Modify: `local-ios-agent/rust-core/src/run_snapshot/snapshot.rs`
 - Modify: `local-ios-agent/rust-core/src/run_snapshot/resolver.rs`
+- Modify: `local-ios-agent/rust-core/src/execution/run_lifecycle.rs`
 - Modify: `local-ios-agent/rust-core/src/execution/execution_service.rs`
 - Modify: `local-ios-agent/rust-core/src/ffi_bridge.rs`
+- Modify: `local-ios-agent/rust-core/tests/golden/lifecycle_debug_artifacts.rs`
+- Modify: `local-ios-agent/rust-core/tests/golden/runtime_execution_trace.rs`
+- Modify: `local-ios-agent/rust-core/tests/integration/runtime_execution_lifecycle.rs`
+- Modify: `local-ios-agent/rust-core/tests/contract/runtime_execution_agent_os.rs`
+- Modify: `local-ios-agent/rust-core/tests/integration/agent_lifecycle_profile_to_runtime.rs`
 - Modify: `local-ios-agent/rust-core/tests/contract/run_snapshot_resolution_agent_os.rs`
+- Modify: `local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs`
 - Modify: `local-ios-agent/rust-core/tests/integration/ffi_bridge.rs`
 
 **Interfaces:**
@@ -2237,7 +2315,61 @@ fn profile(
 }
 ```
 
-- [ ] **Step 5: Update FFI JSON request**
+- [ ] **Step 5: Update execution request and FFI JSON request**
+
+In `execution/run_lifecycle.rs`, import `AgentProfileVersion` and change `StartExecutionRequest`:
+
+```rust
+use crate::user_customization::AgentProfileVersion;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartExecutionRequest {
+    run_id: String,
+    agent_profile_id: String,
+    profile_revision_id: AgentProfileVersion,
+    user_intent: String,
+    conversation_run_frame_ref: ConversationRunFrameRef,
+}
+```
+
+Change constructor:
+
+```rust
+pub fn new(
+    run_id: impl Into<String>,
+    agent_profile_id: impl Into<String>,
+    profile_revision_id: AgentProfileVersion,
+    user_intent: impl Into<String>,
+    conversation_run_frame_ref: ConversationRunFrameRef,
+) -> Self {
+    Self {
+        run_id: run_id.into(),
+        agent_profile_id: agent_profile_id.into(),
+        profile_revision_id,
+        user_intent: user_intent.into(),
+        conversation_run_frame_ref,
+    }
+}
+```
+
+Add accessor:
+
+```rust
+pub fn profile_revision_id(&self) -> AgentProfileVersion {
+    self.profile_revision_id
+}
+```
+
+In `execution_service.rs`, pass the pinned revision:
+
+```rust
+.resolve_and_persist(StartRunRequest::new(
+    request.agent_profile_id(),
+    request.profile_revision_id(),
+    request.user_intent(),
+    request.conversation_run_frame_ref().clone(),
+))
+```
 
 In `ffi_bridge.rs`, change `StartRunRequestJson`:
 
@@ -2268,7 +2400,55 @@ Change start call:
 
 Update `StartExecutionRequest::new` and `ExecutionService` to carry `AgentProfileVersion` into `StartRunRequest::new(...)`.
 
-- [ ] **Step 6: Run Rust tests**
+- [ ] **Step 6: Mechanically migrate every Rust call site**
+
+Run:
+
+```bash
+cd local-ios-agent/rust-core
+rg -n "StartRunRequest::new|StartExecutionRequest::new" src tests
+```
+
+Update every result so the new revision argument is present. Use `AgentProfileVersion::new(1)` for default fixture profile calls, and use the fixture-specific version when a test intentionally creates a different profile version.
+
+The current call-site file set is:
+
+```text
+src/execution/execution_service.rs
+src/ffi_bridge.rs
+tests/golden/lifecycle_debug_artifacts.rs
+tests/golden/runtime_execution_trace.rs
+tests/integration/runtime_execution_lifecycle.rs
+tests/contract/runtime_execution_agent_os.rs
+tests/integration/agent_lifecycle_profile_to_runtime.rs
+tests/contract/run_snapshot_resolution_agent_os.rs
+tests/contract/conversation_execution_boundary.rs
+```
+
+Example `StartRunRequest::new` migration:
+
+```rust
+StartRunRequest::new(
+    "profile_1",
+    AgentProfileVersion::new(1),
+    "hello",
+    frame_ref_fixture(),
+)
+```
+
+Example `StartExecutionRequest::new` migration:
+
+```rust
+StartExecutionRequest::new(
+    "run_1",
+    "profile_1",
+    AgentProfileVersion::new(1),
+    "hello",
+    frame_ref.clone(),
+)
+```
+
+- [ ] **Step 7: Run Rust tests**
 
 Run:
 
@@ -2276,18 +2456,26 @@ Run:
 cd local-ios-agent/rust-core
 cargo test run_snapshot
 cargo test ffi_bridge
+cargo test
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add local-ios-agent/rust-core/src/run_snapshot/snapshot.rs \
   local-ios-agent/rust-core/src/run_snapshot/resolver.rs \
+  local-ios-agent/rust-core/src/execution/run_lifecycle.rs \
   local-ios-agent/rust-core/src/execution/execution_service.rs \
   local-ios-agent/rust-core/src/ffi_bridge.rs \
+  local-ios-agent/rust-core/tests/golden/lifecycle_debug_artifacts.rs \
+  local-ios-agent/rust-core/tests/golden/runtime_execution_trace.rs \
+  local-ios-agent/rust-core/tests/integration/runtime_execution_lifecycle.rs \
+  local-ios-agent/rust-core/tests/contract/runtime_execution_agent_os.rs \
+  local-ios-agent/rust-core/tests/integration/agent_lifecycle_profile_to_runtime.rs \
   local-ios-agent/rust-core/tests/contract/run_snapshot_resolution_agent_os.rs \
+  local-ios-agent/rust-core/tests/contract/conversation_execution_boundary.rs \
   local-ios-agent/rust-core/tests/integration/ffi_bridge.rs
 git commit -m "feat: pin runs to agent profile revisions"
 ```
@@ -2299,11 +2487,15 @@ git commit -m "feat: pin runs to agent profile revisions"
 **Files:**
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift`
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift`
+- Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentPackageClient.swift`
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State/AgentViewState.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/ChatInteractionCoordinator.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceTests.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ExecutionDomainTests.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ChatInteractionCoordinatorTests.swift`
+- Modify: `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift`
 - Create: `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/AgentProfileRevisionDTOTests.swift`
 
 **Interfaces:**
@@ -2518,6 +2710,18 @@ public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentP
 }
 ```
 
+In `AgentPackageClient.swift`, update mock install:
+
+```swift
+public func installPackage(_ request: PackageInstallRequestDTO) async throws -> AgentProfileDTO {
+    AgentProfileDTO(
+        profileId: "profile_1",
+        profileRevisionId: 1,
+        displayName: preview.profileName
+    )
+}
+```
+
 In `ChatInteractionCoordinator`, add parameter:
 
 ```swift
@@ -2570,7 +2774,7 @@ private(set) var agentProfileRevisionIds: [UInt64] = []
 
 and append `profileRevisionId` inside the test double's `sendMessage`.
 
-Only seed/mock clients may default to revision `1`. Put that fallback in `MockAgentBuilderClient.publishProfile` and fixture setup, not in `AgentRuntimeService`.
+Only seed/mock clients and the current hard-coded `profile_1` selected state may default to revision `1`. Put that transitional value in `MockAgentBuilderClient.publishProfile`, package/mock fixtures, and `AgentViewState`; do not synthesize it inside `AgentRuntimeService`.
 
 ```swift
 public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
@@ -2582,7 +2786,58 @@ public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentP
 }
 ```
 
-- [ ] **Step 5: Run Swift bridge tests**
+- [ ] **Step 5: Mechanically migrate every Swift profile DTO call site**
+
+Run:
+
+```bash
+cd local-ios-agent
+rg -n "AgentProfileDTO\\(" toolkit apps/LocalAgentApp -g '*.swift'
+```
+
+Update every result so `profileRevisionId` is explicit. The current call-site file set is:
+
+```text
+local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift
+local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift
+local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentPackageClient.swift
+local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ExecutionDomainTests.swift
+local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ChatInteractionCoordinatorTests.swift
+local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift
+```
+
+Use revision `1` only for seed/mock fixture profiles:
+
+```swift
+AgentProfileDTO(
+    profileId: "profile_1",
+    profileRevisionId: 1,
+    displayName: "Planner"
+)
+```
+
+Use the explicit published revision in tests that model publish output:
+
+```swift
+AgentProfileDTO(
+    profileId: draft.profileId,
+    profileRevisionId: publishedRevision,
+    displayName: model.displayName
+)
+```
+
+Update any `StartExecutionRequestDTO(...)` test construction to include `profileRevisionId`:
+
+```swift
+StartExecutionRequestDTO(
+    agentProfileId: "profile_1",
+    profileRevisionId: 1,
+    userIntent: "continue",
+    conversationRunFrameRef: frameRef
+)
+```
+
+- [ ] **Step 6: Run Swift bridge and app tests**
 
 Run:
 
@@ -2597,21 +2852,25 @@ Run:
 
 ```bash
 cd local-ios-agent
-xcodebuild test -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:LocalAgentAppTests/AgentRuntimeServiceTests
+xcodebuild test -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:LocalAgentAppTests/AgentRuntimeServiceTests -only-testing:LocalAgentAppTests/ExecutionDomainTests -only-testing:LocalAgentAppTests/ChatInteractionCoordinatorTests
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift \
   local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift \
+  local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentPackageClient.swift \
   local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State/AgentViewState.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/ChatInteractionCoordinator.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceTests.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ExecutionDomainTests.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/ChatInteractionCoordinatorTests.swift \
+  local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift \
   local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/AgentProfileRevisionDTOTests.swift
 git commit -m "feat: propagate agent profile revisions in swift"
 ```
