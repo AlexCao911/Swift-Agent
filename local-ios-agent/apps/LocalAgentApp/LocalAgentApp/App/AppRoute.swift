@@ -1,4 +1,4 @@
-enum AppRoute: Equatable, Sendable {
+enum AppRoute: Equatable, Hashable, Sendable {
     case chat(sessionId: String?)
     case agents(profileId: String?)
     case builder(profileId: String?, revisionId: UInt64?)
@@ -25,13 +25,66 @@ enum AppRoute: Equatable, Sendable {
     }
 }
 
-enum AppRouteFamily: String, Codable, Equatable, Sendable {
+enum AppRouteFamily: String, CaseIterable, Codable, Equatable, Hashable, Identifiable, Sendable {
     case chat
     case agents
     case tools
     case models
     case settings
     case debug
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .chat:
+            "Chat"
+        case .agents:
+            "Agents"
+        case .tools:
+            "Tools"
+        case .models:
+            "Models"
+        case .settings:
+            "Settings"
+        case .debug:
+            "Debug"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .chat:
+            "bubble.left.and.text.bubble.right"
+        case .agents:
+            "rectangle.3.group"
+        case .tools:
+            "wrench.and.screwdriver"
+        case .models:
+            "cpu"
+        case .settings:
+            "gearshape"
+        case .debug:
+            "ladybug"
+        }
+    }
+
+    var defaultRoute: AppRoute {
+        switch self {
+        case .chat:
+            .chat(sessionId: nil)
+        case .agents:
+            .agents(profileId: nil)
+        case .tools:
+            .tools(focusedToolName: nil)
+        case .models:
+            .models
+        case .settings:
+            .settings
+        case .debug:
+            .debug(runId: nil)
+        }
+    }
 }
 
 struct ActiveAgentRevisionSelection: Equatable, Sendable {
@@ -40,13 +93,13 @@ struct ActiveAgentRevisionSelection: Equatable, Sendable {
     var displayName: String
 }
 
-enum ModelRouteKind: Equatable, Sendable {
+enum ModelRouteKind: Equatable, Hashable, Sendable {
     case localCpp(engineId: String)
     case cloud(providerId: String)
     case unset
 }
 
-enum ModelReadiness: Equatable, Sendable {
+enum ModelReadiness: Equatable, Hashable, Sendable {
     case ready
     case missingConfiguration(reason: String)
     case unavailable(reason: String)

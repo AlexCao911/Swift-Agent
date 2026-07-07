@@ -102,4 +102,37 @@ struct AppShellViewModelTests {
             activeModelId: "model_1"
         ))
     }
+
+    @Test("tools route preserves focused tool name")
+    func toolsRoutePreservesFocusedToolName() {
+        let viewModel = AppShellViewModel()
+
+        viewModel.open(.tools(focusedToolName: "web.fetch_url_text"))
+
+        #expect(viewModel.route == .tools(focusedToolName: "web.fetch_url_text"))
+    }
+
+    @Test("debug route is guarded by advanced mode")
+    func debugRouteIsGuardedByAdvancedMode() {
+        let viewModel = AppShellViewModel(route: .settings)
+
+        viewModel.openDebug(runId: "run_1")
+
+        #expect(viewModel.route == .settings)
+
+        viewModel.advancedDebugEnabled = true
+        viewModel.openDebug(runId: "run_1")
+
+        #expect(viewModel.route == .debug(runId: "run_1"))
+    }
+
+    @Test("builder route does not publish active agent")
+    func builderRouteDoesNotPublishActiveAgent() {
+        let viewModel = AppShellViewModel(activeAgent: nil)
+
+        viewModel.openBuilder(profileId: "profile_1", revisionId: 2)
+
+        #expect(viewModel.route == .builder(profileId: "profile_1", revisionId: 2))
+        #expect(viewModel.activeAgent == nil)
+    }
 }

@@ -14,6 +14,17 @@ struct AppContainer {
     }
 
     @MainActor
+    func makeAppShellViewModel() -> AppShellViewModel {
+        AppShellViewModel(
+            activeAgent: ActiveAgentRevisionSelection(
+                profileId: "profile_1",
+                profileRevisionId: 1,
+                displayName: "Assistant"
+            )
+        )
+    }
+
+    @MainActor
     func makeAgentBuilderViewModel(
         profileId: String = "profile_1",
         templateId: String = "template_1"

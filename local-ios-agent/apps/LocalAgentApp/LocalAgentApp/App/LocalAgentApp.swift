@@ -4,12 +4,16 @@ import SwiftUI
 @main
 struct LocalAgentApp: App {
     private let container: AppContainer
+    @State private var shellViewModel: AppShellViewModel
 
+    @MainActor
     init() {
         do {
-            container = try AppBootstrapper.makeContainer()
+            let container = try AppBootstrapper.makeContainer()
+            self.container = container
+            _shellViewModel = State(initialValue: container.makeAppShellViewModel())
         } catch {
-            container = AppContainer(
+            let container = AppContainer(
                 runtimeService: AgentRuntimeService(
                     runtimeClient: FailingRuntimeClient(error: error),
                     toolDriver: MinimalHostToolDriver()
@@ -24,12 +28,14 @@ struct LocalAgentApp: App {
                 permissionClient: MockPermissionClient(issues: []),
                 agentBuilderToolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
             )
+            self.container = container
+            _shellViewModel = State(initialValue: container.makeAppShellViewModel())
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            BuilderFirstHostView(container: container)
+            AppShellView(viewModel: shellViewModel, container: container)
         }
     }
 }
