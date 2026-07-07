@@ -1,3 +1,4 @@
+import LocalAgentBridge
 import SwiftUI
 
 struct AgentBuilderPublishReviewView: View {

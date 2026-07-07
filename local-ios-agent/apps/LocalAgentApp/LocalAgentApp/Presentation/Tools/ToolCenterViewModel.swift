@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import LocalNativeToolkit
 import Observation
@@ -119,7 +120,7 @@ enum ToolCenterProjection {
                 continue
             }
 
-            let scope = metadata.permissionScope.map(NativePermissionScope.init)
+            let scope = metadata.permissionScope.map { NativePermissionScope($0) }
             let readiness = await permissionGateway.readiness(for: scope)
             rows.append(ToolCenterRowState(
                 id: schema.name,

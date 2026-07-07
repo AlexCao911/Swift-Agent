@@ -2,8 +2,11 @@
 import EventKit
 #endif
 
-public struct EventKitPermissionAdapter: NativePermissionGateway {
+public struct EventKitPermissionAdapter: NativePermissionGateway, @unchecked Sendable {
 #if canImport(EventKit) && os(iOS)
+    // EKEventStore is not annotated Sendable by Apple. The app owns one instance and
+    // uses this adapter as the permission gateway boundary, matching the other
+    // EventKit facade wrappers in this package.
     private let eventStore: EKEventStore
 
     public init(eventStore: EKEventStore) {

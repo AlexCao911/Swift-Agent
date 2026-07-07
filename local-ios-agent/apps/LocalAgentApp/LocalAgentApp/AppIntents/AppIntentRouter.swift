@@ -87,7 +87,7 @@ struct AppIntentRoute: Equatable, Identifiable, Sendable {
                 destination: .openConversationList
             )
         }
-        AppIntentRoute(
+        return AppIntentRoute(
             intentIdentifier: "agent.continue_conversation",
             destination: .openChat(conversationId: conversationId)
         )

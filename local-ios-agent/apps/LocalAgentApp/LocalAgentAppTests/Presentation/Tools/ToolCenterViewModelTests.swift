@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import LocalNativeToolkit
 import Testing

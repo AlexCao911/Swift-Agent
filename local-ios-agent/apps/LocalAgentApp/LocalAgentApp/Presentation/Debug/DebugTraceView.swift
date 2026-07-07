@@ -10,6 +10,7 @@ struct DebugTraceSnapshot: Equatable, Sendable {
     var resumeCheckpoint: RuntimeCheckpointItem?
 }
 
+@MainActor
 enum DebugTraceProjection {
     static func project(
         routeRunId: String?,
