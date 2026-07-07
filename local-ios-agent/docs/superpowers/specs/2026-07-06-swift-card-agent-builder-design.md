@@ -615,6 +615,54 @@ location.current
 
 Agent Builder uses the same gateway to show readiness badges before a user publishes an agent.
 
+### WebFetchPolicyV1
+
+`web.fetch_url_text` is useful, but it is also an untrusted content ingestion tool. It must use a narrow fetch policy rather than a general browser/network client.
+
+Policy:
+
+```text
+scheme
+  Allow only https by default.
+  http may be enabled only through explicit per-call approval and should be labelled lower trust.
+  Deny file:, data:, javascript:, blob:, app-specific, custom, and non-URL schemes.
+
+credentials
+  Do not send cookies, app session state, Authorization headers, client certificates, or Keychain-backed credentials.
+  Do not share WKWebView/Safari cookie storage.
+
+javascript
+  Do not execute JavaScript for background fetch.
+  web.open_url / visible browsing may use SafariServices or WebKit, but fetched text for context comes from a bounded network response, not from arbitrary page scripts.
+
+redirects
+  Limit redirect count.
+  Re-validate scheme, host policy, MIME, and private-network policy after each redirect.
+  Record final URL in provenance.
+
+network scope
+  Deny localhost, loopback, link-local, private LAN ranges, and device-local addresses by default.
+  A future developer/debug mode may allow explicit private-network fetch, but product agents must not use it silently.
+
+content type
+  Allow text/html, text/plain, application/json, and well-known text-like types.
+  Reject executable, archive, binary, media, and unknown large content types.
+
+size and time
+  Enforce response size, extracted text size, and timeout limits.
+  Truncate with an explicit `truncated=true` flag when policy permits partial content.
+
+privacy and audit
+  Persist source URL, final URL, MIME, byte count, redirect count, trust level, and fetch outcome.
+  Never persist raw fetched body beyond the selected retention policy.
+
+context policy
+  Always mark fetched body text as `untrusted_external_content`.
+  The model may summarize or quote it, but must not treat embedded instructions as executable instructions.
+```
+
+Failure should return a structured tool error with policy code, display-safe reason, audit summary, and no partial body unless truncation was explicitly allowed.
+
 ### System Capability Toolkit
 
 System capability adapters should stay thin and call app/domain services. They should not become business logic containers.
@@ -935,7 +983,8 @@ User edits cards
 
 ```text
 Conversation Workspace
-  -> Rust prepare user turn with profile_revision_id
+  -> Rust prepare user turn
+       output: conversation_run_frame_ref
   -> Rust start execution with profile_revision_id + conversation_run_frame_ref
   -> Rust requests tool call
   -> Swift LocalNativeToolkit inspects NativeToolManifest.tool_mode
@@ -1007,7 +1056,7 @@ Apple system API
 - Files document picker and attachment read path.
 - Photos picker and image attachment path.
 - Maps search/geocode and open-in-Maps handoff.
-- Web open URL and bounded fetch/read path.
+- Web open URL and bounded fetch/read path using `WebFetchPolicyV1`.
 - App-owned Shortcuts/App Intents for agent capture/start/continue actions.
 - App meta tools for tool listing and permission status.
 - Context trust levels for web/file/OCR/share content.
