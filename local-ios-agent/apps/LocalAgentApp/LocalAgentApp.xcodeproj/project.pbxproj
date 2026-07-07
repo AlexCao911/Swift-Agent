@@ -45,6 +45,11 @@
 		0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002101 /* AgentBuilderDraftModelsTests.swift */; };
 		0C0000010000000000002002 /* AgentBuilderToolCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */; };
 		0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002103 /* AgentBuilderToolCatalogTests.swift */; };
+		0C0000010000000000002004 /* AgentBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002104 /* AgentBuilderView.swift */; };
+		0C0000010000000000002005 /* AgentBuilderCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002105 /* AgentBuilderCards.swift */; };
+		0C0000010000000000002006 /* AgentBuilderToolPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */; };
+		0C0000010000000000002007 /* AgentBuilderContextPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */; };
+		0C0000010000000000002008 /* AgentBuilderPublishReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -116,6 +121,11 @@
 		0C0000010000000000002101 /* AgentBuilderDraftModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderDraftModelsTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolCatalog.swift; sourceTree = "<group>"; };
 		0C0000010000000000002103 /* AgentBuilderToolCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolCatalogTests.swift; sourceTree = "<group>"; };
+		0C0000010000000000002104 /* AgentBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002105 /* AgentBuilderCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderCards.swift; sourceTree = "<group>"; };
+		0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolPickerView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderContextPreviewView.swift; sourceTree = "<group>"; };
+		0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderPublishReviewView.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -260,6 +270,11 @@
 			children = (
 				0C0000010000000000002100 /* AgentBuilderDraftModels.swift */,
 				0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */,
+				0C0000010000000000002105 /* AgentBuilderCards.swift */,
+				0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */,
+				0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */,
+				0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */,
+				0C0000010000000000002104 /* AgentBuilderView.swift */,
 				0A0000010000000000000120 /* AgentBuilderViewModel.swift */,
 			);
 			path = AgentBuilder;
@@ -558,8 +573,13 @@
 				0A000001000000000000001C /* AppIntentRouter.swift in Sources */,
 				0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */,
 				0A000001000000000000001E /* ChatManagementSheets.swift in Sources */,
+				0C0000010000000000002005 /* AgentBuilderCards.swift in Sources */,
+				0C0000010000000000002007 /* AgentBuilderContextPreviewView.swift in Sources */,
 				0C0000010000000000002000 /* AgentBuilderDraftModels.swift in Sources */,
+				0C0000010000000000002008 /* AgentBuilderPublishReviewView.swift in Sources */,
 				0C0000010000000000002002 /* AgentBuilderToolCatalog.swift in Sources */,
+				0C0000010000000000002006 /* AgentBuilderToolPickerView.swift in Sources */,
+				0C0000010000000000002004 /* AgentBuilderView.swift in Sources */,
 				0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */,
 				0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */,
 			);
