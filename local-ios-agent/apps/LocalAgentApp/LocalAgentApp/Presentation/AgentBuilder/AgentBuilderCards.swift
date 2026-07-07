@@ -4,6 +4,7 @@ struct AgentBuilderCardView: View {
     var card: AgentBuilderCardDraft
     var selectedToolCount: Int
     var onSelect: () -> Void
+    var onUpdateIdentity: (String, String) -> Void
     var onUpdatePrompt: (String, String, String) -> Void
     var onSetContextStep: (String, Bool) -> Void
     var onConfigureTools: () -> Void
@@ -15,6 +16,10 @@ struct AgentBuilderCardView: View {
                 header
             }
             .buttonStyle(.plain)
+
+            if case .identity(let payload) = card.payload {
+                identityControls(payload)
+            }
 
             if case .prompt(let payload) = card.payload {
                 promptControls(payload)
@@ -69,6 +74,27 @@ struct AgentBuilderCardView: View {
 
             Spacer()
             statusBadge
+        }
+    }
+
+    private func identityControls(_ payload: AgentIdentityPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Agent name", text: Binding(
+                get: { payload.displayName },
+                set: { value in
+                    onUpdateIdentity(value, payload.description)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+
+            TextField("Description", text: Binding(
+                get: { payload.description },
+                set: { value in
+                    onUpdateIdentity(payload.displayName, value)
+                }
+            ), axis: .vertical)
+            .lineLimit(2...4)
+            .textFieldStyle(.roundedBorder)
         }
     }
 

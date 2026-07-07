@@ -18,6 +18,12 @@ struct AgentBuilderView: View {
                                 card: card,
                                 selectedToolCount: draft.selectedToolIds.count,
                                 onSelect: { viewModel.selectCard(card.id) },
+                                onUpdateIdentity: { displayName, description in
+                                    viewModel.updateIdentity(
+                                        displayName: displayName,
+                                        description: description
+                                    )
+                                },
                                 onUpdatePrompt: { systemPrompt, persona, responseStyle in
                                     viewModel.updatePrompt(
                                         systemPrompt: systemPrompt,

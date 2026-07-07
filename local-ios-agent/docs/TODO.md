@@ -9,6 +9,7 @@ Done in the current MVP branch:
 - Builder can publish a template-backed, Rust-resolvable profile revision.
 - Builder can publish a minimal card-backed, Rust-resolvable profile revision with prompt/persona,
   selected tools, and enabled context step ids.
+- Builder Identity card can edit the published agent name and description.
 - Builder Prompt and Context Pipeline cards can edit prompt/persona/style and enabled context steps.
 - Builder can request a Rust-backed context preview for prompt, conversation, and tool-result
   placeholder segments.

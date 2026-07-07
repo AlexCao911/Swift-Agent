@@ -93,6 +93,21 @@ struct AgentBuilderDraft: Equatable, Sendable, Identifiable {
         touch()
     }
 
+    mutating func updateIdentity(displayName: String, description: String) {
+        guard let index = cards.firstIndex(where: { $0.kind == .identity }),
+              let payload = cards[index].payload.identity
+        else {
+            return
+        }
+        cards[index].payload = .identity(AgentIdentityPayload(
+            displayName: displayName,
+            description: description,
+            iconName: payload.iconName,
+            accentColorName: payload.accentColorName
+        ))
+        touch()
+    }
+
     mutating func toggleTool(_ toolId: String) {
         guard let index = cards.firstIndex(where: { $0.kind == .toolBelt }),
               var payload = cards[index].payload.toolBelt

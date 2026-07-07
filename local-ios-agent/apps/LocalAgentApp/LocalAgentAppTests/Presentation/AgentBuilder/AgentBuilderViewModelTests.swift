@@ -146,6 +146,33 @@ struct AgentBuilderViewModelTests {
         #expect(publishedDraft?.responseStyle == "Dense")
     }
 
+    @Test("editing identity updates draft and published profile name")
+    func editingIdentityUpdatesDraftAndPublishedProfileName() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        viewModel.updateIdentity(
+            displayName: "Research Agent",
+            description: "Tracks sources before answering."
+        )
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        let identity = viewModel.draft?.cards.compactMap(\.payload.identity).first
+        #expect(identity?.displayName == "Research Agent")
+        #expect(identity?.description == "Tracks sources before answering.")
+
+        let publishedDraft = await builderClient.publishedDrafts.last
+        #expect(publishedDraft?.displayName == "Research Agent")
+        #expect(viewModel.publishedAgentSelection?.displayName == "Research Agent")
+    }
+
     @Test("toggling context step updates draft and published context ids")
     func togglingContextStepUpdatesDraftAndPublishedContextIds() async throws {
         let builderClient = RecordingAgentBuilderClient()

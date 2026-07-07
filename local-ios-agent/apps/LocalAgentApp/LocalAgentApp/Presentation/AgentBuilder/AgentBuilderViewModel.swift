@@ -79,6 +79,18 @@ final class AgentBuilderViewModel {
         markEdited()
     }
 
+    func updateIdentity(displayName: String, description: String) {
+        guard var draft else {
+            return
+        }
+        draft.updateIdentity(
+            displayName: displayName,
+            description: description
+        )
+        self.draft = draft
+        markEdited()
+    }
+
     func updatePrompt(systemPrompt: String, persona: String, responseStyle: String) {
         guard var draft else {
             return
