@@ -15,9 +15,10 @@ use crate::storage::{
     TransactionRunner, UnitOfWork,
 };
 use crate::user_customization::{
-    AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings, AgentProfileModelBinding,
-    AgentProfilePublisher, AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService,
-    ComponentContent, InMemoryAgentProfileRepository,
+    AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
+    AgentProfileModelBinding, AgentProfilePublisher, AgentProfileReference, AgentProfileVersion,
+    AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent,
+    InMemoryAgentProfileRepository,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -27,6 +28,9 @@ pub struct AgentOSApplicationServiceConfig {
 
 pub struct AgentOSApplicationService {
     snapshot_service: Arc<RunSnapshotService>,
+    profile_repository: InMemoryAgentProfileRepository,
+    component_catalog: ComponentCatalogService,
+    model_catalog: InMemoryModelBindingCatalog,
 }
 
 struct ModelSelectionStageOperation {
@@ -59,18 +63,19 @@ impl AgentOSApplicationService {
     }
 
     pub fn empty() -> Self {
-        Self {
-            snapshot_service: Arc::new(snapshot_service_from_repositories(
-                InMemoryAgentProfileRepository::default(),
-                ComponentCatalogService::default(),
-                InMemoryModelBindingCatalog::default(),
-                Arc::new(
-                    StaticSecurityPermissionService::default()
-                        .with_permission("run.start", PermissionState::Granted),
-                ),
-                Arc::new(InMemoryCredentialResolver::default()),
-            )),
-        }
+        let profile_repository = InMemoryAgentProfileRepository::default();
+        let component_catalog = ComponentCatalogService::default();
+        let model_catalog = InMemoryModelBindingCatalog::default();
+        Self::from_repositories(
+            profile_repository,
+            component_catalog,
+            model_catalog,
+            Arc::new(
+                StaticSecurityPermissionService::default()
+                    .with_permission("run.start", PermissionState::Granted),
+            ),
+            Arc::new(default_credential_resolver()),
+        )
     }
 
     pub fn snapshot_service(&self) -> Arc<RunSnapshotService> {
@@ -82,6 +87,74 @@ impl AgentOSApplicationService {
         request: StartRunRequest,
     ) -> RunSnapshotResult<ResolvedRunSnapshot> {
         self.snapshot_service.resolve_and_persist(request)
+    }
+
+    pub fn list_agent_profiles(&self) -> Vec<AgentProfile> {
+        self.profile_repository.profiles()
+    }
+
+    pub fn build_agent_from_template(&self, template_id: &str) -> RunSnapshotResult<AgentProfile> {
+        let template = template_for_build_request(template_id)?;
+        let profile_id = AgentProfileId::new(format!("profile.from_template.{template_id}"));
+        if let Some(profile) = self.profile_repository.profile(&AgentProfileReference::pinned(
+            profile_id.clone(),
+            AgentProfileVersion::initial(),
+        )) {
+            return Ok(profile);
+        }
+
+        let persona_component_id = self
+            .component_catalog
+            .create_draft(ComponentContent::persona("Custom Agent"));
+        let persona_version = self
+            .component_catalog
+            .publish(persona_component_id)
+            .map_err(|error| {
+                RunSnapshotError::new(
+                    "application_service.component_publish_failed",
+                    error.to_string(),
+                )
+            })?;
+        let model_selection = default_model_selection();
+        ensure_model_selection(&self.model_catalog, model_selection.clone())?;
+        let model_catalog_for_publish =
+            ModelBindingCatalog::default().with_selection(model_selection.clone());
+        let draft = AgentProfileDraft::new(profile_id, template.id().clone(), "Custom Agent")
+            .bind(ComponentBinding::persona(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Persona)
+                    .expect("assistant template has persona slot")
+                    .clone(),
+                persona_version,
+            ))
+            .with_model_binding(AgentProfileModelBinding::new(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Model)
+                    .expect("assistant template has model slot")
+                    .clone(),
+                model_selection,
+            ))
+            .with_local_bindings(
+                AgentProfileLocalBindings::default()
+                    .with_credential_ref("account.openai.default", "credential.openai.default"),
+            );
+        let reference = AgentProfilePublisher::new(
+            Box::new(InMemoryTransactionRunner::default()),
+            self.profile_repository.clone(),
+        )
+        .publish(
+            draft,
+            &template,
+            &self.component_catalog,
+            &model_catalog_for_publish,
+        )
+        .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+        self.profile_repository.profile(&reference).ok_or_else(|| {
+            RunSnapshotError::new(
+                "application_service.profile_publish_missing",
+                "published agent profile could not be loaded from repository",
+            )
+        })
     }
 
     fn development_seeded() -> RunSnapshotResult<Self> {
@@ -101,14 +174,8 @@ impl AgentOSApplicationService {
                 )
             })?;
 
-        let model_selection = ModelSelection::new(
-            ModelBindingId::new("model_binding.primary"),
-            "account.openai.default",
-            "provider.openai",
-            "gpt-4.1-mini",
-            ModelCatalogVersion::new(7),
-        );
-        stage_model_selection(&model_catalog, model_selection.clone())?;
+        let model_selection = default_model_selection();
+        ensure_model_selection(&model_catalog, model_selection.clone())?;
         let model_catalog_for_publish =
             ModelBindingCatalog::default().with_selection(model_selection.clone());
 
@@ -147,22 +214,37 @@ impl AgentOSApplicationService {
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
-        Ok(Self {
+        Ok(Self::from_repositories(
+            profile_repository,
+            component_catalog,
+            model_catalog,
+            Arc::new(
+                StaticSecurityPermissionService::default()
+                    .with_permission("run.start", PermissionState::Granted),
+            ),
+            Arc::new(default_credential_resolver()),
+        ))
+    }
+
+    fn from_repositories(
+        profile_repository: InMemoryAgentProfileRepository,
+        component_catalog: ComponentCatalogService,
+        model_catalog: InMemoryModelBindingCatalog,
+        security: Arc<dyn crate::security::SecurityPermissionService>,
+        credential_resolver: Arc<dyn crate::security::CredentialRefResolver>,
+    ) -> Self {
+        Self {
             snapshot_service: Arc::new(snapshot_service_from_repositories(
-                profile_repository,
-                component_catalog,
-                model_catalog,
-                Arc::new(
-                    StaticSecurityPermissionService::default()
-                        .with_permission("run.start", PermissionState::Granted),
-                ),
-                Arc::new(InMemoryCredentialResolver::default().with_secret_for(
-                    "credential.openai.default",
-                    "secret",
-                    [CredentialPurpose::RemoteProvider],
-                )),
+                profile_repository.clone(),
+                component_catalog.clone(),
+                model_catalog.clone(),
+                security,
+                credential_resolver,
             )),
-        })
+            profile_repository,
+            component_catalog,
+            model_catalog,
+        }
     }
 }
 
@@ -186,6 +268,45 @@ fn stage_model_selection(
             &mut operation,
         )
         .map_err(RunSnapshotError::from)
+}
+
+fn ensure_model_selection(
+    catalog: &InMemoryModelBindingCatalog,
+    selection: ModelSelection,
+) -> RunSnapshotResult<()> {
+    if catalog.contains_exact_selection(&selection) {
+        Ok(())
+    } else {
+        stage_model_selection(catalog, selection)
+    }
+}
+
+fn default_model_selection() -> ModelSelection {
+    ModelSelection::new(
+        ModelBindingId::new("model_binding.primary"),
+        "account.openai.default",
+        "provider.openai",
+        "gpt-4.1-mini",
+        ModelCatalogVersion::new(7),
+    )
+}
+
+fn default_credential_resolver() -> InMemoryCredentialResolver {
+    InMemoryCredentialResolver::default().with_secret_for(
+        "credential.openai.default",
+        "secret",
+        [CredentialPurpose::RemoteProvider],
+    )
+}
+
+fn template_for_build_request(template_id: &str) -> RunSnapshotResult<AgentTemplate> {
+    match template_id {
+        "template_1" | "template.assistant.default" => Ok(AgentTemplate::assistant_default()),
+        _ => Err(RunSnapshotError::new(
+            "application_service.template_not_found",
+            format!("unknown agent template id: {template_id}"),
+        )),
+    }
 }
 
 fn snapshot_service_from_repositories(

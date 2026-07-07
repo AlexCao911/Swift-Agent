@@ -40,7 +40,7 @@ use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
 };
-use crate::user_customization::AgentProfileVersion;
+use crate::user_customization::{AgentProfile, AgentProfileVersion};
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
@@ -172,6 +172,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     conversation:
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
     execution: ExecutionService<InMemoryConversationFrameRepository>,
+    app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
     ffi_tainted: AtomicBool,
 }
@@ -184,13 +185,14 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let event_log = ExecutionEventLog::default();
         let completed_runs = CompletedRunRegistry::default();
+        let snapshot_service = app_services.snapshot_service();
         let worker_dependencies = ExecutionWorkerDependencies::new(
             Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
             Arc::new(BridgeExecutionToolExecutor::new(runtime.clone())),
         );
         let execution = ExecutionService::with_runtime_parts(
             frames.clone(),
-            app_services.snapshot_service(),
+            snapshot_service,
             ExecutionPlanner,
             event_log,
             completed_runs.clone(),
@@ -206,6 +208,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             frames,
             conversation,
             execution,
+            app_services,
             conversation_commits,
             ffi_tainted: AtomicBool::new(false),
         }
@@ -275,20 +278,22 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
         let _: EmptyAgentOSRequestJson = from_json(request_json)?;
-        to_json(&vec![AgentProfileJson {
-            profile_id: "profile_1".to_string(),
-            profile_revision_id: 1,
-            display_name: "Development Agent".to_string(),
-        }])
+        let profiles: Vec<_> = self
+            .app_services
+            .list_agent_profiles()
+            .iter()
+            .map(AgentProfileJson::from)
+            .collect();
+        to_json(&profiles)
     }
 
     fn build_agent_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: BuildAgentRequestJson = from_json(request_json)?;
-        to_json(&AgentProfileJson {
-            profile_id: format!("profile.from_template.{}", request.template_id),
-            profile_revision_id: 1,
-            display_name: "Custom Agent".to_string(),
-        })
+        let profile = self
+            .app_services
+            .build_agent_from_template(&request.template_id)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&AgentProfileJson::from(&profile))
     }
 
     fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -1423,6 +1428,16 @@ struct AgentProfileJson {
     profile_id: String,
     profile_revision_id: u64,
     display_name: String,
+}
+
+impl From<&AgentProfile> for AgentProfileJson {
+    fn from(profile: &AgentProfile) -> Self {
+        Self {
+            profile_id: profile.id().as_str().to_string(),
+            profile_revision_id: profile.version().as_u64(),
+            display_name: profile.name().to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]

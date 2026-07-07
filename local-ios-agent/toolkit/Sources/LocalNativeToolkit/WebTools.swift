@@ -207,6 +207,8 @@ public struct WebFetchURLTextTool: NativeTool {
                 auditSummary: "Fetched text from \(url.absoluteString)",
                 auditRedaction: "excerpt_only"
             )
+        } catch WebFetchError.policyDenied(let code) {
+            return blockedResult(code: code, displayText: "A redirect was blocked by the web fetch policy.")
         } catch {
             return blockedResult(code: "web_fetch.network_error", displayText: "The URL could not be fetched.")
         }

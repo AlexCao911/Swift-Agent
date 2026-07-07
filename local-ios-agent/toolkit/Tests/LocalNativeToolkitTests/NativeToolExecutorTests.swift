@@ -59,6 +59,22 @@ struct NativeToolExecutorTests {
         #expect(await recorder.arguments == [])
     }
 
+    @Test
+    func executorRejectsToolResultWithoutEnvelope() async throws {
+        let catalog = try NativeToolCatalog(tools: [
+            RawResultTool(name: "debug.raw"),
+        ])
+        let executor = NativeToolExecutor(catalog: catalog)
+
+        let result = await executor.execute(request(toolName: "debug.raw"))
+        let payload = try envelopePayload(from: result)
+        let envelope = try envelopeObject(from: result)
+
+        #expect(result.isError)
+        #expect(payload["code"] as? String == "invalid_tool_result_envelope")
+        #expect(envelope["tool_call_id"] as? String == "call_1")
+    }
+
     private func envelopePayload(from result: ToolResultDTO) throws -> [String: Any] {
         let object = try envelopeObject(from: result)
         return try #require(object["result"] as? [String: Any])
@@ -122,6 +138,33 @@ private struct RecordingTool: NativeTool {
             sourceLabel: "Tool",
             auditSummary: "executed \(schema.name)",
             auditRedaction: "metadata_only"
+        )
+    }
+}
+
+private struct RawResultTool: NativeTool {
+    var schema: NativeToolSchema
+
+    init(name: String) {
+        self.schema = NativeToolSchema(
+            name: name,
+            description: "Returns raw JSON",
+            inputSchema: .object(),
+            riskLevel: .readOnly,
+            permissionScope: nil,
+            availability: .available
+        )
+    }
+
+    func execute(argumentsJson: String) async -> ToolResultDTO {
+        ToolResultDTO(
+            displayText: "raw",
+            modelText: "raw",
+            structuredJson: #"{"ok":true}"#,
+            auditText: "raw",
+            sensitivity: .public,
+            retention: .runOnly,
+            isError: false
         )
     }
 }

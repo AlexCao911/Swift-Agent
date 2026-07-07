@@ -30,10 +30,21 @@ public struct NativeToolExecutor: Sendable {
         }
 
         let result = await tool.execute(argumentsJson: request.argumentsJson)
-        return NativeToolResultEnvelopeValidator.replacingToolCallId(
+        let identified = NativeToolResultEnvelopeValidator.replacingToolCallId(
             result,
             with: request.toolCallId
         )
+        do {
+            return try NativeToolResultEnvelopeValidator.validate(identified)
+        } catch {
+            return Self.errorResult(
+                code: "invalid_tool_result_envelope",
+                toolName: request.toolName,
+                toolCallId: request.toolCallId,
+                displayText: "Native tool returned an invalid result envelope.",
+                auditText: "Invalid native tool result envelope: \(request.toolName)"
+            )
+        }
     }
 
     private static func argumentsAreJSONObject(_ argumentsJson: String) -> Bool {

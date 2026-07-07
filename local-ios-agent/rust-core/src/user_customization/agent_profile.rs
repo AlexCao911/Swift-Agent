@@ -366,6 +366,16 @@ impl InMemoryAgentProfileRepository {
             .cloned()
     }
 
+    pub fn profiles(&self) -> Vec<AgentProfile> {
+        self.inner
+            .lock()
+            .expect("agent profile repository mutex poisoned")
+            .profiles
+            .values()
+            .cloned()
+            .collect()
+    }
+
     fn validate_profile(&self, profile: &AgentProfile) -> StorageResult<()> {
         let inner = self
             .inner

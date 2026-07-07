@@ -415,6 +415,41 @@ fn c_abi_agent_profiles_include_revision_id() {
 }
 
 #[test]
+fn c_abi_build_agent_publishes_profile_that_start_run_can_resolve() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let build_request =
+            CString::new(json!({"template_id": "template_1"}).to_string()).unwrap();
+        let built = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            build_request.as_ptr(),
+        )));
+        let prepared = prepare_c_user_turn(runtime, "use built profile");
+        let start_request = CString::new(
+            json!({
+                "agent_profile_id": built["profile_id"],
+                "profile_revision_id": built["profile_revision_id"],
+                "user_intent": "use built profile",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let handle = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            start_request.as_ptr(),
+        )));
+
+        assert!(handle["run_id"].as_str().unwrap().starts_with("run_"));
+        assert!(handle.get("error").is_none());
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
 fn bridge_exposes_session_turn_and_prompt_snapshot_json() {
     let bridge = bridge();
 
