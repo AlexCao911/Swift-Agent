@@ -282,6 +282,57 @@ Each manifest must declare:
 
 Manifest fields are not UI decoration. They are contract inputs for Builder rendering, Rust bridge schema export, runtime approval, permission readiness, test fixtures, and audit output.
 
+### NativeToolSchema Metadata Contract
+
+`ToolSchemaDTO` can keep `metadata_json` as the bridge extension point, but the content must be a stable schema, not a free-form dumping ground. Swift should project `NativeToolManifest` into `metadata_json` using this v1 envelope:
+
+```json
+{
+  "schema_version": 1,
+  "manifest_id": "native.calendar.search_events.v1",
+  "capability_id": "calendar.events.search",
+  "tool_mode": "background",
+  "permission_scope": "calendar.events.read_full",
+  "approval_policy": "per_call",
+  "risk_level": "read_only",
+  "context_trust_level": "trusted_tool_result",
+  "availability": {
+    "state": "available",
+    "os_minimum": "iOS 17.0",
+    "region_policy": "available_with_service_fallback"
+  },
+  "fallback": {
+    "kind": "open_settings",
+    "message": "Calendar access is required to search events."
+  },
+  "audit": {
+    "label": "Calendar Search",
+    "result_summary_policy": "metadata_only"
+  }
+}
+```
+
+Stable fields:
+
+- `schema_version`: metadata envelope version.
+- `manifest_id`: stable manifest identity used by Builder, runtime approval, tests, and audit.
+- `capability_id`: semantic capability, used to match skill/tool requirements.
+- `tool_mode`: `background`, `user_mediated`, or `system_action_adapter`.
+- `permission_scope`: the `NativePermissionGateway` scope.
+- `approval_policy`: `never`, `per_call`, `per_session`, or `always_deny_until_configured`.
+- `risk_level`: same value as `ToolSchemaDTO.riskLevel`, duplicated here so metadata is self-describing.
+- `context_trust_level`: default trust level for successful model-visible result content.
+- `availability`: current platform/device/service availability projection.
+- `fallback`: what Swift should do when unavailable or restricted.
+- `audit`: how UI/runtime should summarize use without leaking sensitive payload.
+
+Rules:
+
+- `NativeToolSchemaExport` is the only code path that converts manifest to Rust schema metadata.
+- Builder cards, runtime approval cards, and Rust tool schema export must all consume the same manifest values.
+- Rust should ignore unknown metadata keys from newer Swift clients, but malformed known keys should make the tool unavailable rather than silently widening permissions.
+- A tool without valid metadata may still appear in debug builds, but product builds should not expose it as an agent-selectable native tool.
+
 `context trust level` is required because some tools import hostile or untrusted text into the agent context. Initial values:
 
 ```text
@@ -313,6 +364,50 @@ NativeTool
 ```
 
 The model never calls iOS frameworks directly. Rust requests a tool call; Swift receives the tool request; `LocalNativeToolkit` executes the platform adapter; the result returns to Rust as a structured tool result.
+
+### ToolResult Envelope Contract
+
+`ToolResultDTO` currently has top-level `displayText`, `modelText`, `structuredJson`, `auditText`, `sensitivity`, `retention`, and `isError`. For v1, `structuredJson` must carry a stable envelope so trust/provenance cannot be accidentally dropped.
+
+```json
+{
+  "schema_version": 1,
+  "manifest_id": "native.web.fetch_url_text.v1",
+  "tool_name": "web.fetch_url_text",
+  "tool_call_id": "call_123",
+  "result": {
+    "kind": "web_text",
+    "title": "Example",
+    "text_excerpt": "..."
+  },
+  "provenance": {
+    "source_kind": "web",
+    "source_id": "https://example.com/article",
+    "display_name": "example.com",
+    "attachment_ids": [],
+    "trust_level": "untrusted_external_content",
+    "sensitivity": "public"
+  },
+  "context_policy": {
+    "model_text_policy": "summarize_or_quote_only",
+    "trust_level": "untrusted_external_content",
+    "source_label": "Web"
+  },
+  "audit": {
+    "summary": "Fetched text from example.com",
+    "redaction": "excerpt_only"
+  }
+}
+```
+
+Rules:
+
+- `structuredJson` is the authoritative source for `trust_level`, `source_kind`, provenance, attachment ids, and context policy.
+- `modelText` is a model-visible rendering, not a place to hide policy. It must be consistent with `structuredJson.context_policy`.
+- External-content tools such as Web, OCR, Files, Photos, Share, Speech, and Vision must mark successful imported text as `untrusted_external_content`.
+- If an external-content tool returns a success result without the v1 envelope, Rust/Swift should treat it as `untrusted_external_content` and surface a warning rather than trusting it by default.
+- Deterministic app-local status tools such as `native.permission_status` may return `trusted_tool_result` when their manifest declares it.
+- Future DTOs may lift `trustLevel`, `sourceKind`, and provenance to top-level fields, but v1 must work through this envelope so current bridge shape can still be used.
 
 ### NativeInteractionBroker
 
@@ -779,6 +874,47 @@ Transition rules:
 - While `publishing`, the published payload is an immutable draft revision snapshot. The simplest first-stage UX should lock card editing until publish succeeds or fails. If later we allow editing during publish, those edits must create a new local draft version and must not alter the in-flight publish payload.
 - A run must bind to a specific `profile_revision_id`, not a mutable profile id resolved to "latest".
 
+### Agent Profile Revision Contract
+
+The product contract must distinguish mutable profile identity from immutable runnable revision identity.
+
+| Operation | Input identity | Output identity | Rule |
+|---|---|---|---|
+| List agents | `profile_id` | latest published `profile_revision_id` plus draft status | Lists may show mutable profiles. |
+| Open Builder | `profile_id`, optional `profile_revision_id` | local draft id | Builder may edit from a selected revision. |
+| Validate draft | local draft id | validation report | Does not create a runnable revision. |
+| Publish agent | `profile_id`, local draft snapshot | new `profile_revision_id` | Publish freezes a runnable revision. |
+| Start run | `profile_revision_id`, `conversation_run_frame_ref`, user intent, execution options | `run_id` | Execution must not resolve `profile_id` to latest at run time. |
+| Conversation summary | conversation id | pinned `profile_revision_id` | Existing conversations remain pinned. |
+
+ABI/DTO mapping:
+
+```text
+profile_id
+  Mutable product identity for listing, editing, draft lookup, and display grouping.
+
+profile_revision_id
+  Immutable execution identity for published agent configuration.
+  Required for startRun/start_execution_run/start_run_json.
+
+agent_profile_id
+  Legacy compatibility field when present in current bridge DTOs.
+  It may be kept for display or lookup during migration, but it is not the trusted execution selector.
+```
+
+Required Rust migration:
+
+- `StartRunRequest` / start-run JSON should accept `profile_revision_id`.
+- `RunSnapshotResolver` should resolve the exact revision, not `AgentProfileReference::latest(...)`, when a revision id is provided.
+- `ResolvedRunSnapshot` should record both `profile_id` and `profile_revision_id` for audit/debug, with `profile_revision_id` as the execution pin.
+- A missing or stale revision id should fail before model/tool execution starts.
+
+Required Swift migration:
+
+- Agent Builder publish returns and stores `profile_revision_id`.
+- Conversation Workspace starts runs with `profile_revision_id`, not only `selectedAgentProfileId`.
+- `selectedAgentProfileId` remains useful for Builder navigation and grouping, but the run path must carry the pinned revision id.
+
 ## Data Flow
 
 ### Publish Agent
@@ -800,12 +936,36 @@ User edits cards
 ```text
 Conversation Workspace
   -> Rust prepare user turn with profile_revision_id
-  -> Rust start execution
+  -> Rust start execution with profile_revision_id + conversation_run_frame_ref
   -> Rust requests tool call
-  -> Swift LocalNativeToolkit executes native tool
-  -> Rust resumes execution
+  -> Swift LocalNativeToolkit inspects NativeToolManifest.tool_mode
+       background:
+         execute tool -> submit ToolResultEnvelopeV1 -> Rust resumes execution
+       user_mediated:
+         persist pending_user_interaction -> show/present system UI -> persist attachment/result
+         submit ToolResultEnvelopeV1 or structured cancellation/failure -> Rust resumes execution
+       system_action_adapter:
+         route app/system action when explicitly user-triggered -> return structured result or app route
   -> Rust commits final assistant result
 ```
+
+For user-mediated tools, the run flow is not linear. The execution boundary must represent the run as suspended for `pending_user_interaction` before Swift opens the picker or system UI:
+
+```text
+Rust tool request / run boundary
+  -> Swift creates PendingUserInteraction record
+  -> record persisted before presenting system UI
+  -> app may be killed/backgrounded
+  -> app relaunch rehydrates pending interaction from local store + Rust pending run/tool state
+  -> user resumes or cancels
+  -> Swift submits ToolResultDTO:
+       success: attachment ids / selected values / context trust envelope
+       cancel: is_error=true, reason=user_cancelled
+       interrupted: is_error=true, reason=system_interrupted
+  -> Rust resumes or finalizes according to tool policy
+```
+
+The first bridge may encode this as `run.suspended` with a `pending_user_interaction` payload. A dedicated `run.pending_user_interaction` event is cleaner long-term, but the durable contract is the pending id, run id, tool call id, manifest id, resumable payload summary, expiration, and resume/cancel actions.
 
 ### System Capability Action
 
@@ -833,6 +993,7 @@ Apple system API
 ### Phase 1: Native Toolkit Catalog
 
 - Introduce `NativeToolManifest` as the single source for card rendering, schema export, approval policy, readiness, and audit metadata.
+- Add `NativeToolSchemaMetadataV1` projection through `ToolSchemaDTO.metadata_json`.
 - Add permission gateway abstraction.
 - Add platform availability and readiness reporting.
 - Add tool mode metadata: background, user-mediated, system action adapter.
@@ -850,6 +1011,7 @@ Apple system API
 - App-owned Shortcuts/App Intents for agent capture/start/continue actions.
 - App meta tools for tool listing and permission status.
 - Context trust levels for web/file/OCR/share content.
+- ToolResultEnvelopeV1 in `ToolResultDTO.structuredJson` for provenance and trust.
 
 ### Phase 3: Agent Builder Cards
 
@@ -859,6 +1021,7 @@ Apple system API
 - Add draft lifecycle states: empty, editing, dirty, validating, invalid, readyToPublish, publishing, published, publishFailed.
 - Enforce draft version tokens so validation and publish cannot apply stale card edits.
 - Save draft locally and validate through Rust bridge.
+- Publish returns an immutable `profile_revision_id`.
 
 ### Phase 4: Context Preview
 
@@ -888,6 +1051,7 @@ Apple system API
 - Tool cards show permission, risk, and availability.
 - Tool cards show whether a tool is background, user-mediated, or a system action adapter.
 - Tool cards, Rust schema export, and runtime approval policy derive from the same `NativeToolManifest`.
+- `ToolSchemaDTO.metadata_json` uses a stable metadata schema, not ad hoc keys.
 - Tool cards show OS, region/service availability, and fallback behavior.
 - EventKit calendar tools use distinct read-full, write-only, and user-confirmed-create permission scopes.
 - Maps coordinate geocoding and device-location tools use distinct names and permission scopes.
@@ -895,13 +1059,15 @@ Apple system API
 - User-mediated tools route through one interaction broker instead of presenting UI from random tool code.
 - User-mediated tools can recover or fail cleanly from pending interaction state after app interruption.
 - Attachment-producing tools and attachment-consuming tools compose through `NativeAttachmentStore`.
-- Attachment and external-content results carry trust levels into Context Preview and Rust context assembly.
+- Attachment and external-content results carry trust levels through `ToolResultEnvelopeV1` into Context Preview and Rust context assembly.
 - Files/Photos attachment storage has explicit `available`, `needs_user_reselection`, and `unavailable` states for security-scoped bookmark failure and repair.
 - Shortcuts/App Intents, Maps, and Web are treated as compatibility-priority tool families, not blanket-deferred capabilities.
 - Context cards can be reordered/configured through presets.
 - Context Pipeline has a Rust-backed preview with ordered segments, trust levels, token estimates, and privacy warnings.
 - Agent Builder exposes a clear draft lifecycle from editing to published.
 - Published runs bind to an immutable profile revision id.
+- startRun/start_execution_run/start_run_json use `profile_revision_id` as the trusted execution selector; `profile_id` is for listing/draft/navigation.
+- User-mediated tools suspend through a durable `pending_user_interaction` record and resume via structured success/cancel/interruption tool results.
 - Swift can validate an agent draft before publishing.
 - Rust remains final authority for agent profile validation and execution context assembly.
 - iOS system APIs are wrapped as toolkit capabilities rather than scattered through views.
