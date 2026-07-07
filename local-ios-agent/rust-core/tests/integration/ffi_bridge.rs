@@ -276,6 +276,7 @@ fn ffi_reachable_modules_do_not_unwrap_poisoned_locks() {
         "src/execution/completed_run_registry.rs",
         "src/execution/inference_settings.rs",
         "src/execution/execution_service.rs",
+        "src/user_customization/agent_profile.rs",
     ];
 
     for file in files {
@@ -442,6 +443,65 @@ fn c_abi_build_agent_publishes_profile_that_start_run_can_resolve() {
             start_request.as_ptr(),
         )));
 
+        assert!(handle["run_id"].as_str().unwrap().starts_with("run_"));
+        assert!(handle.get("error").is_none());
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_build_agent_publishes_new_revision_for_same_profile_id() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let first_request = CString::new(
+            json!({
+                "profile_id": "profile.builder.demo",
+                "template_id": "template_1"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let second_request = CString::new(
+            json!({
+                "profile_id": "profile.builder.demo",
+                "template_id": "template_1"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let first = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            first_request.as_ptr(),
+        )));
+        let second = decode(&take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            second_request.as_ptr(),
+        )));
+
+        assert_eq!(first["profile_id"], "profile.builder.demo");
+        assert_eq!(first["profile_revision_id"], 1);
+        assert_eq!(second["profile_id"], "profile.builder.demo");
+        assert_eq!(second["profile_revision_id"], 2);
+
+        let prepared = prepare_c_user_turn(runtime, "use second revision");
+        let start_request = CString::new(
+            json!({
+                "agent_profile_id": second["profile_id"],
+                "profile_revision_id": second["profile_revision_id"],
+                "user_intent": "use second revision",
+                "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                "options": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let handle = decode(&take_bridge_string(local_agent_runtime_bridge_start_run(
+            runtime,
+            start_request.as_ptr(),
+        )));
         assert!(handle["run_id"].as_str().unwrap().starts_with("run_"));
         assert!(handle.get("error").is_none());
 
@@ -967,6 +1027,43 @@ fn c_abi_prepare_user_turn_without_parent_uses_current_active_branch() {
         assert!(messages
             .iter()
             .any(|message| message["content"] == "second"));
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_list_agent_profiles_returns_latest_revision_per_profile() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+
+        let build_request = CString::new(
+            r#"{"profile_id":"profile.builder.list","template_id":"template_1"}"#,
+        )
+        .unwrap();
+        let _ = take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            build_request.as_ptr(),
+        ));
+        let _ = take_bridge_string(local_agent_runtime_bridge_build_agent(
+            runtime,
+            build_request.as_ptr(),
+        ));
+
+        let profiles = decode(&take_bridge_string(
+            local_agent_runtime_bridge_list_agent_profiles(
+                runtime,
+                CString::new("{}").unwrap().as_ptr(),
+            ),
+        ));
+        let matching: Vec<_> = profiles
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|profile| profile["profile_id"] == "profile.builder.list")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0]["profile_revision_id"], 2);
 
         local_agent_runtime_bridge_free(runtime);
     }

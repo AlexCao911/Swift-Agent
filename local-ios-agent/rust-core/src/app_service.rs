@@ -90,18 +90,32 @@ impl AgentOSApplicationService {
     }
 
     pub fn list_agent_profiles(&self) -> Vec<AgentProfile> {
-        self.profile_repository.profiles()
+        self.profile_repository.latest_profiles()
     }
 
-    pub fn build_agent_from_template(&self, template_id: &str) -> RunSnapshotResult<AgentProfile> {
+    pub fn build_agent_from_template(
+        &self,
+        profile_id: Option<&str>,
+        template_id: &str,
+    ) -> RunSnapshotResult<AgentProfile> {
         let template = template_for_build_request(template_id)?;
-        let profile_id = AgentProfileId::new(format!("profile.from_template.{template_id}"));
-        if let Some(profile) = self.profile_repository.profile(&AgentProfileReference::pinned(
-            profile_id.clone(),
-            AgentProfileVersion::initial(),
-        )) {
-            return Ok(profile);
-        }
+        let explicit_profile_id = profile_id.is_some();
+        let profile_id = AgentProfileId::new(
+            profile_id
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("profile.from_template.{template_id}")),
+        );
+        let profile_version = if explicit_profile_id {
+            next_profile_version(&self.profile_repository, &profile_id)
+        } else {
+            if let Some(profile) = self.profile_repository.profile(&AgentProfileReference::pinned(
+                profile_id.clone(),
+                AgentProfileVersion::initial(),
+            )) {
+                return Ok(profile);
+            }
+            AgentProfileVersion::initial()
+        };
 
         let persona_component_id = self
             .component_catalog
@@ -142,8 +156,9 @@ impl AgentOSApplicationService {
             Box::new(InMemoryTransactionRunner::default()),
             self.profile_repository.clone(),
         )
-        .publish(
+        .publish_with_version(
             draft,
+            profile_version,
             &template,
             &self.component_catalog,
             &model_catalog_for_publish,
@@ -246,6 +261,17 @@ impl AgentOSApplicationService {
             model_catalog,
         }
     }
+}
+
+fn next_profile_version(
+    repository: &InMemoryAgentProfileRepository,
+    profile_id: &AgentProfileId,
+) -> AgentProfileVersion {
+    let next = repository
+        .latest_version(profile_id)
+        .map(|version| version.as_u64() + 1)
+        .unwrap_or_else(|| AgentProfileVersion::initial().as_u64());
+    AgentProfileVersion::new(next)
 }
 
 impl TransactionOperation for ModelSelectionStageOperation {

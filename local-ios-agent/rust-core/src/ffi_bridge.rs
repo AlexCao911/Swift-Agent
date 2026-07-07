@@ -291,7 +291,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let request: BuildAgentRequestJson = from_json(request_json)?;
         let profile = self
             .app_services
-            .build_agent_from_template(&request.template_id)
+            .build_agent_from_template(request.profile_id.as_deref(), &request.template_id)
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&AgentProfileJson::from(&profile))
     }
@@ -1420,6 +1420,7 @@ struct EmptyAgentOSResponseJson {}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BuildAgentRequestJson {
+    profile_id: Option<String>,
     template_id: String,
 }
 

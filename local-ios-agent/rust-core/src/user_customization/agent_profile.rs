@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 
@@ -130,6 +130,7 @@ struct PendingAgentProfileWrite {
 
 struct AgentProfilePublishOperation<'a> {
     draft: Option<AgentProfileDraft>,
+    profile_version: AgentProfileVersion,
     template: &'a AgentTemplate,
     catalog: &'a ComponentCatalogService,
     model_catalog: &'a ModelBindingCatalog,
@@ -338,6 +339,12 @@ impl AgentProfileDraft {
 }
 
 impl InMemoryAgentProfileRepository {
+    fn records(&self) -> MutexGuard<'_, AgentProfileRecords> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn stage(&self, tx: &mut UnitOfWork, profile: AgentProfile) -> StorageResult<()> {
         tx.push_store_write(Box::new(PendingAgentProfileWrite {
             repository: self.clone(),
@@ -347,10 +354,7 @@ impl InMemoryAgentProfileRepository {
     }
 
     pub fn profile(&self, reference: &AgentProfileReference) -> Option<AgentProfile> {
-        let inner = self
-            .inner
-            .lock()
-            .expect("agent profile repository mutex poisoned");
+        let inner = self.records();
         let profile_version = reference.profile_version().or_else(|| {
             inner
                 .profiles
@@ -367,20 +371,39 @@ impl InMemoryAgentProfileRepository {
     }
 
     pub fn profiles(&self) -> Vec<AgentProfile> {
-        self.inner
-            .lock()
-            .expect("agent profile repository mutex poisoned")
+        self.records()
             .profiles
             .values()
             .cloned()
             .collect()
     }
 
+    pub fn latest_profiles(&self) -> Vec<AgentProfile> {
+        let inner = self.records();
+        let mut latest_by_id: BTreeMap<AgentProfileId, AgentProfile> = BTreeMap::new();
+        for profile in inner.profiles.values() {
+            let replace = latest_by_id
+                .get(profile.id())
+                .map(|current| profile.version() > current.version())
+                .unwrap_or(true);
+            if replace {
+                latest_by_id.insert(profile.id().clone(), profile.clone());
+            }
+        }
+        latest_by_id.into_values().collect()
+    }
+
+    pub fn latest_version(&self, profile_id: &AgentProfileId) -> Option<AgentProfileVersion> {
+        self.records()
+            .profiles
+            .keys()
+            .filter(|(id, _)| id == profile_id)
+            .map(|(_, version)| *version)
+            .max()
+    }
+
     fn validate_profile(&self, profile: &AgentProfile) -> StorageResult<()> {
-        let inner = self
-            .inner
-            .lock()
-            .expect("agent profile repository mutex poisoned");
+        let inner = self.records();
         if inner
             .profiles
             .contains_key(&(profile.id().clone(), profile.version()))
@@ -394,10 +417,7 @@ impl InMemoryAgentProfileRepository {
     }
 
     fn commit_profile(&self, profile: AgentProfile) {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("agent profile repository mutex poisoned");
+        let mut inner = self.records();
         inner
             .profiles
             .insert((profile.id().clone(), profile.version()), profile);
@@ -429,8 +449,26 @@ impl AgentProfilePublisher {
         catalog: &ComponentCatalogService,
         model_catalog: &ModelBindingCatalog,
     ) -> StorageResult<AgentProfileReference> {
+        self.publish_with_version(
+            draft,
+            AgentProfileVersion::initial(),
+            template,
+            catalog,
+            model_catalog,
+        )
+    }
+
+    pub fn publish_with_version(
+        &self,
+        draft: AgentProfileDraft,
+        profile_version: AgentProfileVersion,
+        template: &AgentTemplate,
+        catalog: &ComponentCatalogService,
+        model_catalog: &ModelBindingCatalog,
+    ) -> StorageResult<AgentProfileReference> {
         let mut operation = AgentProfilePublishOperation {
             draft: Some(draft),
+            profile_version,
             template,
             catalog,
             model_catalog,
@@ -462,7 +500,7 @@ impl TransactionOperation for AgentProfilePublishOperation<'_> {
         })?;
 
         validate_profile_draft(&draft, self.template, self.catalog, self.model_catalog)?;
-        let profile = draft.into_published();
+        let profile = draft.into_published().with_version(self.profile_version);
         let reference = profile.reference();
         self.repository.stage(tx, profile)?;
         self.result = Some(reference.clone());
