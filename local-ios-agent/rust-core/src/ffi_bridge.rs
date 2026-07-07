@@ -14,7 +14,10 @@ use serde_json::{json, Value};
 use crate::app_service::{
     AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
 };
-use crate::context::{InferenceOptions, ModelInputMessages, PromptFrame, TokenizerAdapter};
+use crate::context::{
+    ContextAssembler, ContextSegment, InferenceOptions, ModelInputMessages, PromptFrame,
+    TokenizerAdapter,
+};
 use crate::conversation::{
     ConversationCommitError, ConversationCommitService, ConversationFrameId,
     ConversationFrameMessage, ConversationFrameRepository, ConversationRunFrame,
@@ -300,6 +303,13 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             )
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&AgentProfileJson::from(&profile))
+    }
+
+    fn preview_context_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: BuilderContextPreviewRequestJson = from_json(request_json)?;
+        let preview = BuilderContextPreviewJson::from_request(request)
+            .map_err(|error| AgentError::Storage(format!("context.preview_failed: {error}")))?;
+        to_json(&preview)
     }
 
     fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -944,6 +954,13 @@ impl RuntimeJsonBridge {
         }
     }
 
+    pub fn preview_context_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.preview_context_json(request_json),
+            Self::Sqlite(runtime) => runtime.preview_context_json(request_json),
+        }
+    }
+
     pub fn prepare_user_turn_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.prepare_user_turn_json(request_json),
@@ -1320,6 +1337,17 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_build_agent(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_preview_context(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+) -> *mut c_char {
+    c_runtime_result(runtime, || {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.preview_context_json(request_json)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_prepare_user_turn(
     runtime: *mut RuntimeJsonBridge,
     request_json: *const c_char,
@@ -1448,6 +1476,172 @@ impl BuildAgentRequestJson {
             selected_tool_ids: self.selected_tool_ids.clone(),
             context_step_ids: self.context_step_ids.clone(),
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuilderContextPreviewRequestJson {
+    draft: BuildAgentRequestJson,
+    sample_user_message: String,
+}
+
+#[derive(Serialize)]
+struct BuilderContextPreviewJson {
+    is_preview_only: bool,
+    segments: Vec<BuilderContextPreviewSegmentJson>,
+    token_estimate: usize,
+    warnings: Vec<String>,
+    missing_inputs: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BuilderContextPreviewSegmentJson {
+    id: String,
+    title: String,
+    source_label: String,
+    trust_level: String,
+    is_enabled: bool,
+    preview_text: String,
+}
+
+impl BuilderContextPreviewJson {
+    fn from_request(request: BuilderContextPreviewRequestJson) -> Result<Self, String> {
+        let mut assembler = ContextAssembler::new();
+        let mut segments = Vec::new();
+        for step_id in cleaned_preview_steps(&request.draft.context_step_ids) {
+            if let Some(segment) = preview_segment_for_step(&step_id, &request) {
+                assembler = assembler.with_segment(segment.context_segment);
+                segments.push(segment.dto);
+            }
+        }
+        let preview = assembler.preview().map_err(|error| error.to_string())?;
+        let token_estimate = preview
+            .trace()
+            .kept_token_entries()
+            .iter()
+            .map(|(_, tokens)| *tokens)
+            .sum();
+
+        Ok(Self {
+            is_preview_only: false,
+            segments,
+            token_estimate,
+            warnings: vec![
+                "Rust preview: execution still assembles the final model input at run time."
+                    .to_string(),
+            ],
+            missing_inputs: Vec::new(),
+        })
+    }
+}
+
+struct BuilderContextPreviewSegmentBuild {
+    dto: BuilderContextPreviewSegmentJson,
+    context_segment: ContextSegment,
+}
+
+fn cleaned_preview_steps(values: &[String]) -> Vec<String> {
+    let cleaned = preview_cleaned_list(values);
+    if cleaned.is_empty() {
+        vec!["system_prompt".into(), "conversation_history".into()]
+    } else {
+        cleaned
+    }
+}
+
+fn preview_segment_for_step(
+    step_id: &str,
+    request: &BuilderContextPreviewRequestJson,
+) -> Option<BuilderContextPreviewSegmentBuild> {
+    match step_id {
+        "system_prompt" => preview_non_empty_trimmed(&request.draft.system_prompt).map(|text| {
+            preview_segment(
+                "system_prompt",
+                "System Prompt",
+                "prompt",
+                "trusted_app_policy",
+                text.clone(),
+                ContextSegment::prompt("system_prompt", text)
+                    .with_provenance("builder.system_prompt")
+                    .required_for_model_input(),
+            )
+        }),
+        "conversation_history" => {
+            let text = format!(
+                "Sample user message on the active conversation branch: {}",
+                request.sample_user_message.trim()
+            );
+            Some(preview_segment(
+                "conversation_history",
+                "Conversation History",
+                "conversation",
+                "user_instruction",
+                text.clone(),
+                ContextSegment::conversation("conversation_history", text)
+                    .with_provenance("builder.sample_user_message")
+                    .required_for_model_input(),
+            ))
+        }
+        "tool_results" => {
+            let selected_tools = preview_cleaned_list(&request.draft.selected_tool_ids);
+            let text = if selected_tools.is_empty() {
+                "No tool observations in this preview.".to_string()
+            } else {
+                format!(
+                    "Selected tools available for future tool observations: {}",
+                    selected_tools.join(", ")
+                )
+            };
+            Some(preview_segment(
+                "tool_results",
+                "Tool Results",
+                "tool_result",
+                "runtime_dependent_tool_result",
+                text.clone(),
+                ContextSegment::tool_result("tool_results", text)
+                    .with_provenance("builder.tool_results_preview"),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn preview_non_empty_trimmed(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn preview_cleaned_list(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn preview_segment(
+    id: &str,
+    title: &str,
+    source_label: &str,
+    trust_level: &str,
+    preview_text: String,
+    context_segment: ContextSegment,
+) -> BuilderContextPreviewSegmentBuild {
+    BuilderContextPreviewSegmentBuild {
+        dto: BuilderContextPreviewSegmentJson {
+            id: id.to_string(),
+            title: title.to_string(),
+            source_label: source_label.to_string(),
+            trust_level: trust_level.to_string(),
+            is_enabled: true,
+            preview_text,
+        },
+        context_segment,
     }
 }
 

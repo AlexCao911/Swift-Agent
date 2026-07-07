@@ -54,6 +54,27 @@ struct AgentBuilderClientTests {
         ])
     }
 
+    @Test("preview context forwards draft to execution bridge")
+    func previewContextForwardsDraftToExecutionBridge() async throws {
+        let bridge = RecordingExecutionBridgeClient()
+        let client = RustAgentBuilderClient(execution: bridge)
+        let request = BuilderContextPreviewRequestDTO(
+            draft: AgentBuilderDraftDTO(
+                profileId: "profile.draft.local",
+                templateId: "template.assistant.default",
+                systemPrompt: "You are careful.",
+                selectedToolIds: ["web.fetch_url_text"],
+                contextStepIds: ["system_prompt"]
+            ),
+            sampleUserMessage: "Hello"
+        )
+
+        let preview = try await client.previewContext(request)
+
+        #expect(bridge.previewRequests == [request])
+        #expect(preview.segments.map(\.id) == ["system_prompt"])
+    }
+
     @Test("validate draft reports unsupported template")
     func validateDraftReportsUnsupportedTemplate() async throws {
         let bridge = RecordingExecutionBridgeClient()
@@ -71,9 +92,14 @@ struct AgentBuilderClientTests {
 private final class RecordingExecutionBridgeClient: ExecutionBridgeClient, @unchecked Sendable {
     private let lock = NSLock()
     private var storedBuiltRequests: [BuildAgentRequestDTO] = []
+    private var storedPreviewRequests: [BuilderContextPreviewRequestDTO] = []
 
     var builtRequests: [BuildAgentRequestDTO] {
         lock.withLock { storedBuiltRequests }
+    }
+
+    var previewRequests: [BuilderContextPreviewRequestDTO] {
+        lock.withLock { storedPreviewRequests }
     }
 
     func listAgentProfiles() async throws -> [AgentProfileDTO] {
@@ -88,6 +114,27 @@ private final class RecordingExecutionBridgeClient: ExecutionBridgeClient, @unch
             profileId: request.profileId ?? "profile.from_template.\(request.templateId)",
             profileRevisionId: 1,
             displayName: "Assistant"
+        )
+    }
+
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        lock.withLock {
+            storedPreviewRequests.append(request)
+        }
+        return BuilderContextPreviewResponseDTO(
+            isPreviewOnly: false,
+            segments: [
+                BuilderContextPreviewSegmentDTO(
+                    id: "system_prompt",
+                    title: "System Prompt",
+                    sourceLabel: "prompt",
+                    trustLevel: "trusted_app_policy",
+                    isEnabled: true,
+                    previewText: request.draft.systemPrompt ?? ""
+                ),
+            ],
+            tokenEstimate: 4,
+            warnings: []
         )
     }
 

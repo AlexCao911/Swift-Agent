@@ -9,6 +9,8 @@ Done in the current MVP branch:
 - Builder can publish a template-backed, Rust-resolvable profile revision.
 - Builder can publish a minimal card-backed, Rust-resolvable profile revision with prompt/persona,
   selected tools, and enabled context step ids.
+- Builder can request a Rust-backed context preview for prompt, conversation, and tool-result
+  placeholder segments.
 - Chat handoff stores both `profile_id` and `profile_revision_id`.
 
 Remaining:
@@ -52,7 +54,8 @@ Remaining:
 
 - Expand card-backed publish beyond the MVP prompt/persona/tool/context-step slice.
 - Wire full context policy, memory policy, selected tools, and skills into the published profile revision.
-- Add Rust-backed context preview/trace for Builder.
+- Expand Builder context preview into a full source-map trace with memory, skills, attachments,
+  and runtime context policy.
 - Add validation copy for unsupported cards, missing permissions, and publish-blocking configuration.
 
 ### Native Toolkit Additional Adapters
@@ -89,4 +92,4 @@ Track separately from the Swift product path:
 - Skill package discovery/activation interface.
 - Memory extraction and memory-to-context policy bridge.
 - Cross-platform tool capability abstraction.
-- Context assembly preview/trace API for Builder.
+- Context assembly trace API expansion for Builder memory/skills/attachments.

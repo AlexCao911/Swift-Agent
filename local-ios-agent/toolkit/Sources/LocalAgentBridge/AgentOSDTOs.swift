@@ -332,6 +332,85 @@ public struct BuildAgentRequestDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct BuilderContextPreviewRequestDTO: Codable, Equatable, Sendable {
+    public var draft: AgentBuilderDraftDTO
+    public var sampleUserMessage: String
+
+    public init(draft: AgentBuilderDraftDTO, sampleUserMessage: String) {
+        self.draft = draft
+        self.sampleUserMessage = sampleUserMessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case draft
+        case sampleUserMessage = "sample_user_message"
+    }
+}
+
+public struct BuilderContextPreviewResponseDTO: Codable, Equatable, Sendable {
+    public var isPreviewOnly: Bool
+    public var segments: [BuilderContextPreviewSegmentDTO]
+    public var tokenEstimate: Int
+    public var warnings: [String]
+    public var missingInputs: [String]
+
+    public init(
+        isPreviewOnly: Bool,
+        segments: [BuilderContextPreviewSegmentDTO],
+        tokenEstimate: Int,
+        warnings: [String] = [],
+        missingInputs: [String] = []
+    ) {
+        self.isPreviewOnly = isPreviewOnly
+        self.segments = segments
+        self.tokenEstimate = tokenEstimate
+        self.warnings = warnings
+        self.missingInputs = missingInputs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isPreviewOnly = "is_preview_only"
+        case segments
+        case tokenEstimate = "token_estimate"
+        case warnings
+        case missingInputs = "missing_inputs"
+    }
+}
+
+public struct BuilderContextPreviewSegmentDTO: Codable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var sourceLabel: String
+    public var trustLevel: String
+    public var isEnabled: Bool
+    public var previewText: String
+
+    public init(
+        id: String,
+        title: String,
+        sourceLabel: String,
+        trustLevel: String,
+        isEnabled: Bool,
+        previewText: String
+    ) {
+        self.id = id
+        self.title = title
+        self.sourceLabel = sourceLabel
+        self.trustLevel = trustLevel
+        self.isEnabled = isEnabled
+        self.previewText = previewText
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case sourceLabel = "source_label"
+        case trustLevel = "trust_level"
+        case isEnabled = "is_enabled"
+        case previewText = "preview_text"
+    }
+}
+
 public struct ApprovalDecisionDTO: Codable, Equatable, Sendable {
     public var approved: Bool
     public var reason: String?

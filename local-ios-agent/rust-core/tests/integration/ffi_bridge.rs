@@ -12,11 +12,11 @@ use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_observe_events_streaming,
     local_agent_runtime_bridge_pending_approval_requests,
     local_agent_runtime_bridge_pending_tool_requests, local_agent_runtime_bridge_prepare_user_turn,
-    local_agent_runtime_bridge_register_tool_schema, local_agent_runtime_bridge_send_message,
-    local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
-    local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
-    local_agent_runtime_bridge_string_free, local_agent_runtime_bridge_submit_tool_result,
-    RuntimeJsonBridge,
+    local_agent_runtime_bridge_preview_context, local_agent_runtime_bridge_register_tool_schema,
+    local_agent_runtime_bridge_send_message, local_agent_runtime_bridge_send_message_streaming,
+    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
+    local_agent_runtime_bridge_start_run, local_agent_runtime_bridge_string_free,
+    local_agent_runtime_bridge_submit_tool_result, RuntimeJsonBridge,
 };
 use local_ios_agent_runtime::tool::{
     ToolCall, ToolRecipe, ToolRecipeCompiler, ToolRegistry, ToolRouter,
@@ -496,6 +496,66 @@ fn c_abi_build_agent_accepts_card_backed_builder_fields() {
         )));
         assert!(handle["run_id"].as_str().unwrap().starts_with("run_"));
         assert!(handle.get("error").is_none());
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_preview_context_uses_builder_draft_segments() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let request = CString::new(
+            json!({
+                "draft": {
+                    "profile_id": "profile.builder.preview",
+                    "template_id": "template_1",
+                    "system_prompt": "You are careful.",
+                    "selected_tool_ids": ["web.fetch_url_text"],
+                    "context_step_ids": [
+                        "system_prompt",
+                        "conversation_history",
+                        "tool_results"
+                    ]
+                },
+                "sample_user_message": "Summarize this"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let preview = decode(&take_bridge_string(
+            local_agent_runtime_bridge_preview_context(runtime, request.as_ptr()),
+        ));
+
+        assert_eq!(preview["is_preview_only"], false);
+        assert_eq!(
+            preview["segments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|segment| segment["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["system_prompt", "conversation_history", "tool_results"]
+        );
+        assert!(preview["segments"][1]["preview_text"]
+            .as_str()
+            .unwrap()
+            .contains("Summarize this"));
+        assert!(preview["segments"][2]["preview_text"]
+            .as_str()
+            .unwrap()
+            .contains("web.fetch_url_text"));
+        assert_eq!(
+            preview["segments"][2]["trust_level"],
+            "runtime_dependent_tool_result"
+        );
+        assert!(preview["token_estimate"].as_u64().unwrap() > 0);
+        assert!(preview["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("Rust preview")));
 
         local_agent_runtime_bridge_free(runtime);
     }

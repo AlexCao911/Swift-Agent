@@ -9,9 +9,14 @@ struct AgentBuilderContextPreviewView: View {
         NavigationStack {
             List {
                 Section {
-                    Label("Preview only", systemImage: "eye")
+                    Label(
+                        preview?.isPreviewOnly == false ? "Rust preview" : "Preview only",
+                        systemImage: preview?.isPreviewOnly == false ? "timeline.selection" : "eye"
+                    )
                         .font(.headline)
-                    Text("Final model input is assembled by Rust execution at run time.")
+                    Text(preview?.isPreviewOnly == false
+                        ? "This preview is assembled by the Rust context pipeline. Final model input is still resolved at run time."
+                        : "Final model input is assembled by Rust execution at run time.")
                         .foregroundStyle(.secondary)
                     if let preview {
                         LabeledContent("Token estimate", value: "\(preview.tokenEstimate)")

@@ -1,6 +1,7 @@
 public protocol ExecutionBridgeClient: Sendable {
     func listAgentProfiles() async throws -> [AgentProfileDTO]
     func buildAgent(_ request: BuildAgentRequestDTO) async throws -> AgentProfileDTO
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error>
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws
@@ -42,6 +43,14 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
             .buildAgent,
             request,
             as: AgentProfileDTO.self
+        )
+    }
+
+    public func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        try await gateway.request(
+            .previewContext,
+            request,
+            as: BuilderContextPreviewResponseDTO.self
         )
     }
 

@@ -238,6 +238,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var commitAssistantResult: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var approveTool: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var cancelRun: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var previewContext: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
 
     public init(
         makeRuntime: @escaping () -> RuntimeHandle?,
@@ -307,7 +308,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         ) -> StringResult = { _, _, _, _ in nil },
         commitAssistantResult: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
         approveTool: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
-        cancelRun: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil }
+        cancelRun: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
+        previewContext: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil }
     ) {
         self.makeRuntime = makeRuntime
         self.freeRuntime = freeRuntime
@@ -345,6 +347,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.commitAssistantResult = commitAssistantResult
         self.approveTool = approveTool
         self.cancelRun = cancelRun
+        self.previewContext = previewContext
     }
 
     public static func live(configuration: RustRuntimeConfiguration) throws -> Self {
@@ -544,6 +547,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     requestJson
                 )
+            },
+            previewContext: { runtime, requestJson in
+                local_agent_runtime_bridge_preview_context(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson
+                )
             }
         )
     }
@@ -625,6 +634,8 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                 result = functions.cancelRun(handle, pointer)
             case .updateRuntimeOptions:
                 result = functions.updateRuntimeOptions(handle, pointer)
+            case .previewContext:
+                result = functions.previewContext(handle, pointer)
             case .observeEvents:
                 throw RuntimeBridgeError(
                     kind: "unsupported_operation",

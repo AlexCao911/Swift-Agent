@@ -11,6 +11,7 @@ public enum RustAgentOSOperation: String, Sendable {
     case submitToolResult = "submit_tool_result"
     case cancelRun = "cancel_run"
     case updateRuntimeOptions = "update_runtime_options"
+    case previewContext = "preview_context"
 }
 
 public protocol RustAgentOSBridgeGateway: Sendable {

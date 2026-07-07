@@ -79,14 +79,25 @@ final class AgentBuilderViewModel {
         markEdited()
     }
 
-    func previewContext(sampleUserMessage: String) {
+    func previewContext(sampleUserMessage: String) async {
         guard let draft else {
             return
         }
-        preview = BuilderContextPreviewResult.previewOnly(
+
+        let fallback = BuilderContextPreviewResult.previewOnly(
             draft: draft,
             sampleUserMessage: sampleUserMessage
         )
+
+        do {
+            let response = try await builderClient.previewContext(BuilderContextPreviewRequestDTO(
+                draft: draft.publishDTO(templateId: templateId),
+                sampleUserMessage: sampleUserMessage
+            ))
+            preview = BuilderContextPreviewResult(dto: response)
+        } catch {
+            preview = fallback
+        }
     }
 
     func refreshReadiness() async {

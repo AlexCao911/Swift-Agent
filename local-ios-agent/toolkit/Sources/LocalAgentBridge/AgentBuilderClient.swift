@@ -2,6 +2,7 @@ public protocol AgentBuilderClient: Sendable {
     func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel
     func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel
     func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO
 }
 
 public struct RustAgentBuilderClient: AgentBuilderClient {
@@ -43,6 +44,10 @@ public struct RustAgentBuilderClient: AgentBuilderClient {
             selectedToolIds: draft.selectedToolIds,
             contextStepIds: draft.contextStepIds
         ))
+    }
+
+    public func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        try await execution.previewContext(request)
     }
 
     private static let supportedTemplateIds: Set<String> = [
@@ -96,6 +101,13 @@ public actor MockAgentBuilderClient: AgentBuilderClient {
             profileId: draft.profileId,
             profileRevisionId: publishedRevision,
             displayName: model.displayName
+        )
+    }
+
+    public func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        throw RuntimeBridgeError(
+            kind: "builder_preview_unavailable",
+            message: "Mock builder preview uses the local preview fallback."
         )
     }
 }

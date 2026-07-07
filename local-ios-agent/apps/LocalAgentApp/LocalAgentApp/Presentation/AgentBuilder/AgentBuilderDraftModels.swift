@@ -369,6 +369,30 @@ struct BuilderContextPreviewResult: Equatable, Sendable {
     var warnings: [String]
     var missingInputs: [String]
 
+    init(
+        isPreviewOnly: Bool,
+        segments: [BuilderContextPreviewSegment],
+        tokenEstimate: Int,
+        warnings: [String],
+        missingInputs: [String]
+    ) {
+        self.isPreviewOnly = isPreviewOnly
+        self.segments = segments
+        self.tokenEstimate = tokenEstimate
+        self.warnings = warnings
+        self.missingInputs = missingInputs
+    }
+
+    init(dto: BuilderContextPreviewResponseDTO) {
+        self.init(
+            isPreviewOnly: dto.isPreviewOnly,
+            segments: dto.segments.map(BuilderContextPreviewSegment.init(dto:)),
+            tokenEstimate: dto.tokenEstimate,
+            warnings: dto.warnings,
+            missingInputs: dto.missingInputs
+        )
+    }
+
     static func previewOnly(
         draft: AgentBuilderDraft,
         sampleUserMessage: String
@@ -431,4 +455,31 @@ struct BuilderContextPreviewSegment: Equatable, Sendable, Identifiable {
     var trustLevel: String
     var isEnabled: Bool
     var previewText: String
+
+    init(
+        id: String,
+        title: String,
+        sourceLabel: String,
+        trustLevel: String,
+        isEnabled: Bool,
+        previewText: String
+    ) {
+        self.id = id
+        self.title = title
+        self.sourceLabel = sourceLabel
+        self.trustLevel = trustLevel
+        self.isEnabled = isEnabled
+        self.previewText = previewText
+    }
+
+    init(dto: BuilderContextPreviewSegmentDTO) {
+        self.init(
+            id: dto.id,
+            title: dto.title,
+            sourceLabel: dto.sourceLabel,
+            trustLevel: dto.trustLevel,
+            isEnabled: dto.isEnabled,
+            previewText: dto.previewText
+        )
+    }
 }

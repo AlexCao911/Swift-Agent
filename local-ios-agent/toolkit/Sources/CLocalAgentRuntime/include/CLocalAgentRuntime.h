@@ -108,6 +108,10 @@ char *local_agent_runtime_bridge_build_agent(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json
 );
+char *local_agent_runtime_bridge_preview_context(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
 char *local_agent_runtime_bridge_prepare_user_turn(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json

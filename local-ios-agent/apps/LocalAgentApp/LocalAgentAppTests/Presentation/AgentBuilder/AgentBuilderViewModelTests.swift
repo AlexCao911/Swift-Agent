@@ -121,10 +121,29 @@ struct AgentBuilderViewModelTests {
         let viewModel = AgentBuilderViewModel.fixtureReadyToPublish()
 
         await viewModel.load()
-        viewModel.previewContext(sampleUserMessage: "Hello")
+        await viewModel.previewContext(sampleUserMessage: "Hello")
 
         #expect(viewModel.preview?.isPreviewOnly == true)
         #expect(viewModel.preview?.warnings.contains("Preview only: final model input is assembled by Rust execution.") == true)
+    }
+
+    @Test("preview context uses Rust-backed builder preview when available")
+    func previewContextUsesRustBackedBuilderPreview() async throws {
+        let builderClient = RecordingAgentBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            builderClient: builderClient,
+            permissionClient: MockPermissionClient(issues: []),
+            toolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+        )
+
+        await viewModel.load()
+        await viewModel.previewContext(sampleUserMessage: "Hello")
+
+        #expect(await builderClient.previewRequests.map(\.sampleUserMessage) == ["Hello"])
+        #expect(viewModel.preview?.isPreviewOnly == false)
+        #expect(viewModel.preview?.segments.map(\.id) == ["system_prompt"])
+        #expect(viewModel.preview?.warnings == ["Rust preview"])
     }
 
     @Test("publish stores exact profile selection")
@@ -186,6 +205,7 @@ struct AgentBuilderViewModelTests {
 
 private actor RecordingAgentBuilderClient: AgentBuilderClient {
     private(set) var publishedDrafts: [AgentBuilderDraftDTO] = []
+    private(set) var previewRequests: [BuilderContextPreviewRequestDTO] = []
 
     func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
         AgentBuilderUIModel(
@@ -207,6 +227,25 @@ private actor RecordingAgentBuilderClient: AgentBuilderClient {
             displayName: draft.displayName ?? "Assistant"
         )
     }
+
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        previewRequests.append(request)
+        return BuilderContextPreviewResponseDTO(
+            isPreviewOnly: false,
+            segments: [
+                BuilderContextPreviewSegmentDTO(
+                    id: "system_prompt",
+                    title: "System Prompt",
+                    sourceLabel: "prompt",
+                    trustLevel: "trusted_app_policy",
+                    isEnabled: true,
+                    previewText: "system"
+                ),
+            ],
+            tokenEstimate: 4,
+            warnings: ["Rust preview"]
+        )
+    }
 }
 
 private actor DelayedFailingAgentBuilderClient: AgentBuilderClient {
@@ -224,6 +263,10 @@ private actor DelayedFailingAgentBuilderClient: AgentBuilderClient {
 
     func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
         try await Task.sleep(nanoseconds: 50_000_000)
+        throw AgentBuilderTestError.publishFailed
+    }
+
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
         throw AgentBuilderTestError.publishFailed
     }
 }

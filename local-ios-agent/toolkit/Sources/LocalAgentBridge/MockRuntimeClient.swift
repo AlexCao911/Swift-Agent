@@ -297,6 +297,24 @@ public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient,
         )
     }
 
+    public func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO {
+        BuilderContextPreviewResponseDTO(
+            isPreviewOnly: false,
+            segments: [
+                BuilderContextPreviewSegmentDTO(
+                    id: "system_prompt",
+                    title: "System Prompt",
+                    sourceLabel: "prompt",
+                    trustLevel: "trusted_app_policy",
+                    isEnabled: true,
+                    previewText: request.draft.systemPrompt ?? ""
+                ),
+            ],
+            tokenEstimate: max(1, (request.draft.systemPrompt ?? "").count / 4),
+            warnings: []
+        )
+    }
+
     public nonisolated func observeEvents(
         runId: String,
         fromSequence: UInt64

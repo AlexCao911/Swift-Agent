@@ -20,10 +20,12 @@ struct AgentBuilderView: View {
                                 onSelect: { viewModel.selectCard(card.id) },
                                 onConfigureTools: { isToolPickerPresented = true },
                                 onPreviewContext: {
-                                    viewModel.previewContext(
-                                        sampleUserMessage: "What should this agent know before answering?"
-                                    )
-                                    isPreviewPresented = true
+                                    Task {
+                                        await viewModel.previewContext(
+                                            sampleUserMessage: "What should this agent know before answering?"
+                                        )
+                                        isPreviewPresented = true
+                                    }
                                 }
                             )
                         }

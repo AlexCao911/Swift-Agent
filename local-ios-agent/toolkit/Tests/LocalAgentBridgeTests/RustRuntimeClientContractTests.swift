@@ -307,6 +307,20 @@ struct RustRuntimeClientContractTests {
             BuildAgentRequestDTO(templateId: "template_1"),
             as: AgentProfileDTO.self
         )
+        let contextPreview: BuilderContextPreviewResponseDTO = try await client!.request(
+            .previewContext,
+            BuilderContextPreviewRequestDTO(
+                draft: AgentBuilderDraftDTO(
+                    profileId: "profile_1",
+                    templateId: "template_1",
+                    systemPrompt: "system",
+                    selectedToolIds: ["web.fetch_url_text"],
+                    contextStepIds: ["system_prompt", "tool_results"]
+                ),
+                sampleUserMessage: "hello"
+            ),
+            as: BuilderContextPreviewResponseDTO.self
+        )
         let _: EmptyAgentOSResponseDTO = try await client!.request(
             .approveTool,
             ApproveToolRequestDTO(id: "approval_1", decision: ApprovalDecisionDTO(approved: true)),
@@ -343,6 +357,7 @@ struct RustRuntimeClientContractTests {
         let startRequest = try decodedObject(try #require(probe.startRunJson))
         let commitRequest = try decodedObject(try #require(probe.commitAssistantResultJson))
         let buildRequest = try decodedObject(try #require(probe.buildAgentJson))
+        let previewRequest = try decodedObject(try #require(probe.previewContextJson))
         let approveRequest = try decodedObject(try #require(probe.approveToolJson))
         let submitRequest = try decodedObject(try #require(probe.submittedToolResultJson))
 
@@ -352,6 +367,7 @@ struct RustRuntimeClientContractTests {
         #expect(run.replayFromSequence == 0)
         #expect(commit.committedMessageId == "assistant.final_1")
         #expect(profile.profileId == "profile_1")
+        #expect(contextPreview.segments.map(\.id) == ["system_prompt"])
         #expect(submitted.state == .completed)
         #expect(preparedRequest["parent_event_id"] as? String == "entry_parent")
         #expect((startRequest["conversation_run_frame_ref"] as? [String: Any])?["frame_id"] as? String == "frame_1")
@@ -361,6 +377,8 @@ struct RustRuntimeClientContractTests {
         #expect(commitRequest["run_id"] as? String == "run_agent_os")
         #expect((commitRequest["conversation_run_frame_ref"] as? [String: Any])?["user_turn_id"] as? String == "entry_user")
         #expect(buildRequest["template_id"] as? String == "template_1")
+        #expect((previewRequest["draft"] as? [String: Any])?["system_prompt"] as? String == "system")
+        #expect(previewRequest["sample_user_message"] as? String == "hello")
         #expect(approveRequest["id"] as? String == "approval_1")
         #expect((approveRequest["decision"] as? [String: Any])?["approved"] as? Bool == true)
         #expect(probe.submittedToolResultRunId == "run_agent_os")
@@ -368,7 +386,7 @@ struct RustRuntimeClientContractTests {
 
         client = nil
 
-        #expect(probe.freedStrings == 7)
+        #expect(probe.freedStrings == 8)
         #expect(probe.freedRuntimeHandles == 1)
     }
 
@@ -645,6 +663,7 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var debugArchiveRunId: String?
     var listAgentProfilesJson: String?
     var buildAgentJson: String?
+    var previewContextJson: String?
     var prepareUserTurnJson: String?
     var observeEventsJson: String?
     var observeEventsToEmit: Int?
@@ -709,7 +728,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             observeEventsStreaming: observeEventsStreaming,
             commitAssistantResult: commitAssistantResult,
             approveTool: approveTool,
-            cancelRun: cancelRun
+            cancelRun: cancelRun,
+            previewContext: previewContext
         )
     }
 
@@ -1023,6 +1043,31 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
           "profile_id": "profile_1",
           "profile_revision_id": 1,
           "display_name": "Planner"
+        }
+        """)
+    }
+
+    func previewContext(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        previewContextJson = String(cString: requestJson!)
+        return makeCString("""
+        {
+          "is_preview_only": false,
+          "segments": [
+            {
+              "id": "system_prompt",
+              "title": "System Prompt",
+              "source_label": "prompt",
+              "trust_level": "trusted_app_policy",
+              "is_enabled": true,
+              "preview_text": "system"
+            }
+          ],
+          "token_estimate": 8,
+          "warnings": [],
+          "missing_inputs": []
         }
         """)
     }
