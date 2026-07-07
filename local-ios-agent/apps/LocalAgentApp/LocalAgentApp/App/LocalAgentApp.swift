@@ -1,4 +1,5 @@
 import LocalAgentBridge
+import LocalNativeToolkit
 import SwiftUI
 
 @main
@@ -19,6 +20,7 @@ struct LocalAgentApp: App {
                     toolDriver: MinimalHostToolDriver()
                 ),
                 nativeToolkitClient: EmptyNativeToolkitClient(),
+                nativePermissionGateway: StoreBackedNativePermissionGateway(store: PermissionStore()),
                 agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([
                     PermissionIssueDTO(
                         code: "app.bootstrap.failed",

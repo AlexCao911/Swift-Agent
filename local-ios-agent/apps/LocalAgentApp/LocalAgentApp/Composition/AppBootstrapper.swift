@@ -28,11 +28,22 @@ enum AppBootstrapper {
         ))
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let permissionStore = PermissionStore()
+        let eventStore: EKEventStore?
+#if canImport(EventKit) && os(iOS)
+        eventStore = EKEventStore()
+#else
+        eventStore = nil
+#endif
+        let nativePermissionGateway = nativePermissionGateway(
+            permissionStore: permissionStore,
+            eventStore: eventStore
+        )
         let catalogBox = NativeCatalogBox(catalog: try NativeToolCatalog(tools: []))
         let listTools = NativeListToolsTool(catalogProvider: { catalogBox.catalog })
         let nativeCatalog = try NativeToolCatalog(tools: nativeTools(
             listTools: listTools,
-            permissionStore: permissionStore
+            permissionStore: permissionStore,
+            eventStore: eventStore
         ))
         catalogBox.catalog = nativeCatalog
         let nativeToolkitClient = NativeToolkitClient(catalog: nativeCatalog)
@@ -54,6 +65,7 @@ enum AppBootstrapper {
                 coordinator: coordinator
             ),
             nativeToolkitClient: nativeToolkitClient,
+            nativePermissionGateway: nativePermissionGateway,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: builderToolCatalogClient
@@ -103,7 +115,8 @@ enum AppBootstrapper {
 
     private static func nativeTools(
         listTools: NativeListToolsTool,
-        permissionStore: PermissionStore
+        permissionStore: PermissionStore,
+        eventStore: EKEventStore?
     ) -> [any NativeTool] {
         var tools: [any NativeTool] = [
             listTools,
@@ -112,12 +125,25 @@ enum AppBootstrapper {
         ]
 
         #if canImport(EventKit) && os(iOS)
-        let eventStore = EKEventStore()
-        tools.append(CalendarSearchEventsTool(calendar: EventKitCalendarAdapter(eventStore: eventStore)))
-        tools.append(RemindersCreateReminderTool(reminders: EventKitReminderAdapter(eventStore: eventStore)))
+        if let eventStore {
+            tools.append(CalendarSearchEventsTool(calendar: EventKitCalendarAdapter(eventStore: eventStore)))
+            tools.append(RemindersCreateReminderTool(reminders: EventKitReminderAdapter(eventStore: eventStore)))
+        }
         #endif
 
         return tools
+    }
+
+    private static func nativePermissionGateway(
+        permissionStore: PermissionStore,
+        eventStore: EKEventStore?
+    ) -> any NativePermissionGateway {
+        #if canImport(EventKit) && os(iOS)
+        if let eventStore {
+            return EventKitPermissionAdapter(eventStore: eventStore)
+        }
+        #endif
+        return StoreBackedNativePermissionGateway(store: permissionStore)
     }
 
     static func sqliteURL(fileManager: FileManager = .default) throws -> URL {

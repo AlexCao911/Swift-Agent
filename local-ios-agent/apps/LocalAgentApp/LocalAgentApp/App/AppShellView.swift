@@ -7,6 +7,7 @@ struct AppShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var chatViewModel: AgentViewModel
     @State private var builderViewModel: AgentBuilderViewModel
+    @State private var toolCenterViewModel: ToolCenterViewModel
 
     private let primaryFamilies: [AppRouteFamily] = [.chat, .agents, .tools, .models, .settings]
 
@@ -16,6 +17,7 @@ struct AppShellView: View {
         self.container = container
         _chatViewModel = State(initialValue: container.makeAgentViewModel())
         _builderViewModel = State(initialValue: container.makeAgentBuilderViewModel())
+        _toolCenterViewModel = State(initialValue: container.makeToolCenterViewModel())
     }
 
     var body: some View {
@@ -94,11 +96,7 @@ struct AppShellView: View {
                 onUseInChat: usePublishedAgentInChat
             )
         case .tools:
-            ProductPlaceholderView(
-                title: "Tools",
-                systemImageName: "wrench.and.screwdriver",
-                message: "Tool Center will show native capabilities, permissions, approval policy, and audit metadata."
-            )
+            ToolCenterView(viewModel: toolCenterViewModel)
         case .models:
             ProductPlaceholderView(
                 title: "Models",

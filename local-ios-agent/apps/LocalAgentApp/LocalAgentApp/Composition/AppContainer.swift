@@ -4,6 +4,7 @@ import LocalNativeToolkit
 struct AppContainer {
     let runtimeService: AgentRuntimeService
     let nativeToolkitClient: any NativeToolkitClientProtocol
+    let nativePermissionGateway: any NativePermissionGateway
     let agentBuilderClient: any AgentBuilderClient
     let permissionClient: any PermissionClient
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
@@ -35,6 +36,14 @@ struct AppContainer {
             builderClient: agentBuilderClient,
             permissionClient: permissionClient,
             toolCatalogClient: agentBuilderToolCatalogClient
+        )
+    }
+
+    @MainActor
+    func makeToolCenterViewModel() -> ToolCenterViewModel {
+        ToolCenterViewModel(
+            client: nativeToolkitClient,
+            permissionGateway: nativePermissionGateway
         )
     }
 }
