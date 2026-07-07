@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     @Bindable var viewModel: AgentViewModel
     var onOpenBuilder: (() -> Void)?
+    var onInspectContext: (() -> Void)?
 
     @State private var scrollProxy: ScrollViewProxy?
     @State private var editingMessage: AgentMessageViewState?
@@ -15,9 +16,14 @@ struct ChatView: View {
     @State private var intentRouter = AppIntentRouter.shared
     @State private var managementSheet: ChatManagementSheet?
 
-    init(viewModel: AgentViewModel, onOpenBuilder: (() -> Void)? = nil) {
+    init(
+        viewModel: AgentViewModel,
+        onOpenBuilder: (() -> Void)? = nil,
+        onInspectContext: (() -> Void)? = nil
+    ) {
         self.viewModel = viewModel
         self.onOpenBuilder = onOpenBuilder
+        self.onInspectContext = onInspectContext
     }
 
     var body: some View {
@@ -51,6 +57,12 @@ struct ChatView: View {
                             managementSheet = .settings
                         } label: {
                             Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+
+                        if let onInspectContext {
+                            Button(action: onInspectContext) {
+                                Label("Inspect Context", systemImage: "doc.text.magnifyingglass")
+                            }
                         }
                     } label: {
                         HStack(spacing: 4) {

@@ -6,12 +6,19 @@ struct ConversationWorkspaceView: View {
     var onOpenBuilder: () -> Void
 
     @State private var workspaceViewModel = ConversationWorkspaceViewModel()
+    @State private var isContextInspectorPresented = false
 
     var body: some View {
         ChatView(
             viewModel: chatViewModel,
-            onOpenBuilder: onOpenBuilder
+            onOpenBuilder: onOpenBuilder,
+            onInspectContext: { isContextInspectorPresented = true }
         )
+        .sheet(isPresented: $isContextInspectorPresented) {
+            ContextInspectorView(
+                snapshot: ContextInspectorProjection.project(messages: chatViewModel.state.messages)
+            )
+        }
         .task {
             syncRuntimeMirror()
         }
