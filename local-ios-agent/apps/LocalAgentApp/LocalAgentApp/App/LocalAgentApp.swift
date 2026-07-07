@@ -20,7 +20,8 @@ struct LocalAgentApp: App {
                         message: error.localizedDescription
                     ),
                 ]),
-                permissionClient: MockPermissionClient(issues: [])
+                permissionClient: MockPermissionClient(issues: []),
+                agentBuilderToolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
             )
         }
     }

@@ -106,6 +106,21 @@ struct RustRuntimeAppIntegrationTests {
         #expect(viewModel.lifecycle == .published(profileRevisionId: 1))
     }
 
+    @Test("container builder view model loads tool cards")
+    @MainActor
+    func containerBuilderViewModelLoadsToolCards() async throws {
+        let container = try AppBootstrapper.makeContainer(
+            environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
+            store: .inMemory
+        )
+        let viewModel = container.makeAgentBuilderViewModel()
+
+        await viewModel.load()
+
+        #expect(viewModel.draft != nil)
+        #expect(!viewModel.toolCards.isEmpty)
+    }
+
     @Test("live RustRuntimeClient completes debug echo tool loop")
     func liveRuntimeCompletesDebugEchoToolLoop() async throws {
         let service = try makeLiveService()

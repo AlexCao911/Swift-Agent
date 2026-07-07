@@ -1,9 +1,11 @@
 import LocalAgentBridge
+import LocalNativeToolkit
 
 struct AppContainer {
     let runtimeService: AgentRuntimeService
     let agentBuilderClient: any AgentBuilderClient
     let permissionClient: any PermissionClient
+    let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
 
     @MainActor
     func makeAgentViewModel() -> AgentViewModel {
@@ -19,7 +21,8 @@ struct AppContainer {
             profileId: profileId,
             templateId: templateId,
             builderClient: agentBuilderClient,
-            permissionClient: permissionClient
+            permissionClient: permissionClient,
+            toolCatalogClient: agentBuilderToolCatalogClient
         )
     }
 }

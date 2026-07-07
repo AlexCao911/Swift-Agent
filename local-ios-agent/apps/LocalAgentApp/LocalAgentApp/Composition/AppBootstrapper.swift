@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalNativeToolkit
 
 enum AppBootstrapper {
     static func makeContainer(
@@ -29,6 +30,15 @@ enum AppBootstrapper {
             executionBridge: executionBridge,
             toolDriver: toolDriver
         )
+        let permissionStore = PermissionStore()
+        let nativeCatalog = try NativeToolCatalog(tools: [
+            NativePermissionStatusTool(permissionStore: permissionStore),
+            WebFetchURLTextTool(),
+        ])
+        let builderToolCatalogClient = NativeManifestToolCatalogClient(catalogProvider: {
+            nativeCatalog
+        })
+
         return AppContainer(
             runtimeService: AgentRuntimeService(
                 runtimeClient: client,
@@ -36,7 +46,8 @@ enum AppBootstrapper {
                 coordinator: coordinator
             ),
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
-            permissionClient: MockPermissionClient(issues: [])
+            permissionClient: MockPermissionClient(issues: []),
+            agentBuilderToolCatalogClient: builderToolCatalogClient
         )
     }
 
