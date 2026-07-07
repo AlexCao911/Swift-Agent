@@ -61,6 +61,9 @@
 		0C0000010000000000002011 /* AgentEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002111 /* AgentEntity.swift */; };
 		0C0000010000000000002012 /* ConversationEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002112 /* ConversationEntity.swift */; };
 		0C0000010000000000002013 /* AppIntentRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002113 /* AppIntentRoutingTests.swift */; };
+		0C0000010000000000002014 /* AppRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002114 /* AppRoute.swift */; };
+		0C0000010000000000002015 /* AppShellViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002115 /* AppShellViewModel.swift */; };
+		0C0000010000000000002016 /* AppShellViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002116 /* AppShellViewModelTests.swift */; };
 		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
 		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
 		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
@@ -148,6 +151,9 @@
 		0C0000010000000000002111 /* AgentEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEntity.swift; sourceTree = "<group>"; };
 		0C0000010000000000002112 /* ConversationEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationEntity.swift; sourceTree = "<group>"; };
 		0C0000010000000000002113 /* AppIntentRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRoutingTests.swift; sourceTree = "<group>"; };
+		0C0000010000000000002114 /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRoute.swift; sourceTree = "<group>"; };
+		0C0000010000000000002115 /* AppShellViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModel.swift; sourceTree = "<group>"; };
+		0C0000010000000000002116 /* AppShellViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModelTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
 		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
 		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
@@ -233,6 +239,7 @@
 			isa = PBXGroup;
 			children = (
 				0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */,
+				0C0000010000000000002116 /* AppShellViewModelTests.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -240,6 +247,8 @@
 		0A0000010000000000000501 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				0C0000010000000000002114 /* AppRoute.swift */,
+				0C0000010000000000002115 /* AppShellViewModel.swift */,
 				0C000001000000000000210A /* BuilderFirstHostView.swift */,
 				0A0000010000000000000101 /* LocalAgentApp.swift */,
 			);
@@ -613,6 +622,8 @@
 				0C000001000000000000200F /* NativeInteractionBroker.swift in Sources */,
 				0C0000010000000000002011 /* AgentEntity.swift in Sources */,
 				0C0000010000000000002012 /* ConversationEntity.swift in Sources */,
+				0C0000010000000000002014 /* AppRoute.swift in Sources */,
+				0C0000010000000000002015 /* AppShellViewModel.swift in Sources */,
 				0C000001000000000000200B /* NativeToolkitClient.swift in Sources */,
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
@@ -663,6 +674,7 @@
 				0C0000010000000000002010 /* NativeInteractionBrokerTests.swift in Sources */,
 				0C000001000000000000200D /* NativeToolkitClientTests.swift in Sources */,
 				0C0000010000000000002013 /* AppIntentRoutingTests.swift in Sources */,
+				0C0000010000000000002016 /* AppShellViewModelTests.swift in Sources */,
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,
