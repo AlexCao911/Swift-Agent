@@ -6,6 +6,31 @@ import LocalAgentBridge
 @Suite("Meta native tools")
 struct MetaToolsTests {
     @Test
+    func listToolsReturnsEnvelopeWithTrustedToolResultAndToolArray() async throws {
+        let tool = NativeListToolsTool(catalogProvider: {
+            try! NativeToolCatalog(tools: [
+                MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope"),
+                MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil),
+            ])
+        })
+
+        let result = await tool.execute(argumentsJson: "{}")
+        let data = try #require(result.structuredJson.data(using: .utf8))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
+        let provenance = try #require(object["provenance"] as? [String: Any])
+
+        #expect(object["schema_version"] as? Int == 1)
+        #expect(object["manifest_id"] as? String == "native.native.list_tools.v1")
+        #expect(provenance["trust_level"] as? String == "trusted_tool_result")
+        #expect(tools.map { $0["name"] as? String } == ["alpha.tool", "zeta.tool"])
+        #expect(tools[0]["risk_level"] as? String == "read_only")
+        #expect(tools[1]["permission_scope"] as? String == "zeta.scope")
+        #expect(result.isError == false)
+    }
+
+    @Test
     func listToolsReportsAvailableSchemasAsPublicRunScopedResult() async throws {
         let catalog = try NativeToolCatalog(tools: [
             MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope"),
@@ -19,7 +44,8 @@ struct MetaToolsTests {
 
         let result = await tool.execute(argumentsJson: "{}")
         let object = try decodedJSONObject(result.structuredJson)
-        let tools = try #require(object["tools"] as? [[String: Any]])
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
 
         #expect(result.sensitivity == .public)
         #expect(result.retention == .runOnly)
@@ -47,7 +73,8 @@ struct MetaToolsTests {
 
         let result = await listTool.execute(argumentsJson: "{}")
         let object = try decodedJSONObject(result.structuredJson)
-        let tools = try #require(object["tools"] as? [[String: Any]])
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
 
         #expect(tools.map { $0["name"] as? String } == [
             "alpha.tool",
@@ -69,7 +96,8 @@ struct MetaToolsTests {
 
         let result = await tool.execute(argumentsJson: "{}")
         let object = try decodedJSONObject(result.structuredJson)
-        let permissions = try #require(object["permissions"] as? [[String: Any]])
+        let payload = try #require(object["result"] as? [String: Any])
+        let permissions = try #require(payload["permissions"] as? [[String: Any]])
 
         #expect(result.sensitivity == .public)
         #expect(result.retention == .runOnly)

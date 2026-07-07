@@ -19,12 +19,13 @@ struct NativeCapabilityToolsTests {
 
         #expect(tool.schema.name == "calendar.search_events")
         #expect(tool.schema.riskLevel == .readOnly)
-        #expect(tool.schema.permissionScope == NativePermissionScope("calendar.events"))
+        #expect(tool.schema.permissionScope == NativePermissionScope("calendar.events.read_full"))
         #expect(tool.schema.inputSchema.jsonString == #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#)
 
         let result = await tool.execute(argumentsJson: #"{"query":"standup"}"#)
         let object = try decodedJSONObject(result.structuredJson)
-        let events = try #require(object["events"] as? [[String: Any]])
+        let payload = try #require(object["result"] as? [String: Any])
+        let events = try #require(payload["events"] as? [[String: Any]])
 
         #expect(await facade.queries == ["standup"])
         #expect(result.isError == false)
@@ -51,7 +52,8 @@ struct NativeCapabilityToolsTests {
             argumentsJson: #"{"title":"Buy milk","notes":"2%","due_date":"2026-06-20T09:00:00Z"}"#
         )
         let object = try decodedJSONObject(result.structuredJson)
-        let reminder = try #require(object["reminder"] as? [String: Any])
+        let payload = try #require(object["result"] as? [String: Any])
+        let reminder = try #require(payload["reminder"] as? [String: Any])
 
         #expect(await facade.createdRequests == [
             NativeReminderCreateRequest(

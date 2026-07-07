@@ -32,23 +32,12 @@ public protocol CalendarEventsFacade: Sendable {
 }
 
 public struct CalendarSearchEventsTool: NativeTool {
-    public let schema = NativeToolSchema(
-        name: "calendar.search_events",
-        description: "Search local calendar events.",
-        inputSchema: .object(
-            properties: [
-                "query": .string(),
-            ],
-            required: ["query"]
-        ),
-        riskLevel: .readOnly,
-        permissionScope: NativePermissionScope("calendar.events"),
-        availability: .available
-    )
+    public let schema: NativeToolSchema
 
     private let calendar: any CalendarEventsFacade
 
     public init(calendar: any CalendarEventsFacade) {
+        self.schema = Self.makeSchema()
         self.calendar = calendar
     }
 
@@ -56,16 +45,29 @@ public struct CalendarSearchEventsTool: NativeTool {
         do {
             let arguments = try Self.decode(CalendarSearchEventsArguments.self, from: argumentsJson)
             let events = try await calendar.searchEvents(query: arguments.query)
-            let structuredJson = Self.encode(CalendarSearchEventsPayload(events: events))
 
-            return ToolResultDTO(
+            return NativeToolResultBuilder.success(
+                manifestId: Self.manifest.manifestId,
+                toolName: schema.name,
+                toolCallId: "unknown",
                 displayText: "\(events.count) calendar events found.",
-                modelText: structuredJson,
-                structuredJson: structuredJson,
-                auditText: "Searched calendar events for query `\(arguments.query)`.",
+                modelText: "Calendar events matching `\(arguments.query)`: \(events.map(\.title).joined(separator: ", "))",
+                resultKind: "calendar_events",
+                resultPayload: [
+                    "count": .number(Double(events.count)),
+                    "events": .array(events.map(Self.eventJSONValue)),
+                ],
+                sourceKind: "calendar",
+                sourceId: "calendar.search_events",
+                displayName: Self.manifest.title,
+                attachmentIds: [],
+                trustLevel: Self.manifest.trustLevel,
                 sensitivity: .private,
-                retention: .session,
-                isError: false
+                retention: Self.manifest.retention,
+                modelTextPolicy: "tool_status",
+                sourceLabel: "Calendar",
+                auditSummary: "Searched calendar events for query `\(arguments.query)`.",
+                auditRedaction: Self.manifest.audit.resultSummaryPolicy.rawValue
             )
         } catch {
             return Self.errorResult("Unable to search calendar events: \(error)")
@@ -77,28 +79,65 @@ public struct CalendarSearchEventsTool: NativeTool {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    private static func encode<T: Encodable>(_ value: T) -> String {
-        let data = try! JSONEncoder().encode(value)
-        return String(decoding: data, as: UTF8.self)
+    private static func errorResult(_ message: String) -> ToolResultDTO {
+        NativeToolResultBuilder.error(
+            manifestId: manifest.manifestId,
+            toolName: "calendar.search_events",
+            toolCallId: "unknown",
+            code: "calendar_search_failed",
+            displayText: message,
+            auditSummary: message
+        )
     }
 
-    private static func errorResult(_ message: String) -> ToolResultDTO {
-        ToolResultDTO(
-            displayText: message,
-            modelText: message,
-            structuredJson: #"{"error":"calendar_search_failed"}"#,
-            auditText: message,
-            sensitivity: .private,
-            retention: .session,
-            isError: true
+    private static var manifest: NativeToolManifest {
+        NativeToolManifest(
+            manifestId: "native.calendar.search_events.v1",
+            capabilityId: "calendar.events.search",
+            title: "Search Calendar",
+            description: "Search local calendar events.",
+            mode: .background,
+            permissionScope: NativePermissionScope("calendar.events.read_full"),
+            requiredPrivacyKeys: ["NSCalendarsFullAccessUsageDescription"],
+            requiresForegroundUI: false,
+            minimumOS: "iOS 17.0",
+            regionPolicy: "available_with_service_fallback",
+            fallback: NativeToolFallback(kind: .openSettings, message: "Calendar access is required."),
+            riskLevel: .readOnly,
+            approvalPolicy: .perCall,
+            trustLevel: .trustedToolResult,
+            retention: .runOnly,
+            audit: NativeToolAudit(label: "Calendar Search", resultSummaryPolicy: .metadataOnly)
         )
+    }
+
+    private static func makeSchema() -> NativeToolSchema {
+        NativeToolSchema(
+            name: "calendar.search_events",
+            description: manifest.description,
+            inputSchema: .object(
+                properties: [
+                    "query": .string(),
+                ],
+                required: ["query"]
+            ),
+            riskLevel: manifest.riskLevel,
+            permissionScope: manifest.permissionScope,
+            availability: .available,
+            manifest: manifest
+        )
+    }
+
+    private static func eventJSONValue(_ event: NativeCalendarEvent) -> JSONValue {
+        .object([
+            "id": .string(event.id),
+            "title": .string(event.title),
+            "start_date": .string(event.startDateISO8601),
+            "end_date": .string(event.endDateISO8601 ?? ""),
+        ])
     }
 }
 
 private struct CalendarSearchEventsArguments: Decodable {
     var query: String
-}
-
-private struct CalendarSearchEventsPayload: Encodable {
-    var events: [NativeCalendarEvent]
 }

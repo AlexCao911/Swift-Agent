@@ -45,25 +45,12 @@ public protocol RemindersFacade: Sendable {
 }
 
 public struct RemindersCreateReminderTool: NativeTool {
-    public let schema = NativeToolSchema(
-        name: "reminders.create_reminder",
-        description: "Create a local reminder.",
-        inputSchema: .object(
-            properties: [
-                "title": .string(),
-                "notes": .string(),
-                "due_date": .string(),
-            ],
-            required: ["title"]
-        ),
-        riskLevel: .confirm,
-        permissionScope: NativePermissionScope("reminders"),
-        availability: .available
-    )
+    public let schema: NativeToolSchema
 
     private let reminders: any RemindersFacade
 
     public init(reminders: any RemindersFacade) {
+        self.schema = Self.makeSchema()
         self.reminders = reminders
     }
 
@@ -71,16 +58,33 @@ public struct RemindersCreateReminderTool: NativeTool {
         do {
             let request = try Self.decode(NativeReminderCreateRequest.self, from: argumentsJson)
             let reminder = try await reminders.createReminder(request)
-            let structuredJson = Self.encode(NativeReminderPayload(reminder: reminder))
 
-            return ToolResultDTO(
+            return NativeToolResultBuilder.success(
+                manifestId: Self.manifest.manifestId,
+                toolName: schema.name,
+                toolCallId: "unknown",
                 displayText: "Reminder created: \(reminder.title)",
-                modelText: structuredJson,
-                structuredJson: structuredJson,
-                auditText: "Created reminder `\(reminder.id)`.",
+                modelText: "Reminder created: \(reminder.title)",
+                resultKind: "reminder_created",
+                resultPayload: [
+                    "reminder": .object([
+                        "id": .string(reminder.id),
+                        "title": .string(reminder.title),
+                        "notes": .string(reminder.notes ?? ""),
+                        "due_date": .string(reminder.dueDateISO8601 ?? ""),
+                    ]),
+                ],
+                sourceKind: "reminders",
+                sourceId: reminder.id,
+                displayName: Self.manifest.title,
+                attachmentIds: [],
+                trustLevel: Self.manifest.trustLevel,
                 sensitivity: .private,
-                retention: .session,
-                isError: false
+                retention: Self.manifest.retention,
+                modelTextPolicy: "tool_status",
+                sourceLabel: "Reminders",
+                auditSummary: "Created reminder `\(reminder.id)`.",
+                auditRedaction: Self.manifest.audit.resultSummaryPolicy.rawValue
             )
         } catch {
             return Self.errorResult("Unable to create reminder: \(error)")
@@ -92,24 +96,54 @@ public struct RemindersCreateReminderTool: NativeTool {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    private static func encode<T: Encodable>(_ value: T) -> String {
-        let data = try! JSONEncoder().encode(value)
-        return String(decoding: data, as: UTF8.self)
-    }
-
     private static func errorResult(_ message: String) -> ToolResultDTO {
-        ToolResultDTO(
+        NativeToolResultBuilder.error(
+            manifestId: manifest.manifestId,
+            toolName: "reminders.create_reminder",
+            toolCallId: "unknown",
+            code: "reminder_create_failed",
             displayText: message,
-            modelText: message,
-            structuredJson: #"{"error":"reminder_create_failed"}"#,
-            auditText: message,
-            sensitivity: .private,
-            retention: .session,
-            isError: true
+            auditSummary: message
         )
     }
-}
 
-private struct NativeReminderPayload: Encodable {
-    var reminder: NativeReminder
+    private static var manifest: NativeToolManifest {
+        NativeToolManifest(
+            manifestId: "native.reminders.create_reminder.v1",
+            capabilityId: "reminders.create_reminder",
+            title: "Create Reminder",
+            description: "Create a local reminder.",
+            mode: .background,
+            permissionScope: NativePermissionScope("reminders"),
+            requiredPrivacyKeys: ["NSRemindersUsageDescription"],
+            requiresForegroundUI: false,
+            minimumOS: "iOS 17.0",
+            regionPolicy: "available_with_service_fallback",
+            fallback: NativeToolFallback(kind: .openSettings, message: "Reminders access is required."),
+            riskLevel: .confirm,
+            approvalPolicy: .perCall,
+            trustLevel: .trustedToolResult,
+            retention: .runOnly,
+            audit: NativeToolAudit(label: "Create Reminder", resultSummaryPolicy: .metadataOnly)
+        )
+    }
+
+    private static func makeSchema() -> NativeToolSchema {
+        NativeToolSchema(
+            name: "reminders.create_reminder",
+            description: manifest.description,
+            inputSchema: .object(
+                properties: [
+                    "title": .string(),
+                    "notes": .string(),
+                    "due_date": .string(),
+                ],
+                required: ["title"]
+            ),
+            riskLevel: manifest.riskLevel,
+            permissionScope: manifest.permissionScope,
+            availability: .available,
+            manifest: manifest
+        )
+    }
 }
