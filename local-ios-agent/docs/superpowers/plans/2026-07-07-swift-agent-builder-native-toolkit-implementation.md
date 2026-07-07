@@ -18,6 +18,7 @@
 - External web/file/OCR/share/speech/vision content must be labelled `untrusted_external_content`.
 - `web.fetch_url_text` must use `WebFetchPolicyV1`: no cookies/auth headers, no JS, no private network by default, bounded redirects, bounded MIME/size/time.
 - User-mediated tools must persist a durable `pending_user_interaction` record before presenting system UI.
+- Production run start must fail when no `profile_revision_id` is selected; only explicit seed/mock clients may use revision `1`.
 - Avoid full visual node editor work in this plan.
 
 ---
@@ -39,11 +40,11 @@ Swift toolkit files:
 - Create `local-ios-agent/toolkit/Sources/LocalNativeToolkit/WebFetchPolicy.swift`
   Defines WebFetchPolicyV1 validator.
 - Create `local-ios-agent/toolkit/Sources/LocalNativeToolkit/WebTools.swift`
-  Adds `web.fetch_url_text` using `WebFetchPolicyV1` and injectable fetcher.
+  Adds `web.fetch_url_text` using `WebFetchPolicyV1`, redirect-aware fetch reporting, and injectable fetcher.
 - Create `local-ios-agent/toolkit/Sources/LocalNativeToolkit/NativeAttachmentStore.swift`
   Adds attachment records and access states.
 - Create `local-ios-agent/toolkit/Sources/LocalNativeToolkit/PendingUserInteraction.swift`
-  Adds pending interaction record and in-memory store.
+  Adds pending interaction record, durable store protocol, file-backed store, and test in-memory store.
 - Modify `local-ios-agent/toolkit/Sources/LocalNativeToolkit/CalendarTools.swift`
 - Modify `local-ios-agent/toolkit/Sources/LocalNativeToolkit/ReminderTools.swift`
 - Modify `local-ios-agent/toolkit/Sources/LocalNativeToolkit/MetaTools.swift`
@@ -152,7 +153,77 @@ func exportsManifestMetadataV1() throws {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Write missing-manifest and risk-conflict tests**
+
+Add these tests to `NativeToolSchemaExportTests.swift`:
+
+```swift
+@Test
+func missingManifestDoesNotSynthesizeProductMetadata() throws {
+    let catalog = try NativeToolCatalog(tools: [
+        ExportStubTool(
+            schema: NativeToolSchema(
+                name: "legacy.tool",
+                description: "Legacy tool",
+                inputSchema: .object(properties: [:], required: []),
+                riskLevel: .readOnly,
+                permissionScope: nil,
+                availability: .available
+            )
+        ),
+    ])
+
+    let exported = NativeToolSchemaExport.exportSchemas(from: catalog)
+
+    #expect(exported.count == 1)
+    #expect(exported[0].metadataJson == nil)
+}
+
+@Test
+func riskMismatchExportsMoreRestrictiveRisk() throws {
+    let manifest = NativeToolManifest(
+        manifestId: "native.reminders.create.v1",
+        capabilityId: "reminders.create",
+        title: "Create Reminder",
+        description: "Create reminders",
+        mode: .background,
+        permissionScope: NativePermissionScope("reminders.full"),
+        requiredPrivacyKeys: ["NSRemindersUsageDescription"],
+        requiresForegroundUI: false,
+        minimumOS: "iOS 17.0",
+        regionPolicy: "available_with_service_fallback",
+        fallback: NativeToolFallback(kind: .openSettings, message: "Reminders access is required."),
+        riskLevel: .confirm,
+        approvalPolicy: .perCall,
+        trustLevel: .trustedToolResult,
+        retention: .runOnly,
+        audit: NativeToolAudit(label: "Create Reminder", resultSummaryPolicy: .metadataOnly)
+    )
+    let catalog = try NativeToolCatalog(tools: [
+        ExportStubTool(
+            schema: NativeToolSchema(
+                name: "reminders.create",
+                description: "Create reminders",
+                inputSchema: .object(properties: ["title": .string()], required: ["title"]),
+                riskLevel: .readOnly,
+                permissionScope: NativePermissionScope("reminders.full"),
+                availability: .available,
+                manifest: manifest
+            )
+        ),
+    ])
+
+    let exported = NativeToolSchemaExport.exportSchemas(from: catalog)
+    let metadata = try #require(exported[0].metadataJson)
+    let metadataData = try #require(metadata.data(using: .utf8))
+    let object = try #require(JSONSerialization.jsonObject(with: metadataData) as? [String: Any])
+
+    #expect(exported[0].riskLevel == .confirm)
+    #expect(object["risk_level"] as? String == "confirm")
+}
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run:
 
@@ -163,7 +234,7 @@ swift test --filter NativeToolSchemaExportTests/exportsManifestMetadataV1
 
 Expected: FAIL because `NativeToolManifest` and the new `NativeToolSchema` initializer argument do not exist.
 
-- [ ] **Step 3: Add manifest model**
+- [ ] **Step 4: Add manifest model**
 
 Create `NativeToolManifest.swift`:
 
@@ -314,7 +385,7 @@ public struct NativeToolSchemaMetadataV1: Codable, Sendable, Equatable {
 }
 ```
 
-- [ ] **Step 4: Extend NativeToolSchema**
+- [ ] **Step 5: Extend NativeToolSchema**
 
 Modify `NativeTool.swift`:
 
@@ -348,13 +419,16 @@ public struct NativeToolSchema: Sendable, Equatable {
 }
 ```
 
-- [ ] **Step 5: Export metadata from manifest**
+- [ ] **Step 6: Export metadata from manifest**
 
 Replace `metadataJSON(for:)` in `NativeToolSchemaExport.swift` with:
 
 ```swift
 private static func metadataJSON(for schema: NativeToolSchema) -> String? {
-    let manifest = schema.manifest ?? legacyManifest(for: schema)
+    guard let manifest = schema.manifest else {
+        return nil
+    }
+    let riskLevel = effectiveRiskLevel(schema.riskLevel, manifest.riskLevel)
     let metadata = NativeToolSchemaMetadataV1(
         schemaVersion: 1,
         manifestId: manifest.manifestId,
@@ -362,7 +436,7 @@ private static func metadataJSON(for schema: NativeToolSchema) -> String? {
         toolMode: manifest.mode,
         permissionScope: manifest.permissionScope?.name,
         approvalPolicy: manifest.approvalPolicy,
-        riskLevel: bridgeRiskLevel(for: manifest.riskLevel),
+        riskLevel: bridgeRiskLevel(for: riskLevel),
         contextTrustLevel: manifest.trustLevel,
         availability: NativeToolSchemaMetadataV1.Availability(
             state: availabilityState(schema.availability),
@@ -378,6 +452,24 @@ private static func metadataJSON(for schema: NativeToolSchema) -> String? {
     return String(decoding: data, as: UTF8.self)
 }
 
+private static func effectiveRiskLevel(
+    _ schemaRisk: NativeToolRiskLevel,
+    _ manifestRisk: NativeToolRiskLevel
+) -> NativeToolRiskLevel {
+    rank(manifestRisk) >= rank(schemaRisk) ? manifestRisk : schemaRisk
+}
+
+private static func rank(_ risk: NativeToolRiskLevel) -> Int {
+    switch risk {
+    case .readOnly:
+        0
+    case .confirm:
+        1
+    case .destructive:
+        2
+    }
+}
+
 private static func availabilityState(_ availability: NativeToolAvailability) -> String {
     switch availability {
     case .available:
@@ -386,36 +478,32 @@ private static func availabilityState(_ availability: NativeToolAvailability) ->
         "unavailable"
     }
 }
+```
 
-private static func legacyManifest(for schema: NativeToolSchema) -> NativeToolManifest {
-    NativeToolManifest(
-        manifestId: "legacy.\(schema.name).v1",
-        capabilityId: schema.name,
-        title: schema.name,
-        description: schema.description,
-        mode: .background,
-        permissionScope: schema.permissionScope,
-        requiredPrivacyKeys: [],
-        requiresForegroundUI: false,
-        minimumOS: "iOS 17.0",
-        regionPolicy: "available_with_service_fallback",
-        fallback: NativeToolFallback(kind: .none, message: ""),
-        riskLevel: schema.riskLevel,
-        approvalPolicy: .perCall,
-        trustLevel: .trustedToolResult,
-        retention: .runOnly,
-        audit: NativeToolAudit(label: schema.name, resultSummaryPolicy: .metadataOnly)
-    )
+Update the DTO construction call inside `exportSchemas(from:)`:
+
+```swift
+public static func exportSchemas(from catalog: NativeToolCatalog) -> [ToolSchemaDTO] {
+    catalog.schemas.compactMap { schema in
+        guard schema.availability == .available else {
+            return nil
+        }
+        let effectiveRisk = schema.manifest.map {
+            effectiveRiskLevel(schema.riskLevel, $0.riskLevel)
+        } ?? schema.riskLevel
+
+        return ToolSchemaDTO(
+            name: schema.name,
+            description: schema.description,
+            parametersJsonSchema: schema.inputSchema.jsonString,
+            riskLevel: bridgeRiskLevel(for: effectiveRisk),
+            metadataJson: metadataJSON(for: schema)
+        )
+    }
 }
 ```
 
-Update the DTO construction call:
-
-```swift
-metadataJson: metadataJSON(for: schema)
-```
-
-- [ ] **Step 6: Run focused tests**
+- [ ] **Step 7: Run focused tests**
 
 Run:
 
@@ -426,7 +514,7 @@ swift test --filter NativeToolSchemaExportTests
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add local-ios-agent/toolkit/Sources/LocalNativeToolkit/NativeToolManifest.swift \
@@ -448,7 +536,7 @@ git commit -m "feat: add native tool manifest metadata"
 
 **Interfaces:**
 - Consumes: `ToolResultDTO`, `NativeToolTrustLevel`, `SensitivityDTO`, `RetentionPolicyDTO`.
-- Produces: `ToolResultEnvelopeV1`, `NativeToolResultBuilder.success(...)`, `NativeToolResultBuilder.error(...)`.
+- Produces: `ToolResultEnvelopeV1`, recursive `JSONValue`, `NativeToolResultBuilder.success(...)`, `NativeToolResultBuilder.error(...)`, `NativeToolResultEnvelopeValidator.validate(...)`.
 
 - [ ] **Step 1: Write failing envelope tests**
 
@@ -471,7 +559,7 @@ struct NativeToolResultEnvelopeTests {
             displayText: "Fetched example.com",
             modelText: "External content from example.com:\nhello",
             resultKind: "web_text",
-            resultPayload: ["text_excerpt": "hello"],
+            resultPayload: ["text_excerpt": .string("hello")],
             sourceKind: "web",
             sourceId: "https://example.com",
             displayName: "example.com",
@@ -493,10 +581,53 @@ struct NativeToolResultEnvelopeTests {
         #expect(object["schema_version"] as? Int == 1)
         #expect(object["manifest_id"] as? String == "native.web.fetch_url_text.v1")
         #expect(provenance["trust_level"] as? String == "untrusted_external_content")
+        #expect(provenance["retention"] as? String == "run_only")
         #expect(contextPolicy["model_text_policy"] as? String == "summarize_or_quote_only")
         #expect(result.sensitivity == .public)
         #expect(result.retention == .runOnly)
         #expect(result.isError == false)
+    }
+
+    @Test
+    func envelopeSupportsNestedArraysAndObjects() throws {
+        let result = NativeToolResultBuilder.success(
+            manifestId: "native.native.list_tools.v1",
+            toolName: "native.list_tools",
+            toolCallId: "call_1",
+            displayText: "2 tools available",
+            modelText: "Available tools: calendar.search_events, reminders.create",
+            resultKind: "native_tool_status",
+            resultPayload: [
+                "tools": .array([
+                    .object(["name": .string("calendar.search_events")]),
+                    .object(["name": .string("reminders.create")]),
+                ]),
+                "permissions": .array([
+                    .object(["scope": .string("calendar.events.read_full")]),
+                ]),
+            ],
+            sourceKind: "tool",
+            sourceId: "native.list_tools",
+            displayName: "List Tools",
+            attachmentIds: [],
+            trustLevel: .trustedToolResult,
+            sensitivity: .public,
+            retention: .runOnly,
+            modelTextPolicy: "tool_status",
+            sourceLabel: "Tool",
+            auditSummary: "Listed tools",
+            auditRedaction: "metadata_only"
+        )
+
+        let data = try #require(result.structuredJson.data(using: .utf8))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let payload = try #require(object["result"] as? [String: Any])
+        let tools = try #require(payload["tools"] as? [[String: Any]])
+
+        #expect(tools.map { $0["name"] as? String } == [
+            "calendar.search_events",
+            "reminders.create",
+        ])
     }
 
     @Test
@@ -518,6 +649,69 @@ struct NativeToolResultEnvelopeTests {
         #expect(result.isError == true)
         #expect(result.sensitivity == .public)
         #expect(result.retention == .runOnly)
+    }
+
+    @Test
+    func validatorRejectsErrorFlagMismatch() throws {
+        let result = NativeToolResultBuilder.error(
+            manifestId: "native.executor.v1",
+            toolName: "native.executor",
+            toolCallId: "call_1",
+            code: "tool_executor_error",
+            displayText: "Tool failed",
+            auditSummary: "Tool failed"
+        )
+        let mismatched = ToolResultDTO(
+            displayText: result.displayText,
+            modelText: result.modelText,
+            structuredJson: result.structuredJson,
+            auditText: result.auditText,
+            sensitivity: result.sensitivity,
+            retention: result.retention,
+            isError: false
+        )
+
+        #expect(throws: NativeToolResultEnvelopeValidationError.self) {
+            try NativeToolResultEnvelopeValidator.validate(mismatched)
+        }
+    }
+
+    @Test
+    func validatorKeepsConservativeSensitivityAndRetention() throws {
+        let result = NativeToolResultBuilder.success(
+            manifestId: "native.files.read_attachment.v1",
+            toolName: "files.read_attachment",
+            toolCallId: "call_1",
+            displayText: "Read file",
+            modelText: "File text",
+            resultKind: "attachment_text",
+            resultPayload: ["attachment_id": .string("att_1")],
+            sourceKind: "attachment",
+            sourceId: "att_1",
+            displayName: "notes.txt",
+            attachmentIds: ["att_1"],
+            trustLevel: .untrustedExternalContent,
+            sensitivity: .private,
+            retention: .runOnly,
+            modelTextPolicy: "summarize_or_quote_only",
+            sourceLabel: "File",
+            auditSummary: "Read attachment",
+            auditRedaction: "metadata_only"
+        )
+        let weakened = ToolResultDTO(
+            displayText: result.displayText,
+            modelText: result.modelText,
+            structuredJson: result.structuredJson,
+            auditText: result.auditText,
+            sensitivity: .public,
+            retention: .session,
+            isError: false
+        )
+
+        let validated = try NativeToolResultEnvelopeValidator.validate(weakened)
+
+        #expect(validated.sensitivity == .private)
+        #expect(validated.retention == .runOnly)
     }
 }
 ```
@@ -558,12 +752,29 @@ public struct ToolResultEnvelopeV1: Codable, Sendable, Equatable {
         public var attachmentIds: [String]
         public var trustLevel: NativeToolTrustLevel
         public var sensitivity: SensitivityDTO
+        public var retention: RetentionPolicyDTO
+
+        private enum CodingKeys: String, CodingKey {
+            case sourceKind = "source_kind"
+            case sourceId = "source_id"
+            case displayName = "display_name"
+            case attachmentIds = "attachment_ids"
+            case trustLevel = "trust_level"
+            case sensitivity
+            case retention
+        }
     }
 
     public struct ContextPolicy: Codable, Sendable, Equatable {
         public var modelTextPolicy: String
         public var trustLevel: NativeToolTrustLevel
         public var sourceLabel: String
+
+        private enum CodingKeys: String, CodingKey {
+            case modelTextPolicy = "model_text_policy"
+            case trustLevel = "trust_level"
+            case sourceLabel = "source_label"
+        }
     }
 
     public struct Audit: Codable, Sendable, Equatable {
@@ -587,6 +798,8 @@ public enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
     case bool(Bool)
     case number(Double)
+    case array([JSONValue])
+    case object([String: JSONValue])
     case stringArray([String])
 
     public init(from decoder: Decoder) throws {
@@ -597,6 +810,10 @@ public enum JSONValue: Codable, Sendable, Equatable {
             self = .bool(value)
         } else if let value = try? container.decode(Double.self) {
             self = .number(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
         } else {
             self = .stringArray(try container.decode([String].self))
         }
@@ -610,6 +827,10 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .bool(let value):
             try container.encode(value)
         case .number(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .object(let value):
             try container.encode(value)
         case .stringArray(let value):
             try container.encode(value)
@@ -652,7 +873,8 @@ public enum NativeToolResultBuilder {
                 displayName: displayName,
                 attachmentIds: attachmentIds,
                 trustLevel: trustLevel,
-                sensitivity: sensitivity
+                sensitivity: sensitivity,
+                retention: retention
             ),
             contextPolicy: ToolResultEnvelopeV1.ContextPolicy(
                 modelTextPolicy: modelTextPolicy,
@@ -723,6 +945,68 @@ private extension ToolResultDTO {
         )
     }
 }
+
+public enum NativeToolResultEnvelopeValidationError: Error, Equatable {
+    case invalidStructuredJson
+    case isErrorMismatch
+}
+
+public enum NativeToolResultEnvelopeValidator {
+    public static func validate(_ result: ToolResultDTO) throws -> ToolResultDTO {
+        guard let data = result.structuredJson.data(using: .utf8),
+              let envelope = try? JSONDecoder().decode(ToolResultEnvelopeV1.self, from: data)
+        else {
+            throw NativeToolResultEnvelopeValidationError.invalidStructuredJson
+        }
+        let envelopeIsError = envelope.result["kind"] == .string("error")
+        guard envelopeIsError == result.isError else {
+            throw NativeToolResultEnvelopeValidationError.isErrorMismatch
+        }
+        return ToolResultDTO(
+            displayText: result.displayText,
+            modelText: result.modelText,
+            structuredJson: result.structuredJson,
+            auditText: result.auditText,
+            sensitivity: moreSensitive(result.sensitivity, envelope.provenance.sensitivity),
+            retention: moreRestrictive(result.retention, envelope.provenance.retention),
+            isError: result.isError
+        )
+    }
+
+    private static func moreSensitive(_ lhs: SensitivityDTO, _ rhs: SensitivityDTO) -> SensitivityDTO {
+        sensitivityRank(rhs) >= sensitivityRank(lhs) ? rhs : lhs
+    }
+
+    private static func sensitivityRank(_ value: SensitivityDTO) -> Int {
+        if value == .public {
+            0
+        } else if value == .private {
+            1
+        } else if value == .secret {
+            2
+        } else {
+            2
+        }
+    }
+
+    private static func moreRestrictive(_ lhs: RetentionPolicyDTO, _ rhs: RetentionPolicyDTO) -> RetentionPolicyDTO {
+        retentionRank(rhs) >= retentionRank(lhs) ? rhs : lhs
+    }
+
+    private static func retentionRank(_ value: RetentionPolicyDTO) -> Int {
+        if value == .session {
+            0
+        } else if value == .memoryCandidate {
+            1
+        } else if value == .auditOnly {
+            2
+        } else if value == .runOnly {
+            3
+        } else {
+            3
+        }
+    }
+}
 ```
 
 - [ ] **Step 4: Update executor error results**
@@ -780,7 +1064,7 @@ git commit -m "feat: add native tool result envelope"
 
 **Interfaces:**
 - Consumes: `NativeToolManifest`, `NativeToolResultBuilder`.
-- Produces: `WebFetchPolicyV1`, `WebFetchURLTextTool`, `WebFetching`.
+- Produces: `WebFetchPolicyV1`, `WebFetchURLTextTool`, `WebFetchResponse`, redirect-aware `WebFetching`.
 
 - [ ] **Step 1: Write failing policy tests**
 
@@ -820,6 +1104,40 @@ struct WebFetchPolicyTests {
 
         #expect(WebFetchPolicyV1.default.validate(localhost) == .denied(code: "web_fetch.private_network_denied"))
         #expect(WebFetchPolicyV1.default.validate(privateLan) == .denied(code: "web_fetch.private_network_denied"))
+    }
+
+    @Test
+    func rejectsRedirectToPrivateNetworkBeforeFollow() throws {
+        let source = URLRequest(url: try #require(URL(string: "https://example.com/article")))
+        let redirected = URLRequest(url: try #require(URL(string: "https://localhost:8080/private")))
+
+        let decision = WebFetchPolicyV1.default.validateRedirect(
+            from: source,
+            to: redirected,
+            redirectCount: 1
+        )
+
+        #expect(decision == .denied(code: "web_fetch.private_network_denied"))
+    }
+
+    @Test
+    func rejectsRedirectCountOverLimit() throws {
+        let source = URLRequest(url: try #require(URL(string: "https://example.com/article")))
+        let redirected = URLRequest(url: try #require(URL(string: "https://example.org/next")))
+        let policy = WebFetchPolicyV1(
+            maxResponseBytes: 512_000,
+            maxExtractedTextCharacters: 100_000,
+            timeoutSeconds: 20,
+            maxRedirects: 1
+        )
+
+        let decision = policy.validateRedirect(
+            from: source,
+            to: redirected,
+            redirectCount: 2
+        )
+
+        #expect(decision == .denied(code: "web_fetch.redirect_limit_exceeded"))
     }
 }
 ```
@@ -880,6 +1198,17 @@ public struct WebFetchPolicyV1: Sendable, Equatable {
         return .allowed
     }
 
+    public func validateRedirect(
+        from: URLRequest,
+        to redirectedRequest: URLRequest,
+        redirectCount: Int
+    ) -> WebFetchPolicyDecision {
+        guard redirectCount <= maxRedirects else {
+            return .denied(code: "web_fetch.redirect_limit_exceeded")
+        }
+        return validate(redirectedRequest)
+    }
+
     public func allowsMimeType(_ mimeType: String?) -> Bool {
         guard let mimeType = mimeType?.lowercased() else {
             return false
@@ -921,15 +1250,92 @@ Create `WebTools.swift`:
 import Foundation
 import LocalAgentBridge
 
+public struct WebFetchResponse: Sendable {
+    public var data: Data
+    public var response: URLResponse
+    public var redirectChain: [URLRequest]
+
+    public init(data: Data, response: URLResponse, redirectChain: [URLRequest]) {
+        self.data = data
+        self.response = response
+        self.redirectChain = redirectChain
+    }
+}
+
 public protocol WebFetching: Sendable {
-    func fetch(_ request: URLRequest) async throws -> (Data, URLResponse)
+    func fetch(_ request: URLRequest, policy: WebFetchPolicyV1) async throws -> WebFetchResponse
 }
 
 public struct URLSessionWebFetcher: WebFetching {
     public init() {}
 
-    public func fetch(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        try await URLSession.shared.data(for: request)
+    public func fetch(_ request: URLRequest, policy: WebFetchPolicyV1) async throws -> WebFetchResponse {
+        let delegate = RedirectRecordingDelegate(policy: policy)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        defer {
+            session.invalidateAndCancel()
+        }
+        let (data, response) = try await session.data(for: request)
+        if let code = delegate.redirectFailureCode {
+            throw WebFetchError.policyDenied(code)
+        }
+        return WebFetchResponse(data: data, response: response, redirectChain: delegate.redirectChain)
+    }
+}
+
+public enum WebFetchError: Error, Sendable, Equatable {
+    case policyDenied(String)
+}
+
+private final class RedirectRecordingDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private let policy: WebFetchPolicyV1
+    private var redirectCount: Int = 0
+    private var storedRedirectChain: [URLRequest] = []
+    private var storedFailureCode: String?
+
+    var redirectChain: [URLRequest] {
+        lock.withLock { storedRedirectChain }
+    }
+
+    var redirectFailureCode: String? {
+        lock.withLock { storedFailureCode }
+    }
+
+    init(policy: WebFetchPolicyV1) {
+        self.policy = policy
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        lock.lock()
+        redirectCount += 1
+        let count = redirectCount
+        storedRedirectChain.append(request)
+        lock.unlock()
+
+        let decision = policy.validateRedirect(
+            from: task.originalRequest ?? request,
+            to: request,
+            redirectCount: count
+        )
+        switch decision {
+        case .allowed:
+            completionHandler(request)
+        case .denied(let code):
+            lock.withLock {
+                storedFailureCode = code
+            }
+            completionHandler(nil)
+        }
     }
 }
 
@@ -1004,8 +1410,23 @@ public struct WebFetchURLTextTool: NativeTool {
         }
 
         do {
-            let (data, response) = try await fetcher.fetch(request)
-            guard data.count <= policy.maxResponseBytes else {
+            let fetched = try await fetcher.fetch(request, policy: policy)
+            for redirect in fetched.redirectChain {
+                switch policy.validate(redirect) {
+                case .allowed:
+                    break
+                case .denied(let code):
+                    return NativeToolResultBuilder.error(
+                        manifestId: "native.web.fetch_url_text.v1",
+                        toolName: "web.fetch_url_text",
+                        toolCallId: "unknown",
+                        code: code,
+                        displayText: "A redirect was blocked by the web fetch policy.",
+                        auditSummary: "Web fetch blocked redirect: \(code)"
+                    )
+                }
+            }
+            guard fetched.data.count <= policy.maxResponseBytes else {
                 return NativeToolResultBuilder.error(
                     manifestId: "native.web.fetch_url_text.v1",
                     toolName: "web.fetch_url_text",
@@ -1015,7 +1436,7 @@ public struct WebFetchURLTextTool: NativeTool {
                     auditSummary: "Web fetch failed: response too large"
                 )
             }
-            if let http = response as? HTTPURLResponse,
+            if let http = fetched.response as? HTTPURLResponse,
                !policy.allowsMimeType(http.mimeType) {
                 return NativeToolResultBuilder.error(
                     manifestId: "native.web.fetch_url_text.v1",
@@ -1026,7 +1447,7 @@ public struct WebFetchURLTextTool: NativeTool {
                     auditSummary: "Web fetch failed: MIME denied"
                 )
             }
-            let text = String(decoding: data, as: UTF8.self)
+            let text = String(decoding: fetched.data, as: UTF8.self)
             let excerpt = String(text.prefix(policy.maxExtractedTextCharacters))
             return NativeToolResultBuilder.success(
                 manifestId: "native.web.fetch_url_text.v1",
@@ -1106,7 +1527,7 @@ git commit -m "feat: add bounded web fetch policy"
 - Create: `local-ios-agent/toolkit/Tests/LocalNativeToolkitTests/NativeAttachmentStoreTests.swift`
 
 **Interfaces:**
-- Produces: `NativeAttachmentRecord`, `NativeAttachmentAccessState`, `InMemoryNativeAttachmentStore`, `PendingUserInteractionRecord`, `InMemoryPendingUserInteractionStore`.
+- Produces: `NativeAttachmentRecord`, `NativeAttachmentAccessState`, `InMemoryNativeAttachmentStore`, `PendingUserInteractionRecord`, `PendingUserInteractionStore`, `FileBackedPendingUserInteractionStore`, `InMemoryPendingUserInteractionStore`, `PendingInteractionPresentationGate`.
 
 - [ ] **Step 1: Write failing store tests**
 
@@ -1159,6 +1580,58 @@ struct NativeAttachmentStoreTests {
 
         #expect(restored?.id == "pending_1")
         #expect(restored?.interactionKind == .photosPicker)
+    }
+
+    @Test
+    func fileBackedPendingInteractionStoreSurvivesRecreation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "pending-interactions-\(UUID().uuidString)")
+        let record = PendingUserInteractionRecord(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.files.pick_document.v1",
+            interactionKind: .filePicker,
+            state: .requested,
+            resumablePayloadSummary: "Pick a document",
+            expiresAtMillis: nil
+        )
+
+        let writer = try FileBackedPendingUserInteractionStore(directory: directory)
+        try await writer.put(record)
+        let reader = try FileBackedPendingUserInteractionStore(directory: directory)
+        let restored = try await reader.pending(runId: "run_1", toolCallId: "call_1")
+
+        #expect(restored?.id == "pending_1")
+        #expect(restored?.state == .requested)
+    }
+
+    @Test
+    func presentationGatePersistsBeforePresentingSystemUI() async throws {
+        let store = InMemoryPendingUserInteractionStore()
+        let record = PendingUserInteractionRecord(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: .photosPicker,
+            state: .requested,
+            resumablePayloadSummary: "Pick images",
+            expiresAtMillis: nil
+        )
+        var persistedBeforePresentation = false
+
+        try await PendingInteractionPresentationGate.persistBeforePresenting(
+            record,
+            store: store
+        ) {
+            persistedBeforePresentation = try await store.pending(
+                runId: "run_1",
+                toolCallId: "call_1"
+            ) != nil
+        }
+
+        #expect(persistedBeforePresentation)
     }
 }
 ```
@@ -1299,19 +1772,73 @@ public struct PendingUserInteractionRecord: Codable, Sendable, Equatable, Identi
     }
 }
 
-public actor InMemoryPendingUserInteractionStore {
+public protocol PendingUserInteractionStore: Sendable {
+    func put(_ record: PendingUserInteractionRecord) async throws
+    func pending(runId: String, toolCallId: String) async throws -> PendingUserInteractionRecord?
+}
+
+public actor InMemoryPendingUserInteractionStore: PendingUserInteractionStore {
     private var records: [String: PendingUserInteractionRecord] = [:]
 
     public init() {}
 
-    public func put(_ record: PendingUserInteractionRecord) {
+    public func put(_ record: PendingUserInteractionRecord) async throws {
         records[record.id] = record
     }
 
-    public func pending(runId: String, toolCallId: String) -> PendingUserInteractionRecord? {
+    public func pending(runId: String, toolCallId: String) async throws -> PendingUserInteractionRecord? {
         records.values.first { record in
             record.runId == runId && record.toolCallId == toolCallId
         }
+    }
+}
+
+public actor FileBackedPendingUserInteractionStore: PendingUserInteractionStore {
+    private let directory: URL
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    public init(directory: URL) throws {
+        self.directory = directory
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    public func put(_ record: PendingUserInteractionRecord) async throws {
+        let data = try encoder.encode(record)
+        try data.write(to: fileURL(for: record.id), options: [.atomic])
+    }
+
+    public func pending(runId: String, toolCallId: String) async throws -> PendingUserInteractionRecord? {
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        for url in urls where url.pathExtension == "json" {
+            let data = try Data(contentsOf: url)
+            let record = try decoder.decode(PendingUserInteractionRecord.self, from: data)
+            if record.runId == runId && record.toolCallId == toolCallId {
+                return record
+            }
+        }
+        return nil
+    }
+
+    private func fileURL(for id: String) -> URL {
+        directory.appending(path: "\(id).json")
+    }
+}
+
+public enum PendingInteractionPresentationGate {
+    public static func persistBeforePresenting(
+        _ record: PendingUserInteractionRecord,
+        store: any PendingUserInteractionStore,
+        present: () async throws -> Void
+    ) async throws {
+        try await store.put(record)
+        try await present()
     }
 }
 ```
@@ -1357,19 +1884,27 @@ Add to `MetaToolsTests.swift`:
 
 ```swift
 @Test
-func listToolsReturnsEnvelopeWithTrustedToolResult() async throws {
+func listToolsReturnsEnvelopeWithTrustedToolResultAndToolArray() async throws {
     let tool = NativeListToolsTool(catalogProvider: {
-        try NativeToolCatalog(tools: [])
+        try NativeToolCatalog(tools: [
+            MetaStubTool(name: "zeta.tool", riskLevel: .confirm, permissionScope: "zeta.scope"),
+            MetaStubTool(name: "alpha.tool", riskLevel: .readOnly, permissionScope: nil),
+        ])
     })
 
     let result = await tool.execute(argumentsJson: "{}")
     let data = try #require(result.structuredJson.data(using: .utf8))
     let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let payload = try #require(object["result"] as? [String: Any])
+    let tools = try #require(payload["tools"] as? [[String: Any]])
     let provenance = try #require(object["provenance"] as? [String: Any])
 
     #expect(object["schema_version"] as? Int == 1)
     #expect(object["manifest_id"] as? String == "native.native.list_tools.v1")
     #expect(provenance["trust_level"] as? String == "trusted_tool_result")
+    #expect(tools.map { $0["name"] as? String } == ["alpha.tool", "zeta.tool"])
+    #expect(tools[0]["risk_level"] as? String == "read_only")
+    #expect(tools[1]["permission_scope"] as? String == "zeta.scope")
     #expect(result.isError == false)
 }
 ```
@@ -1380,7 +1915,7 @@ Run:
 
 ```bash
 cd local-ios-agent/toolkit
-swift test --filter MetaToolsTests/listToolsReturnsEnvelopeWithTrustedToolResult
+swift test --filter MetaToolsTests/listToolsReturnsEnvelopeWithTrustedToolResultAndToolArray
 ```
 
 Expected: FAIL because the tool still returns older structured JSON.
@@ -1426,7 +1961,16 @@ NativeToolResultBuilder.success(
     displayText: displayText,
     modelText: modelText,
     resultKind: "native_tool_status",
-    resultPayload: ["count": .number(Double(toolCount))],
+    resultPayload: [
+        "count": .number(Double(toolCount)),
+        "tools": .array(toolSummaries.map { summary in
+            .object([
+                "name": .string(summary.name),
+                "risk_level": .string(riskLevelString(summary.riskLevel)),
+                "permission_scope": summary.permissionScope.map(JSONValue.string) ?? .string(""),
+            ])
+        }),
+    ],
     sourceKind: "tool",
     sourceId: schema.name,
     displayName: manifest.title,
@@ -1439,6 +1983,21 @@ NativeToolResultBuilder.success(
     auditSummary: manifest.audit.label,
     auditRedaction: manifest.audit.resultSummaryPolicy.rawValue
 )
+```
+
+Add this local helper in `MetaTools.swift`:
+
+```swift
+private func riskLevelString(_ riskLevel: NativeToolRiskLevel) -> String {
+    switch riskLevel {
+    case .readOnly:
+        "read_only"
+    case .confirm:
+        "confirm"
+    case .destructive:
+        "destructive"
+    }
+}
 ```
 
 Use the same pattern for Calendar and Reminder tools, with their manifest ids and permission scopes:
@@ -1655,8 +2214,10 @@ git commit -m "feat: pin runs to agent profile revisions"
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift`
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift`
 - Modify: `local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State/AgentViewState.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/ChatInteractionCoordinator.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceTests.swift`
 - Create: `local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/AgentProfileRevisionDTOTests.swift`
 
 **Interfaces:**
@@ -1713,6 +2274,47 @@ struct AgentProfileRevisionDTOTests {
 }
 ```
 
+Add these runtime tests to `AgentRuntimeServiceTests.swift`:
+
+```swift
+@Test("coordinator path requires selected profile revision")
+@MainActor
+func coordinatorPathRequiresSelectedProfileRevision() async throws {
+    let coordinator = RecordingChatInteractionCoordinator()
+    let service = AgentRuntimeService(
+        runtimeClient: ScriptedRuntimeClient(),
+        toolDriver: MinimalHostToolDriver(),
+        coordinator: coordinator
+    )
+
+    await #expect(throws: AgentRuntimeServiceError.missingAgentProfileRevision) {
+        _ = try await service.sendMessage(
+            "hello",
+            state: AgentViewState(phase: .ready, currentSessionId: "session_1")
+        )
+    }
+
+    #expect(coordinator.sentMessages.isEmpty)
+}
+
+@Test("coordinator path passes selected profile revision")
+@MainActor
+func coordinatorPathPassesSelectedProfileRevision() async throws {
+    let coordinator = RecordingChatInteractionCoordinator()
+    let service = AgentRuntimeService(
+        runtimeClient: ScriptedRuntimeClient(),
+        toolDriver: MinimalHostToolDriver(),
+        coordinator: coordinator
+    )
+    var state = AgentViewState(phase: .ready, currentSessionId: "session_1")
+    state.selectedAgentProfileRevisionId = 7
+
+    _ = try await service.sendMessage("hello", state: state)
+
+    #expect(coordinator.agentProfileRevisionIds == [7])
+}
+```
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run:
@@ -1724,7 +2326,16 @@ swift test --filter AgentProfileRevisionDTOTests
 
 Expected: FAIL because DTO initializers do not accept `profileRevisionId`.
 
-- [ ] **Step 3: Add DTO fields**
+Run:
+
+```bash
+cd local-ios-agent
+xcodebuild test -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:LocalAgentAppTests/AgentRuntimeServiceTests
+```
+
+Expected: FAIL because `AgentRuntimeServiceError.missingAgentProfileRevision`, `selectedAgentProfileRevisionId`, and coordinator revision parameters do not exist.
+
+- [ ] **Step 3: Add DTO and state fields**
 
 In `AgentOSDTOs.swift`, change `StartExecutionRequestDTO`:
 
@@ -1782,6 +2393,12 @@ public struct AgentProfileDTO: Codable, Equatable, Sendable {
 }
 ```
 
+In `AgentViewState.swift`, add:
+
+```swift
+var selectedAgentProfileRevisionId: UInt64?
+```
+
 - [ ] **Step 4: Update mocks and coordinator**
 
 In `AgentBuilderClient.swift`, update mock publish:
@@ -1814,11 +2431,50 @@ StartExecutionRequestDTO(
 )
 ```
 
-In `AgentRuntimeService`, pass the selected profile revision from state. If no revision is loaded yet, use `1` only inside the existing development seed path and add a comment:
+In `AgentRuntimeServiceError`, add:
 
 ```swift
-// Development seed profile until Agent Builder publish persists real revisions.
-let profileRevisionId = state.selectedAgentProfileRevisionId ?? 1
+case missingAgentProfileRevision
+```
+
+In `AgentRuntimeService`, reject missing profile revision before calling the coordinator:
+
+```swift
+guard let profileRevisionId = state.selectedAgentProfileRevisionId else {
+    throw AgentRuntimeServiceError.missingAgentProfileRevision
+}
+let result = try await coordinator.sendMessage(
+    text: text,
+    sessionId: state.currentSessionId,
+    parentEventId: state.draft.targetParentEventId,
+    agentProfileId: state.selectedAgentProfileId,
+    profileRevisionId: profileRevisionId,
+    options: state.executionOptions,
+    onEvent: { event in
+        await collector.apply(event)
+        await onEvent(event)
+    }
+)
+```
+
+In `RecordingChatInteractionCoordinator`, add:
+
+```swift
+private(set) var agentProfileRevisionIds: [UInt64] = []
+```
+
+and append `profileRevisionId` inside the test double's `sendMessage`.
+
+Only seed/mock clients may default to revision `1`. Put that fallback in `MockAgentBuilderClient.publishProfile` and fixture setup, not in `AgentRuntimeService`.
+
+```swift
+public func publishProfile(_ draft: AgentBuilderDraftDTO) async throws -> AgentProfileDTO {
+    AgentProfileDTO(
+        profileId: draft.profileId,
+        profileRevisionId: publishedRevision,
+        displayName: model.displayName
+    )
+}
 ```
 
 - [ ] **Step 5: Run Swift bridge tests**
@@ -1832,14 +2488,25 @@ swift test --filter AgentProfileRevisionDTOTests
 
 Expected: PASS.
 
+Run:
+
+```bash
+cd local-ios-agent
+xcodebuild test -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:LocalAgentAppTests/AgentRuntimeServiceTests
+```
+
+Expected: PASS.
+
 - [ ] **Step 6: Commit**
 
 ```bash
 git add local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift \
   local-ios-agent/toolkit/Sources/LocalAgentBridge/AgentBuilderClient.swift \
   local-ios-agent/toolkit/Sources/LocalAgentBridge/MockRuntimeClient.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentApp/State/AgentViewState.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/ChatInteractionCoordinator.swift \
   local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Runtime/AgentRuntimeService.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Runtime/AgentRuntimeServiceTests.swift \
   local-ios-agent/toolkit/Tests/LocalAgentBridgeTests/AgentProfileRevisionDTOTests.swift
 git commit -m "feat: propagate agent profile revisions in swift"
 ```
@@ -2053,6 +2720,15 @@ cargo test
 ```
 
 Expected: all Rust tests pass.
+
+Run:
+
+```bash
+cd local-ios-agent
+xcodebuild test -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp -destination 'platform=iOS Simulator,name=iPhone 16'
+```
+
+Expected: LocalAgentApp and LocalAgentAppTests build and pass.
 
 Run:
 
