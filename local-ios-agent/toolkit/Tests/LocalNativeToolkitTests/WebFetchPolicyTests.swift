@@ -16,6 +16,11 @@ struct WebFetchPolicyTests {
 
     @Test
     func rejectsUnsafeSchemesAndCredentials() throws {
+        let httpDecision = WebFetchPolicyV1.default.validate(
+            URLRequest(url: try #require(URL(string: "http://example.com/article")))
+        )
+        #expect(httpDecision == .denied(code: "web_fetch.scheme_denied"))
+
         let fileDecision = WebFetchPolicyV1.default.validate(URLRequest(url: URL(fileURLWithPath: "/etc/passwd")))
         #expect(fileDecision == .denied(code: "web_fetch.scheme_denied"))
 
