@@ -110,6 +110,14 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
                 else {
                     return ChatInteractionResult(runId: runId, state: .waitingTool)
                 }
+                if let pendingEvent = result.pendingInteractionEvent(
+                    runId: runId,
+                    request: request,
+                    preparedTurn: preparedTurn
+                ) {
+                    await onEvent(pendingEvent)
+                    return ChatInteractionResult(runId: runId, state: .suspended)
+                }
                 _ = try await execution.submitToolResult(runId: request.runId, result: result)
                 continuationIndex += 1
             case .suspended:
@@ -206,6 +214,59 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
 
     func cancelRun(runId: String) async throws {
         _ = try await execution.cancelRun(runId: runId)
+    }
+}
+
+private extension ToolResultDTO {
+    func pendingInteractionEvent(
+        runId: String,
+        request: ToolExecutionRequestDTO,
+        preparedTurn: PreparedUserTurnDTO
+    ) -> RuntimeEventDTO? {
+        guard let envelope = structuredJSONObject,
+              let result = envelope["result"] as? [String: Any],
+              result["kind"] as? String == "pending_user_interaction"
+        else {
+            return nil
+        }
+
+        let interactionKind = result["interaction_kind"] as? String ?? "system_confirmation"
+        let interactionId = "pending:\(runId):\(request.toolCallId)"
+        let payload = jsonString([
+            "type": "pending_user_interaction",
+            "interaction_id": interactionId,
+            "tool_name": request.toolName,
+            "tool_call_id": request.toolCallId,
+            "interaction_kind": interactionKind,
+            "manifest_id": envelope["manifest_id"] as? String ?? "",
+            "title": displayText,
+        ])
+
+        return RuntimeEventDTO(
+            id: interactionId,
+            sessionId: preparedTurn.sessionId,
+            parentId: preparedTurn.userMessageId,
+            runId: runId,
+            sequence: 0,
+            depth: 0,
+            kind: .runSuspended,
+            payload: payload,
+            blobRefs: []
+        )
+    }
+
+    private var structuredJSONObject: [String: Any]? {
+        guard let data = structuredJson.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func jsonString(_ object: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return #"{"type":"pending_user_interaction"}"#
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 

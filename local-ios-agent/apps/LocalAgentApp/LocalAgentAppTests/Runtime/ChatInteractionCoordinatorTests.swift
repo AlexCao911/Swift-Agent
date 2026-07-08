@@ -1,4 +1,6 @@
+import Foundation
 import LocalAgentBridge
+import LocalNativeToolkit
 import Testing
 @testable import LocalAgentApp
 
@@ -194,6 +196,75 @@ struct ChatInteractionCoordinatorTests {
         ])
     }
 
+    @Test("pending interaction tool result suspends without submitting")
+    func pendingInteractionToolResultSuspendsWithoutSubmitting() async throws {
+        let conversation = FakeConversationDomain()
+        let execution = FakeExecutionDomain(
+            eventBatches: [
+                [
+                    runtimeEvent(
+                        id: "tool_call_entry",
+                        runId: "run_1",
+                        sequence: 1,
+                        kind: .toolCallRequested,
+                        payload: #"{"tool_call_id":"call_picker","tool_name":"photos.pick_images"}"#
+                    ),
+                    runtimeEvent(
+                        id: "waiting",
+                        runId: "run_1",
+                        sequence: 2,
+                        kind: .runWaitingTool,
+                        payload: "run.waiting_tool"
+                    ),
+                ],
+            ],
+            pendingToolRequests: [
+                ToolExecutionRequestDTO(
+                    runId: "run_1",
+                    sessionId: "session_1",
+                    toolCallEntryId: "tool_call_entry",
+                    toolCallId: "call_picker",
+                    toolName: "photos.pick_images",
+                    argumentsJson: "{}"
+                ),
+            ]
+        )
+        let coordinator = ChatInteractionCoordinator(
+            conversation: conversation,
+            execution: execution,
+            toolDriver: PendingInteractionToolDriver()
+        )
+        var observed: [RuntimeEventDTO] = []
+
+        let result = try await coordinator.sendMessage(
+            text: "pick photos",
+            sessionId: "session_1",
+            parentEventId: nil,
+            agentProfileId: "profile_1",
+            agentProfileRevisionId: 1,
+            options: ExecutionOptionsDTO(),
+            onEvent: { observed.append($0) }
+        )
+
+        #expect(result.state == .suspended)
+        #expect(execution.submittedToolResults.isEmpty)
+        let suspended = try #require(observed.last)
+        #expect(suspended.kind == .runSuspended)
+        #expect(suspended.sequence == 0)
+        let payload = try decodedJSONObject(suspended.payload)
+        #expect(payload["type"] as? String == "pending_user_interaction")
+        #expect(payload["tool_name"] as? String == "photos.pick_images")
+        #expect(payload["tool_call_id"] as? String == "call_picker")
+        #expect(payload["interaction_kind"] as? String == "photos_picker")
+        #expect(RunInlineCardProjection.project(events: [suspended]) == [
+            .pendingInteraction(PendingInteractionCardState(
+                id: payload["interaction_id"] as? String ?? "",
+                toolName: "photos.pick_images",
+                title: "Choose images to continue."
+            )),
+        ])
+    }
+
     @Test("approval and cancellation pass through execution domain")
     func approvalAndCancellationPassThroughExecutionDomain() async throws {
         let execution = FakeExecutionDomain()
@@ -353,6 +424,43 @@ private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
 
 private enum CommitFailure: Error {
     case transient
+}
+
+private struct PendingInteractionToolDriver: HostToolDriving {
+    func schemas() async -> [ToolSchemaDTO] {
+        []
+    }
+
+    func execute(_ request: ToolExecutionRequestDTO, continuationIndex: Int) async -> ToolResultDTO? {
+        NativeToolResultBuilder.success(
+            manifestId: "native.photos.pick_images.v1",
+            toolName: request.toolName,
+            toolCallId: request.toolCallId,
+            displayText: "Choose images to continue.",
+            modelText: "\(request.toolName) requires user interaction: photos_picker.",
+            resultKind: "pending_user_interaction",
+            resultPayload: [
+                "interaction_kind": .string("photos_picker"),
+                "status": .string("requested"),
+            ],
+            sourceKind: "app",
+            sourceId: request.toolName,
+            displayName: "Pick Images",
+            attachmentIds: [],
+            trustLevel: .trustedAppPolicy,
+            sensitivity: .public,
+            retention: .runOnly,
+            modelTextPolicy: "status_only",
+            sourceLabel: "App",
+            auditSummary: "\(request.toolName) requested user interaction.",
+            auditRedaction: "metadata_only"
+        )
+    }
+}
+
+private func decodedJSONObject(_ json: String) throws -> [String: Any] {
+    let data = try #require(json.data(using: .utf8))
+    return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
 private func conversationRunFrameRef() -> ConversationRunFrameRefDTO {

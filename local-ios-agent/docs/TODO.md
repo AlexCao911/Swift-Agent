@@ -45,6 +45,8 @@ Done in the current MVP branch:
 - AppShell owns product routing across Chat, Agents, Tools, Models, and Settings.
 - Builder handoff updates Chat with exact `profile_id` and `profile_revision_id`.
 - Conversation Workspace shows active agent revision and synchronizes runtime selection before send.
+- Coordinator suspends runs on pending-interaction tool envelopes without submitting them as normal
+  tool observations.
 - Inline run cards project approval, pending interaction, permission repair, missing model, and waiting-tool states.
 - Context Inspector shows context sources, trust labels, token estimates, and untrusted external-content warnings.
 - Tool Center shows manifest-derived tool rows, permission readiness, approval policy, and mode filters.
