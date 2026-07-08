@@ -53,6 +53,73 @@ struct RustRuntimeAppIntegrationTests {
         #expect(state.messages.map(\.text).contains("Mock response to: hello"))
     }
 
+    @Test("App bootstrapper default store creates usable runtime")
+    func appBootstrapperDefaultStoreCreatesUsableRuntime() async throws {
+        let container = try AppBootstrapper.makeContainer(environment: [:])
+        let service = container.runtimeService
+
+        var state = try await service.prepare()
+        state = try await service.sendMessage("hello", state: state)
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text).contains("Mock response to: hello"))
+    }
+
+    @Test("App bootstrapper default container exposes visible native tools")
+    @MainActor
+    func appBootstrapperDefaultContainerExposesVisibleNativeTools() async throws {
+        let container = try AppBootstrapper.makeContainer(environment: [:])
+        let viewModel = container.makeToolCenterViewModel()
+
+        await viewModel.reload()
+
+        let toolNames = viewModel.rows.map(\.name)
+        #expect(toolNames.contains("native.list_tools"))
+        #expect(toolNames.contains("native.permission_status"))
+        #expect(toolNames.contains("web.fetch_url_text"))
+        #expect(toolNames.contains("files.pick_document"))
+        #expect(toolNames.contains("photos.pick_images"))
+    }
+
+    @Test("App bootstrapper recovers from unreadable persistent store")
+    func appBootstrapperRecoversFromUnreadablePersistentStore() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LocalAgentBrokenStore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sqliteURL = directory.appendingPathComponent("agent.sqlite")
+        try Data("not a sqlite database".utf8).write(to: sqliteURL)
+
+        let container = try AppBootstrapper.makeContainer(
+            environment: [:],
+            store: .sqlite(path: sqliteURL.path)
+        )
+        let service = container.runtimeService
+
+        var state = try await service.prepare()
+        state = try await service.sendMessage("hello", state: state)
+
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text).contains("Mock response to: hello"))
+    }
+
+    @Test("degraded bootstrap container keeps chat and tools usable")
+    @MainActor
+    func degradedBootstrapContainerKeepsChatAndToolsUsable() async throws {
+        let container = try AppBootstrapper.makeDegradedContainer(
+            error: RuntimeBridgeError(kind: "ffi", message: "failed to create runtime bridge")
+        )
+        let toolCenter = container.makeToolCenterViewModel()
+
+        await toolCenter.reload()
+        var state = try await container.runtimeService.prepare()
+        state = try await container.runtimeService.sendMessage("hello", state: state)
+
+        #expect(toolCenter.rows.contains { $0.name == "native.list_tools" })
+        #expect(toolCenter.rows.contains { $0.name == "web.fetch_url_text" })
+        #expect(state.phase == .ready)
+        #expect(state.messages.contains { $0.role == .assistant })
+    }
+
     @Test("App bootstrapper keeps legacy streaming path by default")
     func appBootstrapperKeepsLegacyStreamingPathByDefault() async throws {
         let container = try AppBootstrapper.makeContainer(environment: [:], store: .inMemory)
