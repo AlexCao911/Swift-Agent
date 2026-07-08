@@ -123,28 +123,44 @@ enum AppBootstrapper {
         providers: [RustRuntimeProviderConfiguration],
         store: RustRuntimeStoreConfiguration
     ) throws -> RustRuntimeClient {
-        func client(for store: RustRuntimeStoreConfiguration) throws -> RustRuntimeClient {
+        let requestedProviderId = runtimeProviderId(environment: environment, providers: providers)
+
+        func client(
+            for store: RustRuntimeStoreConfiguration,
+            providerId: String
+        ) throws -> RustRuntimeClient {
             try RustRuntimeClient(configuration: RustRuntimeConfiguration(
                 systemPrompt: AgentPromptDefaults.systemPrompt,
                 runtimePolicy: AgentPromptDefaults.runtimePolicy,
-                providerId: runtimeProviderId(environment: environment, providers: providers),
+                providerId: providerId,
                 store: store,
                 providers: providers,
                 agentOS: agentOSConfiguration(environment: environment)
             ))
         }
 
+        func resilientClient(for store: RustRuntimeStoreConfiguration) throws -> RustRuntimeClient {
+            do {
+                return try client(for: store, providerId: requestedProviderId)
+            } catch {
+                guard requestedProviderId != "mock" else {
+                    throw error
+                }
+                return try client(for: store, providerId: "mock")
+            }
+        }
+
         do {
-            return try client(for: store)
+            return try resilientClient(for: store)
         } catch {
             guard case .sqlite(let path) = store else {
                 throw error
             }
 
-            let inMemoryClient = try client(for: .inMemory)
+            let inMemoryClient = try resilientClient(for: .inMemory)
             do {
                 try recoverSQLiteStore(atPath: path)
-                return try client(for: store)
+                return try resilientClient(for: store)
             } catch {
                 return inMemoryClient
             }
@@ -331,18 +347,34 @@ enum AppBootstrapper {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         providers: [RustRuntimeProviderConfiguration]? = nil
     ) -> String {
+        let configuredProviders = providers ?? simulatorProviders(environment: environment)
         if let providerId = environment["LOCAL_AGENT_DEFAULT_PROVIDER_ID"], !providerId.isEmpty {
+            if configuredProviders.contains(where: { $0.bootstrapProviderId == providerId }) {
+                return providerId
+            }
+            if providerId == "local_llm",
+               let localProviderId = configuredProviders.first(where: { provider in
+                   switch provider {
+                   case .localLLM, .namedLocalLLM:
+                       true
+                   default:
+                       false
+                   }
+               })?.bootstrapProviderId {
+                return localProviderId
+            }
             return providerId
         }
 
-        let configuredProviders = providers ?? simulatorProviders(environment: environment)
-        if configuredProviders.contains(where: { provider in
-            if case .localLLM = provider {
-                return true
+        if let localProviderId = configuredProviders.first(where: { provider in
+            switch provider {
+            case .localLLM, .namedLocalLLM:
+                true
+            default:
+                false
             }
-            return false
-        }) {
-            return "local_llm"
+        })?.bootstrapProviderId {
+            return localProviderId
         }
 
         return "mock"
@@ -351,19 +383,32 @@ enum AppBootstrapper {
     static func simulatorProviders(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [RustRuntimeProviderConfiguration] {
-        guard let modelConfigJson = environment["LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON"],
-              !modelConfigJson.isEmpty
-        else {
-            return []
+        var providers: [RustRuntimeProviderConfiguration] = []
+
+        let legacyLlamaConfig = environment["LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON"]
+        let llamaConfig = environment["LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON"] ?? legacyLlamaConfig
+        if let llamaConfig, !llamaConfig.isEmpty {
+            providers.append(.namedLocalLLM(
+                providerId: "local_llm.llama_cpp",
+                displayName: "llama.cpp",
+                model: "local.gguf.simulator",
+                modelConfigJson: llamaConfig,
+                maxContextTokens: 2048
+            ))
         }
 
-        return [
-            .localLLM(
-                model: "local.gguf.simulator",
-                modelConfigJson: modelConfigJson,
+        if let litertConfig = environment["LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON"],
+           !litertConfig.isEmpty {
+            providers.append(.namedLocalLLM(
+                providerId: "local_llm.litert",
+                displayName: "LiteRT",
+                model: "local.litert.simulator",
+                modelConfigJson: litertConfig,
                 maxContextTokens: 2048
-            ),
-        ]
+            ))
+        }
+
+        return providers
     }
 }
 

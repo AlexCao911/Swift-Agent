@@ -76,6 +76,8 @@ Remaining:
 
 ### Model Download And Provider Setup
 
+- Connect Swift HostInference to Rust execution so selected local llama.cpp/LiteRT engines can serve
+  real chat runs without using the retired Rust direct C ABI path.
 - Add local model catalog, download state, storage management, and engine/model compatibility checks.
 - Add cloud provider API-key setup, validation, and per-provider readiness.
 - Persist active model/provider selection and connect it to runtime defaults.

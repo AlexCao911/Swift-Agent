@@ -1876,6 +1876,10 @@ enum RuntimeProviderConfigJson {
     },
     #[serde(rename = "local_llm")]
     LocalLlm {
+        #[serde(default)]
+        provider_id: Option<String>,
+        #[serde(default)]
+        display_name: Option<String>,
         model: String,
         model_config_json: String,
         max_context_tokens: usize,
@@ -1898,29 +1902,40 @@ impl RuntimeProviderConfigJson {
                 },
             ),
             Self::LocalLlm {
+                provider_id,
+                display_name,
                 model,
                 model_config_json,
                 max_context_tokens,
             } => {
+                let provider_id = provider_id
+                    .clone()
+                    .unwrap_or_else(|| "local_llm".to_string());
+                let display_name = display_name
+                    .clone()
+                    .unwrap_or_else(|| "Local LLM".to_string());
                 let model = model.clone();
                 let model_config_json = model_config_json.clone();
                 let max_context_tokens = *max_context_tokens;
+                let tokenizer_id = provider_id.clone();
+                let provider_factory_id = provider_id.clone();
                 registry.register_fallible_factory(
                     ProviderProfile {
-                        id: "local_llm".into(),
-                        display_name: "Local LLM".into(),
+                        id: provider_id,
+                        display_name,
                         kind: ProviderKind::LocalLlm,
                         max_context_tokens,
                     },
                     move || {
                         Ok(ProviderBundle {
-                            provider: Box::new(LocalLLMProvider::new(
+                            provider: Box::new(LocalLLMProvider::with_provider_id(
+                                provider_factory_id.clone(),
                                 model.clone(),
                                 model_config_json.clone(),
                                 Box::new(CAbiLocalInferenceBackend::new()?),
                             )),
                             tokenizer: Box::new(BridgeWhitespaceTokenizer::new(
-                                "local_llm",
+                                tokenizer_id.clone(),
                                 max_context_tokens,
                             )),
                         })

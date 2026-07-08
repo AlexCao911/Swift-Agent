@@ -126,6 +126,40 @@ struct RustRuntimeClientContractTests {
     }
 
     @Test
+    func rustRuntimeConfigurationEncodesNamedLocalLLMProviderConfiguration() throws {
+        let provider = RustRuntimeProviderConfiguration.namedLocalLLM(
+            providerId: "local_llm.litert",
+            displayName: "LiteRT",
+            model: "local.litert.simulator",
+            modelConfigJson: #"{"backend":"litert","model_path":"/tmp/model.task"}"#,
+            maxContextTokens: 1024
+        )
+        let data = try JSONEncoder().encode(provider)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(RustRuntimeProviderConfiguration.self, from: data)
+
+        #expect(provider.bootstrapProviderId == "local_llm.litert")
+        #expect(object["kind"] as? String == "local_llm")
+        #expect(object["provider_id"] as? String == "local_llm.litert")
+        #expect(object["display_name"] as? String == "LiteRT")
+        #expect(decoded == provider)
+    }
+
+    @Test
+    func namedLocalLLMProviderDecodingUsesRustCompatibleDefaults() throws {
+        let data = Data(#"{"kind":"local_llm","provider_id":"local_llm.llama_cpp","model":"local.gguf","model_config_json":"{}","max_context_tokens":2048}"#.utf8)
+        let provider = try JSONDecoder().decode(RustRuntimeProviderConfiguration.self, from: data)
+
+        #expect(provider == .namedLocalLLM(
+            providerId: "local_llm.llama_cpp",
+            displayName: "Local LLM",
+            model: "local.gguf",
+            modelConfigJson: "{}",
+            maxContextTokens: 2048
+        ))
+    }
+
+    @Test
     func rustRuntimeClientDecodesResponsesEncodesRequestsAndFreesStrings() async throws {
         let probe = RuntimeCFunctionProbe()
         var client: RustRuntimeClient? = try RustRuntimeClient(functions: probe.table())

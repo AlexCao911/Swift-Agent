@@ -3,6 +3,7 @@ import SwiftUI
 struct ModelCenterView: View {
     @Bindable var viewModel: ModelCenterViewModel
     @Bindable var shellViewModel: AppShellViewModel
+    @Bindable var chatViewModel: AgentViewModel
 
     var body: some View {
         List {
@@ -34,9 +35,28 @@ struct ModelCenterView: View {
             }
 
             Section("Runtime Defaults") {
-                LabeledContent("Temperature", value: "Default")
+                LabeledContent("Temperature") {
+                    Text(chatViewModel.state.modelSettings.temperature.formatted(.number.precision(.fractionLength(2))))
+                        .foregroundStyle(.secondary)
+                }
+                Slider(
+                    value: $chatViewModel.state.modelSettings.temperature,
+                    in: 0...2,
+                    step: 0.05
+                )
+
+                LabeledContent("Top-p") {
+                    Text(chatViewModel.state.modelSettings.topP.formatted(.number.precision(.fractionLength(2))))
+                        .foregroundStyle(.secondary)
+                }
+                Slider(
+                    value: $chatViewModel.state.modelSettings.topP,
+                    in: 0.05...1,
+                    step: 0.01
+                )
+
                 LabeledContent("Context Budget", value: "Runtime policy")
-                Text("Provider setup and model downloads are explicit setup actions.")
+                Text("Sampling changes apply to the next run. Context budget is still controlled by the Rust runtime policy.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

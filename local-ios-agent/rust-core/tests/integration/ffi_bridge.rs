@@ -1688,6 +1688,51 @@ fn bridge_config_surfaces_unlinked_local_llm_provider() {
     );
 }
 
+#[test]
+fn bridge_config_exposes_named_local_llm_profiles_without_building_them() {
+    let bridge = RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "mock",
+          "providers": [
+            {
+              "kind": "local_llm",
+              "provider_id": "local_llm.llama_cpp",
+              "display_name": "llama.cpp",
+              "model": "local.gguf.simulator",
+              "model_config_json": "{\"backend\":\"llama_cpp\",\"model_path\":\"/tmp/model.gguf\"}",
+              "max_context_tokens": 2048
+            },
+            {
+              "kind": "local_llm",
+              "provider_id": "local_llm.litert",
+              "display_name": "LiteRT",
+              "model": "local.litert.simulator",
+              "model_config_json": "{\"backend\":\"litert\",\"model_path\":\"/tmp/model.task\"}",
+              "max_context_tokens": 1024
+            }
+          ],
+          "store": {"kind": "in_memory"}
+        }"#,
+    )
+    .unwrap();
+
+    let profiles = decode(&bridge.provider_profiles_json().unwrap());
+    let profile_ids: Vec<_> = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|profile| profile["id"].as_str().unwrap())
+        .collect();
+
+    assert!(profile_ids.contains(&"local_llm.llama_cpp"));
+    assert!(profile_ids.contains(&"local_llm.litert"));
+    assert!(profiles.as_array().unwrap().iter().any(|profile| {
+        profile["id"] == "local_llm.litert" && profile["display_name"] == "LiteRT"
+    }));
+}
+
 #[cfg(feature = "link-mock-local-inference")]
 #[test]
 fn bridge_config_can_create_runtime_with_local_llm_provider_when_linked() {

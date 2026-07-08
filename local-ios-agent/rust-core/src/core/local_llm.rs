@@ -118,6 +118,7 @@ pub struct CAbiLocalInferenceBackend {
 }
 
 pub struct LocalLLMProvider {
+    provider_id: String,
     model: String,
     model_config_json: String,
     backend: Box<dyn LocalInferenceBackend>,
@@ -316,7 +317,17 @@ impl LocalLLMProvider {
         model_config_json: impl Into<String>,
         backend: Box<dyn LocalInferenceBackend>,
     ) -> Self {
+        Self::with_provider_id("local_llm", model, model_config_json, backend)
+    }
+
+    pub fn with_provider_id(
+        provider_id: impl Into<String>,
+        model: impl Into<String>,
+        model_config_json: impl Into<String>,
+        backend: Box<dyn LocalInferenceBackend>,
+    ) -> Self {
         Self {
+            provider_id: provider_id.into(),
             model: model.into(),
             model_config_json: model_config_json.into(),
             backend,
@@ -336,7 +347,7 @@ impl LocalLLMProvider {
 
 impl ModelProvider for LocalLLMProvider {
     fn id(&self) -> &str {
-        "local_llm"
+        &self.provider_id
     }
 
     fn stream_chat(

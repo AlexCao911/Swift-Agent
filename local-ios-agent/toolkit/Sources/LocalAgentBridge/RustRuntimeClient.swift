@@ -73,6 +73,18 @@ public struct RustAgentOSConfiguration: Codable, Equatable, Sendable {
 public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
     case desktopMiniCPM(endpoint: String, model: String, maxContextTokens: Int)
     case localLLM(model: String, modelConfigJson: String, maxContextTokens: Int)
+    case namedLocalLLM(providerId: String, displayName: String, model: String, modelConfigJson: String, maxContextTokens: Int)
+
+    public var bootstrapProviderId: String {
+        switch self {
+        case .desktopMiniCPM:
+            "desktop_minicpm"
+        case .localLLM:
+            "local_llm"
+        case .namedLocalLLM(let providerId, _, _, _, _):
+            providerId
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -85,11 +97,26 @@ public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
                 maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
             )
         case "local_llm":
-            self = .localLLM(
-                model: try container.decode(String.self, forKey: .model),
-                modelConfigJson: try container.decode(String.self, forKey: .modelConfigJson),
-                maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
-            )
+            let model = try container.decode(String.self, forKey: .model)
+            let modelConfigJson = try container.decode(String.self, forKey: .modelConfigJson)
+            let maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
+            let providerId = try container.decodeIfPresent(String.self, forKey: .providerId)
+            let displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+            if providerId != nil || displayName != nil {
+                self = .namedLocalLLM(
+                    providerId: providerId ?? "local_llm",
+                    displayName: displayName ?? "Local LLM",
+                    model: model,
+                    modelConfigJson: modelConfigJson,
+                    maxContextTokens: maxContextTokens
+                )
+            } else {
+                self = .localLLM(
+                    model: model,
+                    modelConfigJson: modelConfigJson,
+                    maxContextTokens: maxContextTokens
+                )
+            }
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -112,12 +139,21 @@ public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
             try container.encode(model, forKey: .model)
             try container.encode(modelConfigJson, forKey: .modelConfigJson)
             try container.encode(maxContextTokens, forKey: .maxContextTokens)
+        case .namedLocalLLM(let providerId, let displayName, let model, let modelConfigJson, let maxContextTokens):
+            try container.encode("local_llm", forKey: .kind)
+            try container.encode(providerId, forKey: .providerId)
+            try container.encode(displayName, forKey: .displayName)
+            try container.encode(model, forKey: .model)
+            try container.encode(modelConfigJson, forKey: .modelConfigJson)
+            try container.encode(maxContextTokens, forKey: .maxContextTokens)
         }
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case endpoint
+        case providerId = "provider_id"
+        case displayName = "display_name"
         case model
         case modelConfigJson = "model_config_json"
         case maxContextTokens = "max_context_tokens"

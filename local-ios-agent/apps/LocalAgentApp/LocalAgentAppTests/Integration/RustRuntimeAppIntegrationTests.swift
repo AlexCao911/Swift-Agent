@@ -12,14 +12,53 @@ struct RustRuntimeAppIntegrationTests {
         ]
         let providers = AppBootstrapper.simulatorProviders(environment: environment)
 
-        #expect(AppBootstrapper.runtimeProviderId(environment: environment, providers: providers) == "local_llm")
+        #expect(AppBootstrapper.runtimeProviderId(environment: environment, providers: providers) == "local_llm.llama_cpp")
         #expect(providers.count == 1)
-        if case .localLLM(let model, _, let maxContextTokens) = providers[0] {
+        if case .namedLocalLLM(let providerId, let displayName, let model, let modelConfigJson, let maxContextTokens) = providers[0] {
+            #expect(providerId == "local_llm.llama_cpp")
+            #expect(displayName == "llama.cpp")
             #expect(model == "local.gguf.simulator")
+            #expect(modelConfigJson.contains("llama_cpp"))
             #expect(maxContextTokens == 2048)
         } else {
-            Issue.record("Expected local_llm provider")
+            Issue.record("Expected named llama.cpp provider")
         }
+    }
+
+    @Test("App bootstrapper exposes configured local engine choices")
+    func appBootstrapperExposesConfiguredLocalEngineChoices() throws {
+        let environment = [
+            "LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"/tmp/llama.gguf"}"#,
+            "LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON": #"{"backend":"litert","model_path":"/tmp/model.task","model_format":"litert_lm"}"#,
+            "LOCAL_AGENT_DEFAULT_PROVIDER_ID": "local_llm",
+        ]
+        let providers = AppBootstrapper.simulatorProviders(environment: environment)
+
+        #expect(providers.map(\.bootstrapProviderId) == ["local_llm.llama_cpp", "local_llm.litert"])
+        #expect(AppBootstrapper.runtimeProviderId(environment: environment, providers: providers) == "local_llm.llama_cpp")
+    }
+
+    @Test("unavailable default local provider falls back without recovery container")
+    @MainActor
+    func unavailableDefaultLocalProviderFallsBackWithoutRecoveryContainer() async throws {
+        let environment = [
+            "LOCAL_AGENT_DEFAULT_PROVIDER_ID": "local_llm",
+            "LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"/missing/model.gguf"}"#,
+        ]
+        let container = try AppBootstrapper.makeContainer(environment: environment, store: .inMemory)
+        let toolCenter = container.makeToolCenterViewModel()
+        let modelCenter = container.makeModelCenterViewModel()
+
+        await toolCenter.reload()
+        await modelCenter.reload()
+        var state = try await container.runtimeService.prepare()
+        state = try await container.runtimeService.sendMessage("hello", state: state)
+
+        #expect(toolCenter.rows.contains { $0.name == "native.list_tools" })
+        #expect(modelCenter.rows.contains { $0.id == "local_llm.llama_cpp" })
+        #expect(modelCenter.activeModel?.providerId == "mock")
+        #expect(state.phase == .ready)
+        #expect(state.messages.map(\.text).contains("Mock response to: hello"))
     }
 
     @Test("simulator local LLM smoke through App bootstrapper")
@@ -31,7 +70,7 @@ struct RustRuntimeAppIntegrationTests {
         let container = try AppBootstrapper.makeContainer(store: .inMemory)
         let service = container.runtimeService
         var state = try await service.prepare()
-        #expect(state.provider.active?.id == "local_llm")
+        #expect(state.provider.active?.id == "local_llm.llama_cpp")
 
         state = try await service.sendMessage("Say hello in Chinese.", state: state)
 
