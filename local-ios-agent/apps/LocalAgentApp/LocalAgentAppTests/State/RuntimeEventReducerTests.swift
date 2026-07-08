@@ -103,7 +103,7 @@ struct RuntimeEventReducerTests {
             event(
                 id: "pending_1",
                 kind: .runSuspended,
-                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","title":"Choose photos"}"#
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#
             ),
             to: &state
         )
@@ -112,6 +112,10 @@ struct RuntimeEventReducerTests {
         #expect(RunInlineCardProjection.project(state: state) == [
             .pendingInteraction(PendingInteractionCardState(
                 id: "pending_1",
+                runId: "run_1",
+                toolCallId: "call_1",
+                manifestId: "native.photos.pick_images.v1",
+                interactionKind: "photos_picker",
                 toolName: "photos.pick_images",
                 title: "Choose photos"
             )),
@@ -126,7 +130,7 @@ struct RuntimeEventReducerTests {
             event(
                 id: "pending_1",
                 kind: .runSuspended,
-                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","title":"Choose photos"}"#
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#
             ),
             to: &state
         )

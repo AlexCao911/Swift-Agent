@@ -25,6 +25,11 @@ enum RunInlineCardState: Equatable, Identifiable, Sendable {
     }
 }
 
+struct RunInlineCardPrimaryAction: Equatable, Sendable {
+    var title: String
+    var systemImageName: String
+}
+
 struct ToolApprovalCardState: Equatable, Sendable {
     var id: String
     var runId: String
@@ -34,6 +39,10 @@ struct ToolApprovalCardState: Equatable, Sendable {
 
 struct PendingInteractionCardState: Equatable, Sendable {
     var id: String
+    var runId: String
+    var toolCallId: String
+    var manifestId: String
+    var interactionKind: String
     var toolName: String
     var title: String
 }
@@ -110,9 +119,21 @@ enum RunInlineCardProjection {
         }
 
         let interactionId = payload["interaction_id"] as? String ?? event.id
+        let runId = payload["run_id"] as? String ?? event.runId ?? ""
+        let toolCallId = payload["tool_call_id"] as? String ?? ""
+        let manifestId = payload["manifest_id"] as? String ?? ""
+        let interactionKind = payload["interaction_kind"] as? String ?? ""
         let toolName = payload["tool_name"] as? String ?? "native tool"
         let title = payload["title"] as? String ?? "Continue in Local Agent"
-        return PendingInteractionCardState(id: interactionId, toolName: toolName, title: title)
+        return PendingInteractionCardState(
+            id: interactionId,
+            runId: runId,
+            toolCallId: toolCallId,
+            manifestId: manifestId,
+            interactionKind: interactionKind,
+            toolName: toolName,
+            title: title
+        )
     }
 
     private static func projectPermissionRepair(_ event: RuntimeEventDTO) -> PermissionRepairCardState? {
@@ -155,6 +176,7 @@ enum RunInlineCardProjection {
 
 struct RunInlineCardView: View {
     var state: RunInlineCardState
+    var onPrimaryAction: ((RunInlineCardState) -> Void)? = nil
 
     var body: some View {
         switch state {
@@ -162,33 +184,57 @@ struct RunInlineCardView: View {
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.toolName,
-                systemImageName: "checkmark.shield"
+                systemImageName: "checkmark.shield",
+                action: primaryAction,
+                onAction: primaryActionHandler
             )
         case .pendingInteraction(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.toolName,
-                systemImageName: "hand.tap"
+                systemImageName: "hand.tap",
+                action: primaryAction,
+                onAction: primaryActionHandler
             )
         case .permissionRepair(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.permissionScope,
-                systemImageName: "lock.open"
+                systemImageName: "lock.open",
+                action: primaryAction,
+                onAction: primaryActionHandler
             )
         case .modelMissing(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: "Model setup required",
-                systemImageName: "cpu"
+                systemImageName: "cpu",
+                action: primaryAction,
+                onAction: primaryActionHandler
             )
         case .runStatus(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.message,
-                systemImageName: "clock"
+                systemImageName: "clock",
+                action: primaryAction,
+                onAction: primaryActionHandler
             )
         }
+    }
+
+    private var primaryAction: RunInlineCardPrimaryAction? {
+        guard onPrimaryAction != nil else {
+            return nil
+        }
+        return state.primaryAction
+    }
+
+    private var primaryActionHandler: (() -> Void)? {
+        guard state.primaryAction != nil, let onPrimaryAction else {
+            return nil
+        }
+        return { onPrimaryAction(state) }
     }
 }
 
@@ -196,29 +242,40 @@ private struct RunInlineCardChrome: View {
     var title: String
     var subtitle: String
     var systemImageName: String
+    var action: RunInlineCardPrimaryAction? = nil
+    var onAction: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImageName)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text(subtitle)
-                    .font(.footnote)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: systemImageName)
+                    .font(.headline)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
             }
 
-            Spacer(minLength: 8)
+            if let action, let onAction {
+                Button(action: onAction) {
+                    Label(action.title, systemImage: action.systemImageName)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .combine)
     }
 }
 

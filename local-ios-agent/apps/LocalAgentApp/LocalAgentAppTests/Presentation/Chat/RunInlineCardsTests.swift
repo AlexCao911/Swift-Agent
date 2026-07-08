@@ -35,17 +35,60 @@ struct RunInlineCardsTests {
         let cards = RunInlineCardProjection.project(events: [
             event(
                 kind: .runSuspended,
-                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","title":"Choose photos"}"#
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#
             ),
         ])
 
         #expect(cards == [
             .pendingInteraction(PendingInteractionCardState(
                 id: "pending_1",
+                runId: "run_1",
+                toolCallId: "call_1",
+                manifestId: "native.photos.pick_images.v1",
+                interactionKind: "photos_picker",
                 toolName: "photos.pick_images",
                 title: "Choose photos"
             )),
         ])
+    }
+
+    @Test("pending interaction card exposes continue action")
+    func pendingInteractionCardExposesContinueAction() throws {
+        let card = try #require(RunInlineCardProjection.project(events: [
+            event(
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#
+            ),
+        ]).first)
+
+        #expect(card.primaryAction == RunInlineCardPrimaryAction(
+            title: "Continue",
+            systemImageName: "arrow.forward.circle"
+        ))
+    }
+
+    @Test("pending interaction without manifest is not actionable")
+    func pendingInteractionWithoutManifestIsNotActionable() throws {
+        let card = try #require(RunInlineCardProjection.project(events: [
+            event(
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","interaction_kind":"photos_picker","title":"Choose photos"}"#
+            ),
+        ]).first)
+
+        #expect(card.primaryAction == nil)
+    }
+
+    @Test("pending interaction without tool call id is not actionable")
+    func pendingInteractionWithoutToolCallIdIsNotActionable() throws {
+        let card = try #require(RunInlineCardProjection.project(events: [
+            event(
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#
+            ),
+        ]).first)
+
+        #expect(card.primaryAction == nil)
     }
 
     @Test("denied permission projects to repair card")

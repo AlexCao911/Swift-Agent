@@ -259,6 +259,10 @@ struct ChatInteractionCoordinatorTests {
         #expect(RunInlineCardProjection.project(events: [suspended]) == [
             .pendingInteraction(PendingInteractionCardState(
                 id: payload["interaction_id"] as? String ?? "",
+                runId: "run_1",
+                toolCallId: "call_picker",
+                manifestId: "native.photos.pick_images.v1",
+                interactionKind: "photos_picker",
                 toolName: "photos.pick_images",
                 title: "Choose images to continue."
             )),

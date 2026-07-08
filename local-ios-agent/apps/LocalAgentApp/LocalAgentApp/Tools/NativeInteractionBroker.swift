@@ -43,3 +43,44 @@ actor NativeInteractionBroker {
         }
     }
 }
+
+extension RunInlineCardState {
+    var primaryAction: RunInlineCardPrimaryAction? {
+        switch self {
+        case .pendingInteraction(let state) where state.isActionable:
+            RunInlineCardPrimaryAction(title: "Continue", systemImageName: "arrow.forward.circle")
+        default:
+            nil
+        }
+    }
+}
+
+extension PendingInteractionCardState {
+    var isActionable: Bool {
+        PendingInteractionKind(rawValue: interactionKind) != nil
+            && !runId.isEmpty
+            && !toolCallId.isEmpty
+            && !manifestId.isEmpty
+    }
+
+    func pendingUserInteractionRecord() -> PendingUserInteractionRecord? {
+        guard let kind = PendingInteractionKind(rawValue: interactionKind),
+              !runId.isEmpty,
+              !toolCallId.isEmpty,
+              !manifestId.isEmpty
+        else {
+            return nil
+        }
+
+        return PendingUserInteractionRecord(
+            id: id,
+            runId: runId,
+            toolCallId: toolCallId,
+            manifestId: manifestId,
+            interactionKind: kind,
+            state: .requested,
+            resumablePayloadSummary: title,
+            expiresAtMillis: nil
+        )
+    }
+}

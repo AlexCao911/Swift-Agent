@@ -5,6 +5,47 @@ import Testing
 @Suite("Native interaction broker")
 struct NativeInteractionBrokerTests {
     @Test
+    func pendingInteractionCardCreatesBrokerRecord() throws {
+        let card = PendingInteractionCardState(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: "photos_picker",
+            toolName: "photos.pick_images",
+            title: "Choose images"
+        )
+
+        let record = try #require(card.pendingUserInteractionRecord())
+
+        #expect(record == PendingUserInteractionRecord(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: .photosPicker,
+            state: .requested,
+            resumablePayloadSummary: "Choose images",
+            expiresAtMillis: nil
+        ))
+    }
+
+    @Test
+    func pendingInteractionCardWithoutManifestDoesNotCreateBrokerRecord() {
+        let card = PendingInteractionCardState(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "",
+            interactionKind: "photos_picker",
+            toolName: "photos.pick_images",
+            title: "Choose images"
+        )
+
+        #expect(card.pendingUserInteractionRecord() == nil)
+    }
+
+    @Test
     func persistsAndMarksPresentingBeforeSystemUI() async throws {
         let store = RecordingPendingInteractionStore()
         let record = pendingRecord()

@@ -7,6 +7,7 @@ struct ChatView: View {
     @Bindable var viewModel: AgentViewModel
     var onOpenBuilder: (() -> Void)?
     var onInspectContext: (() -> Void)?
+    var onRunInlineCardAction: ((RunInlineCardState) -> Void)?
 
     @State private var scrollProxy: ScrollViewProxy?
     @State private var editingMessage: AgentMessageViewState?
@@ -19,11 +20,13 @@ struct ChatView: View {
     init(
         viewModel: AgentViewModel,
         onOpenBuilder: (() -> Void)? = nil,
-        onInspectContext: (() -> Void)? = nil
+        onInspectContext: (() -> Void)? = nil,
+        onRunInlineCardAction: ((RunInlineCardState) -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.onOpenBuilder = onOpenBuilder
         self.onInspectContext = onInspectContext
+        self.onRunInlineCardAction = onRunInlineCardAction
     }
 
     var body: some View {
@@ -256,7 +259,7 @@ struct ChatView: View {
                     }
 
                     ForEach(RunInlineCardProjection.project(state: viewModel.state)) { card in
-                        RunInlineCardView(state: card)
+                        RunInlineCardView(state: card, onPrimaryAction: onRunInlineCardAction)
                             .id(card.id)
                     }
 
