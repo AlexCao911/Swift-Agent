@@ -10,6 +10,7 @@ struct AppContainer {
     let permissionClient: any PermissionClient
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
     let runInlineCardActionHandler: RunInlineCardActionHandler
+    let modelRoutingClient: (any ModelRoutingClient)?
 
     @MainActor
     func makeAgentViewModel() -> AgentViewModel {
@@ -51,7 +52,11 @@ struct AppContainer {
 
     @MainActor
     func makeModelCenterViewModel() -> ModelCenterViewModel {
-        ModelCenterViewModel(
+        if let modelRoutingClient {
+            return ModelCenterViewModel(routingClient: modelRoutingClient)
+        }
+
+        return ModelCenterViewModel(
             profiles: [
                 ProviderProfileDTO(
                     id: "mock",

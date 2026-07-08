@@ -18,6 +18,13 @@ struct ModelCenterView: View {
                 }
             }
 
+            if let errorMessage = viewModel.errorMessage {
+                Section {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Local Engines") {
                 rows(for: .local)
             }
@@ -35,6 +42,9 @@ struct ModelCenterView: View {
             }
         }
         .navigationTitle("Models")
+        .task {
+            await viewModel.reload(shell: shellViewModel)
+        }
     }
 
     @ViewBuilder
@@ -46,7 +56,9 @@ struct ModelCenterView: View {
         } else {
             ForEach(rows) { row in
                 Button {
-                    viewModel.select(rowId: row.id, shell: shellViewModel)
+                    Task {
+                        await viewModel.select(rowId: row.id, shell: shellViewModel)
+                    }
                 } label: {
                     ModelCenterRow(row: row)
                 }

@@ -47,7 +47,8 @@ enum AppBootstrapper {
             runInlineCardActionHandler: RunInlineCardActionHandler(
                 broker: nativeBundle.interactionBroker,
                 approvalResponder: ExecutionBridgeToolApprovalResponder(bridge: executionBridge)
-            )
+            ),
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
         )
     }
 
@@ -83,7 +84,8 @@ enum AppBootstrapper {
             agentBuilderToolCatalogClient: nativeBundle.builderToolCatalogClient,
             runInlineCardActionHandler: RunInlineCardActionHandler(
                 broker: nativeBundle.interactionBroker
-            )
+            ),
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
         )
     }
 
@@ -111,7 +113,8 @@ enum AppBootstrapper {
                     store: InMemoryPendingUserInteractionStore(),
                     presenter: UnavailableNativeInteractionPresenter()
                 )
-            )
+            ),
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
         )
     }
 
