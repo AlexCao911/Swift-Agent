@@ -48,6 +48,8 @@ Done in the current MVP branch:
 - Coordinator suspends runs on pending-interaction tool envelopes without submitting them as normal
   tool observations.
 - Inline run cards project approval, pending interaction, permission repair, missing model, and waiting-tool states.
+- Tool approval cards can approve/deny through the execution bridge and clear local pending state.
+- Pending interaction, permission repair, and model readiness cards show either an action or a disabled reason.
 - Chat renders inline run cards from transient runtime events.
 - Context Inspector shows context sources, trust labels, token estimates, and untrusted external-content warnings.
 - Tool Center shows manifest-derived tool rows, permission readiness, approval policy, and mode filters.
@@ -80,7 +82,8 @@ Remaining:
 
 ### Conversation Workspace Polish
 
-- Add polished approval actions, pending interaction recovery, and user-cancel flows in Chat.
+- Connect real pending interaction presentation/resume/cancel flows in Chat.
+- Replace disabled permission/model readiness reasons with concrete repair/setup navigation once those routes are fully wired.
 - Finish session/branch/fork/edit affordances for everyday use.
 - Surface external-content trust warnings in assistant responses, not only in Context Inspector.
 - Add agent selector and visible revision drift indicators for old conversations.

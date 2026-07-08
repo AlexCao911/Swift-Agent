@@ -44,13 +44,21 @@ struct ConversationWorkspaceView: View {
     }
 
     @MainActor
-    private func handleRunInlineCardAction(_ card: RunInlineCardState) {
+    private func handleRunInlineCardAction(_ card: RunInlineCardState, action: RunInlineCardAction) {
         guard let runInlineCardActionHandler else {
             return
         }
 
         Task {
-            _ = await runInlineCardActionHandler.handle(card)
+            let result = await runInlineCardActionHandler.handle(action, for: card)
+            await MainActor.run {
+                RunInlineCardActionStateReducer.apply(
+                    result,
+                    action: action,
+                    card: card,
+                    to: &chatViewModel.state
+                )
+            }
         }
     }
 }

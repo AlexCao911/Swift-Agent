@@ -30,6 +30,42 @@ struct RunInlineCardPrimaryAction: Equatable, Sendable {
     var systemImageName: String
 }
 
+struct RunInlineCardAction: Equatable, Identifiable, Sendable {
+    enum Kind: String, Equatable, Sendable {
+        case approveTool
+        case denyTool
+        case continuePendingInteraction
+    }
+
+    var kind: Kind
+    var title: String
+    var systemImageName: String
+    var isDestructive: Bool
+
+    var id: String { kind.rawValue }
+
+    static let approveTool = RunInlineCardAction(
+        kind: .approveTool,
+        title: "Approve",
+        systemImageName: "checkmark.circle",
+        isDestructive: false
+    )
+
+    static let denyTool = RunInlineCardAction(
+        kind: .denyTool,
+        title: "Deny",
+        systemImageName: "xmark.circle",
+        isDestructive: true
+    )
+
+    static let continuePendingInteraction = RunInlineCardAction(
+        kind: .continuePendingInteraction,
+        title: "Continue",
+        systemImageName: "arrow.forward.circle",
+        isDestructive: false
+    )
+}
+
 struct ToolApprovalCardState: Equatable, Sendable {
     var id: String
     var runId: String
@@ -45,6 +81,7 @@ struct PendingInteractionCardState: Equatable, Sendable {
     var interactionKind: String
     var toolName: String
     var title: String
+    var disabledReason: String? = nil
 }
 
 struct PermissionRepairCardState: Equatable, Sendable {
@@ -64,12 +101,48 @@ struct RunStatusCardState: Equatable, Sendable {
     var message: String
 }
 
+extension RunInlineCardState {
+    var actions: [RunInlineCardAction] {
+        switch self {
+        case .toolApproval:
+            [.approveTool, .denyTool]
+        case .pendingInteraction(let state) where state.isActionable:
+            [.continuePendingInteraction]
+        default:
+            []
+        }
+    }
+
+    var primaryAction: RunInlineCardPrimaryAction? {
+        guard let action = actions.first else {
+            return nil
+        }
+        return RunInlineCardPrimaryAction(
+            title: action.title,
+            systemImageName: action.systemImageName
+        )
+    }
+
+    var disabledReason: String? {
+        switch self {
+        case .pendingInteraction(let state) where !state.isActionable:
+            state.disabledReason ?? "This interaction is missing runtime details."
+        case .permissionRepair:
+            "Repair this permission in Tools or Settings."
+        case .modelMissing:
+            "Select a model in Models before continuing."
+        default:
+            nil
+        }
+    }
+}
+
 enum RunInlineCardProjection {
     static func project(
         state: AgentViewState,
         approval: ApprovalProtocolRequestDTO? = nil
     ) -> [RunInlineCardState] {
-        project(events: state.transientRunEvents, approval: approval)
+        project(events: state.transientRunEvents, approval: approval ?? state.pendingApprovalRequest)
     }
 
     static func project(
@@ -125,6 +198,7 @@ enum RunInlineCardProjection {
         let interactionKind = payload["interaction_kind"] as? String ?? ""
         let toolName = payload["tool_name"] as? String ?? "native tool"
         let title = payload["title"] as? String ?? "Continue in Local Agent"
+        let disabledReason = payload["disabled_reason"] as? String
         return PendingInteractionCardState(
             id: interactionId,
             runId: runId,
@@ -132,7 +206,8 @@ enum RunInlineCardProjection {
             manifestId: manifestId,
             interactionKind: interactionKind,
             toolName: toolName,
-            title: title
+            title: title,
+            disabledReason: disabledReason
         )
     }
 
@@ -174,9 +249,64 @@ enum RunInlineCardProjection {
     }
 }
 
+enum RunInlineCardActionStateReducer {
+    static func apply(
+        _ result: NativeInteractionResult?,
+        action: RunInlineCardAction,
+        card: RunInlineCardState,
+        to state: inout AgentViewState
+    ) {
+        switch (result, card, action.kind) {
+        case (.completed, .toolApproval(let approval), .approveTool),
+             (.completed, .toolApproval(let approval), .denyTool):
+            guard state.pendingApprovalRequest?.approvalId == approval.id else {
+                return
+            }
+            state.pendingApprovalRequest = nil
+        case (.completed, .pendingInteraction(let pending), .continuePendingInteraction):
+            state.transientRunEvents.removeAll { $0.id == pending.id }
+        case (.failed, .pendingInteraction(let pending), .continuePendingInteraction):
+            markPendingInteraction(
+                pending.id,
+                disabledReason: "Native interaction could not be completed.",
+                in: &state
+            )
+        default:
+            return
+        }
+    }
+
+    private static func markPendingInteraction(
+        _ id: String,
+        disabledReason: String,
+        in state: inout AgentViewState
+    ) {
+        guard let index = state.transientRunEvents.firstIndex(where: { event in
+            event.id == id || event.jsonPayload?["interaction_id"] as? String == id
+        }),
+              var payload = state.transientRunEvents[index].jsonPayload
+        else {
+            return
+        }
+
+        payload["disabled_reason"] = disabledReason
+        guard let json = jsonString(payload) else {
+            return
+        }
+        state.transientRunEvents[index].payload = json
+    }
+
+    private static func jsonString(_ object: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
 struct RunInlineCardView: View {
     var state: RunInlineCardState
-    var onPrimaryAction: ((RunInlineCardState) -> Void)? = nil
+    var onAction: ((RunInlineCardState, RunInlineCardAction) -> Void)? = nil
 
     var body: some View {
         switch state {
@@ -185,56 +315,68 @@ struct RunInlineCardView: View {
                 title: state.title,
                 subtitle: state.toolName,
                 systemImageName: "checkmark.shield",
-                action: primaryAction,
-                onAction: primaryActionHandler
+                actions: actions,
+                disabledReason: disabledReason,
+                onAction: actionHandler
             )
         case .pendingInteraction(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.toolName,
                 systemImageName: "hand.tap",
-                action: primaryAction,
-                onAction: primaryActionHandler
+                actions: actions,
+                disabledReason: disabledReason,
+                onAction: actionHandler
             )
         case .permissionRepair(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.permissionScope,
                 systemImageName: "lock.open",
-                action: primaryAction,
-                onAction: primaryActionHandler
+                actions: actions,
+                disabledReason: disabledReason,
+                onAction: actionHandler
             )
         case .modelMissing(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: "Model setup required",
                 systemImageName: "cpu",
-                action: primaryAction,
-                onAction: primaryActionHandler
+                actions: actions,
+                disabledReason: disabledReason,
+                onAction: actionHandler
             )
         case .runStatus(let state):
             RunInlineCardChrome(
                 title: state.title,
                 subtitle: state.message,
                 systemImageName: "clock",
-                action: primaryAction,
-                onAction: primaryActionHandler
+                actions: actions,
+                disabledReason: disabledReason,
+                onAction: actionHandler
             )
         }
     }
 
-    private var primaryAction: RunInlineCardPrimaryAction? {
-        guard onPrimaryAction != nil else {
-            return nil
+    private var actions: [RunInlineCardAction] {
+        guard onAction != nil else {
+            return []
         }
-        return state.primaryAction
+        return state.actions
     }
 
-    private var primaryActionHandler: (() -> Void)? {
-        guard state.primaryAction != nil, let onPrimaryAction else {
+    private var disabledReason: String? {
+        guard actions.isEmpty else {
             return nil
         }
-        return { onPrimaryAction(state) }
+        return state.disabledReason
+    }
+
+    private var actionHandler: ((RunInlineCardAction) -> Void)? {
+        guard let onAction else {
+            return nil
+        }
+        return { action in onAction(state, action) }
     }
 }
 
@@ -242,8 +384,9 @@ private struct RunInlineCardChrome: View {
     var title: String
     var subtitle: String
     var systemImageName: String
-    var action: RunInlineCardPrimaryAction? = nil
-    var onAction: (() -> Void)? = nil
+    var actions: [RunInlineCardAction] = []
+    var disabledReason: String? = nil
+    var onAction: ((RunInlineCardAction) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -266,12 +409,23 @@ private struct RunInlineCardChrome: View {
                 Spacer(minLength: 8)
             }
 
-            if let action, let onAction {
-                Button(action: onAction) {
-                    Label(action.title, systemImage: action.systemImageName)
+            if let onAction, !actions.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(actions) { action in
+                        Button(role: action.isDestructive ? .destructive : nil) {
+                            onAction(action)
+                        } label: {
+                            Label(action.title, systemImage: action.systemImageName)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(action.isDestructive ? .red : .accentColor)
+                        .controlSize(.small)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            } else if let disabledReason {
+                Label(disabledReason, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)

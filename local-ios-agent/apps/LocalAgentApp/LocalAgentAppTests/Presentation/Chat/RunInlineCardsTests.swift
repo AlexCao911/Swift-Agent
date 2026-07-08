@@ -30,6 +30,165 @@ struct RunInlineCardsTests {
         ])
     }
 
+    @Test("tool approval card exposes approve and deny actions")
+    func toolApprovalCardExposesApproveAndDenyActions() throws {
+        let card = try #require(RunInlineCardProjection.project(
+            events: [event(kind: .runSuspended, payload: #"{"reason":"approval_required"}"#)],
+            approval: ApprovalProtocolRequestDTO(
+                approvalId: "approval_1",
+                runId: "run_1",
+                toolCallEntryId: "tool_call_1",
+                message: "Allow Calendar search?",
+                requiresLocalAuthentication: false,
+                scope: .operation(operation: "calendar.search_events")
+            )
+        ).first)
+
+        #expect(card.actions == [
+            RunInlineCardAction(
+                kind: .approveTool,
+                title: "Approve",
+                systemImageName: "checkmark.circle",
+                isDestructive: false
+            ),
+            RunInlineCardAction(
+                kind: .denyTool,
+                title: "Deny",
+                systemImageName: "xmark.circle",
+                isDestructive: true
+            ),
+        ])
+        #expect(card.primaryAction == RunInlineCardPrimaryAction(
+            title: "Approve",
+            systemImageName: "checkmark.circle"
+        ))
+    }
+
+    @Test("pending approval stored in chat state projects to approval card")
+    func pendingApprovalInStateProjectsToApprovalCard() {
+        let state = AgentViewState(
+            pendingApprovalRequest: ApprovalProtocolRequestDTO(
+                approvalId: "approval_1",
+                runId: "run_1",
+                toolCallEntryId: "tool_call_1",
+                message: "Allow Calendar search?",
+                requiresLocalAuthentication: false,
+                scope: .operation(operation: "calendar.search_events")
+            )
+        )
+
+        #expect(RunInlineCardProjection.project(state: state) == [
+            .toolApproval(ToolApprovalCardState(
+                id: "approval_1",
+                runId: "run_1",
+                title: "Allow Calendar search?",
+                toolName: "calendar.search_events"
+            )),
+        ])
+    }
+
+    @Test("completed approval action clears matching pending approval")
+    func completedApprovalActionClearsMatchingPendingApproval() {
+        let request = ApprovalProtocolRequestDTO(
+            approvalId: "approval_1",
+            runId: "run_1",
+            toolCallEntryId: "tool_call_1",
+            message: "Allow Calendar search?",
+            requiresLocalAuthentication: false,
+            scope: .operation(operation: "calendar.search_events")
+        )
+        var state = AgentViewState(pendingApprovalRequest: request)
+        let card = RunInlineCardState.toolApproval(ToolApprovalCardState(
+            id: "approval_1",
+            runId: "run_1",
+            title: "Allow Calendar search?",
+            toolName: "calendar.search_events"
+        ))
+
+        RunInlineCardActionStateReducer.apply(
+            .completed,
+            action: .approveTool,
+            card: card,
+            to: &state
+        )
+
+        #expect(state.pendingApprovalRequest == nil)
+        #expect(RunInlineCardProjection.project(state: state).isEmpty)
+    }
+
+    @Test("failed approval action keeps pending approval visible")
+    func failedApprovalActionKeepsPendingApprovalVisible() {
+        let request = ApprovalProtocolRequestDTO(
+            approvalId: "approval_1",
+            runId: "run_1",
+            toolCallEntryId: "tool_call_1",
+            message: "Allow Calendar search?",
+            requiresLocalAuthentication: false,
+            scope: .operation(operation: "calendar.search_events")
+        )
+        var state = AgentViewState(pendingApprovalRequest: request)
+        let card = RunInlineCardState.toolApproval(ToolApprovalCardState(
+            id: "approval_1",
+            runId: "run_1",
+            title: "Allow Calendar search?",
+            toolName: "calendar.search_events"
+        ))
+
+        RunInlineCardActionStateReducer.apply(
+            .failed,
+            action: .approveTool,
+            card: card,
+            to: &state
+        )
+
+        #expect(state.pendingApprovalRequest == request)
+    }
+
+    @Test("failed pending interaction action shows disabled reason")
+    func failedPendingInteractionActionShowsDisabledReason() throws {
+        var state = AgentViewState(transientRunEvents: [
+            event(
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#,
+                id: "pending_1"
+            ),
+        ])
+        let card = try #require(RunInlineCardProjection.project(state: state).first)
+
+        RunInlineCardActionStateReducer.apply(
+            .failed,
+            action: .continuePendingInteraction,
+            card: card,
+            to: &state
+        )
+        let projected = try #require(RunInlineCardProjection.project(state: state).first)
+
+        #expect(projected.actions.isEmpty)
+        #expect(projected.disabledReason == "Native interaction could not be completed.")
+    }
+
+    @Test("failed pending interaction action matches payload id")
+    func failedPendingInteractionActionMatchesPayloadId() throws {
+        var state = AgentViewState(transientRunEvents: [
+            event(
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","tool_call_id":"call_1","manifest_id":"native.photos.pick_images.v1","interaction_kind":"photos_picker","title":"Choose photos"}"#,
+                id: "runtime_event_1"
+            ),
+        ])
+        let card = try #require(RunInlineCardProjection.project(state: state).first)
+
+        RunInlineCardActionStateReducer.apply(
+            .failed,
+            action: .continuePendingInteraction,
+            card: card,
+            to: &state
+        )
+        let projected = try #require(RunInlineCardProjection.project(state: state).first)
+
+        #expect(projected.disabledReason == "Native interaction could not be completed.")
+    }
+
     @Test("pending user interaction projects to pending interaction")
     func pendingUserInteractionProjectsToPendingInteraction() {
         let cards = RunInlineCardProjection.project(events: [
@@ -77,6 +236,7 @@ struct RunInlineCardsTests {
         ]).first)
 
         #expect(card.primaryAction == nil)
+        #expect(card.disabledReason == "This interaction is missing runtime details.")
     }
 
     @Test("pending interaction without tool call id is not actionable")
@@ -89,6 +249,7 @@ struct RunInlineCardsTests {
         ]).first)
 
         #expect(card.primaryAction == nil)
+        #expect(card.disabledReason == "This interaction is missing runtime details.")
     }
 
     @Test("denied permission projects to repair card")
@@ -109,6 +270,19 @@ struct RunInlineCardsTests {
         ])
     }
 
+    @Test("permission repair card has disabled reason")
+    func permissionRepairCardHasDisabledReason() throws {
+        let card = try #require(RunInlineCardProjection.project(events: [
+            event(
+                kind: .toolExecutionFailed,
+                payload: #"{"code":"permission_denied","permission_scope":"calendar.events.read_full","message":"Calendar access is off"}"#
+            ),
+        ]).first)
+
+        #expect(card.actions.isEmpty)
+        #expect(card.disabledReason == "Repair this permission in Tools or Settings.")
+    }
+
     @Test("missing model projects to model card")
     func missingModelProjectsToModelCard() {
         let cards = RunInlineCardProjection.project(events: [
@@ -124,6 +298,19 @@ struct RunInlineCardsTests {
                 title: "Select a model"
             )),
         ])
+    }
+
+    @Test("model readiness card has disabled reason")
+    func modelReadinessCardHasDisabledReason() throws {
+        let card = try #require(RunInlineCardProjection.project(events: [
+            event(
+                kind: .runFailed,
+                payload: #"{"code":"model_missing","message":"Select a model"}"#
+            ),
+        ]).first)
+
+        #expect(card.actions.isEmpty)
+        #expect(card.disabledReason == "Select a model in Models before continuing.")
     }
 
     @Test("completed run removes transient cards")

@@ -147,6 +147,32 @@ struct RuntimeEventReducerTests {
         #expect(RunInlineCardProjection.project(state: state).isEmpty)
     }
 
+    @Test("terminal events clear pending approval request")
+    func terminalEventsClearPendingApprovalRequest() {
+        var state = AgentViewState(
+            pendingApprovalRequest: ApprovalProtocolRequestDTO(
+                approvalId: "approval_1",
+                runId: "run_1",
+                toolCallEntryId: "tool_call_1",
+                message: "Allow Calendar search?",
+                requiresLocalAuthentication: false,
+                scope: .operation(operation: "calendar.search_events")
+            )
+        )
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "failed",
+                kind: .runFailed,
+                payload: #"{"message":"cancelled by runtime"}"#
+            ),
+            to: &state
+        )
+
+        #expect(state.pendingApprovalRequest == nil)
+        #expect(RunInlineCardProjection.project(state: state).isEmpty)
+    }
+
     @Test("assistant reasoning tags are projected as reasoning parts")
     func assistantReasoningProjectsAsParts() {
         var state = AgentViewState()

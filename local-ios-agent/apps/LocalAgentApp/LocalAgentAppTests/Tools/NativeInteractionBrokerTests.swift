@@ -1,3 +1,4 @@
+import LocalAgentBridge
 import LocalNativeToolkit
 import Testing
 @testable import LocalAgentApp
@@ -75,6 +76,64 @@ struct NativeInteractionBrokerTests {
 
         #expect(result == .failed)
         #expect(await handler.lastErrorMessage == "Native interaction could not be completed.")
+    }
+
+    @Test
+    func runInlineCardActionHandlerApprovesToolCall() async {
+        let broker = RecordingNativeInteractionBroker(result: .completed)
+        let approvalResponder = RecordingToolApprovalResponder()
+        let handler = RunInlineCardActionHandler(
+            broker: broker,
+            approvalResponder: approvalResponder
+        )
+        let card = RunInlineCardState.toolApproval(ToolApprovalCardState(
+            id: "approval_1",
+            runId: "run_1",
+            title: "Allow Calendar search?",
+            toolName: "calendar.search_events"
+        ))
+
+        let result = await handler.handle(
+            RunInlineCardAction.approveTool,
+            for: card
+        )
+
+        #expect(result == .completed)
+        #expect(await approvalResponder.submissions == [
+            RecordedToolApprovalSubmission(
+                id: "approval_1",
+                decision: ApprovalDecisionDTO(approved: true)
+            ),
+        ])
+    }
+
+    @Test
+    func runInlineCardActionHandlerDeniesToolCall() async {
+        let broker = RecordingNativeInteractionBroker(result: .completed)
+        let approvalResponder = RecordingToolApprovalResponder()
+        let handler = RunInlineCardActionHandler(
+            broker: broker,
+            approvalResponder: approvalResponder
+        )
+        let card = RunInlineCardState.toolApproval(ToolApprovalCardState(
+            id: "approval_1",
+            runId: "run_1",
+            title: "Allow Calendar search?",
+            toolName: "calendar.search_events"
+        ))
+
+        let result = await handler.handle(
+            RunInlineCardAction.denyTool,
+            for: card
+        )
+
+        #expect(result == .completed)
+        #expect(await approvalResponder.submissions == [
+            RecordedToolApprovalSubmission(
+                id: "approval_1",
+                decision: ApprovalDecisionDTO(approved: false, reason: "Denied by user")
+            ),
+        ])
     }
 
     @Test
@@ -161,6 +220,11 @@ struct NativeInteractionBrokerTests {
     }
 }
 
+private struct RecordedToolApprovalSubmission: Equatable, Sendable {
+    var id: String
+    var decision: ApprovalDecisionDTO
+}
+
 private actor RecordingPendingInteractionStore: PendingUserInteractionStore {
     private var records: [String: PendingUserInteractionRecord] = [:]
     private(set) var states: [PendingInteractionState] = []
@@ -218,5 +282,13 @@ private actor RecordingNativeInteractionBroker: NativeInteractionBrokering {
     func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult {
         presentedRecords.append(record)
         return result
+    }
+}
+
+private actor RecordingToolApprovalResponder: ToolApprovalResponding {
+    private(set) var submissions: [RecordedToolApprovalSubmission] = []
+
+    func submitApproval(id: String, decision: ApprovalDecisionDTO) async throws {
+        submissions.append(RecordedToolApprovalSubmission(id: id, decision: decision))
     }
 }

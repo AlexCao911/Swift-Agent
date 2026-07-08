@@ -248,6 +248,7 @@ struct AgentViewState: Equatable, Sendable {
     var modelSettings: ModelSettingsViewState
     var selectedAgentProfileId: String
     var selectedAgentProfileRevisionId: UInt64?
+    var pendingApprovalRequest: ApprovalProtocolRequestDTO?
 
     init(
         phase: AppRuntimePhase = .booting,
@@ -264,7 +265,8 @@ struct AgentViewState: Equatable, Sendable {
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
         selectedAgentProfileId: String = "profile_1",
-        selectedAgentProfileRevisionId: UInt64? = 1
+        selectedAgentProfileRevisionId: UInt64? = 1,
+        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil
     ) {
         self.phase = phase
         self.messages = messages
@@ -281,6 +283,7 @@ struct AgentViewState: Equatable, Sendable {
         self.modelSettings = modelSettings
         self.selectedAgentProfileId = selectedAgentProfileId
         self.selectedAgentProfileRevisionId = selectedAgentProfileRevisionId
+        self.pendingApprovalRequest = pendingApprovalRequest
     }
 
     init(
@@ -295,7 +298,8 @@ struct AgentViewState: Equatable, Sendable {
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
         selectedAgentProfileId: String = "profile_1",
-        selectedAgentProfileRevisionId: UInt64? = 1
+        selectedAgentProfileRevisionId: UInt64? = 1,
+        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil
     ) {
         self.init(
             phase: phase,
@@ -309,7 +313,8 @@ struct AgentViewState: Equatable, Sendable {
             promptLibrary: promptLibrary,
             modelSettings: modelSettings,
             selectedAgentProfileId: selectedAgentProfileId,
-            selectedAgentProfileRevisionId: selectedAgentProfileRevisionId
+            selectedAgentProfileRevisionId: selectedAgentProfileRevisionId,
+            pendingApprovalRequest: pendingApprovalRequest
         )
     }
 

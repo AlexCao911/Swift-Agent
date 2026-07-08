@@ -77,7 +77,10 @@ enum AppBootstrapper {
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: builderToolCatalogClient,
-            runInlineCardActionHandler: RunInlineCardActionHandler(broker: nativeInteractionBroker)
+            runInlineCardActionHandler: RunInlineCardActionHandler(
+                broker: nativeInteractionBroker,
+                approvalResponder: ExecutionBridgeToolApprovalResponder(bridge: executionBridge)
+            )
         )
     }
 

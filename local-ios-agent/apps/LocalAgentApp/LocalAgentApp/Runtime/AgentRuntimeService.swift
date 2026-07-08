@@ -184,6 +184,11 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             var nextState = await collector.snapshot()
             nextState.draft = UserDraftViewState()
             applyCoordinatorResult(result, to: &nextState)
+            await applyPendingApprovalStateIfNeeded(
+                runId: result.runId,
+                runState: result.state,
+                to: &nextState
+            )
             return nextState
         }
 
@@ -509,6 +514,11 @@ actor AgentRuntimeService: AgentRuntimeServicing {
                 throw AgentRuntimeServiceError.missingPendingToolRequest(pendingToolCallId)
             }
             guard let result = await toolDriver.execute(request, continuationIndex: continuationIndex) else {
+                await applyPendingApprovalStateIfNeeded(
+                    runId: nextTurn.runId,
+                    runState: nextTurn.state,
+                    to: &nextState
+                )
                 return nextState
             }
 
@@ -530,6 +540,12 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             }
             continuationIndex += 1
         }
+
+        await applyPendingApprovalStateIfNeeded(
+            runId: nextTurn.runId,
+            runState: nextTurn.state,
+            to: &nextState
+        )
 
         switch nextTurn.state {
         case .completed:
@@ -556,6 +572,27 @@ actor AgentRuntimeService: AgentRuntimeServicing {
             nextState.phase = .failed(message: message)
         }
         return nextState
+    }
+
+    private func applyPendingApprovalStateIfNeeded(
+        runId: String,
+        runState: RunStateDTO,
+        to state: inout AgentViewState
+    ) async {
+        switch runState {
+        case .suspended, .waitingTool:
+            do {
+                state.pendingApprovalRequest = try await runtimeClient
+                    .pendingApprovalRequests()
+                    .first { $0.runId == runId }
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        case .completed, .cancelled, .failed:
+            state.pendingApprovalRequest = nil
+        default:
+            break
+        }
     }
 
     private func consume(

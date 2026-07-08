@@ -1071,6 +1071,50 @@ struct AgentRuntimeServiceTests {
         #expect(state.messages.map(\.text).contains("Mock response after tool: debug.echo: hello"))
     }
 
+    @Test("suspended run loads pending approval into chat state")
+    func suspendedRunLoadsPendingApprovalIntoChatState() async throws {
+        let approval = ApprovalProtocolRequestDTO(
+            approvalId: "approval_1",
+            runId: "run_1",
+            toolCallEntryId: "tool_call_1",
+            message: "Allow Calendar search?",
+            requiresLocalAuthentication: false,
+            scope: .operation(operation: "calendar.search_events")
+        )
+        let client = ScriptedRuntimeClient(
+            sendTurns: [
+                AgentTurnResultDTO(
+                    runId: "run_1",
+                    state: .suspended,
+                    events: [
+                        event(id: "user_1", kind: .userMessage, payload: "check calendar"),
+                        event(
+                            id: "suspended",
+                            kind: .runSuspended,
+                            payload: #"{"reason":"approval_required"}"#
+                        ),
+                    ],
+                    pendingToolCallId: nil
+                ),
+            ],
+            pendingApprovalRequests: [approval]
+        )
+        let service = AgentRuntimeService(runtimeClient: client, toolDriver: MinimalHostToolDriver())
+
+        var state = try await service.prepare()
+        state = try await service.sendMessage("check calendar", state: state)
+
+        #expect(state.pendingApprovalRequest == approval)
+        #expect(RunInlineCardProjection.project(state: state) == [
+            .toolApproval(ToolApprovalCardState(
+                id: "approval_1",
+                runId: "run_1",
+                title: "Allow Calendar search?",
+                toolName: "calendar.search_events"
+            )),
+        ])
+    }
+
     @Test("continuation limit submits an error tool result to finish the run")
     func continuationLimitSubmitsErrorToolResultToFinishRun() async throws {
         let client = ScriptedRuntimeClient(
@@ -1861,6 +1905,7 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     private var sendTurns: [AgentTurnResultDTO]
     private var submitTurns: [AgentTurnResultDTO]
     private var pendingRequests: [ToolExecutionRequestDTO]
+    private var approvalRequests: [ApprovalProtocolRequestDTO]
     private var providerProfilesForTest: [ProviderProfileDTO]
     private var activeProviderForTest: ProviderProfileDTO
     private var conversationSummariesForTest: [ConversationSummaryDTO] = []
@@ -1881,11 +1926,13 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     init(
         sendTurns: [AgentTurnResultDTO] = [],
         submitTurns: [AgentTurnResultDTO] = [],
-        pendingToolRequests: [ToolExecutionRequestDTO] = []
+        pendingToolRequests: [ToolExecutionRequestDTO] = [],
+        pendingApprovalRequests: [ApprovalProtocolRequestDTO] = []
     ) {
         self.sendTurns = sendTurns
         self.submitTurns = submitTurns
         self.pendingRequests = pendingToolRequests
+        self.approvalRequests = pendingApprovalRequests
         self.providerProfilesForTest = [
             ProviderProfileDTO(
                 id: "mock",
@@ -1971,7 +2018,7 @@ private actor ScriptedRuntimeClient: BlobReferencingRuntimeClient, ProviderContr
     }
 
     func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
-        []
+        approvalRequests
     }
 
     func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO {

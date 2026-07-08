@@ -1,3 +1,4 @@
+import LocalAgentBridge
 import LocalNativeToolkit
 
 enum NativeInteractionResult: Equatable, Sendable {
@@ -12,6 +13,22 @@ protocol NativeInteractionPresenting: Sendable {
 
 protocol NativeInteractionBrokering: Sendable {
     func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult
+}
+
+protocol ToolApprovalResponding: Sendable {
+    func submitApproval(id: String, decision: ApprovalDecisionDTO) async throws
+}
+
+struct ExecutionBridgeToolApprovalResponder: ToolApprovalResponding {
+    private let bridge: any ExecutionBridgeClient
+
+    init(bridge: any ExecutionBridgeClient) {
+        self.bridge = bridge
+    }
+
+    func submitApproval(id: String, decision: ApprovalDecisionDTO) async throws {
+        try await bridge.approveTool(id: id, decision: decision)
+    }
 }
 
 actor NativeInteractionBroker {
@@ -58,17 +75,43 @@ struct UnavailableNativeInteractionPresenter: NativeInteractionPresenting {
 
 protocol RunInlineCardActionHandling: Sendable {
     func handle(_ card: RunInlineCardState) async -> NativeInteractionResult?
+    func handle(_ action: RunInlineCardAction, for card: RunInlineCardState) async -> NativeInteractionResult?
 }
 
 actor RunInlineCardActionHandler: RunInlineCardActionHandling {
     private let broker: any NativeInteractionBrokering
+    private let approvalResponder: (any ToolApprovalResponding)?
     private(set) var lastErrorMessage: String?
 
-    init(broker: any NativeInteractionBrokering) {
+    init(
+        broker: any NativeInteractionBrokering,
+        approvalResponder: (any ToolApprovalResponding)? = nil
+    ) {
         self.broker = broker
+        self.approvalResponder = approvalResponder
     }
 
     func handle(_ card: RunInlineCardState) async -> NativeInteractionResult? {
+        guard let action = card.actions.first else {
+            return nil
+        }
+        return await handle(action, for: card)
+    }
+
+    func handle(_ action: RunInlineCardAction, for card: RunInlineCardState) async -> NativeInteractionResult? {
+        switch (card, action.kind) {
+        case (.pendingInteraction, .continuePendingInteraction):
+            return await handlePendingInteraction(card)
+        case (.toolApproval(let state), .approveTool):
+            return await submitApproval(id: state.id, approved: true, reason: nil)
+        case (.toolApproval(let state), .denyTool):
+            return await submitApproval(id: state.id, approved: false, reason: "Denied by user")
+        default:
+            return nil
+        }
+    }
+
+    private func handlePendingInteraction(_ card: RunInlineCardState) async -> NativeInteractionResult? {
         guard case .pendingInteraction(let state) = card,
               let record = state.pendingUserInteractionRecord()
         else {
@@ -88,22 +131,35 @@ actor RunInlineCardActionHandler: RunInlineCardActionHandling {
             return .failed
         }
     }
-}
 
-extension RunInlineCardState {
-    var primaryAction: RunInlineCardPrimaryAction? {
-        switch self {
-        case .pendingInteraction(let state) where state.isActionable:
-            RunInlineCardPrimaryAction(title: "Continue", systemImageName: "arrow.forward.circle")
-        default:
-            nil
+    private func submitApproval(
+        id: String,
+        approved: Bool,
+        reason: String?
+    ) async -> NativeInteractionResult {
+        guard let approvalResponder else {
+            lastErrorMessage = "Tool approval is not available."
+            return .failed
+        }
+
+        do {
+            try await approvalResponder.submitApproval(
+                id: id,
+                decision: ApprovalDecisionDTO(approved: approved, reason: reason)
+            )
+            lastErrorMessage = nil
+            return .completed
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return .failed
         }
     }
 }
 
 extension PendingInteractionCardState {
     var isActionable: Bool {
-        PendingInteractionKind(rawValue: interactionKind) != nil
+        disabledReason == nil
+            && PendingInteractionKind(rawValue: interactionKind) != nil
             && !runId.isEmpty
             && !toolCallId.isEmpty
             && !manifestId.isEmpty

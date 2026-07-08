@@ -39,6 +39,10 @@ enum RuntimeEventReducer {
             break
         }
 
+        if event.clearsPendingApprovalRequest {
+            state.pendingApprovalRequest = nil
+        }
+
         updateTransientRunEvents(with: event, in: &state)
 
         if event.sequence > 0 {
@@ -222,5 +226,13 @@ private extension RuntimeEventDTO {
 
     var clearsTransientRunCardEvents: Bool {
         kind == .assistantMessageCompleted || kind == .runCancelled
+    }
+
+    var clearsPendingApprovalRequest: Bool {
+        kind == .assistantMessageCompleted
+            || kind == .runCancelled
+            || kind == .runFailed
+            || kind == .toolCallApproved
+            || kind == .toolCallRejected
     }
 }
