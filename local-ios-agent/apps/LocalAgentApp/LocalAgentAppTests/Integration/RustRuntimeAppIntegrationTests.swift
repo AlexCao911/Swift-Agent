@@ -5,10 +5,33 @@ import Testing
 
 @Suite("Rust runtime App integration")
 struct RustRuntimeAppIntegrationTests {
+    @Test("Xcode run path builds and links simulator llama runtime")
+    func xcodeRunPathBuildsAndLinksSimulatorLlamaRuntime() throws {
+        let schemeFile = try repositoryRoot()
+            .appendingPathComponent("local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj/xcshareddata/xcschemes/LocalAgentApp.xcscheme")
+            .readUTF8()
+        let packageManifest = try repositoryRoot()
+            .appendingPathComponent("local-ios-agent/toolkit/Package.swift")
+            .readUTF8()
+        let xcodeBuildScript = try repositoryRoot()
+            .appendingPathComponent("local-ios-agent/scripts/build-local-inference-xcode.sh")
+            .readUTF8()
+
+        #expect(schemeFile.contains("Build Rust local inference runtime"))
+        #expect(schemeFile.contains("build-local-inference-xcode.sh"))
+        #expect(xcodeBuildScript.contains("link-llama-cpp-local-inference"))
+        #expect(xcodeBuildScript.contains("LLAMA_CPP_HEADERS"))
+        #expect(xcodeBuildScript.contains("LLAMA_CPP_XCFRAMEWORK"))
+        #expect(packageManifest.contains("defaultLlamaCppXCFrameworkPath"))
+        #expect(packageManifest.contains("minicpmv-town/third_party/llama.cpp/build-apple/llama.xcframework"))
+    }
+
     @Test("App bootstrapper defaults to local LLM when simulator config is present")
     func appBootstrapperDefaultsToLocalLLMWhenSimulatorConfigIsPresent() throws {
+        let modelURL = try writeTemporaryModelFile(extension: "gguf")
+        defer { try? FileManager.default.removeItem(at: modelURL) }
         let environment = [
-            "LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"/tmp/model.gguf"}"#,
+            "LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"\#(modelURL.path)"}"#,
         ]
         let providers = AppBootstrapper.simulatorProviders(environment: environment)
 
@@ -27,9 +50,15 @@ struct RustRuntimeAppIntegrationTests {
 
     @Test("App bootstrapper exposes configured local engine choices")
     func appBootstrapperExposesConfiguredLocalEngineChoices() throws {
+        let llamaURL = try writeTemporaryModelFile(extension: "gguf")
+        let litertURL = try writeTemporaryModelFile(extension: "task")
+        defer {
+            try? FileManager.default.removeItem(at: llamaURL)
+            try? FileManager.default.removeItem(at: litertURL)
+        }
         let environment = [
-            "LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"/tmp/llama.gguf"}"#,
-            "LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON": #"{"backend":"litert","model_path":"/tmp/model.task","model_format":"litert_lm"}"#,
+            "LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"\#(llamaURL.path)"}"#,
+            "LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON": #"{"backend":"litert","model_path":"\#(litertURL.path)","model_format":"litert_lm"}"#,
             "LOCAL_AGENT_DEFAULT_PROVIDER_ID": "local_llm",
         ]
         let providers = AppBootstrapper.simulatorProviders(environment: environment)
@@ -55,7 +84,11 @@ struct RustRuntimeAppIntegrationTests {
         state = try await container.runtimeService.sendMessage("hello", state: state)
 
         #expect(toolCenter.rows.contains { $0.name == "native.list_tools" })
-        #expect(modelCenter.rows.contains { $0.id == "local_llm.llama_cpp" })
+        #expect(AppBootstrapper.runtimeProviderId(
+            environment: environment,
+            providers: AppBootstrapper.simulatorProviders(environment: environment)
+        ) == "mock")
+        #expect(!modelCenter.rows.contains { $0.id == "local_llm.llama_cpp" })
         #expect(modelCenter.activeModel?.providerId == "mock")
         #expect(state.phase == .ready)
         #expect(state.messages.map(\.text).contains("Mock response to: hello"))
@@ -282,6 +315,33 @@ struct RustRuntimeAppIntegrationTests {
             runtimeClient: client,
             toolDriver: MinimalHostToolDriver()
         )
+    }
+}
+
+private func writeTemporaryModelFile(extension pathExtension: String) throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LocalAgentTestModel-\(UUID().uuidString)")
+        .appendingPathExtension(pathExtension)
+    try Data("test model placeholder".utf8).write(to: url)
+    return url
+}
+
+private func repositoryRoot(
+    file: StaticString = #filePath
+) throws -> URL {
+    var url = URL(fileURLWithPath: "\(file)")
+    while url.path != "/" {
+        if FileManager.default.fileExists(atPath: url.appendingPathComponent("local-ios-agent").path) {
+            return url
+        }
+        url.deleteLastPathComponent()
+    }
+    throw CocoaError(.fileNoSuchFile)
+}
+
+private extension URL {
+    func readUTF8() throws -> String {
+        try String(contentsOf: self, encoding: .utf8)
     }
 }
 

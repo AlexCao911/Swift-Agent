@@ -8,7 +8,16 @@ let packageDirectory = URL(fileURLWithPath: #filePath)
     .path
 let rustMacOSDebugLibraryPath = "\(packageDirectory)/../rust-core/target/debug"
 let rustIOSSimulatorDebugLibraryPath = "\(packageDirectory)/../rust-core/target/aarch64-apple-ios-sim/debug"
+let defaultLlamaCppXCFrameworkPath = URL(fileURLWithPath: packageDirectory)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("minicpmv-town/third_party/llama.cpp/build-apple/llama.xcframework")
+    .path
 let llamaCppXCFrameworkPath = ProcessInfo.processInfo.environment["LLAMA_CPP_XCFRAMEWORK"]
+    ?? (FileManager.default.fileExists(atPath: defaultLlamaCppXCFrameworkPath)
+        ? defaultLlamaCppXCFrameworkPath
+        : nil)
 let hasLlamaCppXCFramework = llamaCppXCFrameworkPath.map {
     FileManager.default.fileExists(atPath: $0)
 } ?? false

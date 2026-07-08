@@ -363,6 +363,9 @@ enum AppBootstrapper {
                })?.bootstrapProviderId {
                 return localProviderId
             }
+            if providerId == "local_llm" || providerId.hasPrefix("local_llm.") {
+                return "mock"
+            }
             return providerId
         }
 
@@ -387,7 +390,7 @@ enum AppBootstrapper {
 
         let legacyLlamaConfig = environment["LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON"]
         let llamaConfig = environment["LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON"] ?? legacyLlamaConfig
-        if let llamaConfig, !llamaConfig.isEmpty {
+        if let llamaConfig, localModelConfigHasExistingModelPath(llamaConfig) {
             providers.append(.namedLocalLLM(
                 providerId: "local_llm.llama_cpp",
                 displayName: "llama.cpp",
@@ -398,7 +401,7 @@ enum AppBootstrapper {
         }
 
         if let litertConfig = environment["LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON"],
-           !litertConfig.isEmpty {
+           localModelConfigHasExistingModelPath(litertConfig) {
             providers.append(.namedLocalLLM(
                 providerId: "local_llm.litert",
                 displayName: "LiteRT",
@@ -409,6 +412,18 @@ enum AppBootstrapper {
         }
 
         return providers
+    }
+
+    private static func localModelConfigHasExistingModelPath(_ modelConfigJson: String) -> Bool {
+        guard !modelConfigJson.isEmpty,
+              let data = modelConfigJson.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelPath = object["model_path"] as? String,
+              !modelPath.isEmpty
+        else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: modelPath)
     }
 }
 
