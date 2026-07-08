@@ -243,6 +243,7 @@ struct AgentViewState: Equatable, Sendable {
     var lastTerminalReason: RunTerminalReason?
     var lastAppliedRuntimeSequence: UInt64
     var lastAppliedExecutionSequenceByRunId: [String: UInt64]
+    var transientRunEvents: [RuntimeEventDTO]
     var promptLibrary: PromptLibraryViewState
     var modelSettings: ModelSettingsViewState
     var selectedAgentProfileId: String
@@ -259,6 +260,7 @@ struct AgentViewState: Equatable, Sendable {
         lastTerminalReason: RunTerminalReason? = nil,
         lastAppliedRuntimeSequence: UInt64 = 0,
         lastAppliedExecutionSequenceByRunId: [String: UInt64] = [:],
+        transientRunEvents: [RuntimeEventDTO] = [],
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
         modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
         selectedAgentProfileId: String = "profile_1",
@@ -274,6 +276,7 @@ struct AgentViewState: Equatable, Sendable {
         self.lastTerminalReason = lastTerminalReason
         self.lastAppliedRuntimeSequence = lastAppliedRuntimeSequence
         self.lastAppliedExecutionSequenceByRunId = lastAppliedExecutionSequenceByRunId
+        self.transientRunEvents = transientRunEvents
         self.promptLibrary = promptLibrary
         self.modelSettings = modelSettings
         self.selectedAgentProfileId = selectedAgentProfileId

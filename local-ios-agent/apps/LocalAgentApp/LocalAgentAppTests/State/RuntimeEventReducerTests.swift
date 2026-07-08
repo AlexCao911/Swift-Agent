@@ -95,6 +95,54 @@ struct RuntimeEventReducerTests {
         #expect(state.lastAppliedRuntimeSequence == 42)
     }
 
+    @Test("pending interaction events feed transient run cards")
+    func pendingInteractionEventsFeedTransientRunCards() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "pending_1",
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","title":"Choose photos"}"#
+            ),
+            to: &state
+        )
+
+        #expect(state.transientRunEvents.map(\.id) == ["pending_1"])
+        #expect(RunInlineCardProjection.project(state: state) == [
+            .pendingInteraction(PendingInteractionCardState(
+                id: "pending_1",
+                toolName: "photos.pick_images",
+                title: "Choose photos"
+            )),
+        ])
+    }
+
+    @Test("terminal events clear transient run cards")
+    func terminalEventsClearTransientRunCards() {
+        var state = AgentViewState()
+
+        RuntimeEventReducer.apply(
+            event(
+                id: "pending_1",
+                kind: .runSuspended,
+                payload: #"{"type":"pending_user_interaction","interaction_id":"pending_1","tool_name":"photos.pick_images","title":"Choose photos"}"#
+            ),
+            to: &state
+        )
+        RuntimeEventReducer.apply(
+            event(
+                id: "completed",
+                kind: .assistantMessageCompleted,
+                payload: #"{"message_id":"assistant_1","text":"done"}"#
+            ),
+            to: &state
+        )
+
+        #expect(state.transientRunEvents.isEmpty)
+        #expect(RunInlineCardProjection.project(state: state).isEmpty)
+    }
+
     @Test("assistant reasoning tags are projected as reasoning parts")
     func assistantReasoningProjectsAsParts() {
         var state = AgentViewState()

@@ -39,6 +39,8 @@ enum RuntimeEventReducer {
             break
         }
 
+        updateTransientRunEvents(with: event, in: &state)
+
         if event.sequence > 0 {
             recordAppliedSequence(event, in: &state)
         }
@@ -64,6 +66,26 @@ enum RuntimeEventReducer {
             return nil
         }
         return event.runId
+    }
+
+    private static func updateTransientRunEvents(
+        with event: RuntimeEventDTO,
+        in state: inout AgentViewState
+    ) {
+        if event.clearsTransientRunCardEvents {
+            state.transientRunEvents = []
+            return
+        }
+
+        guard event.isTransientRunCardEvent else {
+            return
+        }
+
+        state.transientRunEvents.removeAll { $0.id == event.id }
+        state.transientRunEvents.append(event)
+        if state.transientRunEvents.count > 20 {
+            state.transientRunEvents.removeFirst(state.transientRunEvents.count - 20)
+        }
     }
 
     private static func appendUserMessage(_ event: RuntimeEventDTO, to state: inout AgentViewState) {
@@ -187,5 +209,18 @@ enum RuntimeEventReducer {
         }
 
         return object[key] as? String
+    }
+}
+
+private extension RuntimeEventDTO {
+    var isTransientRunCardEvent: Bool {
+        kind == .runSuspended
+            || kind == .runWaitingTool
+            || kind == .toolExecutionFailed
+            || kind == .runFailed
+    }
+
+    var clearsTransientRunCardEvents: Bool {
+        kind == .assistantMessageCompleted || kind == .runCancelled
     }
 }

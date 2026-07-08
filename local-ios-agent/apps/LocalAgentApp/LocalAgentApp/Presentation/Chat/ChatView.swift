@@ -255,6 +255,11 @@ struct ChatView: View {
                             }
                     }
 
+                    ForEach(RunInlineCardProjection.project(state: viewModel.state)) { card in
+                        RunInlineCardView(state: card)
+                            .id(card.id)
+                    }
+
                     if let error = viewModel.state.errorMessage {
                         errorView(text: error)
                     }
@@ -266,6 +271,9 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .onAppear { scrollProxy = proxy }
             .onChange(of: viewModel.state.messages.count) {
+                scrollToBottom()
+            }
+            .onChange(of: viewModel.state.transientRunEvents.count) {
                 scrollToBottom()
             }
             .onChange(of: viewModel.state.draftText) {

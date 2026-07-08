@@ -57,6 +57,13 @@ struct RunStatusCardState: Equatable, Sendable {
 
 enum RunInlineCardProjection {
     static func project(
+        state: AgentViewState,
+        approval: ApprovalProtocolRequestDTO? = nil
+    ) -> [RunInlineCardState] {
+        project(events: state.transientRunEvents, approval: approval)
+    }
+
+    static func project(
         events: [RuntimeEventDTO],
         approval: ApprovalProtocolRequestDTO? = nil
     ) -> [RunInlineCardState] {

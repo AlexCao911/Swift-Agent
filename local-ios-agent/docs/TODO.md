@@ -48,6 +48,7 @@ Done in the current MVP branch:
 - Coordinator suspends runs on pending-interaction tool envelopes without submitting them as normal
   tool observations.
 - Inline run cards project approval, pending interaction, permission repair, missing model, and waiting-tool states.
+- Chat renders inline run cards from transient runtime events.
 - Context Inspector shows context sources, trust labels, token estimates, and untrusted external-content warnings.
 - Tool Center shows manifest-derived tool rows, permission readiness, approval policy, and mode filters.
 - Model Center shows active model, local/cloud readiness, and explicit setup blockers.
