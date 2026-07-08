@@ -12,11 +12,13 @@ struct BuilderFirstHostView: View {
     @State private var chatViewModel: AgentViewModel
     @State private var builderViewModel: AgentBuilderViewModel
     @State private var isBuilderPresented = false
+    private let runInlineCardActionHandler: RunInlineCardActionHandler
 
     @MainActor
     init(container: AppContainer) {
         _chatViewModel = State(initialValue: container.makeAgentViewModel())
         _builderViewModel = State(initialValue: container.makeAgentBuilderViewModel())
+        runInlineCardActionHandler = container.runInlineCardActionHandler
     }
 
     var body: some View {
@@ -24,7 +26,8 @@ struct BuilderFirstHostView: View {
             viewModel: chatViewModel,
             onOpenBuilder: {
                 isBuilderPresented = true
-            }
+            },
+            onRunInlineCardAction: handleRunInlineCardAction
         )
         .sheet(isPresented: $isBuilderPresented) {
             AgentBuilderView(
@@ -34,6 +37,13 @@ struct BuilderFirstHostView: View {
                     isBuilderPresented = false
                 }
             )
+        }
+    }
+
+    @MainActor
+    private func handleRunInlineCardAction(_ card: RunInlineCardState) {
+        Task {
+            _ = await runInlineCardActionHandler.handle(card)
         }
     }
 }

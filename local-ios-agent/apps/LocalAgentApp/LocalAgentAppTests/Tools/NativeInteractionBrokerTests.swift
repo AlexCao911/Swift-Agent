@@ -5,6 +5,79 @@ import Testing
 @Suite("Native interaction broker")
 struct NativeInteractionBrokerTests {
     @Test
+    @MainActor
+    func runInlineCardActionHandlerPresentsActionablePendingInteraction() async throws {
+        let broker = RecordingNativeInteractionBroker(result: .completed)
+        let handler = RunInlineCardActionHandler(broker: broker)
+        let card = RunInlineCardState.pendingInteraction(PendingInteractionCardState(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: "photos_picker",
+            toolName: "photos.pick_images",
+            title: "Choose images"
+        ))
+
+        let result = await handler.handle(card)
+
+        #expect(result == .completed)
+        #expect(await broker.presentedRecords == [
+            PendingUserInteractionRecord(
+                id: "pending_1",
+                runId: "run_1",
+                toolCallId: "call_1",
+                manifestId: "native.photos.pick_images.v1",
+                interactionKind: .photosPicker,
+                state: .requested,
+                resumablePayloadSummary: "Choose images",
+                expiresAtMillis: nil
+            ),
+        ])
+    }
+
+    @Test
+    @MainActor
+    func runInlineCardActionHandlerIgnoresIncompletePendingInteraction() async {
+        let broker = RecordingNativeInteractionBroker(result: .completed)
+        let handler = RunInlineCardActionHandler(broker: broker)
+        let card = RunInlineCardState.pendingInteraction(PendingInteractionCardState(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "",
+            interactionKind: "photos_picker",
+            toolName: "photos.pick_images",
+            title: "Choose images"
+        ))
+
+        let result = await handler.handle(card)
+
+        #expect(result == nil)
+        #expect(await broker.presentedRecords.isEmpty)
+    }
+
+    @Test
+    func runInlineCardActionHandlerRecordsFailedPresentation() async {
+        let broker = RecordingNativeInteractionBroker(result: .failed)
+        let handler = RunInlineCardActionHandler(broker: broker)
+        let card = RunInlineCardState.pendingInteraction(PendingInteractionCardState(
+            id: "pending_1",
+            runId: "run_1",
+            toolCallId: "call_1",
+            manifestId: "native.photos.pick_images.v1",
+            interactionKind: "photos_picker",
+            toolName: "photos.pick_images",
+            title: "Choose images"
+        ))
+
+        let result = await handler.handle(card)
+
+        #expect(result == .failed)
+        #expect(await handler.lastErrorMessage == "Native interaction could not be completed.")
+    }
+
+    @Test
     func pendingInteractionCardCreatesBrokerRecord() throws {
         let card = PendingInteractionCardState(
             id: "pending_1",
@@ -131,5 +204,19 @@ private struct StaticInteractionPresenter: NativeInteractionPresenting {
 
     func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult {
         result
+    }
+}
+
+private actor RecordingNativeInteractionBroker: NativeInteractionBrokering {
+    private let result: NativeInteractionResult
+    private(set) var presentedRecords: [PendingUserInteractionRecord] = []
+
+    init(result: NativeInteractionResult) {
+        self.result = result
+    }
+
+    func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult {
+        presentedRecords.append(record)
+        return result
     }
 }

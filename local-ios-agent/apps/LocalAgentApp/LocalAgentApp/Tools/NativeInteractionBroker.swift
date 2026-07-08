@@ -10,6 +10,10 @@ protocol NativeInteractionPresenting: Sendable {
     func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult
 }
 
+protocol NativeInteractionBrokering: Sendable {
+    func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult
+}
+
 actor NativeInteractionBroker {
     private let store: any PendingUserInteractionStore
     private let presenter: any NativeInteractionPresenting
@@ -40,6 +44,48 @@ actor NativeInteractionBroker {
         } catch {
             try await store.markState(.failed, id: record.id)
             throw error
+        }
+    }
+}
+
+extension NativeInteractionBroker: NativeInteractionBrokering {}
+
+struct UnavailableNativeInteractionPresenter: NativeInteractionPresenting {
+    func present(_ record: PendingUserInteractionRecord) async throws -> NativeInteractionResult {
+        .failed
+    }
+}
+
+protocol RunInlineCardActionHandling: Sendable {
+    func handle(_ card: RunInlineCardState) async -> NativeInteractionResult?
+}
+
+actor RunInlineCardActionHandler: RunInlineCardActionHandling {
+    private let broker: any NativeInteractionBrokering
+    private(set) var lastErrorMessage: String?
+
+    init(broker: any NativeInteractionBrokering) {
+        self.broker = broker
+    }
+
+    func handle(_ card: RunInlineCardState) async -> NativeInteractionResult? {
+        guard case .pendingInteraction(let state) = card,
+              let record = state.pendingUserInteractionRecord()
+        else {
+            return nil
+        }
+
+        do {
+            let result = try await broker.present(record)
+            if result == .failed {
+                lastErrorMessage = "Native interaction could not be completed."
+            } else {
+                lastErrorMessage = nil
+            }
+            return result
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return .failed
         }
     }
 }

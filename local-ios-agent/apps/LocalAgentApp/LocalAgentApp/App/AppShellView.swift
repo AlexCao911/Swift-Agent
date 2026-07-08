@@ -89,7 +89,8 @@ struct AppShellView: View {
                         profileId: viewModel.activeAgent?.profileId,
                         revisionId: viewModel.activeAgent?.profileRevisionId
                     )
-                }
+                },
+                runInlineCardActionHandler: container.runInlineCardActionHandler
             )
             .navigationTitle("Chat")
         case .agents:

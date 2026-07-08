@@ -57,6 +57,13 @@ enum AppBootstrapper {
         let builderToolCatalogClient = NativeManifestToolCatalogClient(catalogProvider: {
             nativeCatalog
         })
+        let pendingInteractionStore = try FileBackedPendingUserInteractionStore(
+            directory: try pendingInteractionsURL()
+        )
+        let nativeInteractionBroker = NativeInteractionBroker(
+            store: pendingInteractionStore,
+            presenter: UnavailableNativeInteractionPresenter()
+        )
 
         return AppContainer(
             runtimeService: AgentRuntimeService(
@@ -69,7 +76,8 @@ enum AppBootstrapper {
             nativePermissionGateway: nativePermissionGateway,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
             permissionClient: MockPermissionClient(issues: []),
-            agentBuilderToolCatalogClient: builderToolCatalogClient
+            agentBuilderToolCatalogClient: builderToolCatalogClient,
+            runInlineCardActionHandler: RunInlineCardActionHandler(broker: nativeInteractionBroker)
         )
     }
 
@@ -159,6 +167,14 @@ enum AppBootstrapper {
         let directory = support.appendingPathComponent("LocalAgent", isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("agent.sqlite")
+    }
+
+    static func pendingInteractionsURL(fileManager: FileManager = .default) throws -> URL {
+        let directory = try sqliteURL(fileManager: fileManager)
+            .deletingLastPathComponent()
+            .appendingPathComponent("PendingInteractions", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     static func runtimeProviderId(

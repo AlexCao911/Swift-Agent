@@ -9,6 +9,7 @@ struct AppContainer {
     let agentBuilderClient: any AgentBuilderClient
     let permissionClient: any PermissionClient
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
+    let runInlineCardActionHandler: RunInlineCardActionHandler
 
     @MainActor
     func makeAgentViewModel() -> AgentViewModel {

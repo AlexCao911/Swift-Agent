@@ -4,6 +4,7 @@ struct ConversationWorkspaceView: View {
     @Bindable var shellViewModel: AppShellViewModel
     @Bindable var chatViewModel: AgentViewModel
     var onOpenBuilder: () -> Void
+    var runInlineCardActionHandler: RunInlineCardActionHandler?
 
     @State private var workspaceViewModel = ConversationWorkspaceViewModel()
     @State private var isContextInspectorPresented = false
@@ -12,7 +13,8 @@ struct ConversationWorkspaceView: View {
         ChatView(
             viewModel: chatViewModel,
             onOpenBuilder: onOpenBuilder,
-            onInspectContext: { isContextInspectorPresented = true }
+            onInspectContext: { isContextInspectorPresented = true },
+            onRunInlineCardAction: handleRunInlineCardAction
         )
         .sheet(isPresented: $isContextInspectorPresented) {
             ContextInspectorView(
@@ -39,5 +41,16 @@ struct ConversationWorkspaceView: View {
         }
 
         chatViewModel.state = state
+    }
+
+    @MainActor
+    private func handleRunInlineCardAction(_ card: RunInlineCardState) {
+        guard let runInlineCardActionHandler else {
+            return
+        }
+
+        Task {
+            _ = await runInlineCardActionHandler.handle(card)
+        }
     }
 }

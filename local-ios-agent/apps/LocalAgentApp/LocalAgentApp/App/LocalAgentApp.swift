@@ -29,7 +29,13 @@ struct LocalAgentApp: App {
                     ),
                 ]),
                 permissionClient: MockPermissionClient(issues: []),
-                agentBuilderToolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: [])
+                agentBuilderToolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: []),
+                runInlineCardActionHandler: RunInlineCardActionHandler(
+                    broker: NativeInteractionBroker(
+                        store: InMemoryPendingUserInteractionStore(),
+                        presenter: UnavailableNativeInteractionPresenter()
+                    )
+                )
             )
             self.container = container
             _shellViewModel = State(initialValue: container.makeAppShellViewModel())
