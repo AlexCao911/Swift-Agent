@@ -7,9 +7,10 @@ use std::time::Duration;
 use local_ios_agent_runtime::context::{InferenceOptions, PromptFrame, PromptMessage};
 use local_ios_agent_runtime::core::{
     AgentError, CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream,
-    CAbiLocalInferenceBackend, CAbiTokenCallback, CancellationToken, ImageInput, LocalAgentStatus,
-    LocalInferenceBackend, LocalLLMProvider, MockLocalInferenceBackend, ModelProvider,
-    ModelProviderOutput,
+    CAbiLocalInferenceBackend, CAbiTokenCallback, CAbiV2EngineHandle, CAbiV2Functions,
+    CAbiV2GenerationHandle, CAbiV2ImageInput, CAbiV2LocalInferenceBackend, CAbiV2ModelHandle,
+    CancellationToken, ImageInput, LocalAgentStatus, LocalInferenceBackend, LocalLLMProvider,
+    MockLocalInferenceBackend, ModelProvider, ModelProviderOutput,
 };
 
 const MOCK_TOKEN_JSON: [&str; 3] = [
@@ -18,6 +19,7 @@ const MOCK_TOKEN_JSON: [&str; 3] = [
     r#"{"type":"completed","text":"On-device mock response"}"#,
 ];
 const FAKE_TOKEN_JSON: &[u8] = b"{\"type\":\"text_delta\",\"text\":\"On-device \"}\0";
+const FAKE_COMPLETED_JSON: &[u8] = b"{\"type\":\"completed\",\"text\":\"v2 response\"}\0";
 
 #[derive(Clone)]
 struct RecordingBackend {
@@ -31,6 +33,20 @@ struct RecordingBackendState {
     loaded_configs: Mutex<Vec<String>>,
     prompts: Mutex<Vec<String>>,
     image_inputs: Mutex<Vec<ImageInput>>,
+}
+
+#[derive(Default)]
+struct V2CAbiCalls {
+    engine_ids: Vec<String>,
+    model_configs: Vec<String>,
+    generation_requests: Vec<String>,
+    image_counts: Vec<u64>,
+}
+
+static V2_CALLS: std::sync::OnceLock<Mutex<V2CAbiCalls>> = std::sync::OnceLock::new();
+
+fn v2_calls() -> &'static Mutex<V2CAbiCalls> {
+    V2_CALLS.get_or_init(|| Mutex::new(V2CAbiCalls::default()))
 }
 
 impl RecordingBackend {
@@ -158,6 +174,69 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
         .as_str()
         .unwrap()
         .contains("Available tools"));
+}
+
+#[test]
+fn local_llm_provider_can_stream_through_c_abi_v2_backend() {
+    *v2_calls().lock().unwrap() = V2CAbiCalls::default();
+    let backend = unsafe {
+        CAbiV2LocalInferenceBackend::with_functions("llama_cpp", CAbiV2Functions {
+            engine_create: fake_v2_engine_create,
+            engine_release: fake_v2_engine_release,
+            model_load: fake_v2_model_load,
+            model_unload: fake_v2_model_unload,
+            generation_start: fake_v2_generation_start,
+            generation_read: fake_v2_generation_read,
+            generation_cancel: fake_v2_generation_cancel,
+            generation_release: fake_v2_generation_release,
+        })
+    }
+    .unwrap();
+    let provider = LocalLLMProvider::new(
+        "local.gguf.simulator",
+        r#"{"backend":"llama_cpp","model_path":"/tmp/model.gguf","max_context_tokens":1024,"max_new_tokens":128}"#,
+        Box::new(backend),
+    );
+    let frame = PromptFrame {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        inference_options: InferenceOptions {
+            temperature: Some(0.4),
+            top_p: Some(0.8),
+        },
+        messages: vec![PromptMessage::User("hello v2".into())],
+    };
+
+    let mut output = Vec::new();
+    provider
+        .stream_chat(&frame, CancellationToken::default(), &mut |event| {
+            output.push(event);
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        output,
+        vec![
+            ModelProviderOutput::TextDelta("On-device ".into()),
+            ModelProviderOutput::Completed("v2 response".into()),
+        ]
+    );
+
+    let calls = v2_calls().lock().unwrap();
+    assert_eq!(calls.engine_ids, vec!["llama_cpp"]);
+    assert_eq!(calls.model_configs.len(), 1);
+    let model_config: serde_json::Value = serde_json::from_str(&calls.model_configs[0]).unwrap();
+    assert_eq!(model_config["engine"], "llama_cpp");
+    assert_eq!(model_config["model_path"], "/tmp/model.gguf");
+    assert_eq!(model_config["context_tokens"], 1024);
+    let request: serde_json::Value = serde_json::from_str(&calls.generation_requests[0]).unwrap();
+    assert_eq!(request["messages"][1]["content"], "hello v2");
+    assert!((request["sampling"]["temperature"].as_f64().unwrap() - 0.4).abs() < 0.0001);
+    assert!((request["sampling"]["top_p"].as_f64().unwrap() - 0.8).abs() < 0.0001);
+    assert_eq!(request["sampling"]["max_new_tokens"], 128);
+    assert_eq!(calls.image_counts, vec![0]);
 }
 
 #[test]
@@ -365,7 +444,7 @@ fn mock_local_backend_stops_when_cancelled_by_token_callback() {
     assert!(matches!(error, AgentError::Cancelled(_)));
 }
 
-#[cfg(feature = "link-mock-local-inference")]
+#[cfg(feature = "legacy-v1-local-inference-compat")]
 #[test]
 fn c_abi_backend_streams_through_linked_mock_backend() {
     let backend = CAbiLocalInferenceBackend::new().unwrap();
@@ -386,7 +465,7 @@ fn c_abi_backend_streams_through_linked_mock_backend() {
     assert_eq!(tokens, MOCK_TOKEN_JSON);
 }
 
-#[cfg(not(feature = "link-mock-local-inference"))]
+#[cfg(not(feature = "legacy-v1-local-inference-compat"))]
 #[test]
 fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
     let error = match CAbiLocalInferenceBackend::new() {
@@ -396,7 +475,7 @@ fn c_abi_backend_new_reports_not_linked_when_backend_feature_is_disabled() {
 
     assert!(error
         .to_string()
-        .contains("Rust direct on-device C ABI linking is retired"));
+        .contains("legacy local inference v1 C ABI linking is disabled"));
 }
 
 static CANCEL_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -467,6 +546,83 @@ unsafe extern "C" fn fake_read_stream(
         return LocalAgentStatus::Ok;
     }
     LocalAgentStatus::Cancelled
+}
+
+unsafe extern "C" fn fake_v2_engine_create(
+    engine_id: *const c_char,
+    out_engine: *mut *mut CAbiV2EngineHandle,
+) -> LocalAgentStatus {
+    let engine_id = std::ffi::CStr::from_ptr(engine_id)
+        .to_str()
+        .unwrap()
+        .to_string();
+    v2_calls().lock().unwrap().engine_ids.push(engine_id);
+    *out_engine = std::ptr::dangling_mut::<CAbiV2EngineHandle>();
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_v2_engine_release(_engine: *mut CAbiV2EngineHandle) -> LocalAgentStatus {
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_v2_model_load(
+    _engine: *mut CAbiV2EngineHandle,
+    model_config_json: *const c_char,
+    out_model: *mut *mut CAbiV2ModelHandle,
+) -> LocalAgentStatus {
+    let model_config = std::ffi::CStr::from_ptr(model_config_json)
+        .to_str()
+        .unwrap()
+        .to_string();
+    v2_calls().lock().unwrap().model_configs.push(model_config);
+    *out_model = std::ptr::dangling_mut::<CAbiV2ModelHandle>();
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_v2_model_unload(_model: *mut CAbiV2ModelHandle) -> LocalAgentStatus {
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_v2_generation_start(
+    _model: *mut CAbiV2ModelHandle,
+    generation_request_json: *const c_char,
+    _images: *const CAbiV2ImageInput,
+    image_count: u64,
+    out_generation: *mut *mut CAbiV2GenerationHandle,
+) -> LocalAgentStatus {
+    let request = std::ffi::CStr::from_ptr(generation_request_json)
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut calls = v2_calls().lock().unwrap();
+    calls.generation_requests.push(request);
+    calls.image_counts.push(image_count);
+    *out_generation = std::ptr::dangling_mut::<CAbiV2GenerationHandle>();
+    LocalAgentStatus::Ok
+}
+
+unsafe extern "C" fn fake_v2_generation_read(
+    _generation: *mut CAbiV2GenerationHandle,
+    callback: CAbiTokenCallback,
+    user_data: *mut c_void,
+) -> LocalAgentStatus {
+    let delta_status = callback(FAKE_TOKEN_JSON.as_ptr() as *const c_char, user_data);
+    if delta_status != LocalAgentStatus::Ok {
+        return delta_status;
+    }
+    callback(FAKE_COMPLETED_JSON.as_ptr() as *const c_char, user_data)
+}
+
+unsafe extern "C" fn fake_v2_generation_cancel(
+    _generation: *mut CAbiV2GenerationHandle,
+) -> LocalAgentStatus {
+    LocalAgentStatus::Cancelled
+}
+
+unsafe extern "C" fn fake_v2_generation_release(
+    _generation: *mut CAbiV2GenerationHandle,
+) -> LocalAgentStatus {
+    LocalAgentStatus::Ok
 }
 
 unsafe extern "C" fn fake_blocking_read_stream(

@@ -20,8 +20,9 @@ pub use desktop_minicpm::{
 pub use event::{EventKind, RuntimeEvent};
 pub use local_llm::{
     CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream, CAbiLocalInferenceBackend,
-    CAbiTokenCallback, ImageInput, LocalAgentStatus, LocalInferenceBackend, LocalLLMProvider,
-    MockLocalInferenceBackend,
+    CAbiTokenCallback, CAbiV2EngineHandle, CAbiV2Functions, CAbiV2GenerationHandle,
+    CAbiV2ImageInput, CAbiV2LocalInferenceBackend, CAbiV2ModelHandle, ImageInput,
+    LocalAgentStatus, LocalInferenceBackend, LocalLLMProvider, MockLocalInferenceBackend,
 };
 pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
 pub use provider::{

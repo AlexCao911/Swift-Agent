@@ -13,39 +13,44 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_CPP_LIBRARY");
     println!("cargo:rerun-if-env-changed=LLAMA_CPP_MTMD_HEADERS");
     println!("cargo:rerun-if-env-changed=LLAMA_CPP_MTMD_LIBRARY");
-    println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
-    if env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_some() {
-        panic!(
-            "link-mock-local-inference is retired by the local C++ inference v2 ABI; use the later Swift/Rust HostInference takeover instead"
-        );
-    }
-    if env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_LOCAL_INFERENCE").is_some()
-        || env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_MTMD_LOCAL_INFERENCE").is_some()
-    {
-        panic!(
-            "Rust direct local inference linking is retired by the local C++ inference v2 ABI; use the later Swift/Rust HostInference takeover instead"
-        );
-    }
-    if env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_none() {
+    println!("cargo:rerun-if-env-changed=LOCAL_AGENT_LITERT_LM_INCLUDE_DIR");
+    println!("cargo:rerun-if-env-changed=LOCAL_AGENT_LITERT_LM_CXXFLAGS");
+    println!("cargo:rerun-if-env-changed=LOCAL_AGENT_LITERT_LM_LDFLAGS");
+    println!("cargo:rerun-if-env-changed=LOCAL_AGENT_LITERT_LM_LIBRARY");
+    let link_mock = env::var_os("CARGO_FEATURE_LINK_MOCK_LOCAL_INFERENCE").is_some();
+    let link_llama_cpp = env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_LOCAL_INFERENCE").is_some();
+    let link_llama_cpp_mtmd =
+        env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_MTMD_LOCAL_INFERENCE").is_some();
+    let link_litert = env::var_os("CARGO_FEATURE_LINK_LITERT_LOCAL_INFERENCE").is_some();
+    if !(link_mock || link_llama_cpp || link_litert) {
         return;
     }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let inference_dir = manifest_dir.parent().unwrap().join("inference");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let library_path = out_dir.join("liblocal_agent_inference_mock.a");
-    let sources = [
+    let library_path = out_dir.join("liblocal_agent_inference_v2.a");
+    let mut sources = vec![
         "c_api/local_agent_inference.cpp",
+        "core/json_value.cpp",
         "core/model_config.cpp",
+        "core/generation_request.cpp",
+        "core/engine_registry.cpp",
         "core/token_stream.cpp",
-        "backends/mock/mock_inference_engine.cpp",
-        "backends/llama_cpp/llama_cpp_api.cpp",
-        "backends/llama_cpp/llama_cpp_engine.cpp",
-        "backends/llama_cpp/llama_cpp_prompt.cpp",
     ];
-    let link_llama_cpp = env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_LOCAL_INFERENCE").is_some();
-    let link_llama_cpp_mtmd =
-        env::var_os("CARGO_FEATURE_LINK_LLAMA_CPP_MTMD_LOCAL_INFERENCE").is_some();
+    if link_mock {
+        sources.push("backends/mock/mock_inference_engine.cpp");
+    }
+    if link_llama_cpp {
+        sources.push("backends/llama_cpp/llama_cpp_api.cpp");
+        sources.push("backends/llama_cpp/llama_cpp_engine.cpp");
+        sources.push("backends/llama_cpp/llama_cpp_prompt.cpp");
+    }
+    if link_litert {
+        sources.push("backends/litert/litert_active_generation.cpp");
+        sources.push("backends/litert/litert_engine.cpp");
+        sources.push("backends/litert/litert_lm_api.cpp");
+    }
 
     println!(
         "cargo:rerun-if-changed={}",
@@ -53,7 +58,7 @@ fn main() {
             .join("include/local_agent_inference.h")
             .display()
     );
-    for source in sources {
+    for source in &sources {
         println!(
             "cargo:rerun-if-changed={}",
             inference_dir.join(source).display()
@@ -75,7 +80,12 @@ fn main() {
             .arg("-I")
             .arg(inference_dir.join("backends/mock"))
             .arg("-I")
-            .arg(inference_dir.join("backends/llama_cpp"));
+            .arg(inference_dir.join("backends/llama_cpp"))
+            .arg("-I")
+            .arg(inference_dir.join("backends/litert"));
+        if link_mock {
+            compile.arg("-DLOCAL_AGENT_ENABLE_TEST_ENGINES");
+        }
         if link_llama_cpp {
             compile.arg("-DLOCAL_AGENT_ENABLE_LLAMA_CPP");
             for include_path in required_paths("LLAMA_CPP_HEADERS") {
@@ -86,6 +96,16 @@ fn main() {
             compile.arg("-DLOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD");
             for include_path in required_paths("LLAMA_CPP_MTMD_HEADERS") {
                 compile.arg("-I").arg(include_path);
+            }
+        }
+        if link_litert {
+            compile
+                .arg("-DLOCAL_AGENT_ENABLE_LITERT")
+                .arg("-DLOCAL_AGENT_ENABLE_LITERT_VENDOR")
+                .arg("-I")
+                .arg(required_path("LOCAL_AGENT_LITERT_LM_INCLUDE_DIR"));
+            for flag in env_words("LOCAL_AGENT_LITERT_LM_CXXFLAGS") {
+                compile.arg(flag);
             }
         }
         compile
@@ -105,12 +125,18 @@ fn main() {
     run(&mut archive);
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=local_agent_inference_mock");
+    println!("cargo:rustc-link-lib=static=local_agent_inference_v2");
     if link_llama_cpp {
         link_llama_cpp_artifact();
     }
     if link_llama_cpp_mtmd {
         link_library_path(&required_path("LLAMA_CPP_MTMD_LIBRARY"));
+    }
+    if link_litert {
+        if let Some(library) = env::var_os("LOCAL_AGENT_LITERT_LM_LIBRARY").map(PathBuf::from) {
+            link_library_path(&library);
+        }
+        link_litert_flags();
     }
     match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
         "ios" | "macos" => println!("cargo:rustc-link-lib=dylib=c++"),
@@ -156,19 +182,11 @@ fn cxx_invocation() -> CxxInvocation {
 }
 
 fn apple_cxx(sdk: &str, clang_target: &str, min_version_arg: &str) -> CxxInvocation {
-    let compiler = command_stdout(
-        Command::new("xcrun")
-            .arg("--sdk")
-            .arg(sdk)
-            .arg("--find")
-            .arg("clang++"),
-    );
-    let sdk_path = command_stdout(
-        Command::new("xcrun")
-            .arg("--sdk")
-            .arg(sdk)
-            .arg("--show-sdk-path"),
-    );
+    let compiler = env::var("CXX").unwrap_or_else(|_| {
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+            .to_string()
+    });
+    let sdk_path = env::var("SDKROOT").unwrap_or_else(|_| sdk_path(sdk));
 
     CxxInvocation {
         compiler: PathBuf::from(compiler),
@@ -180,6 +198,29 @@ fn apple_cxx(sdk: &str, clang_target: &str, min_version_arg: &str) -> CxxInvocat
             min_version_arg.into(),
         ],
     }
+}
+
+fn sdk_path(sdk: &str) -> String {
+    let platform = match sdk {
+        "iphonesimulator" => "iPhoneSimulator.platform",
+        "iphoneos" => "iPhoneOS.platform",
+        "macosx" => "MacOSX.platform",
+        _ => {
+            return command_stdout(
+                Command::new("/usr/bin/xcrun")
+                    .arg("--sdk")
+                    .arg(sdk)
+                    .arg("--show-sdk-path"),
+            )
+        }
+    };
+    let sdk_name = match sdk {
+        "iphonesimulator" => "iPhoneSimulator.sdk",
+        "iphoneos" => "iPhoneOS.sdk",
+        "macosx" => "MacOSX.sdk",
+        _ => unreachable!(),
+    };
+    format!("/Applications/Xcode.app/Contents/Developer/Platforms/{platform}/Developer/SDKs/{sdk_name}")
 }
 
 fn command_stdout(command: &mut Command) -> String {
@@ -212,6 +253,12 @@ fn required_paths(name: &str) -> Vec<PathBuf> {
     paths
 }
 
+fn env_words(name: &str) -> Vec<String> {
+    env::var(name)
+        .map(|value| value.split_whitespace().map(ToString::to_string).collect())
+        .unwrap_or_default()
+}
+
 fn link_llama_cpp_artifact() {
     if let Some(library) = env::var_os("LLAMA_CPP_LIBRARY").map(PathBuf::from) {
         link_library_path(&library);
@@ -226,6 +273,23 @@ fn link_llama_cpp_artifact() {
         )
     });
     link_library_path(&library);
+}
+
+fn link_litert_flags() {
+    for flag in env_words("LOCAL_AGENT_LITERT_LM_LDFLAGS") {
+        if let Some(path) = flag.strip_prefix("-L") {
+            println!("cargo:rustc-link-search=native={path}");
+        } else if let Some(library) = flag.strip_prefix("-l") {
+            println!("cargo:rustc-link-lib={library}");
+        } else if flag.ends_with(".a") || flag.ends_with(".dylib") {
+            link_library_path(Path::new(&flag));
+        } else if let Some(framework) = flag.strip_prefix("-framework") {
+            let framework = framework.trim();
+            if !framework.is_empty() {
+                println!("cargo:rustc-link-lib=framework={framework}");
+            }
+        }
+    }
 }
 
 fn find_xcframework_library(root: &Path) -> Option<PathBuf> {

@@ -1683,7 +1683,7 @@ fn bridge_config_surfaces_unlinked_local_llm_provider() {
     assert!(
         error
             .to_string()
-            .contains("Rust direct on-device C ABI linking is retired"),
+            .contains("local C++ inference v2 is not linked"),
         "{error}"
     );
 }
@@ -1733,7 +1733,7 @@ fn bridge_config_exposes_named_local_llm_profiles_without_building_them() {
     }));
 }
 
-#[cfg(feature = "link-mock-local-inference")]
+#[cfg(feature = "legacy-v1-local-inference-compat")]
 #[test]
 fn bridge_config_can_create_runtime_with_local_llm_provider_when_linked() {
     let bridge = RuntimeJsonBridge::from_config_json(

@@ -28,14 +28,14 @@ if [[ "$FEATURES" == *"link-llama-cpp-mtmd-local-inference"* ]]; then
   fi
 fi
 
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+SDKROOT="${SDKROOT:-/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk}" \
+IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}" \
 cargo build \
   --manifest-path "$ROOT/rust-core/Cargo.toml" \
   --target aarch64-apple-ios-sim \
   --features "$FEATURES"
 
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
-xcodebuild -quiet \
+/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -quiet \
   -project "$ROOT/apps/LocalAgentApp/LocalAgentApp.xcodeproj" \
   -scheme LocalAgentApp \
   -derivedDataPath "${LOCAL_AGENT_DERIVED_DATA_PATH:-/private/tmp/local-agent-deriveddata}" \

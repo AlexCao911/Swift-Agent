@@ -26,7 +26,7 @@ use crate::conversation::{
 };
 use crate::core::{
     register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
-    AgentTurnResult, CAbiLocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
+    AgentTurnResult, CAbiV2LocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
     LocalLLMProvider, ProviderBundle, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
@@ -1917,6 +1917,7 @@ impl RuntimeProviderConfigJson {
                 let model = model.clone();
                 let model_config_json = model_config_json.clone();
                 let max_context_tokens = *max_context_tokens;
+                let engine_id = local_engine_id(&model_config_json, &provider_id)?;
                 let tokenizer_id = provider_id.clone();
                 let provider_factory_id = provider_id.clone();
                 registry.register_fallible_factory(
@@ -1932,7 +1933,7 @@ impl RuntimeProviderConfigJson {
                                 provider_factory_id.clone(),
                                 model.clone(),
                                 model_config_json.clone(),
-                                Box::new(CAbiLocalInferenceBackend::new()?),
+                                Box::new(CAbiV2LocalInferenceBackend::new(engine_id.clone())?),
                             )),
                             tokenizer: Box::new(BridgeWhitespaceTokenizer::new(
                                 tokenizer_id.clone(),
@@ -1944,6 +1945,29 @@ impl RuntimeProviderConfigJson {
             }
         }
     }
+}
+
+fn local_engine_id(model_config_json: &str, provider_id: &str) -> Result<String, AgentError> {
+    let value: Value = serde_json::from_str(model_config_json)
+        .map_err(|error| AgentError::Provider(format!("invalid local model config JSON: {error}")))?;
+    if let Some(engine) = value.get("engine").and_then(Value::as_str) {
+        if !engine.trim().is_empty() {
+            return Ok(engine.to_string());
+        }
+    }
+    if let Some(backend) = value.get("backend").and_then(Value::as_str) {
+        if !backend.trim().is_empty() {
+            return Ok(backend.to_string());
+        }
+    }
+    if let Some(engine) = provider_id.strip_prefix("local_llm.") {
+        if !engine.trim().is_empty() {
+            return Ok(engine.to_string());
+        }
+    }
+    Err(AgentError::Provider(format!(
+        "local provider {provider_id} missing engine/backend in model_config_json"
+    )))
 }
 
 #[derive(Deserialize)]

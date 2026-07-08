@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::context::PromptFrame;
 use crate::core::{
@@ -23,10 +23,9 @@ pub enum LocalAgentStatus {
 
 // Retired v1 C ABI compatibility surface.
 //
-// The local C++ inference v2 ABI is now app-owned and will be reached through
-// the Swift/Rust HostInference boundary. These declarations remain only so
-// older tests and injected compatibility backends can be understood while
-// build.rs fails fast for direct-link local inference Cargo features.
+// Product local inference now uses the C++ v2 engine/model/generation ABI below.
+// These declarations remain only so older tests and injected compatibility
+// backends can be understood without keeping the old direct-link path alive.
 #[repr(C)]
 pub struct CAbiLocalAgentBackend {
     _private: [u8; 0],
@@ -35,6 +34,30 @@ pub struct CAbiLocalAgentBackend {
 #[repr(C)]
 pub struct CAbiLocalAgentBackendStream {
     _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct CAbiV2EngineHandle {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct CAbiV2ModelHandle {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct CAbiV2GenerationHandle {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct CAbiV2ImageInput {
+    pub bytes: *const u8,
+    pub byte_count: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: *const c_char,
 }
 
 pub type CAbiTokenCallback = unsafe extern "C" fn(*const c_char, *mut c_void) -> LocalAgentStatus;
@@ -66,6 +89,32 @@ pub type CAbiReleaseStreamFn =
 pub type CAbiReleaseBackendFn =
     unsafe extern "C" fn(*mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 
+pub type CAbiV2EngineCreateFn =
+    unsafe extern "C" fn(*const c_char, *mut *mut CAbiV2EngineHandle) -> LocalAgentStatus;
+pub type CAbiV2EngineReleaseFn = unsafe extern "C" fn(*mut CAbiV2EngineHandle) -> LocalAgentStatus;
+pub type CAbiV2ModelLoadFn = unsafe extern "C" fn(
+    *mut CAbiV2EngineHandle,
+    *const c_char,
+    *mut *mut CAbiV2ModelHandle,
+) -> LocalAgentStatus;
+pub type CAbiV2ModelUnloadFn = unsafe extern "C" fn(*mut CAbiV2ModelHandle) -> LocalAgentStatus;
+pub type CAbiV2GenerationStartFn = unsafe extern "C" fn(
+    *mut CAbiV2ModelHandle,
+    *const c_char,
+    *const CAbiV2ImageInput,
+    u64,
+    *mut *mut CAbiV2GenerationHandle,
+) -> LocalAgentStatus;
+pub type CAbiV2GenerationReadFn = unsafe extern "C" fn(
+    *mut CAbiV2GenerationHandle,
+    CAbiTokenCallback,
+    *mut c_void,
+) -> LocalAgentStatus;
+pub type CAbiV2GenerationCancelFn =
+    unsafe extern "C" fn(*mut CAbiV2GenerationHandle) -> LocalAgentStatus;
+pub type CAbiV2GenerationReleaseFn =
+    unsafe extern "C" fn(*mut CAbiV2GenerationHandle) -> LocalAgentStatus;
+
 #[derive(Clone, Copy)]
 pub struct CAbiFunctions {
     pub init: CAbiInitFn,
@@ -76,6 +125,18 @@ pub struct CAbiFunctions {
     pub cancel: CAbiCancelFn,
     pub release_stream: CAbiReleaseStreamFn,
     pub release_backend: CAbiReleaseBackendFn,
+}
+
+#[derive(Clone, Copy)]
+pub struct CAbiV2Functions {
+    pub engine_create: CAbiV2EngineCreateFn,
+    pub engine_release: CAbiV2EngineReleaseFn,
+    pub model_load: CAbiV2ModelLoadFn,
+    pub model_unload: CAbiV2ModelUnloadFn,
+    pub generation_start: CAbiV2GenerationStartFn,
+    pub generation_read: CAbiV2GenerationReadFn,
+    pub generation_cancel: CAbiV2GenerationCancelFn,
+    pub generation_release: CAbiV2GenerationReleaseFn,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,6 +178,13 @@ pub struct CAbiLocalInferenceBackend {
     backend: Mutex<CAbiBackendHandle>,
 }
 
+pub struct CAbiV2LocalInferenceBackend {
+    functions: CAbiV2Functions,
+    engine_id: String,
+    engine: Mutex<CAbiV2EngineHandlePtr>,
+    model: Mutex<CAbiV2ModelHandlePtr>,
+}
+
 pub struct LocalLLMProvider {
     provider_id: String,
     model: String,
@@ -135,6 +203,27 @@ struct CAbiStreamHandle(*mut CAbiLocalAgentBackendStream);
 
 unsafe impl Send for CAbiStreamHandle {}
 
+#[derive(Clone, Copy)]
+struct CAbiV2EngineHandlePtr(*mut CAbiV2EngineHandle);
+
+unsafe impl Send for CAbiV2EngineHandlePtr {}
+
+#[derive(Clone, Copy)]
+struct CAbiV2ModelHandlePtr(*mut CAbiV2ModelHandle);
+
+unsafe impl Send for CAbiV2ModelHandlePtr {}
+
+#[derive(Clone, Copy)]
+struct CAbiV2GenerationHandlePtr(*mut CAbiV2GenerationHandle);
+
+unsafe impl Send for CAbiV2GenerationHandlePtr {}
+
+impl CAbiV2GenerationHandlePtr {
+    fn as_ptr(self) -> *mut CAbiV2GenerationHandle {
+        self.0
+    }
+}
+
 impl CAbiStreamHandle {
     fn as_ptr(self) -> *mut CAbiLocalAgentBackendStream {
         self.0
@@ -151,7 +240,7 @@ struct CallbackState<'a> {
 
 // Retired v1 symbol imports. Enabling this feature is intentionally rejected in
 // build.rs before linking; do not add new product code against these symbols.
-#[cfg(feature = "link-mock-local-inference")]
+#[cfg(feature = "legacy-v1-local-inference-compat")]
 extern "C" {
     fn local_agent_backend_init(out_backend: *mut *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
     fn local_agent_backend_load_model(
@@ -183,8 +272,44 @@ extern "C" {
     fn local_agent_backend_release(backend: *mut CAbiLocalAgentBackend) -> LocalAgentStatus;
 }
 
+#[cfg(any(
+    feature = "link-mock-local-inference",
+    feature = "link-llama-cpp-local-inference",
+    feature = "link-llama-cpp-mtmd-local-inference",
+    feature = "link-litert-local-inference"
+))]
+extern "C" {
+    fn local_agent_engine_create(
+        engine_id: *const c_char,
+        out_engine: *mut *mut CAbiV2EngineHandle,
+    ) -> LocalAgentStatus;
+    fn local_agent_engine_release(engine: *mut CAbiV2EngineHandle) -> LocalAgentStatus;
+    fn local_agent_model_load(
+        engine: *mut CAbiV2EngineHandle,
+        model_config_json: *const c_char,
+        out_model: *mut *mut CAbiV2ModelHandle,
+    ) -> LocalAgentStatus;
+    fn local_agent_model_unload(model: *mut CAbiV2ModelHandle) -> LocalAgentStatus;
+    fn local_agent_generation_start(
+        model: *mut CAbiV2ModelHandle,
+        generation_request_json: *const c_char,
+        images: *const CAbiV2ImageInput,
+        image_count: u64,
+        out_generation: *mut *mut CAbiV2GenerationHandle,
+    ) -> LocalAgentStatus;
+    fn local_agent_generation_read(
+        generation: *mut CAbiV2GenerationHandle,
+        callback: CAbiTokenCallback,
+        user_data: *mut c_void,
+    ) -> LocalAgentStatus;
+    fn local_agent_generation_cancel(generation: *mut CAbiV2GenerationHandle) -> LocalAgentStatus;
+    fn local_agent_generation_release(
+        generation: *mut CAbiV2GenerationHandle,
+    ) -> LocalAgentStatus;
+}
+
 impl CAbiFunctions {
-    #[cfg(feature = "link-mock-local-inference")]
+    #[cfg(feature = "legacy-v1-local-inference-compat")]
     pub fn linked() -> Self {
         Self {
             init: local_agent_backend_init,
@@ -195,6 +320,27 @@ impl CAbiFunctions {
             cancel: local_agent_backend_cancel,
             release_stream: local_agent_backend_release_stream,
             release_backend: local_agent_backend_release,
+        }
+    }
+}
+
+impl CAbiV2Functions {
+    #[cfg(any(
+        feature = "link-mock-local-inference",
+        feature = "link-llama-cpp-local-inference",
+        feature = "link-llama-cpp-mtmd-local-inference",
+        feature = "link-litert-local-inference"
+    ))]
+    pub fn linked() -> Self {
+        Self {
+            engine_create: local_agent_engine_create,
+            engine_release: local_agent_engine_release,
+            model_load: local_agent_model_load,
+            model_unload: local_agent_model_unload,
+            generation_start: local_agent_generation_start,
+            generation_read: local_agent_generation_read,
+            generation_cancel: local_agent_generation_cancel,
+            generation_release: local_agent_generation_release,
         }
     }
 }
@@ -299,15 +445,242 @@ impl CAbiLocalInferenceBackend {
     }
 }
 
-#[cfg(feature = "link-mock-local-inference")]
+impl CAbiV2LocalInferenceBackend {
+    pub fn new(engine_id: impl Into<String>) -> Result<Self, AgentError> {
+        let functions = linked_c_abi_v2_functions()?;
+        unsafe { Self::with_functions(engine_id, functions) }
+    }
+
+    pub unsafe fn with_functions(
+        engine_id: impl Into<String>,
+        functions: CAbiV2Functions,
+    ) -> Result<Self, AgentError> {
+        let engine_id = engine_id.into();
+        let engine_id_c = c_string(&engine_id, "engine id")?;
+        let mut engine = ptr::null_mut();
+        let status = (functions.engine_create)(engine_id_c.as_ptr(), &mut engine);
+        if status != LocalAgentStatus::Ok {
+            return Err(status_to_error(status, "create on-device engine"));
+        }
+        if engine.is_null() {
+            return Err(AgentError::Provider(
+                "on-device engine create returned null".into(),
+            ));
+        }
+
+        Ok(Self {
+            functions,
+            engine_id,
+            engine: Mutex::new(CAbiV2EngineHandlePtr(engine)),
+            model: Mutex::new(CAbiV2ModelHandlePtr(ptr::null_mut())),
+        })
+    }
+
+    fn engine_ptr(&self) -> Result<*mut CAbiV2EngineHandle, AgentError> {
+        let engine = self.engine.lock().unwrap();
+        if engine.0.is_null() {
+            return Err(AgentError::Provider(
+                "on-device engine has been released".into(),
+            ));
+        }
+        Ok(engine.0)
+    }
+
+    fn model_ptr(&self) -> Result<*mut CAbiV2ModelHandle, AgentError> {
+        let model = self.model.lock().unwrap();
+        if model.0.is_null() {
+            return Err(AgentError::Provider(
+                "on-device model is not loaded".into(),
+            ));
+        }
+        Ok(model.0)
+    }
+
+    fn start_generation(
+        &self,
+        request: &CString,
+        image: Option<&ImageInput>,
+    ) -> Result<*mut CAbiV2GenerationHandle, AgentError> {
+        let pixel_format = c_string("rgb8", "pixel format")?;
+        let image_inputs = image.map(|image| CAbiV2ImageInput {
+            bytes: image.rgb_data.as_ptr(),
+            byte_count: image.rgb_data.len() as u64,
+            width: image.width,
+            height: image.height,
+            pixel_format: pixel_format.as_ptr(),
+        });
+        let (images_ptr, image_count) = match &image_inputs {
+            Some(image_input) => (image_input as *const CAbiV2ImageInput, 1),
+            None => (ptr::null(), 0),
+        };
+
+        let mut generation = ptr::null_mut();
+        let status = unsafe {
+            (self.functions.generation_start)(
+                self.model_ptr()?,
+                request.as_ptr(),
+                images_ptr,
+                image_count,
+                &mut generation,
+            )
+        };
+        status_to_result(status, "start on-device generation")?;
+        if generation.is_null() {
+            return Err(AgentError::Provider(
+                "on-device generation start returned null".into(),
+            ));
+        }
+        Ok(generation)
+    }
+
+    fn read_started_generation(
+        &self,
+        generation: *mut CAbiV2GenerationHandle,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        let done = Arc::new(AtomicBool::new(false));
+        let cancel_called = Arc::new(AtomicBool::new(false));
+        let watcher = spawn_v2_cancellation_watcher(
+            CAbiV2GenerationHandlePtr(generation),
+            cancellation.clone(),
+            self.functions.generation_cancel,
+            done.clone(),
+            cancel_called.clone(),
+        );
+        let mut callback_error = None;
+        let mut state = CallbackState {
+            on_token,
+            cancellation: cancellation.clone(),
+            stream: ptr::null_mut(),
+            cancel: noop_v1_cancel,
+            error: &mut callback_error,
+        };
+
+        let read_status = unsafe {
+            (self.functions.generation_read)(
+                generation,
+                collect_c_token,
+                &mut state as *mut CallbackState<'_> as *mut c_void,
+            )
+        };
+        done.store(true, Ordering::SeqCst);
+        let watcher_panicked = watcher.join().is_err();
+        if watcher_panicked {
+            unsafe {
+                (self.functions.generation_cancel)(generation);
+            }
+        }
+        let release_status = unsafe { (self.functions.generation_release)(generation) };
+
+        if watcher_panicked {
+            status_to_result(release_status, "release on-device generation")?;
+            return Err(AgentError::Provider(
+                "on-device v2 cancellation watcher panicked".into(),
+            ));
+        }
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        if cancellation.is_cancelled()
+            || cancel_called.load(Ordering::SeqCst)
+            || read_status == LocalAgentStatus::Cancelled
+        {
+            status_to_result(release_status, "release on-device generation")?;
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
+        }
+        status_to_result(read_status, "read on-device generation")?;
+        status_to_result(release_status, "release on-device generation")
+    }
+}
+
+impl LocalInferenceBackend for CAbiV2LocalInferenceBackend {
+    fn load_model(&self, model_config_json: &str) -> Result<(), AgentError> {
+        let normalized = normalize_v2_model_config(model_config_json, &self.engine_id)?;
+        let model_config = c_string(&normalized, "model config")?;
+        let mut model = self.model.lock().unwrap();
+        if !model.0.is_null() {
+            return Ok(());
+        }
+
+        let mut loaded_model = ptr::null_mut();
+        let status = unsafe {
+            (self.functions.model_load)(self.engine_ptr()?, model_config.as_ptr(), &mut loaded_model)
+        };
+        status_to_result(status, "load on-device model")?;
+        if loaded_model.is_null() {
+            return Err(AgentError::Provider(
+                "on-device model load returned null".into(),
+            ));
+        }
+        model.0 = loaded_model;
+        Ok(())
+    }
+
+    fn stream_chat(
+        &self,
+        prompt_json: &str,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
+        }
+        let request = normalize_v2_generation_request(prompt_json, None)?;
+        let request = c_string(&request, "generation request")?;
+        let generation = self.start_generation(&request, None)?;
+        self.read_started_generation(generation, cancellation, on_token)
+    }
+
+    fn stream_chat_with_image(
+        &self,
+        prompt_json: &str,
+        image: ImageInput,
+        cancellation: CancellationToken,
+        on_token: &mut dyn FnMut(&str) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        if cancellation.is_cancelled() {
+            return Err(AgentError::Cancelled("on-device backend cancelled".into()));
+        }
+        validate_image_input(&image)?;
+        let request = normalize_v2_generation_request(prompt_json, Some(&image))?;
+        let request = c_string(&request, "generation request")?;
+        let generation = self.start_generation(&request, Some(&image))?;
+        self.read_started_generation(generation, cancellation, on_token)
+    }
+}
+
+#[cfg(feature = "legacy-v1-local-inference-compat")]
 fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
     Ok(CAbiFunctions::linked())
 }
 
-#[cfg(not(feature = "link-mock-local-inference"))]
+#[cfg(not(feature = "legacy-v1-local-inference-compat"))]
 fn linked_c_abi_functions() -> Result<CAbiFunctions, AgentError> {
     Err(AgentError::Provider(
-        "Rust direct on-device C ABI linking is retired; provide test C ABI functions directly or use the later Swift/Rust HostInference takeover".into(),
+        "legacy local inference v1 C ABI linking is disabled; use C++ inference v2 instead".into(),
+    ))
+}
+
+#[cfg(any(
+    feature = "link-mock-local-inference",
+    feature = "link-llama-cpp-local-inference",
+    feature = "link-llama-cpp-mtmd-local-inference",
+    feature = "link-litert-local-inference"
+))]
+fn linked_c_abi_v2_functions() -> Result<CAbiV2Functions, AgentError> {
+    Ok(CAbiV2Functions::linked())
+}
+
+#[cfg(not(any(
+    feature = "link-mock-local-inference",
+    feature = "link-llama-cpp-local-inference",
+    feature = "link-llama-cpp-mtmd-local-inference",
+    feature = "link-litert-local-inference"
+)))]
+fn linked_c_abi_v2_functions() -> Result<CAbiV2Functions, AgentError> {
+    Err(AgentError::Provider(
+        "local C++ inference v2 is not linked in this build".into(),
     ))
 }
 
@@ -364,10 +737,16 @@ impl ModelProvider for LocalLLMProvider {
 
         let mut prompt = build_openai_chat_request(&self.model, frame);
         prompt["stream"] = Value::Bool(true);
+        apply_local_generation_defaults(&mut prompt, &self.model_config_json)?;
 
         let prompt_json = prompt.to_string();
         let image = latest_image_input(frame)?;
-        let mut emit_token = |token_json: &str| on_output(parse_backend_token(token_json)?);
+        let mut emit_token = |token_json: &str| {
+            if let Some(output) = parse_backend_token(token_json)? {
+                on_output(output)?;
+            }
+            Ok(())
+        };
         if let Some(image) = image {
             self.backend.stream_chat_with_image(
                 &prompt_json,
@@ -655,21 +1034,151 @@ fn ensure_stream(
     }
 }
 
-fn parse_backend_token(token_json: &str) -> Result<ModelProviderOutput, AgentError> {
+fn normalize_v2_model_config(model_config_json: &str, engine_id: &str) -> Result<String, AgentError> {
+    let mut value: Value = serde_json::from_str(model_config_json)
+        .map_err(|error| AgentError::Provider(format!("invalid model config JSON: {error}")))?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        AgentError::Provider("model config must be a JSON object".into())
+    })?;
+
+    let engine = object
+        .get("engine")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| object.get("backend").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| engine_id.to_string());
+    object.insert("engine".to_string(), Value::String(engine));
+
+    if !object.contains_key("context_tokens") {
+        if let Some(max_context_tokens) = object.get("max_context_tokens").cloned() {
+            object.insert("context_tokens".to_string(), max_context_tokens);
+        }
+    }
+
+    if !object.contains_key("runtime") {
+        let mut runtime = serde_json::Map::new();
+        if let Some(n_threads) = object.get("n_threads").cloned() {
+            runtime.insert("n_threads".to_string(), n_threads);
+        }
+        if let Some(n_gpu_layers) = object.get("n_gpu_layers").cloned() {
+            runtime.insert("n_gpu_layers".to_string(), n_gpu_layers);
+        }
+        if !runtime.is_empty() {
+            object.insert("runtime".to_string(), Value::Object(runtime));
+        }
+    }
+
+    Ok(value.to_string())
+}
+
+fn apply_local_generation_defaults(
+    prompt: &mut Value,
+    model_config_json: &str,
+) -> Result<(), AgentError> {
+    let config: Value = serde_json::from_str(model_config_json)
+        .map_err(|error| AgentError::Provider(format!("invalid model config JSON: {error}")))?;
+    let Some(prompt_object) = prompt.as_object_mut() else {
+        return Err(AgentError::Provider("prompt JSON must be an object".into()));
+    };
+    let Some(config_object) = config.as_object() else {
+        return Err(AgentError::Provider("model config must be a JSON object".into()));
+    };
+
+    apply_generation_default(prompt_object, config_object, "max_new_tokens");
+    apply_generation_default(prompt_object, config_object, "temperature");
+    apply_generation_default(prompt_object, config_object, "top_p");
+    Ok(())
+}
+
+fn apply_generation_default(
+    prompt_object: &mut serde_json::Map<String, Value>,
+    config_object: &serde_json::Map<String, Value>,
+    key: &str,
+) {
+    if prompt_object.contains_key(key) {
+        return;
+    }
+    if let Some(value) = config_object.get(key).cloned() {
+        prompt_object.insert(key.to_string(), value);
+        return;
+    }
+    if let Some(value) = config_object
+        .get("generation")
+        .and_then(Value::as_object)
+        .and_then(|generation| generation.get(key))
+        .cloned()
+    {
+        prompt_object.insert(key.to_string(), value);
+    }
+}
+
+fn normalize_v2_generation_request(
+    prompt_json: &str,
+    image: Option<&ImageInput>,
+) -> Result<String, AgentError> {
+    let value: Value = serde_json::from_str(prompt_json)
+        .map_err(|error| AgentError::Provider(format!("invalid prompt JSON: {error}")))?;
+    let messages = value.get("messages").cloned().ok_or_else(|| {
+        AgentError::Provider("prompt JSON missing messages".into())
+    })?;
+    let mut request = serde_json::Map::new();
+    request.insert("messages".to_string(), messages);
+
+    if let Some(image) = image {
+        request.insert(
+            "images".to_string(),
+            Value::Array(vec![json!({
+                "format": "rgb8",
+                "width": image.width,
+                "height": image.height,
+            })]),
+        );
+    }
+
+    let mut sampling = value
+        .get("sampling")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(temperature) = value.get("temperature").cloned() {
+        sampling.insert("temperature".to_string(), temperature);
+    }
+    if let Some(top_p) = value.get("top_p").cloned() {
+        sampling.insert("top_p".to_string(), top_p);
+    }
+    if let Some(max_new_tokens) = value.get("max_new_tokens").cloned() {
+        sampling.insert("max_new_tokens".to_string(), max_new_tokens);
+    }
+    if !sampling.is_empty() {
+        request.insert("sampling".to_string(), Value::Object(sampling));
+    }
+
+    Ok(Value::Object(request).to_string())
+}
+
+fn parse_backend_token(token_json: &str) -> Result<Option<ModelProviderOutput>, AgentError> {
     let value: Value = serde_json::from_str(token_json)
         .map_err(|error| AgentError::Provider(format!("invalid on-device token JSON: {error}")))?;
     let token_type = value
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| AgentError::Provider("missing on-device token type".into()))?;
-    let text = value
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AgentError::Provider("missing on-device token text".into()))?;
-
     match token_type {
-        "text_delta" => Ok(ModelProviderOutput::TextDelta(text.to_string())),
-        "completed" => Ok(ModelProviderOutput::Completed(text.to_string())),
+        "text_delta" => {
+            let text = value
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AgentError::Provider("missing on-device token text".into()))?;
+            Ok(Some(ModelProviderOutput::TextDelta(text.to_string())))
+        }
+        "completed" => {
+            let text = value
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AgentError::Provider("missing on-device token text".into()))?;
+            Ok(Some(ModelProviderOutput::Completed(text.to_string())))
+        }
+        "usage" | "structured_delta" => Ok(None),
         other => Err(AgentError::Provider(format!(
             "unknown on-device token type: {other}"
         ))),
@@ -684,6 +1193,27 @@ impl Drop for CAbiLocalInferenceBackend {
                     (self.functions.release_backend)(backend.0);
                 }
                 backend.0 = ptr::null_mut();
+            }
+        }
+    }
+}
+
+impl Drop for CAbiV2LocalInferenceBackend {
+    fn drop(&mut self) {
+        if let Ok(mut model) = self.model.lock() {
+            if !model.0.is_null() {
+                unsafe {
+                    (self.functions.model_unload)(model.0);
+                }
+                model.0 = ptr::null_mut();
+            }
+        }
+        if let Ok(mut engine) = self.engine.lock() {
+            if !engine.0.is_null() {
+                unsafe {
+                    (self.functions.engine_release)(engine.0);
+                }
+                engine.0 = ptr::null_mut();
             }
         }
     }
@@ -737,6 +1267,10 @@ unsafe fn cancel_stream(state: &mut CallbackState<'_>) {
     }
 }
 
+unsafe extern "C" fn noop_v1_cancel(_stream: *mut CAbiLocalAgentBackendStream) -> LocalAgentStatus {
+    LocalAgentStatus::Cancelled
+}
+
 fn spawn_cancellation_watcher(
     stream: CAbiStreamHandle,
     cancellation: CancellationToken,
@@ -749,6 +1283,27 @@ fn spawn_cancellation_watcher(
             if cancellation.is_cancelled() {
                 unsafe {
                     cancel(stream.as_ptr());
+                }
+                cancel_called.store(true, Ordering::SeqCst);
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    })
+}
+
+fn spawn_v2_cancellation_watcher(
+    generation: CAbiV2GenerationHandlePtr,
+    cancellation: CancellationToken,
+    cancel: CAbiV2GenerationCancelFn,
+    done: Arc<AtomicBool>,
+    cancel_called: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) {
+            if cancellation.is_cancelled() {
+                unsafe {
+                    cancel(generation.as_ptr());
                 }
                 cancel_called.store(true, Ordering::SeqCst);
                 return;
