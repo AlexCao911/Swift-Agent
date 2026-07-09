@@ -1948,8 +1948,9 @@ impl RuntimeProviderConfigJson {
 }
 
 fn local_engine_id(model_config_json: &str, provider_id: &str) -> Result<String, AgentError> {
-    let value: Value = serde_json::from_str(model_config_json)
-        .map_err(|error| AgentError::Provider(format!("invalid local model config JSON: {error}")))?;
+    let value: Value = serde_json::from_str(model_config_json).map_err(|error| {
+        AgentError::Provider(format!("invalid local model config JSON: {error}"))
+    })?;
     if let Some(engine) = value.get("engine").and_then(Value::as_str) {
         if !engine.trim().is_empty() {
             return Ok(engine.to_string());

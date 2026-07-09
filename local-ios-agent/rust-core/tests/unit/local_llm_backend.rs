@@ -180,16 +180,19 @@ fn local_llm_provider_builds_backend_prompt_and_maps_token_outputs() {
 fn local_llm_provider_can_stream_through_c_abi_v2_backend() {
     *v2_calls().lock().unwrap() = V2CAbiCalls::default();
     let backend = unsafe {
-        CAbiV2LocalInferenceBackend::with_functions("llama_cpp", CAbiV2Functions {
-            engine_create: fake_v2_engine_create,
-            engine_release: fake_v2_engine_release,
-            model_load: fake_v2_model_load,
-            model_unload: fake_v2_model_unload,
-            generation_start: fake_v2_generation_start,
-            generation_read: fake_v2_generation_read,
-            generation_cancel: fake_v2_generation_cancel,
-            generation_release: fake_v2_generation_release,
-        })
+        CAbiV2LocalInferenceBackend::with_functions(
+            "llama_cpp",
+            CAbiV2Functions {
+                engine_create: fake_v2_engine_create,
+                engine_release: fake_v2_engine_release,
+                model_load: fake_v2_model_load,
+                model_unload: fake_v2_model_unload,
+                generation_start: fake_v2_generation_start,
+                generation_read: fake_v2_generation_read,
+                generation_cancel: fake_v2_generation_cancel,
+                generation_release: fake_v2_generation_release,
+            },
+        )
     }
     .unwrap();
     let provider = LocalLLMProvider::new(

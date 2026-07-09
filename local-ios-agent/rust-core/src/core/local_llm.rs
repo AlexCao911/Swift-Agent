@@ -303,9 +303,7 @@ extern "C" {
         user_data: *mut c_void,
     ) -> LocalAgentStatus;
     fn local_agent_generation_cancel(generation: *mut CAbiV2GenerationHandle) -> LocalAgentStatus;
-    fn local_agent_generation_release(
-        generation: *mut CAbiV2GenerationHandle,
-    ) -> LocalAgentStatus;
+    fn local_agent_generation_release(generation: *mut CAbiV2GenerationHandle) -> LocalAgentStatus;
 }
 
 impl CAbiFunctions {
@@ -489,9 +487,7 @@ impl CAbiV2LocalInferenceBackend {
     fn model_ptr(&self) -> Result<*mut CAbiV2ModelHandle, AgentError> {
         let model = self.model.lock().unwrap();
         if model.0.is_null() {
-            return Err(AgentError::Provider(
-                "on-device model is not loaded".into(),
-            ));
+            return Err(AgentError::Provider("on-device model is not loaded".into()));
         }
         Ok(model.0)
     }
@@ -605,7 +601,11 @@ impl LocalInferenceBackend for CAbiV2LocalInferenceBackend {
 
         let mut loaded_model = ptr::null_mut();
         let status = unsafe {
-            (self.functions.model_load)(self.engine_ptr()?, model_config.as_ptr(), &mut loaded_model)
+            (self.functions.model_load)(
+                self.engine_ptr()?,
+                model_config.as_ptr(),
+                &mut loaded_model,
+            )
         };
         status_to_result(status, "load on-device model")?;
         if loaded_model.is_null() {
@@ -1034,18 +1034,26 @@ fn ensure_stream(
     }
 }
 
-fn normalize_v2_model_config(model_config_json: &str, engine_id: &str) -> Result<String, AgentError> {
+fn normalize_v2_model_config(
+    model_config_json: &str,
+    engine_id: &str,
+) -> Result<String, AgentError> {
     let mut value: Value = serde_json::from_str(model_config_json)
         .map_err(|error| AgentError::Provider(format!("invalid model config JSON: {error}")))?;
-    let object = value.as_object_mut().ok_or_else(|| {
-        AgentError::Provider("model config must be a JSON object".into())
-    })?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AgentError::Provider("model config must be a JSON object".into()))?;
 
     let engine = object
         .get("engine")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .or_else(|| object.get("backend").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            object
+                .get("backend")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| engine_id.to_string());
     object.insert("engine".to_string(), Value::String(engine));
 
@@ -1081,7 +1089,9 @@ fn apply_local_generation_defaults(
         return Err(AgentError::Provider("prompt JSON must be an object".into()));
     };
     let Some(config_object) = config.as_object() else {
-        return Err(AgentError::Provider("model config must be a JSON object".into()));
+        return Err(AgentError::Provider(
+            "model config must be a JSON object".into(),
+        ));
     };
 
     apply_generation_default(prompt_object, config_object, "max_new_tokens");
@@ -1118,9 +1128,10 @@ fn normalize_v2_generation_request(
 ) -> Result<String, AgentError> {
     let value: Value = serde_json::from_str(prompt_json)
         .map_err(|error| AgentError::Provider(format!("invalid prompt JSON: {error}")))?;
-    let messages = value.get("messages").cloned().ok_or_else(|| {
-        AgentError::Provider("prompt JSON missing messages".into())
-    })?;
+    let messages = value
+        .get("messages")
+        .cloned()
+        .ok_or_else(|| AgentError::Provider("prompt JSON missing messages".into()))?;
     let mut request = serde_json::Map::new();
     request.insert("messages".to_string(), messages);
 

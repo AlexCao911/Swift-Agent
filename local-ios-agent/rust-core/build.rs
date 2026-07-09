@@ -220,7 +220,9 @@ fn sdk_path(sdk: &str) -> String {
         "macosx" => "MacOSX.sdk",
         _ => unreachable!(),
     };
-    format!("/Applications/Xcode.app/Contents/Developer/Platforms/{platform}/Developer/SDKs/{sdk_name}")
+    format!(
+        "/Applications/Xcode.app/Contents/Developer/Platforms/{platform}/Developer/SDKs/{sdk_name}"
+    )
 }
 
 fn command_stdout(command: &mut Command) -> String {
