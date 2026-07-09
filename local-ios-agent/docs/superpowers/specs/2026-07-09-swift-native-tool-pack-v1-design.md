@@ -164,7 +164,7 @@ Slice 1
 
 Slice 2
   reminders.search_reminders
-  calendar.find_free_time (recommended extension)
+  calendar.find_free_time
   calendar.create_event_user_confirmed
 ```
 
@@ -391,7 +391,7 @@ Mode: system action adapter.
 
 Purpose: receive text, URLs, images, and files from the iOS Share Sheet and store them as capture records or attachments.
 
-Outputs:
+Stored capture record shape:
 
 ```json
 {
@@ -754,40 +754,45 @@ System Input Capabilities
 Suggested groups:
 
 ```text
-Capture
+Available Runtime Tools
+  Capture
   files.pick_document
   photos.pick_images
   vision.scan_document
 
-System Inputs
-  share.capture_input
-  agent.capture_text
-  agent.start_chat
-  agent.continue_conversation
-
-Read And Extract
+  Read And Extract
   files.read_attachment
   web.extract_readable_article
   vision.extract_text_from_attachment
-  speech.transcribe_audio_attachment
 
-Organize
+  Organize
   reminders.create_reminder
   reminders.search_reminders
   calendar.search_events
   calendar.find_free_time
   calendar.create_event_user_confirmed
 
-Open And Navigate
+  Open And Navigate
   maps.geocode_address
   maps.reverse_geocode_coordinate
   maps.open_route
   web.open_url_visible
 
-System
+  System
   native.list_tools
   native.permission_status
   notifications.schedule_local
+
+Available System Input Capabilities
+  share.capture_input
+  agent.capture_text
+  agent.start_chat
+  agent.continue_conversation
+
+Future Disabled Cards
+  speech.transcribe_audio_attachment
+  files.extract_pdf_text
+  mail.create_draft
 ```
 
 Tool cards should show:
@@ -985,6 +990,8 @@ Unit tests:
 - OCR fake adapter result
 - reminders search fake adapter result
 - calendar user-confirmed pending interaction lifecycle
+- system input capabilities are not exported by `NativeToolSchemaExport`
+- `native.list_tools` does not list `share.capture_input`, `agent.capture_text`, or `agent.continue_conversation`
 
 Integration tests with fakes:
 
