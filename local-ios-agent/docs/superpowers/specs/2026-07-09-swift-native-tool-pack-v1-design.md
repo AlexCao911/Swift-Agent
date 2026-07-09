@@ -150,9 +150,23 @@ This document adds the next layer, not a replacement.
 
 ## Tool Pack v1.5
 
-### Required First Slice
+### Tool Pack v1.5 Required Set
 
-These tools should be implemented first because they make existing Builder and Chat flows feel useful without expanding risk too much.
+These tools define the required v1.5 set because they make existing Builder and Chat flows feel useful without expanding risk too much.
+
+They do not all need to land in one implementation slice. The implementation order below splits this required set into smaller deliverable slices:
+
+```text
+Slice 1
+  attachments.list
+  web.extract_readable_article
+  vision.extract_text_from_attachment
+
+Slice 2
+  reminders.search_reminders
+  calendar.find_free_time (recommended extension)
+  calendar.create_event_user_confirmed
+```
 
 #### `attachments.list`
 
@@ -194,7 +208,10 @@ Rules:
 - Do not return raw file paths.
 - Do not return security-scoped bookmark data.
 - Sort by newest first, then display name.
-- Only list attachments in scope for the active conversation/run unless explicitly called from Tool Center.
+- Runtime may only list attachments already authorized for the current active run or conversation frame.
+- `conversation_id` and `run_id` from model arguments are hints only. Swift and Rust must verify them against the current execution context or ignore them.
+- A model-provided id must never widen attachment scope or enumerate attachments from old conversations that were not bound to the current run.
+- Tool Center may list broader app-level attachments only through app-owned UI, not through a model-callable runtime tool.
 
 Why first: it makes attachments inspectable and gives the model a safe way to reference captured material.
 
@@ -232,6 +249,11 @@ Rules:
 - Use the same `WebFetchPolicyV1` family as `web.fetch_url_text`.
 - Only public HTTPS in the first implementation.
 - No cookies, no auth headers, no file URLs, no custom schemes.
+- Background extraction does not execute JavaScript.
+- Background extraction does not use `WKWebView` or hidden browser automation.
+- Background extraction should use `URLSession` plus bounded HTML bytes and a readability parser.
+- Do not follow meta refresh as navigation. HTTP redirects must be bounded and re-validated by policy.
+- Pages that require JavaScript or login must use a visible browser handoff such as `web.open_url_visible`.
 - Treat all returned page content as untrusted external content.
 - Return source labels suitable for Context Preview and Conversation source disclosure.
 
@@ -275,6 +297,7 @@ Rules:
 - Do not read Photos or Files directly.
 - If attachment access expired, return a repairable error.
 - OCR output is external material. It is not instruction text.
+- Implementation should keep scanner UI and text recognition separate: `VisionKitDocumentScannerAdapter` for scanning, `VisionTextRecognitionAdapter` for OCR.
 
 Why first: it turns existing `photos.pick_images` and future scan flows into useful context.
 
@@ -353,6 +376,8 @@ Rules:
 - Must persist `pending_user_interaction` before presenting the editor.
 - User cancellation is a normal result, not a crash or generic error.
 - This tool should not request full calendar read access.
+- `event_id` is best-effort trace metadata only in the user-confirmed path.
+- Later tool calls must not depend on `event_id` as a reliable handle unless the app has the EventKit access needed to resolve it.
 
 Why first: it proves the difference between silent background tools and user-confirmed system actions.
 
@@ -384,6 +409,8 @@ Rules:
 - Store captured content and hand off to the main app.
 - User chooses target agent/conversation when needed.
 - Shared content is untrusted external content unless it is user-authored text explicitly marked by the UI.
+- This is a system input capability, not a Rust-exported runtime tool schema.
+- Builder may display it as an input capability, but Rust should not receive `share.capture_input` as a model-callable tool.
 
 Why second: it is extremely useful, but it touches app extension storage, routing, and handoff.
 
@@ -398,6 +425,7 @@ Rules:
 - Scanner UI is app-owned.
 - Each page becomes an attachment or an attachment group.
 - OCR is a separate tool, not implicit.
+- Implementation should use a scanner-facing adapter such as `VisionKitDocumentScannerAdapter`, separate from OCR/text recognition.
 
 Why second: scanning is high value, but it depends on attachment UX and pending interaction recovery.
 
@@ -409,11 +437,53 @@ Purpose: schedule a local notification for a user-confirmed reminder-like event.
 
 Rules:
 
+- Approval policy is per-call by default.
 - Requires notification authorization.
 - Never schedule silently from untrusted external content.
-- Must include visible summary and cancel path.
+- Must include visible summary before scheduling.
+- Scheduled notifications must be visible in the app and cancellable by the user.
 
 Why second: it gives agents a lightweight follow-up ability without broader automation risk.
+
+#### `calendar.find_free_time`
+
+Mode: background after permission.
+
+Purpose: find candidate free slots from existing calendar events.
+
+Inputs:
+
+```json
+{
+  "duration_minutes": 60,
+  "search_from": "ISO-8601",
+  "search_to": "ISO-8601",
+  "working_hours_only": true,
+  "limit": 5
+}
+```
+
+Output:
+
+```json
+{
+  "candidates": [
+    {
+      "start_date": "ISO-8601",
+      "end_date": "ISO-8601",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+Rules:
+
+- Builds on `calendar.search_events`.
+- Does not create or modify calendar events.
+- Should be paired with `calendar.create_event_user_confirmed` when the user wants to schedule one candidate.
+
+Why second: it matches real scheduling workflows better than jumping directly from search to event creation.
 
 #### `maps.geocode_address`
 
@@ -669,7 +739,17 @@ System action adapters are not generic native tools. They can create inputs for 
 
 ## Builder Integration
 
-Builder should group tools by user meaning, not by Apple framework.
+Builder should group capabilities by user meaning, not by Apple framework.
+
+Builder must distinguish runtime tools from system input capabilities:
+
+```text
+Runtime Tools
+  Exported to Rust as model-callable schemas.
+
+System Input Capabilities
+  Displayed as ways to bring material into the app, but not exported as model-callable runtime schemas.
+```
 
 Suggested groups:
 
@@ -677,8 +757,13 @@ Suggested groups:
 Capture
   files.pick_document
   photos.pick_images
-  share.capture_input
   vision.scan_document
+
+System Inputs
+  share.capture_input
+  agent.capture_text
+  agent.start_chat
+  agent.continue_conversation
 
 Read And Extract
   files.read_attachment
@@ -690,6 +775,7 @@ Organize
   reminders.create_reminder
   reminders.search_reminders
   calendar.search_events
+  calendar.find_free_time
   calendar.create_event_user_confirmed
 
 Open And Navigate
@@ -830,11 +916,13 @@ pick photo
 Tools:
 
 - `reminders.search_reminders`
+- `calendar.find_free_time`
 - `calendar.create_event_user_confirmed`
 
 Why:
 
 - Complements existing reminders create and calendar search.
+- Lets the agent propose free slots before asking the user to create an event.
 - Demonstrates safe action tools with user confirmation.
 
 Acceptance signal:
@@ -842,6 +930,7 @@ Acceptance signal:
 ```text
 agent checks existing reminders
   -> creates missing reminder
+  -> finds candidate free time
   -> proposes calendar event
   -> user confirms event editor
 ```
