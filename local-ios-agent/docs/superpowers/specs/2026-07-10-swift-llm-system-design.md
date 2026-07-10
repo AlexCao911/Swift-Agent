@@ -4,6 +4,8 @@
 
 **Date:** 2026-07-10
 
+**Last reviewed:** 2026-07-11
+
 **Target:** iPhone and iPad
 
 ## Summary
@@ -92,6 +94,13 @@ The implementation is blocked unless all review corrections below remain true:
 
 | Review concern | Required resolution |
 | --- | --- |
+| Rust was asked to validate Provider Profile and origin semantics it does not own | Swift validates all provider/egress semantics and returns a versioned opaque egress attestation whose public binding fields alone are checked by Rust |
+| Cross-language digests had no canonicalization protocol | One domain-separated `CanonicalDigestV1` based on RFC 8785 JSON defines schemas, field inclusion, ordering, Unicode, numbers, and shared golden fixtures |
+| Credential replacement could silently change the account used by an active run | Every key replacement advances a pinned credential generation used by validation, grants, sessions, attestations, and snapshots; rotation cannot cross an active session |
+| Opaque session handles and sequence-only event deduplication allowed ABA/conflicting duplicates | Random epoch-bound non-reusable handles plus canonical event envelopes and sequence/digest conflict detection |
+| Command acceptance was confused with backend stop/close completion | Separate command acknowledgement, backend-start, generation-terminal, and session-closed signals with independent watchdogs |
+| Legacy and V2 execution paths did not share an authoritative single-run gate | One durable Rust global run lease covers preparation, legacy start, V2 commit, restart recovery, and terminal release |
+| Disclosure metadata could not explain an incremental approval safely | Rust supplies a grant-neutral enum/count/size summary and Swift adds a private grant-delta summary; neither contains raw contact, file, calendar, memory, or tool-result data |
 | Egress approval was not bound to actual generation content | Freeze and digest the initial model input, attach a `GenerationDisclosure` to every generation turn, and require incremental approval before an affected remote request |
 | Replacing `ModelBinding` before switching the production resolver would break legacy runs | Introduce versioned `LLMSlotV2` alongside legacy bindings, switch execution in Phase 4, and remove the legacy path only in Phase 5 |
 | Rust-to-Swift commands could be lost or replayed as duplicate provider requests | Transactional Rust outbox, sequenced command envelopes, synchronous copy receipts, asynchronous acknowledgements, Swift deduplication, and bounded acknowledgement timeouts |
@@ -114,6 +123,7 @@ Swift App / Agent Host
   | requests preview
   v
 Rust Agent Kernel
+  |-- acquires the route-neutral preparing global run lease
   |-- resolves portable LLMSlot and AgentLLMRequirements
   |-- returns preparation token and requirements
   |
@@ -125,7 +135,7 @@ Swift LLM System
   |
   v
 Rust Agent Kernel
-  |-- commits run snapshot and resumable worker state
+  |-- promotes the global run lease and commits run snapshot/worker state
   |-- emits host LLM commands without holding runtime mutex
   |
   |-- agent loop
@@ -158,6 +168,8 @@ C++ Engine               URLSession
   required tool calling, input modalities, minimum context size, and streaming.
 - Preparation tokens, the two-phase run protocol, and opaque host-binding
   cross-links.
+- The authoritative durable global Agent run lease shared by every execution
+  route.
 - The resumable agent worker and durable run transitions.
 - Test mocks for the abstract LLM client port.
 
@@ -193,7 +205,8 @@ LLM target resolution
 - Provider-specific continuation state for thinking and tool loops.
 - Normalization of stream events, tool calls, usage, and errors.
 - Sanitized LLM run snapshots and LLM diagnostics.
-- The global single-run execution lease.
+- An advisory in-process run reservation for UI responsiveness; Rust remains
+  authoritative.
 
 ### C++ Owns
 
@@ -228,6 +241,7 @@ placed directly in the app target.
 ```text
 local-ios-agent/toolkit/Sources/
   LocalAgentLLMContracts/
+    CanonicalDigest.swift
     LLMInput.swift
     LLMStreamEvent.swift
     LLMCapabilities.swift
@@ -281,6 +295,81 @@ local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Presentation/Models/
 
 Concrete filenames may be refined in implementation plans, but the module
 boundaries are architectural requirements.
+
+## Canonical Cross-Language Digests
+
+Ordinary Swift `JSONEncoder` output and Rust `serde_json` output remain valid
+transport encodings, but they are never hashed directly. Every digest that
+crosses the Swift-Rust boundary uses `CanonicalDigestV1`.
+
+```text
+CanonicalDigestV1(domain, typed digest document)
+  canonicalBytes = RFC 8785 JCS(typed digest document)
+  preimage = UTF8(domain) || 0x00 || canonicalBytes
+  digest = SHA-256(preimage), serialized as 64 lowercase hex characters
+```
+
+The typed digest document has a required string `schema_version: "1"` and
+stable snake-case field names independent of Swift `CodingKeys` or Rust serde
+defaults. Registered domains are lowercase ASCII and cannot contain NUL.
+Canonicalization rules are:
+
+- Input is I-JSON: duplicate object names and invalid Unicode such as lone
+  surrogates are rejected.
+- Object names are sorted recursively as unsigned UTF-16 code units; escaping
+  and finite binary64 number serialization follow RFC 8785 exactly.
+- Text is valid UTF-8 and is not Unicode-normalized. Canonically equivalent but
+  scalar-distinct strings intentionally produce different digests.
+- Semantic sets are encoded as arrays sorted lexicographically by each
+  element's canonical UTF-8 bytes. Semantic arrays preserve their declared
+  order.
+- Optional fields are omitted. `null` is forbidden unless a digest schema
+  explicitly declares a tagged `null` case; missing and null are never treated
+  as equivalent.
+- `UInt64`, counters, byte sizes, and other integers that may exceed the JSON
+  safe-integer range are decimal strings with no leading zeros. Timestamps are
+  UTC RFC 3339 strings with exactly millisecond precision. Binary values are
+  unpadded base64url strings.
+- NaN and infinities are rejected. Negative zero canonicalizes as RFC 8785
+  requires.
+
+Registered V1 domains and coverage are:
+
+| Domain | Required digest coverage | Excluded |
+| --- | --- | --- |
+| `agent-host-binding:v1` | Binding/profile/slot/target identities, requirements hash, and parameter overrides | Credential, Provider payload, resolved local path |
+| `agent-requirements:v1` | Slot ID, capability/modality/context/streaming/tool requirements | Host target and Provider fields |
+| `conversation-frame:v1` | Frame identity, revision, ordered entries, and referenced blobs | UI-only state |
+| `execution-plan:v1` | Ordered Agent plan steps and policy-relevant metadata | Runtime timestamps |
+| `tool-schema:v1` | Ordered tool identities plus complete input/output/data-label schemas | Tool implementation pointers |
+| `source-revisions:v1` | Ordered frame, memory, context, and attachment identity/revision tuples | Source content |
+| `agent-input:v1` | Ordered canonical messages, tool schemas, attachment references/revisions, memory/context revisions | Provider encoding and diagnostics |
+| `generation-disclosure:v1` | Turn ID, content/source digests, sorted data classes, sensitivity, and grant-neutral safe source summary | Raw source content and grant identity |
+| `capability-attestation:v1` | Generic Agent capability values plus contributing observation digests/expiry | Provider-specific claims and evidence body |
+| `resolved-parameters:v1` | Sorted canonical semantic parameter IDs and resolved non-secret values | Provider/C++ field names |
+| `preparation-binding:v1` | Preparation/run IDs, bound digest set, token generation, host epoch, and expiry | Raw token value |
+| `host-binding-staging-receipt:v1` | Operation/token digest, profile/slot/requirements, and binding ID/revision/hash | Swift target details |
+| `host-command-payload:v1` | Complete typed command payload | Command delivery metadata |
+| `host-command-envelope:v1` | Command ID, run/session/epoch/sequence/turn, kind, complete canonical payload, and complete canonical disclosure | Dispatch attempts and wall-clock receipt time |
+| `llm-event-envelope:v1` | Event ID, run/session/epoch/turn/sequence, event kind, and complete event payload | Local arrival time and diagnostics |
+| `egress-approval-summary:v1` | Swift-only disclosure digest, prior scope-grant digest, grant-neutral source summary, and newly added data classes | Raw source content |
+| `egress-subject:v1` | Swift-only tagged local `not_applicable` decision or cloud Provider Profile revision, exact origin, credential generation, scope grant, approval-summary digest, and per-turn authorization | Credential value |
+| `egress-attestation:v1` | Preparation/run/session/snapshot identities, binding/requirements/disclosure/capability/parameter digests, host epoch, expiry, and opaque egress-subject digest | Parsed provider fields |
+
+`payloadDigest` is the `host-command-payload:v1` result.
+`commandEnvelopeDigest` covers the whole command and therefore changes when the
+same payload is paired with a different `GenerationDisclosure`. `bindingHash`,
+`modelInputDigest`, `contentDigest`, and `eventDigest` use their corresponding
+registered domains. Adding another cross-boundary digest requires registering
+its domain and exact include/exclude schema here; ad hoc hashes are forbidden.
+
+Swift and Rust share golden fixtures under
+`local-ios-agent/contracts/canonical-digest-v1/`. Each fixture contains the
+typed source document, expected JCS UTF-8 bytes, and expected SHA-256. Tests
+cover map/set insertion order, omitted versus null, composed versus decomposed
+Unicode, numeric boundaries, disclosure-only command changes, and malformed
+documents. Both implementations must pass the same fixtures before a bridge
+schema can ship.
 
 ## Core Swift Data Model
 
@@ -339,10 +428,9 @@ struct AgentHostConfiguration: Codable, Sendable {
 }
 ```
 
-`bindingHash` is the SHA-256 of the canonical non-secret
-`AgentHostConfiguration` revision, including binding/profile/slot/target
-identities, requirements hash, and parameter overrides. It excludes the API key
-and resolved local path.
+`bindingHash` is `CanonicalDigestV1(agent-host-binding:v1, ...)` over the
+non-secret `AgentHostConfiguration` revision. It excludes the API key and
+resolved local path.
 
 The UI may present this composition as part of Agent Profile editing, but the
 record belongs to the Swift host layer and is not stored in the Rust agent
@@ -362,8 +450,9 @@ preview_run(start request)
   -> RunPreparationPreview
 ```
 
-Rust uses the existing `RunSnapshotService.preview` path as the starting point,
-then previews the execution plan and context requirements without starting the
+Rust first acquires the `preparing` state of the durable global run lease, then
+uses the existing `RunSnapshotService.preview` path as the starting point and
+previews the execution plan and context requirements without starting the
 worker or persisting a run snapshot. It also assembles the canonical first-turn
 `AgentLLMInput`, freezes its canonical digest and exact source revisions in the
 pending preparation record, and computes its disclosure metadata. The first
@@ -413,9 +502,8 @@ and frozen input, and succeeds only when every bound digest and the host epoch
 are unchanged. Each renewal extends the lease by five minutes, up to thirty
 minutes total from preview. It cannot change the frozen input, any Rust-owned
 digest, or the disclosed egress scope; Swift binding, capability, and parameter
-claims remain
-subject to the final attestation checks. When Swift becomes ready, its host
-attestation is valid for two minutes; `commit_start` must consume the current
+claims remain subject to the final attestation checks. When Swift becomes
+ready, its host attestation is valid for two minutes; `commit_start` must consume the current
 rotated token within that shorter ready window. Exceeding the total lease
 requires a new preview and approval flow.
 
@@ -439,19 +527,58 @@ Swift consumes `RunPreparationPreview` and:
 Swift returns a host attestation:
 
 ```text
+host attestation schema version
 preparation ID
 preparation token
 proposed Rust run ID
 host binding ID, revision, and hash
 LLMSessionHandle
 Swift LLM snapshot ID
+Agent requirements hash
 capability attestation and hash
 resolved parameter hash
-approved initial egress disclosure digest, scope grant ID, and generation
-authorization ID, when remote
+initial disclosure digest
 host process epoch
 attestation expiration
+opaque egress-subject digest
+EgressAttestationDigest
 ```
+
+### Host and Egress Attestation Boundary
+
+Swift is solely responsible for resolving and validating Provider Profile
+revision, exact origin, credential availability/generation, origin approval,
+scope grant, and per-turn egress authorization. Those fields remain in the
+Swift LLM snapshot and egress ledger.
+
+For every local or cloud preparation, Swift creates a versioned private egress
+subject. A cloud subject contains the provider/credential/grant fields; a local
+subject contains a tagged `not_applicable` decision. Swift computes:
+
+```text
+opaqueEgressSubjectDigest =
+  CanonicalDigestV1(egress-subject:v1, private Swift subject)
+
+EgressAttestationDigest =
+  CanonicalDigestV1(
+    egress-attestation:v1,
+    preparation ID + proposed run ID + session handle + Swift snapshot ID +
+    binding hash + requirements hash + initial disclosure digest +
+    capability attestation hash + resolved parameter hash +
+    host epoch + expiration +
+    opaqueEgressSubjectDigest)
+```
+
+Rust receives the opaque subject digest and the outer attestation digest. It
+recomputes only the outer digest from provider-neutral public binding fields,
+checks the supported schema version, preparation/run/session/snapshot
+identities, binding/requirements/disclosure/capability/parameter hashes, host
+epoch, and expiry, and stores the digest for cross-linking. Rust never receives
+or parses Provider Profile, origin, CredentialRef, credential generation,
+grant, authorization, or route details.
+
+The digest provides deterministic binding and reconciliation inside the trusted
+app host; it is not presented as a cryptographic trust boundary against Swift.
 
 ### Phase C: Rust Commit
 
@@ -469,8 +596,8 @@ Rust verifies that:
 - the generic capability attestation satisfies `AgentLLMRequirements`;
 - the host binding and Swift snapshot identifiers are present;
 - the host epoch is current; and
-- required initial egress approval metadata exactly matches the frozen
-  disclosure, Provider Profile revision, and origin.
+- the versioned `EgressAttestationDigest` recomputes from the public binding
+  fields and opaque Swift subject digest.
 
 Rust then persists the Rust run snapshot, opaque host-binding cross-link, and
 initial resumable worker state under the proposed run ID in one Rust
@@ -489,11 +616,15 @@ abort_preparation(preparation token, reason)
 ```
 
 - If Swift preparation fails or the user denies approval, Swift closes any
-  partial session and Rust aborts the token.
+  partial session and Rust aborts the token; the lease follows the same
+  `releasing -> session_closed -> empty` rule, or returns directly to empty
+  when no session was created.
 - If Rust commit fails, Swift closes the session and marks the Swift snapshot
   aborted through the same idempotency key.
-- Expiration closes a prepared Swift session, deletes pending host state, and
-  marks the Rust token expired.
+- Expiration marks the Rust token expired and moves its global run lease to
+  `releasing`. If no Swift session exists, Rust releases it atomically;
+  otherwise Swift closes the prepared session and `session_closed` releases the
+  lease.
 - Repeating renewal with an already rotated token returns the previously issued
   replacement only for the same idempotency key; otherwise the old token is
   stale.
@@ -513,12 +644,18 @@ struct PreparedLLMSession: Sendable {
     let hostBindingID: String
     let hostBindingRevision: UInt64
     let hostBindingHash: String
+    let egressAttestationDigest: String
     let sanitizedSnapshot: LLMRunSnapshot
 }
 ```
 
 `LLMSessionHandle` is opaque to Rust. It never encodes a model path, Provider
-Profile, API key, Base URL, engine ID, or adapter kind.
+Profile, API key, Base URL, engine ID, or adapter kind. Swift creates it from at
+least 128 bits of cryptographically secure randomness and never reuses it within
+a host epoch. The Swift session registry binds the handle to preparation ID,
+run ID, host epoch, binding hash, and pinned credential generation when remote;
+Rust persists the provider-neutral preparation/run/epoch binding. Closed or
+expired handles remain tombstoned for the rest of the epoch, preventing ABA.
 
 ## Rust-Swift LLM Client Port
 
@@ -531,11 +668,15 @@ The target worker is a resumable state machine:
 
 ```text
 ready
-  -> awaiting_start_ack
+  -> awaiting_start_command_ack
+  -> awaiting_generation_started
   -> consuming_llm_turn
   -> executing_tool_batch
-  -> awaiting_resume_ack
+  -> awaiting_resume_command_ack
+  -> awaiting_generation_started
   -> consuming_llm_turn
+  -> awaiting_cancel_command_ack -> awaiting_cancelled_terminal
+  -> awaiting_close_command_ack -> awaiting_session_closed
   -> completed | failed | cancelled | interrupted
 ```
 
@@ -576,6 +717,8 @@ HostCommandEnvelope
   generationTurnID, for start/resume
   kind
   payloadDigest
+  disclosureDigest, for start/resume
+  commandEnvelopeDigest
   GenerationDisclosure, for start/resume
   payload
 ```
@@ -585,21 +728,22 @@ increasing per session. Rust writes the worker transition and outbox row in the
 same SQLite transaction. A committed outbox row is the sole authority for
 dispatch; an in-memory enqueue without that row is forbidden. A terminal run
 transition cancels pending non-cleanup commands and inserts one idempotent
-`close_session` row; the session is released only after that row is
-acknowledged or its cleanup deadline expires.
+`close_session` row. Its acknowledgement proves only that Swift claimed the
+close command. The session is released only after a matching `session_closed`
+event confirms that provider/C++ resources are gone.
 
 The dispatcher wakes after commit and also scans pending rows, so failure
 between transaction commit and callback invocation cannot strand a run. On a
 new host epoch, restart invalidation cancels old-epoch rows before dispatch.
 
 Swift keeps a per-session command ledger keyed by `commandID`. Receiving the
-same ID, sequence, and payload digest again returns the existing acknowledgement
-without recreating a URLSession request or C++ generation. Reusing an ID with a
-different sequence or digest interrupts the run with
-`llm.command.identity_conflict`.
+same ID, sequence, and `commandEnvelopeDigest` again returns the existing
+acknowledgement without recreating a URLSession request or C++ generation.
+Reusing an ID with a different sequence or envelope digest interrupts the run
+with `llm.command.identity_conflict`.
 
-Ledger entries remain until `close_session` is acknowledged; Swift cannot evict
-an identity while Rust may legally redispatch its outbox row.
+Ledger entries and the handle tombstone remain until `session_closed`; Swift
+cannot evict an identity merely because `close_session` was acknowledged.
 
 For a previously unseen command ID, Swift accepts only the next sequence. A gap
 returns `llm.command.sequence_gap`; reusing an accepted sequence with a different
@@ -655,23 +799,46 @@ context pointer. Its rules are:
 
 ### Independent Event Submission
 
-Swift delivers model events through a separate FFI entry after the command
-callback has returned:
+Swift delivers model and lifecycle events through a separate FFI entry after
+the command callback has returned:
 
 ```text
-submit_llm_event(runtime, session_handle, event_sequence, event_bytes)
+submit_llm_event(runtime, event_envelope_bytes)
 ```
 
-Swift owns `event_bytes` for the duration of the FFI call; Rust copies accepted
-events before returning. The event entry takes the runtime mutex only long
-enough to validate the session/sequence, append the event, advance the worker,
-and enqueue any next outbound command. It never calls the Swift vtable while
+The envelope is:
+
+```text
+LLMEventEnvelope
+  schemaVersion
+  eventID
+  sessionHandle
+  hostProcessEpoch
+  runID
+  generationTurnID, absent only for session-level lifecycle events
+  eventSequence
+  eventDigest
+  event
+```
+
+`eventID` contains at least 128 random bits and is never reused within a
+session. `eventDigest` is
+`CanonicalDigestV1(llm-event-envelope:v1, envelope without eventDigest)`.
+
+Swift owns `event_envelope_bytes` for the duration of the FFI call; Rust copies
+accepted envelopes before returning. The event entry takes the runtime mutex
+only long enough to validate the canonical digest, handle/run/epoch/turn
+binding, identity and sequence, append the event, advance the worker, and
+enqueue any next outbound command. It never calls the Swift vtable while
 holding the mutex.
 
 The stream contract is provider-neutral:
 
 ```text
-started
+generation_started {
+  commandID
+  opaqueBackendOperationID
+}
 reasoning_summary_delta
 text_delta
 tool_call_started
@@ -684,14 +851,30 @@ generation_completed {
   orderedCallIDs
   finishReason
 }
-cancelled
+cancelled { cancelCommandID }
 failed
+session_closed { closeCommandID }
 ```
 
 `finishReason` is provider-neutral: `stop`, `tool_calls`, `length`,
 `content_filtered`, or `other`. The raw provider reason remains in redacted
 Swift diagnostics. `orderedCallIDs` uses first-appearance order after adapter
 normalization and is empty for every non-tool outcome.
+
+The lifecycle meanings are distinct:
+
+- `command_acknowledged` is the separate FFI acknowledgement that Swift copied,
+  deduplicated, and claimed a command identity.
+- `generation_started` means URLSession has created/resumed the request task or
+  C++ has returned a live generation operation. It is not inferred from command
+  acknowledgement or the first text token.
+- `cancelled` is emitted only after the URLSession completion callback or C++
+  engine confirms that the generation operation stopped.
+- `session_closed` is emitted only after all provider/C++ session resources are
+  released. Only then may Swift remove the command/event ledgers and live
+  handle registry entry; the handle remains non-reusable for the epoch. For a
+  local target this releases the generation/session, not necessarily the
+  separately managed loaded model, which may remain `ready(model)` in RAM.
 
 Rules:
 
@@ -700,15 +883,24 @@ Rules:
 - Closing is idempotent.
 - Every generation event carries the `generationTurnID` from its acknowledged
   start/resume command and is rejected if it does not match the active turn.
+- `session_closed` is the only event without a generation turn ID and must
+  reference the accepted `close_session` command ID.
 - Each session uses monotonically increasing event sequence numbers.
-- A duplicate sequence is an idempotent no-op.
+- Repeating the same sequence is an idempotent duplicate only when `eventID` and
+  `eventDigest` both match the accepted receipt.
+- Reusing a sequence with a different ID or digest returns
+  `llm.event.sequence_conflict` and interrupts the run. Reusing an event ID with
+  a different sequence or digest returns `llm.event.identity_conflict` and also
+  interrupts the run.
 - A sequence gap interrupts the session with `llm.event.sequence_gap`.
 - Events after `generation_completed` for the same turn return
   `llm.event.turn_terminal` and are ignored. A `tool_calls_ready` terminal keeps
   the session open for a later acknowledged resume turn.
-- Events after `generation_completed(outcome: final_response)`, `cancelled`, or
-  `failed` make the session terminal, return `llm.event.session_terminal`, and
-  are ignored.
+- After `generation_completed(outcome: final_response)`, `cancelled`, or
+  `failed`, further generation events return `llm.event.generation_terminal`;
+  the matching `session_closed` event remains admissible.
+- After `session_closed`, every later event returns `llm.event.session_closed`
+  and is ignored.
 - Events for an expired or unknown handle return `llm.event.stale_session` and
   are ignored.
 - Provider-specific unknown events are handled in Swift and do not cross FFI.
@@ -733,6 +925,9 @@ Rules:
   duplicated when Swift continues the provider-private session.
 - The completed tool batch and its observations are persisted before a resume
   command/outbox row is created.
+- Rust retains a durable event receipt ledger of
+  `session + sequence -> eventID + eventDigest` until `session_closed`, so a
+  duplicate remains verifiable after the inbound queue has drained.
 
 ### Backpressure
 
@@ -745,8 +940,11 @@ duplicate
 backpressure
 stale_session
 turn_terminal
-session_terminal
+generation_terminal
+session_closed
 sequence_gap
+sequence_conflict
+identity_conflict
 ```
 
 `backpressure` does not consume the rejected event's sequence number. Swift
@@ -765,16 +963,34 @@ event cannot fit in an empty queue, the session fails with
 Cancellation is represented by a persisted Rust state transition and an
 outbound cancel command.
 
-- If a session-terminal `generation_completed(outcome: final_response)`,
+- If a generation-terminal `generation_completed(outcome: final_response)`,
   `cancelled`, or `failed` event commits first, a later cancel is an idempotent
-  no-op. A `tool_calls_ready` turn terminal does not block cancellation while
-  tools are pending.
-- If cancellation commits first, later non-cancellation events are stale and
-  ignored.
-- Swift cancels the active URLSession task or C++ generation exactly once and
-  submits one terminal `cancelled` event.
-- If the host does not acknowledge cancellation within ten seconds, Rust marks
-  the run interrupted and closes the session handle.
+  no-op and Rust proceeds to close. A `tool_calls_ready` turn terminal does not
+  block cancellation while tools are pending.
+- If cancellation commits first, later non-cancellation generation events are
+  stale and ignored; the matching `cancelled` and eventual `session_closed`
+  remain admissible.
+- Swift invokes URLSession/C++ cancellation at most once per cancel command ID.
+  It emits `cancelled` only after the backend confirms stop.
+- The cancel command uses the normal ten-second command-acknowledgement
+  deadline. After `accepted`, a separate ten-second backend-stop watchdog waits
+  for `cancelled`. If it expires, Rust interrupts with
+  `llm.cancel.stop_timeout`, enqueues `close_session`, and records that backend
+  stop is unconfirmed; it does not claim that provider quota use ended.
+
+### Start and Close Watchdogs
+
+- Command acknowledgement never proves backend start or resource release.
+- After the effective egress authorization exists, Swift starts a local
+  ten-second operation-start watchdog. It must emit `generation_started` or a
+  terminal `failed` event. Time spent waiting for user approval is excluded.
+- `close_session` has the normal ten-second command-acknowledgement deadline.
+  After `accepted`, Rust waits a separate ten seconds for `session_closed`.
+- Missing `session_closed` produces `llm.session.close_timeout`. Rust may persist
+  and expose the already determined logical Agent outcome, but the resource
+  lifecycle/global lease remains `releasing`. Swift quarantines the handle and
+  its ledgers until `session_closed` eventually arrives or the process epoch
+  ends. A quarantined handle is never reused.
 
 The bridge may use the project's JSON envelope conventions over the C ABI, but
 the queue, ownership, ordering, backpressure, and race rules above are fixed by
@@ -969,6 +1185,7 @@ struct ProviderProfileRevision: Codable, Sendable {
 struct ProviderProfileState: Codable, Sendable {
     let profileID: String
     let profileRevision: UInt64
+    var currentCredentialGeneration: UInt64
     var validationState: ProviderValidationState
     var approvedEgressOrigin: EgressOrigin?
     var catalogRevision: UInt64?
@@ -976,10 +1193,10 @@ struct ProviderProfileState: Codable, Sendable {
 ```
 
 Non-secret Provider Profile configuration is immutable by revision. Changing
-the preset or Base URL creates a new revision. Rotating a key replaces the
-secret behind the same credential slot, invalidates validation, and does not
-rewrite an Agent or LLM target revision. A cloud `LLMTargetRevision` pins the
-Provider Profile revision it was validated against.
+the preset or Base URL creates a new revision. A cloud `LLMTargetRevision` pins
+the Provider Profile revision it was validated against. Key replacement does
+not rewrite that target revision, but it always advances the credential slot's
+non-secret `credentialGeneration` and invalidates generation-scoped readiness.
 
 Provider presets supply a display name, default Base URL, authentication scheme,
 wire codec, model-list strategy, validation strategy, and provider-semantic
@@ -1052,23 +1269,27 @@ Validation has two explicit stages:
 The UI discloses that model validation may consume a small amount of provider
 quota. Validation is never run until egress for the exact origin is approved.
 
-Changing the Base URL, API key, provider preset, or selected model invalidates
-the relevant validation state. A successful probe is evidence of current
-availability, not a permanent capability override.
+Changing the Base URL, credential generation, provider preset, or selected model
+invalidates the relevant validation state. Validation evidence is keyed by
+Provider Profile revision, model ID, exact origin, and credential generation. A
+successful probe is evidence of current availability, not a permanent
+capability override.
 
 ### Keychain
 
 - The API key is stored with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
-- Persistent stores contain only an opaque CredentialRef.
+- Persistent stores contain only an opaque CredentialRef plus its non-secret
+  generation metadata, never the credential value.
 - A CredentialRef names a logical credential slot. Multiple immutable revisions
   of the same Provider Profile may reference that slot.
 - The UI cannot read a saved key back as plaintext; it may replace or delete it.
 - Archiving a Provider Profile revision never deletes its Keychain item.
 - Deleting the entire logical Provider Profile first prevents new sessions and
   archives all of its revisions. `ProviderCredentialStore` deletes the Keychain
-  item only after no non-archived profile revision, pending preparation, or live
-  session references the CredentialRef. A credential slot shared by another
-  logical profile is retained until its final reference is removed.
+  generation items only after no non-archived profile revision, pending
+  preparation, or live session references the CredentialRef. A credential slot
+  shared by another logical profile is retained until its final reference is
+  removed.
 - Key deletion uses an idempotent persisted tombstone: record deletion intent,
   delete the Keychain item, then mark completion. Startup reconciliation safely
   repeats an incomplete deletion without exposing the old credential.
@@ -1076,11 +1297,47 @@ availability, not a permanent capability override.
 - Credential values never enter logs, SQLite, FFI DTOs, diagnostics, exports, or
   provider error messages.
 
+### Credential Generation and Rotation
+
+`credentialGeneration` is a monotonically increasing `UInt64` owned by the
+Swift credential slot. It is not a secret. Phase B pins the current generation
+into provider validation, the scope grant, per-turn authorization, private
+egress subject, `LLMSessionHandle` registry entry, provider session, and
+sanitized Swift run snapshot. Every remote request verifies that the session is
+still using its pinned generation before resolving the generation-specific
+Keychain item.
+
+Because the private egress subject feeds `EgressAttestationDigest`, the host
+attestation is generation-bound without exposing generation semantics to Rust.
+
+Publishing a new key generation is forbidden while any pending preparation or
+live/closing session references that CredentialRef. The UI may wait, or ask the
+user to cancel the run and wait for `session_closed`; it cannot silently rotate
+under an active run.
+
+Rotation is an idempotent Swift saga:
+
+```text
+1. persist rotation intent and next generation
+2. write the new key to a generation-specific Keychain item
+3. in one SQLite transaction, CAS currentCredentialGeneration from old to next
+   and invalidate validation, availability, scope grants, and readiness bound
+   to the old generation
+4. tombstone and delete the old generation-specific Keychain item
+```
+
+Startup reconciliation completes or rolls back an interrupted saga without
+ever labeling old key material as the new generation. When several logical
+profiles intentionally share one credential slot, rotation invalidates all of
+their generation-scoped state and the UI discloses that shared impact before
+the CAS.
+
 ### Provider Session Continuation
 
 Swift owns an in-memory provider session object for every cloud run:
 
 ```text
+pin credential generation
 start(input)
 stream normalized events
 retain provider-private continuation state
@@ -1094,6 +1351,10 @@ The session retains provider-private response IDs, reasoning content needed for
 continuation, thinking blocks, and signatures. When Rust returns a normalized
 tool result, Swift reconstructs the correct provider-specific request. This
 state is memory-only and is dropped when the session closes.
+
+Cloud inference uses process-bound, non-background URLSession tasks. Only model
+downloads use background URLSession; a generation cannot outlive the host epoch
+as a resumable app operation.
 
 Reasoning summaries may cross the LLM client port only when the provider
 explicitly returns a user-displayable summary. Raw private reasoning and opaque
@@ -1120,14 +1381,60 @@ Every start or resume command carries a provider-neutral disclosure:
 
 ```swift
 struct GenerationDisclosure: Codable, Sendable {
+    let schemaVersion: String
     let generationTurnID: String
     let contentDigest: String
     let sourceRevisionDigest: String
     let dataClasses: Set<EgressDataClass>
     let highestSensitivity: DataSensitivity
-    let priorGrantID: String?
+    let safeDisplaySummary: SafeDisplaySummary
+    let disclosureDigest: String
+}
+
+struct SafeDisplaySummary: Codable, Sendable {
+    let sourceKinds: Set<EgressSourceKind>
+    let addedItemCounts: [EgressDataClassCount]
+    let approximateAddedSize: EgressSizeBucket
+    let triggeringToolDisplayKeys: Set<String>
+}
+
+struct EgressDataClassCount: Codable, Sendable {
+    let dataClass: EgressDataClass
+    let count: UInt64
+}
+
+// Swift-only; never crosses into Rust.
+struct EgressApprovalDisplaySummary: Codable, Sendable {
+    let disclosureDigest: String
+    let priorScopeGrantDigest: String?
+    let sourceSummary: SafeDisplaySummary
+    let newlyAddedDataClasses: Set<EgressDataClass>
+    let approvalSummaryDigest: String
 }
 ```
+
+`EgressSourceKind` is a stable enum such as `conversation`, `memory`,
+`contacts`, `files`, `calendar`, `photos`, `location`, `attachment`,
+`tool_result`, or `other`. Size uses coarse buckets (`none`, `<1 KiB`,
+`1-100 KiB`, `100 KiB-1 MiB`, `>1 MiB`). Tool display keys must come from the
+signed tool manifest and are localized by the app; no tool output can inject
+free-form approval text.
+
+`disclosureDigest` is computed over the disclosure with that field omitted.
+Rust constructs only the grant-neutral `SafeDisplaySummary`. Swift compares the
+machine labels with its private current scope grant, creates
+`EgressApprovalDisplaySummary`, and computes `approvalSummaryDigest` with the
+`egress-approval-summary:v1` domain and that digest field omitted. The derived
+summary is stored with the private grant/authorization and never crosses into
+Rust.
+
+Neither summary contains contact names, calendar titles, filenames,
+paths, URLs, content snippets, queries, tool arguments, or raw values. It is
+included in the appropriate canonical digest, so the exact summary shown for
+approval is bound to the disclosure and private grant. Swift validates that
+counts/classes are consistent with the machine labels; a missing or inconsistent
+summary can only increase sensitivity to `unknown_data`, never reduce it. The
+summary is explanatory metadata, not an independent source of authorization.
 
 `contentDigest` covers the exact canonical input that Swift will give the
 adapter for that generation turn. For the first turn it must equal the frozen
@@ -1149,11 +1456,18 @@ Swift moves the session to `awaiting_incremental_egress_approval` and does not
 encode, credential, or create the affected network request until the new grant
 is recorded. A user-approved scope grant is bound to run ID, allowed data
 classes, maximum sensitivity, Provider Profile revision, and exact origin. For
-every turn, Swift creates a derived `GenerationEgressAuthorization` bound to
-that grant ID, generation turn ID, content/source digests, and exact request
-scope. Changed content within the approved scope receives a new derived
-authorization without another prompt; a scope expansion requires a new user
-grant. No authorization can be reused for a later changed payload.
+cloud routes it is also bound to the pinned credential generation. For every
+turn, Swift creates a derived `GenerationEgressAuthorization` bound to that
+grant ID, credential generation, generation turn ID, content/source digests,
+and exact request scope. Changed content within the approved scope receives a
+new derived authorization without another prompt; a scope expansion requires a
+new user grant. No authorization can be reused for a later changed payload or
+credential generation.
+
+The incremental approval sheet shows the exact approved origin plus the
+manifest-localized source kinds/tool names, added item counts, size bucket, and
+new data classes from the Swift-only `EgressApprovalDisplaySummary`. It does not
+offer a raw-data preview or log the underlying values.
 
 If the user denies the initial disclosure, Swift aborts preparation before the
 first outbound request. If the user denies an expanded disclosure after tools
@@ -1233,6 +1547,7 @@ struct CapabilitySubject: Codable, Sendable {
     let engineID: String?
     let providerProfileID: String?
     let providerProfileRevision: UInt64?
+    let credentialGeneration: UInt64?
     let llmTargetID: LLMTargetID?
     let llmTargetRevision: UInt64?
     let modelID: String?
@@ -1255,6 +1570,8 @@ encoding observation has an adapter ID but no model, while provider-list
 availability has an exact Provider Profile revision and Model ID but may precede
 creation of an LLM target. An observation can contribute to a run attestation
 only when its populated subject fields match the selected route exactly.
+Authenticated availability/validation observations must include the exact
+credential generation; static catalog or adapter observations leave it absent.
 
 The dimensions have distinct meanings:
 
@@ -1385,9 +1702,59 @@ Rules:
 - Provider and engine adapters validate once more immediately before execution.
 - Rust never receives provider parameter names or local engine option names.
 
+## Durable Global Agent Run Lease
+
+Rust owns one route-neutral lease row in its SQLite store:
+
+```text
+GlobalRunLease
+  leaseGeneration
+  ownerRunID
+  preparationID, for host_slot_v2 preparation
+  bindingSchema: legacy_v1 | host_slot_v2
+  hostProcessEpoch
+  state: preparing | active | releasing
+  preparationExpiration, when preparing
+```
+
+The lease is the authority for the one-Agent-run product rule.
+`ActiveExecutionRunRegistry` and the Swift coordinator are caches/gates, not
+proof that the device is free.
+
+Acquisition rules are:
+
+1. Swift first takes its advisory actor reservation before invoking either
+   route, preventing avoidable duplicate UI work.
+2. `host_slot_v2 preview_run` performs a durable CAS from empty to
+   `preparing` before preview resolution. Renewal updates the same lease
+   generation. Preview failure, abort, or preparation expiry moves it through
+   route cleanup and releases it.
+3. `commit_start` performs another CAS that verifies lease generation,
+   preparation ID, proposed run ID, token, and host epoch, then promotes
+   `preparing -> active` in the same Rust transaction as the run snapshot,
+   worker state, and first outbox row.
+4. `legacy_v1 start_run` receives the current host epoch and performs the same
+   empty-to-active CAS before `RunSnapshotResolver::resolve_and_persist` or plan
+   creation. Resolution/start failure compensates and releases the lease.
+
+A busy CAS returns `execution.global_run_busy`; neither route may fall through
+to its resolver or create a second snapshot. A run terminal transition changes
+the lease to `releasing`. V2 releases it only after `session_closed` (or
+old-epoch recovery); legacy releases it only after its Rust-owned backend/worker
+cleanup completes. Thus a new run cannot start while a previous provider/C++
+operation is merely acknowledged for close but may still be alive.
+
+On bootstrap, every preparing, active, or releasing lease from an older host
+epoch is reconciled before run replay or UI pending actions. Its route's
+nonterminal run is interrupted, pending tool/approval/outbox work is
+invalidated, process-bound backend state is treated as gone, and the lease is
+released transactionally. This applies equally to `legacy_v1` and
+`host_slot_v2` during Phase 4 coexistence.
+
 ## Global Runtime Coordinator
 
-`LLMRuntimeCoordinator` is a Swift global actor-backed service.
+`LLMRuntimeCoordinator` is a Swift global actor-backed service. Its reservation
+improves UX, but every start still requires the Rust durable lease CAS.
 
 ```text
 idle
@@ -1408,12 +1775,19 @@ Every non-terminal state may transition through:
 ```text
 cancelling -> closing -> idle
 failed -> closing -> idle
+close_timeout -> quarantined
+quarantined -> idle, only after session_closed or a new host epoch
 ```
 
 Invariants:
 
-- There is at most one active agent/LLM session globally.
-- A new run is rejected while another run is active.
+- There is at most one active agent/LLM session globally, enforced by the Rust
+  lease rather than actor state alone.
+- A new preparation/run is rejected while the durable lease is preparing,
+  active, or releasing.
+- `idle` requires both `session_closed`/legacy cleanup and an empty Rust global
+  run lease. A quarantined same-epoch session keeps the coordinator non-idle and
+  blocks new runs.
 - An active run cannot switch target or parameter revision.
 - Editing configuration during a run affects only the next run.
 - Local preparation verifies installation before loading C++.
@@ -1442,8 +1816,9 @@ parameter defaults and overrides
 local installation records
 download task and resume metadata
 egress grants and validation state
+private non-secret egress subjects and attestation digests
 append-only generation disclosure/grant audit rows
-credential deletion tombstones
+credential generations, rotation intents, and deletion tombstones
 sanitized LLM run snapshots
 ```
 
@@ -1460,8 +1835,9 @@ unredacted request/response bodies
 Local file paths stay inside the Swift local-model subsystem. UI DTOs expose
 opaque installation IDs and display-safe storage metadata.
 
-Rust separately persists only Agent-owned preparation leases and digests,
-resumable worker state, opaque Swift cross-links, and host-command outbox rows.
+Rust separately persists only the route-neutral global run lease, Agent-owned
+preparation leases/digests, resumable worker state, opaque Swift cross-links and
+egress attestation digests, host-command outbox rows, and event receipt ledger.
 An outbox row may retain the normalized Agent input/tool-result payload only
 until Swift acknowledges that command; Rust then removes the payload and keeps
 the command identity and digest needed for audit/deduplication. Rust never
@@ -1598,6 +1974,8 @@ LLM slot ID and requirements hash
 opaque host binding ID, revision, and hash
 opaque Swift LLM snapshot ID
 host process epoch
+global run lease generation
+opaque EgressAttestationDigest
 stable preparation ID and final consumed token digest
 ```
 
@@ -1608,6 +1986,9 @@ proposed Rust run ID, which becomes the committed run ID
 agent profile ID and revision
 LLM slot ID
 host binding ID, revision, and hash
+host process epoch
+private egress subject, credential generation when remote, and
+EgressAttestationDigest
 stable preparation ID and final consumed token digest
 LLM target and sanitized runtime configuration
 ```
@@ -1666,13 +2047,16 @@ host binding ID, revision, and hash
 LLM target ID and revision
 route class: local or cloud
 model ID
+credential generation when remote
 capability snapshot hash
 resolved non-secret generation parameters
 initial modelInputDigest and source revision digest
 initial egress disclosure, scope-grant, and generation-authorization IDs when remote
+opaque egress-subject digest and EgressAttestationDigest
 append-only generation disclosure/grant audit hash
 adapter or engine version
 host process epoch
+global run lease generation
 stable preparation ID and final consumed token digest
 ```
 
@@ -1685,9 +2069,10 @@ The snapshot does not contain the API key, absolute local path, full request,
 provider-private continuation state, or raw provider failure body.
 
 Rust persists the opaque Swift snapshot ID, host binding ID/revision/hash,
-process epoch, stable preparation ID, and final token digest for cross-linking.
-Swift remains the owner and resolver of the LLM target and runtime
-configuration behind that snapshot.
+process epoch, global run lease generation, `EgressAttestationDigest`, stable
+preparation ID, and final token digest for cross-linking. Swift remains the
+owner and resolver of the LLM target and runtime configuration behind that
+snapshot.
 
 ## Failure Model
 
@@ -1734,9 +2119,10 @@ cancelled
 `execution.llm_continuation_lost` and
 `execution.continuation_expired` are Rust run-recovery errors, not Swift
 `AgentLLMFailure` categories, so they remain in the Rust execution namespace.
-Likewise, `llm.command.*`, `llm.event.*`, and `llm.turn.*` describe Rust bridge
-protocol violations. They interrupt or fail the run deterministically and are
-not remapped to a provider error.
+Likewise, `llm.command.*`, `llm.event.*`, `llm.turn.*`, `llm.cancel.*`, and
+`llm.session.*` describe Rust bridge protocol violations/timeouts. They
+interrupt or fail the run deterministically and are not remapped to a provider
+error.
 
 Raw HTTP status details, response bodies, endpoints, and engine-private messages
 remain in Swift diagnostics and must be redacted.
@@ -1762,10 +2148,12 @@ remain in Swift diagnostics and must be redacted.
 
 ### Process Restart and Ephemeral Continuation
 
-Every prepared LLM session is bound to the Swift host process epoch. A new app
-process has an empty LLM session registry and a new epoch. Before pending tools
-or approvals are exposed to the UI, startup reconciliation finds every
-non-terminal Rust run whose snapshot references an older host epoch.
+During Phase 4 coexistence, every `legacy_v1` and `host_slot_v2` preparation/run
+plus the shared global lease is bound to the app host process epoch. A new app
+process has an empty Swift session registry, no trustworthy legacy provider
+continuation, and a new epoch. Before pending tools or approvals are exposed to
+the UI, startup reconciliation finds every non-terminal Rust run whose snapshot
+or lease references an older epoch.
 
 Runtime bootstrap must be reordered accordingly: Swift supplies the new host
 epoch before Rust reconstructs actionable waiting state. Rust opens storage,
@@ -1778,13 +2166,18 @@ Affected states include:
 
 ```text
 preparing
-awaiting_start_ack
+legacy_starting_or_running
+awaiting_start_command_ack
+awaiting_generation_started
 consuming_llm_turn
 executing_tool_batch
 suspended_for_tool_approval
 awaiting_incremental_egress_approval
-awaiting_resume_ack
-cancelling
+awaiting_resume_command_ack
+awaiting_cancel_command_ack
+awaiting_cancelled_terminal
+awaiting_close_command_ack
+awaiting_session_closed
 ```
 
 Rust performs one recovery transaction per affected run:
@@ -1794,8 +2187,11 @@ Rust performs one recovery transaction per affected run:
 2. Mark the run interrupted and remove it from the active-run registry.
 3. Invalidate every pending tool request and approval for that run.
 4. Mark its preparation/session cross-link expired.
-5. Cancel every pending old-epoch host-command outbox row.
-6. Record the host epoch mismatch for diagnostics without persisting provider
+5. Cancel every pending old-epoch V2 host-command outbox row or mark the legacy
+   backend continuation abandoned.
+6. Release the matching durable global run lease after old-process resources
+   are treated as gone.
+7. Record the host epoch mismatch for diagnostics without persisting provider
    continuation state.
 
 Only after these transactions commit may the app list actionable pending tools
@@ -1805,8 +2201,8 @@ does not restart the model request, recreate a Provider Session, or append the
 result to another run.
 
 This intentionally replaces the current behavior that replays waiting-tool and
-suspended runs after SQLite restart when the continuation depended on a live
-Swift LLM session.
+suspended runs after SQLite restart when either route depended on process-bound
+model continuation state.
 
 ### Host Tool Effect Idempotency
 
@@ -1838,6 +2234,8 @@ effect.
 
 ### Swift Contract Tests
 
+- Swift passes every shared `CanonicalDigestV1` golden fixture and rejects
+  malformed, null-ambiguous, non-finite, or unregistered digest documents.
 - Capability authority, dimension, expiry, and invalidation rules.
 - Provider-list and generic probes cannot overclaim model semantics.
 - Conservative handling of unknown capabilities.
@@ -1847,6 +2245,13 @@ effect.
 - Global single-run state-machine invariants.
 - Generation disclosures are bound to exact content/source digests; unknown
   tool-result labels conservatively require approval.
+- Grant-neutral source summaries and Swift-only grant-delta summaries contain
+  only manifest-controlled enums/keys, counts/buckets, and new classes; raw
+  values cannot enter approval UI/logs.
+- Provider/origin/credential/grant semantics remain inside the private egress
+  subject while the public opaque attestation binds the required generic fields.
+- Credential rotation is blocked by pending/live/closing sessions; successful
+  rotation increments generation and invalidates old validation/grants.
 - Archiving one Provider Profile revision retains a CredentialRef still used by
   another revision; logical-profile deletion reconciles Keychain tombstones.
 - Sanitized snapshots and error redaction.
@@ -1865,7 +2270,9 @@ Each provider adapter has recorded, secret-free fixtures covering:
 - usage normalization;
 - unknown event forward compatibility;
 - rate-limit and authentication errors;
-- cancellation; and
+- cancellation command acceptance;
+- command-acknowledged versus generation-started/cancelled/session-closed
+  lifecycle signals; and
 - terminal event enforcement.
 
 CI must not require live provider credentials. Optional manual smoke tests may
@@ -1888,6 +2295,8 @@ data or secrets.
 
 ### Rust Boundary Tests
 
+- Rust passes the same `CanonicalDigestV1` golden fixtures as Swift; ordinary
+  serde JSON byte order never affects a digest.
 - The agent kernel depends only on the abstract LLM client port.
 - Rust product code does not construct or resolve Provider Profiles, model
   installations, Base URLs, credentials, model paths, or backend adapters.
@@ -1898,11 +2307,19 @@ data or secrets.
 - No Swift host vtable callback occurs while the Rust runtime mutex is held.
 - Event sequence duplication, gaps, terminal events, stale handles, and bounded
   backpressure follow the bridge contract.
+- Repeating an event sequence with a different event ID/digest interrupts;
+  old-epoch or tombstoned handles never match a new session.
+- Rust validates only the public binding of `EgressAttestationDigest` and has no
+  Provider Profile, origin, credential-generation, or grant parser.
+- Command acknowledgement cannot satisfy generation-start, cancel-stop, or
+  session-close watchdogs.
+- The route-neutral durable global run lease CAS admits exactly one legacy/V2
+  owner and is released only after route cleanup.
 - Cancellation/final-event races produce one deterministic terminal state.
 - Preparation tokens rotate idempotently on valid renewal, expire at the total
   lease bound, abort idempotently, and reject stale input/source digests.
 - Start/resume command acknowledgement timeout and deduplication use the same
-  command ID, sequence, and payload digest.
+  command ID, sequence, and full command-envelope digest, including disclosure.
 - Rust waits for `generation_completed`, rejects malformed tool batches, and
   executes a valid multi-call batch sequentially before one batched resume.
 - Normalized text and tool-call events drive the resumable agent worker.
@@ -1930,12 +2347,23 @@ data or secrets.
 - A sensitive tool result pauses before its resume network request, records an
   incremental digest-bound grant, and maps denial to
   `execution.egress_denied` without sending that result.
+- Rotating a key during a prepared/live session is rejected; after
+  `session_closed`, rotation advances credential generation and requires fresh
+  validation/grant before another request.
 - Crash injection after Rust outbox commit and before Swift acknowledgement
   redispatches the same command identity without a duplicate provider request.
+- Conflicting duplicate event envelopes and an old-handle ABA attempt are
+  rejected without advancing the worker.
+- An accepted cancel without backend `cancelled` hits the stop watchdog; an
+  accepted close without `session_closed` quarantines the session ledger.
+- Concurrent `legacy_v1 start_run` and `host_slot_v2 commit_start` attempts
+  produce one winner and one `execution.global_run_busy` without a losing
+  snapshot/worker.
 - `legacy_v1` remains runnable through Phases 1-3 while `host_slot_v2` remains
   non-runnable until the Phase 4 route switch.
-- Restart invalidates LLM-dependent waiting-tool/approval state before it is
-  exposed, and late results return `execution.continuation_expired`.
+- Restart invalidates legacy/V2 waiting-tool/approval state and releases the
+  old-epoch global lease before pending actions are exposed; late results return
+  `execution.continuation_expired`.
 - A committed or outcome-unknown host tool effect is never automatically
   executed twice.
 
@@ -1987,6 +2415,11 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 
 ### Phase 1: Contracts, Slots, and Consistency Foundation
 
+- Add Swift/Rust `CanonicalDigestV1` implementations and shared golden fixtures
+  before introducing any cross-language digest contract.
+- Add the durable route-neutral global run lease and place the legacy
+  `start_run` CAS before its resolver; do not otherwise change legacy model
+  resolution/execution semantics.
 - Add Swift LLM contract, core, storage, capability, and parameter targets.
 - Add `AgentHostConfiguration` and immutable `LLMTarget` revisions.
 - Introduce portable `LLMSlotV2` and `AgentLLMRequirements` alongside the
@@ -1997,7 +2430,7 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 - Add the `preview_run`/`renew_preparation`/`commit_start`/
   `abort_preparation` contracts without switching the production worker yet.
 - Keep `RunSnapshotResolver::resolve_model_binding` and the active legacy
-  production route unchanged.
+  model route unchanged behind the new lease gate.
 
 ### Phase 2: Local Product Path
 
@@ -2013,7 +2446,8 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 - Add Provider Profiles, Keychain storage, egress, validation, and provider
   adapters.
 - Add digest-bound initial and incremental `GenerationDisclosure` grants,
-  including conservative tool-result labeling and credential tombstones.
+  safe display summaries, opaque egress attestations, conservative tool-result
+  labeling, credential generations, rotation sagas, and tombstones.
 - Complete fixture coverage before exposing a provider preset in release UI.
 
 ### Phase 4: Host LLM Session Bridge
@@ -2022,6 +2456,8 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 - Replace synchronous `ExecutionModelClient::next_turn` execution with the
   durable resumable worker state machine.
 - Add the outbound command vtable and independent inbound event FFI entry.
+- Add random epoch-bound session handles and canonical `LLMEventEnvelope`
+  identity/sequence/digest validation.
 - Add the transactional host-command outbox, copy receipts, command
   acknowledgements, deduplication, and acknowledgement deadlines.
 - Prove that no Swift callback occurs while the Rust runtime mutex is held.
@@ -2029,12 +2465,16 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
   event behavior, and cancellation races.
 - Implement structured generation terminal outcomes and complete ordered
   tool-call batches.
+- Separate command acknowledgement, backend start, generation terminal, and
+  session close signals/watchdogs.
 - Implement host-process epoch recovery, continuation invalidation, and host
   tool effect idempotency.
 - Replace the production `BridgeExecutionModelClient` provider path with a
   host-backed LLM client.
 - Route `host_slot_v2` profiles through the host-backed worker; continue routing
   unmigrated `legacy_v1` profiles through the old path during this phase.
+- Require both routes to use the same durable global run lease and host epoch;
+  legacy waiting states follow the same restart interruption rule.
 - Keep Rust Agent policy, context assembly, and tool semantics unchanged while
   changing the worker scheduling model.
 
@@ -2063,12 +2503,14 @@ environment providers remain debug-only and are not treated as user profiles.
 This architecture is intentionally delivered through five independently
 verifiable implementation plans:
 
-1. Portable LLM slots, Agent Package v2, cross-store saga, Swift LLM contracts,
-   storage, capabilities, and parameters.
+1. Canonical digests, durable global run lease, portable LLM slots, Agent
+   Package v2, cross-store saga, Swift LLM contracts, storage, capabilities,
+   and parameters.
 2. Local model catalog, download, disk management, and C++ runtime.
-3. Cloud Provider Profiles, Keychain, egress, and adapters.
-4. Async Swift-Rust LLM session bridge, two-phase run commit, and restart
-   recovery.
+3. Cloud Provider Profiles, credential generations, Keychain, egress
+   attestations/disclosures, and adapters.
+4. Async Swift-Rust LLM session bridge, event envelopes, lifecycle watchdogs,
+   two-phase run commit, and restart recovery.
 5. Model Center UI, migration, and legacy cleanup.
 
 The plans are sequential. Later plans must not redefine the ownership boundary
@@ -2082,6 +2524,11 @@ lint rules above without pretending the legacy route is already gone.
 
 - [ ] Rust production code does not own LLM targets, Provider Profiles, model
       installations, credentials, Base URLs, model paths, or backend selection.
+- [ ] Rust never parses Provider Profile, origin, CredentialRef/generation,
+      scope grant, or per-turn authorization; it validates only the generic
+      public binding of a versioned opaque egress attestation.
+- [ ] Every Swift-Rust digest uses registered `CanonicalDigestV1` schemas and
+      both languages pass identical RFC 8785 golden fixtures.
 - [ ] Rust Agent/Profile/Package contracts retain only portable LLM slots,
       requirements, and optional hints; they contain no device-local binding.
 - [ ] Swift is the sole product owner of local/cloud LLM selection and runtime
@@ -2095,9 +2542,18 @@ lint rules above without pretending the legacy route is already gone.
 - [ ] Rust never invokes the Swift host vtable while holding its runtime mutex.
 - [ ] The Rust worker is resumable and receives Swift stream events through an
       independent FFI entry with defined ownership, sequencing, and backpressure.
+- [ ] Session handles contain at least 128 random bits, are bound to
+      preparation/run/epoch, remain tombstoned, and are never reused in an
+      epoch.
+- [ ] Event envelopes bind event ID, handle, epoch, run, turn, sequence, and
+      payload digest; a conflicting duplicate interrupts instead of becoming a
+      no-op.
 - [ ] Every Rust-to-Swift command is committed with worker state in a durable
       outbox and has stable identity, sequence, copy receipt, deduplication,
       acknowledgement, and timeout behavior.
+- [ ] `command_acknowledged`, `generation_started`, generation terminal, and
+      `session_closed` are distinct; cancel/close watchdogs wait for backend
+      facts, and ledgers survive until `session_closed`.
 - [ ] Profile publish, Package binding, and run cross-links use idempotent sagas
       and converge after every injected crash boundary.
 - [ ] Profile and Package sagas persist the exact opaque binding ID, revision,
@@ -2107,19 +2563,27 @@ lint rules above without pretending the legacy route is already gone.
 - [ ] One Agent Profile revision resolves to one explicit LLM target revision.
 - [ ] A cloud LLM target revision pins one Provider Profile revision; changing
       its Base URL cannot silently alter an existing Agent configuration.
-- [ ] Only one agent run and one generation may be active globally.
+- [ ] A single durable Rust global run lease is acquired by CAS before either
+      legacy or V2 resolution, admits only one run/preparation globally, and is
+      released only after route cleanup.
 - [ ] Installed models remain on disk until the user deletes them.
 - [ ] Only the active local model may be loaded in RAM.
 - [ ] Local downloads support pause, resume, verification, atomic install, and
       launch reconciliation.
 - [ ] Local catalog manifests are signed and arbitrary imports are absent in v1.
 - [ ] API keys exist only in Keychain and never cross into Rust.
+- [ ] Validation, grants, sessions, private egress attestations, and Swift
+      snapshots pin credential generation; key rotation cannot cross a
+      pending/live/closing session.
 - [ ] Archiving a Provider Profile revision cannot delete a CredentialRef still
       used by another revision, preparation, or live session.
 - [ ] Egress approval is bound to exact provider origin.
 - [ ] Every remote start/resume request carries a disclosure bound to its exact
       content and source revisions; expanded sensitive tool data requires
       incremental approval before the affected request.
+- [ ] Every approval uses a digest-bound grant-neutral source summary plus a
+      Swift-only grant-delta summary of source enums, counts, size bucket,
+      manifest tool keys, and new classes, with no raw user data.
 - [ ] OpenAI, Claude, Gemini, Grok, DeepSeek, MiniMax, and GLM have explicit
       Swift adapter semantics.
 - [ ] Capability unknowns fail conservatively.
@@ -2132,8 +2596,9 @@ lint rules above without pretending the legacy route is already gone.
       a complete ordered tool-call batch; V1 executes multi-call batches
       sequentially and resumes once with all results.
 - [ ] Cancellation is idempotent and reaches Rust plus the active backend.
-- [ ] Process restart atomically interrupts LLM-dependent non-terminal runs,
-      invalidates pending tool/approval state, and rejects late results.
+- [ ] Process restart atomically interrupts legacy and V2 non-terminal runs,
+      invalidates pending tool/approval/outbox state, releases the old-epoch
+      global lease, and rejects late results.
 - [ ] Side-effecting host tools use effect IDs and never auto-repeat an
       outcome-unknown effect.
 - [ ] No automatic model fallback occurs.
@@ -2149,6 +2614,8 @@ The adapter design was checked against official provider documentation on
 2026-07-10. Provider presets and capability catalogs must be versioned because
 these APIs and model-level constraints evolve.
 
+- RFC 8785 JSON Canonicalization Scheme:
+  <https://www.rfc-editor.org/rfc/rfc8785.html>
 - OpenAI reasoning controls:
   <https://developers.openai.com/api/docs/guides/reasoning>
 - OpenAI Responses API:
