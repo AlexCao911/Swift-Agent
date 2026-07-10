@@ -88,13 +88,19 @@ multiple agents or multiple generations concurrently.
 
 ## Architecture Review Resolution
 
-The implementation is blocked unless all six review corrections below remain
-true:
+The implementation is blocked unless all review corrections below remain true:
 
 | Review concern | Required resolution |
 | --- | --- |
+| Egress approval was not bound to actual generation content | Freeze and digest the initial model input, attach a `GenerationDisclosure` to every generation turn, and require incremental approval before an affected remote request |
+| Replacing `ModelBinding` before switching the production resolver would break legacy runs | Introduce versioned `LLMSlotV2` alongside legacy bindings, switch execution in Phase 4, and remove the legacy path only in Phase 5 |
+| Rust-to-Swift commands could be lost or replayed as duplicate provider requests | Transactional Rust outbox, sequenced command envelopes, synchronous copy receipts, asynchronous acknowledgements, Swift deduplication, and bounded acknowledgement timeouts |
+| A bare `completed` event could not distinguish final output from a tool-call turn | Structured generation terminal outcomes, complete ordered tool-call batches, and explicit mixed text/tool-call semantics |
+| Profile publication did not persist the staged host-binding identity | Commit the exact binding ID, revision, and hash into the Rust opaque cross-link and require exact-match activation/reconciliation |
+| A fixed two-minute preparation token could expire during approval or local loading | Use a digest-preserving rotating preparation lease, then keep the ready host attestation short-lived |
+| Archiving one Provider Profile revision could delete a key shared by newer revisions | Separate revision archival from logical-profile deletion and delete a credential slot only after reference and active-session checks |
 | Synchronous Rust-Swift call under the runtime mutex | Resumable Rust worker, lock-free outbound host callback, independent event FFI, bounded backpressure, and explicit cancellation races |
-| Swift needs resolved requirements before it can prepare | Mandatory preview -> Swift prepare/attest -> Rust commit protocol with single-use expiry-bound tokens |
+| Swift needs resolved requirements before it can prepare | Mandatory preview -> Swift prepare/attest -> Rust commit protocol with a digest-bound rotating lease and short-lived ready attestation |
 | Rust and Swift persist related state in separate stores | Portable Rust LLM slots, Swift host bindings, idempotent profile/package/run sagas, and startup reconciliation |
 | Provider continuation is memory-only across restart | Host-process epochs, pre-replay interruption of every LLM-dependent run, invalidated pending actions, and host tool effect idempotency |
 | GGUF/custom prompt formatting is model-format-specific | Swift selects canonical messages/tools/template; C++ performs engine/model-format rendering; Swift parses normalized tool calls |
@@ -333,6 +339,11 @@ struct AgentHostConfiguration: Codable, Sendable {
 }
 ```
 
+`bindingHash` is the SHA-256 of the canonical non-secret
+`AgentHostConfiguration` revision, including binding/profile/slot/target
+identities, requirements hash, and parameter overrides. It excludes the API key
+and resolved local path.
+
 The UI may present this composition as part of Agent Profile editing, but the
 record belongs to the Swift host layer and is not stored in the Rust agent
 definition.
@@ -353,11 +364,16 @@ preview_run(start request)
 
 Rust uses the existing `RunSnapshotService.preview` path as the starting point,
 then previews the execution plan and context requirements without starting the
-worker or persisting a run snapshot.
+worker or persisting a run snapshot. It also assembles the canonical first-turn
+`AgentLLMInput`, freezes its canonical digest and exact source revisions in the
+pending preparation record, and computes its disclosure metadata. The first
+`start_generation` command must use canonical bytes whose digest matches that
+frozen record; reconstruction with any changed source is rejected.
 
 The result contains only agent and host-neutral requirements:
 
 ```text
+preparation ID
 preparation token
 proposed Rust run ID
 agent profile ID and revision
@@ -365,21 +381,48 @@ conversation frame reference and digest
 execution plan digest
 AgentLLMRequirements
 tool schema digest
+frozen initial AgentLLMInput ID and modelInputDigest
+memory/context/attachment revision digest
+initial GenerationDisclosure
 required input modalities
 streaming/tool-calling requirements
 requested context budget
-egress data classes and highest sensitivity
 expiration time
 ```
 
-The preparation token is random, single-use, bound to the proposed run ID and
-all listed digests, and valid for two minutes. Rust persists a pending
+The preparation ID is stable for reconciliation. The preparation token is
+random, single-use, and bound to that ID, the proposed run ID, and all listed
+digests. It begins as a five-minute preparation lease. Rust persists a pending
 preparation record, not a run lifecycle record. The proposed run ID is reserved
-for this token and cannot be reused. Restart invalidates every uncommitted
-preparation.
+for this preparation and cannot be reused. Restart invalidates every
+uncommitted preparation.
+
+While Swift is waiting for user approval or loading a local model, it may call:
+
+```text
+renew_preparation(
+  current token,
+  bound digest set,
+  host process epoch,
+  renewal idempotency key)
+  -> rotated preparation token and new expiration
+```
+
+Renewal consumes the old token, preserves the preparation ID, proposed run ID,
+and frozen input, and succeeds only when every bound digest and the host epoch
+are unchanged. Each renewal extends the lease by five minutes, up to thirty
+minutes total from preview. It cannot change the frozen input, any Rust-owned
+digest, or the disclosed egress scope; Swift binding, capability, and parameter
+claims remain
+subject to the final attestation checks. When Swift becomes ready, its host
+attestation is valid for two minutes; `commit_start` must consume the current
+rotated token within that shorter ready window. Exceeding the total lease
+requires a new preview and approval flow.
 
 Preview does not send prompt content to a provider, resolve a Swift credential,
-load a model, or create a Rust run lifecycle record.
+load a model, or create a Rust run lifecycle record. Freezing is a local Rust
+operation; Swift receives the content digest and disclosure during preparation,
+not permission to transmit the content.
 
 ### Phase B: Swift Preparation
 
@@ -396,14 +439,16 @@ Swift consumes `RunPreparationPreview` and:
 Swift returns a host attestation:
 
 ```text
+preparation ID
 preparation token
 proposed Rust run ID
-host binding revision and hash
+host binding ID, revision, and hash
 LLMSessionHandle
 Swift LLM snapshot ID
 capability attestation and hash
 resolved parameter hash
-approved egress disclosure ID, when remote
+approved initial egress disclosure digest, scope grant ID, and generation
+authorization ID, when remote
 host process epoch
 attestation expiration
 ```
@@ -418,17 +463,21 @@ commit_start(preparation token, host attestation)
 Rust verifies that:
 
 - the token exists, is unexpired, and has not been consumed;
-- the profile, frame, plan, and tool-schema digests are unchanged;
+- the profile, frame, plan, tool-schema, frozen model-input, and
+  memory/context/attachment revision digests plus the initial disclosure digest
+  are unchanged;
 - the generic capability attestation satisfies `AgentLLMRequirements`;
 - the host binding and Swift snapshot identifiers are present;
 - the host epoch is current; and
-- required egress approval metadata is present.
+- required initial egress approval metadata exactly matches the frozen
+  disclosure, Provider Profile revision, and origin.
 
 Rust then persists the Rust run snapshot, opaque host-binding cross-link, and
 initial resumable worker state under the proposed run ID in one Rust
 transaction. The token becomes consumed in that same transaction. The returned
 `RunHandle` contains that exact ID. Only after commit does Rust enqueue the first
-outbound LLM command.
+outbound LLM command, whose payload references the frozen input ID and must
+match the committed `modelInputDigest`.
 
 Rust does not interpret the target, provider, model, parameters, credential, or
 route behind the attestation.
@@ -445,6 +494,9 @@ abort_preparation(preparation token, reason)
   aborted through the same idempotency key.
 - Expiration closes a prepared Swift session, deletes pending host state, and
   marks the Rust token expired.
+- Repeating renewal with an already rotated token returns the previously issued
+  replacement only for the same idempotency key; otherwise the old token is
+  stale.
 - Repeating abort is a no-op.
 - A consumed or expired token cannot start a run.
 - Startup reconciliation cleans pending records on both sides before the UI
@@ -458,6 +510,7 @@ Swift materializes the Phase B result as:
 struct PreparedLLMSession: Sendable {
     let handle: LLMSessionHandle
     let capabilityAttestation: AgentLLMCapabilities
+    let hostBindingID: String
     let hostBindingRevision: UInt64
     let hostBindingHash: String
     let sanitizedSnapshot: LLMRunSnapshot
@@ -478,27 +531,109 @@ The target worker is a resumable state machine:
 
 ```text
 ready
-  -> awaiting_llm
-  -> consuming_llm_stream
-  -> awaiting_tool
-  -> awaiting_llm_resume
-  -> consuming_llm_stream
+  -> awaiting_start_ack
+  -> consuming_llm_turn
+  -> executing_tool_batch
+  -> awaiting_resume_ack
+  -> consuming_llm_turn
   -> completed | failed | cancelled | interrupted
 ```
 
 Agent policy, context assembly, tool routing, and completion semantics remain in
 Rust. The worker scheduling and model-call implementation do change: a worker
-transition persists state, enqueues an outbound host command, and returns
-without waiting for Swift.
+transition persists state and a durable outbound host command in one
+transaction, then returns without waiting for Swift.
 
 Outbound commands are:
 
 ```text
-start_generation(session_handle, agent_llm_input)
-resume_generation(session_handle, normalized_tool_results)
+start_generation(session_handle, agent_llm_input, generation_disclosure)
+resume_generation(session_handle, normalized_tool_results, generation_disclosure)
 cancel_generation(session_handle)
 close_session(session_handle)
+capacity_available(session_handle)
 ```
+
+Rust computes a fresh `GenerationDisclosure` for every generation turn. The
+start disclosure is bound to the frozen initial input. A resume disclosure is
+bound to the complete canonical semantic request for that turn: all prior
+content the adapter will resend, the full tool-result batch, and every context,
+memory, or attachment revision newly included. Swift must validate the
+disclosure before it lets an adapter encode or transmit the corresponding
+remote request.
+
+### Durable Host Command Outbox
+
+Every outbound operation uses a stable envelope:
+
+```text
+HostCommandEnvelope
+  commandID
+  runID
+  sessionHandle
+  hostProcessEpoch
+  commandSequence
+  generationTurnID, for start/resume
+  kind
+  payloadDigest
+  GenerationDisclosure, for start/resume
+  payload
+```
+
+`commandID` is globally unique and `commandSequence` is monotonically
+increasing per session. Rust writes the worker transition and outbox row in the
+same SQLite transaction. A committed outbox row is the sole authority for
+dispatch; an in-memory enqueue without that row is forbidden. A terminal run
+transition cancels pending non-cleanup commands and inserts one idempotent
+`close_session` row; the session is released only after that row is
+acknowledged or its cleanup deadline expires.
+
+The dispatcher wakes after commit and also scans pending rows, so failure
+between transaction commit and callback invocation cannot strand a run. On a
+new host epoch, restart invalidation cancels old-epoch rows before dispatch.
+
+Swift keeps a per-session command ledger keyed by `commandID`. Receiving the
+same ID, sequence, and payload digest again returns the existing acknowledgement
+without recreating a URLSession request or C++ generation. Reusing an ID with a
+different sequence or digest interrupts the run with
+`llm.command.identity_conflict`.
+
+Ledger entries remain until `close_session` is acknowledged; Swift cannot evict
+an identity while Rust may legally redispatch its outbox row.
+
+For a previously unseen command ID, Swift accepts only the next sequence. A gap
+returns `llm.command.sequence_gap`; reusing an accepted sequence with a different
+ID returns `llm.command.sequence_conflict`. Rust never dispatches a later command
+until the earlier envelope has a `copied` receipt or has been atomically
+cancelled before Swift saw it, in which case its unseen sequence is released
+for the replacement cleanup command. A new start/resume waits for asynchronous
+acceptance of the previous lifecycle command; cancel/close may follow a copy
+receipt so cancellation is not blocked by a lost asynchronous acknowledgement.
+
+Delivery has two acknowledgement levels:
+
+1. The synchronous vtable return reports `copied`, `backpressure`, or
+   `host_unavailable`. Only `copied` means Swift owns an immutable copy in its
+   bounded actor queue; it does not remove the Rust outbox row.
+2. After the actor deduplicates and claims the command, Swift calls
+   `submit_llm_command_ack(runtime, sessionHandle, commandID,
+   commandSequence, accepted | rejected)`.
+   `accepted` means Swift has claimed that identity and will not start it more
+   than once in the current host epoch; it does not mean generation has
+   completed or egress has been approved. Swift may acknowledge the command and
+   wait in `awaiting_incremental_egress_approval`; the command deadline never
+   times the user's approval decision.
+
+A rejected acknowledgement carries a stable safe error. Rust marks that outbox
+row terminal and fails or interrupts the run according to the error category;
+it does not retry rejection with a new identity.
+
+Rust retries `backpressure`, a missing copy receipt, or a missing asynchronous
+acknowledgement with the same envelope identity. Start and resume commands have
+a ten-second acknowledgement deadline with bounded redispatch during that
+window. If no valid acknowledgement arrives, Rust interrupts the run with
+`llm.command.ack_timeout`; it never creates a new command ID to guess whether
+the provider request started. A late acknowledgement is treated as stale.
 
 ### Host Command Vtable
 
@@ -511,12 +646,12 @@ context pointer. Its rules are:
 
 - Rust owns the command buffer for the duration of the callback.
 - Swift copies the command before the callback returns.
-- The Swift callback only enqueues the copied command onto the dedicated
-  `LLMBridgeActor` and returns promptly.
+- The Swift callback only attempts to enqueue the copied command onto the
+  bounded `LLMBridgeActor` queue and returns the copy receipt promptly.
 - The callback must not call any Rust FFI entry synchronously or wait for the
   main actor.
-- Command delivery is serial per runtime. Different runtimes do not share a
-  command-order guarantee.
+- Command delivery is serial per runtime and validated against
+  `commandSequence`. Different runtimes do not share a command-order guarantee.
 
 ### Independent Event Submission
 
@@ -543,28 +678,61 @@ tool_call_started
 tool_call_arguments_delta
 tool_call_completed
 usage_updated
-completed
+generation_completed {
+  generationTurnID
+  outcome: final_response | tool_calls_ready
+  orderedCallIDs
+  finishReason
+}
 cancelled
 failed
 ```
+
+`finishReason` is provider-neutral: `stop`, `tool_calls`, `length`,
+`content_filtered`, or `other`. The raw provider reason remains in redacted
+Swift diagnostics. `orderedCallIDs` uses first-appearance order after adapter
+normalization and is empty for every non-tool outcome.
 
 Rules:
 
 - Swift prepares and owns every session handle.
 - Rust may retain a handle only for the lifetime of its run.
 - Closing is idempotent.
+- Every generation event carries the `generationTurnID` from its acknowledged
+  start/resume command and is rejected if it does not match the active turn.
 - Each session uses monotonically increasing event sequence numbers.
 - A duplicate sequence is an idempotent no-op.
 - A sequence gap interrupts the session with `llm.event.sequence_gap`.
-- Events after a terminal event return `llm.event.terminal` and are ignored.
+- Events after `generation_completed` for the same turn return
+  `llm.event.turn_terminal` and are ignored. A `tool_calls_ready` terminal keeps
+  the session open for a later acknowledged resume turn.
+- Events after `generation_completed(outcome: final_response)`, `cancelled`, or
+  `failed` make the session terminal, return `llm.event.session_terminal`, and
+  are ignored.
 - Events for an expired or unknown handle return `llm.event.stale_session` and
   are ignored.
 - Provider-specific unknown events are handled in Swift and do not cross FFI.
 - Provider reasoning signatures and raw thinking blocks never cross FFI.
 - Tool calls cross FFI only in the normalized agent tool-call shape.
 - Secrets and local paths never appear in port DTOs.
-- Tool completion persists the Rust observation before a resume command is
-  enqueued.
+- `tool_call_completed` closes one decoded call but does not authorize tool
+  execution. Rust waits for the terminal `generation_completed` event.
+- `final_response` requires an empty `orderedCallIDs`; accumulated text becomes
+  the final assistant answer and `finishReason` cannot be `tool_calls`.
+- `tool_calls_ready` requires a non-empty ordered list that exactly matches all
+  completed calls in that turn plus `finishReason: tool_calls`. Missing,
+  duplicate, unknown, or still-open call IDs fail the run with
+  `llm.turn.invalid_tool_batch`.
+- V1 executes the complete tool-call batch sequentially in `orderedCallIDs`
+  order, even when the model can emit parallel calls. Every call produces a
+  normalized success or failure result. Rust persists the whole result set and
+  sends one ordered result batch in the next `resume_generation` command.
+- Text emitted in a `tool_calls_ready` turn is an assistant preamble: it may be
+  streamed to the UI and is persisted once with that tool turn, but it is not a
+  final answer. It remains part of Rust conversation context without being
+  duplicated when Swift continues the provider-private session.
+- The completed tool batch and its observations are persisted before a resume
+  command/outbox row is created.
 
 ### Backpressure
 
@@ -576,7 +744,8 @@ accepted
 duplicate
 backpressure
 stale_session
-terminal
+turn_terminal
+session_terminal
 sequence_gap
 ```
 
@@ -596,8 +765,10 @@ event cannot fit in an empty queue, the session fails with
 Cancellation is represented by a persisted Rust state transition and an
 outbound cancel command.
 
-- If a terminal model event commits first, a later cancel is an idempotent
-  no-op.
+- If a session-terminal `generation_completed(outcome: final_response)`,
+  `cancelled`, or `failed` event commits first, a later cancel is an idempotent
+  no-op. A `tool_calls_ready` turn terminal does not block cancellation while
+  tools are pending.
 - If cancellation commits first, later non-cancellation events are stale and
   ignored.
 - Swift cancels the active URLSession task or C++ generation exactly once and
@@ -889,8 +1060,18 @@ availability, not a permanent capability override.
 
 - The API key is stored with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
 - Persistent stores contain only an opaque CredentialRef.
+- A CredentialRef names a logical credential slot. Multiple immutable revisions
+  of the same Provider Profile may reference that slot.
 - The UI cannot read a saved key back as plaintext; it may replace or delete it.
-- Deleting a Provider Profile deletes its Keychain item.
+- Archiving a Provider Profile revision never deletes its Keychain item.
+- Deleting the entire logical Provider Profile first prevents new sessions and
+  archives all of its revisions. `ProviderCredentialStore` deletes the Keychain
+  item only after no non-archived profile revision, pending preparation, or live
+  session references the CredentialRef. A credential slot shared by another
+  logical profile is retained until its final reference is removed.
+- Key deletion uses an idempotent persisted tombstone: record deletion intent,
+  delete the Keychain item, then mark completion. Startup reconciliation safely
+  repeats an incomplete deletion without exposing the old credential.
 - Credential resolution happens only after egress and approval checks pass.
 - Credential values never enter logs, SQLite, FFI DTOs, diagnostics, exports, or
   provider error messages.
@@ -935,12 +1116,50 @@ Routine text inference does not repeatedly prompt after origin approval.
 
 ### Per-Run Sensitive Approval
 
-`AgentLLMInput` carries provider-neutral data-class and sensitivity annotations.
-Swift evaluates them before credential resolution or network task creation.
+Every start or resume command carries a provider-neutral disclosure:
 
-High-sensitivity context or sensitive attachments require an additional
-per-run approval describing the provider origin and data classes. Denial stops
-the run before any outbound request.
+```swift
+struct GenerationDisclosure: Codable, Sendable {
+    let generationTurnID: String
+    let contentDigest: String
+    let sourceRevisionDigest: String
+    let dataClasses: Set<EgressDataClass>
+    let highestSensitivity: DataSensitivity
+    let priorGrantID: String?
+}
+```
+
+`contentDigest` covers the exact canonical input that Swift will give the
+adapter for that generation turn. For the first turn it must equal the frozen
+`modelInputDigest`. For a resume it covers the complete semantic request,
+including any prior content the provider protocol requires Swift to resend, the
+entire tool-result batch, and all new context. The Swift adapter rejects a
+payload whose canonical digest or source revisions do not match the disclosure.
+
+Tool manifests declare possible output data classes, and each normalized tool
+result carries actual data-class and sensitivity labels. The resume disclosure
+uses the conservative union of manifest declarations, result labels, and any
+new context labels; a missing or unknown label defaults to high-sensitivity
+`unknown_data` rather than routine text. A later component cannot downgrade a
+label already attached by an earlier source.
+
+High-sensitivity context, sensitive attachments, or tool results outside the
+currently approved disclosure scope require an incremental per-run approval.
+Swift moves the session to `awaiting_incremental_egress_approval` and does not
+encode, credential, or create the affected network request until the new grant
+is recorded. A user-approved scope grant is bound to run ID, allowed data
+classes, maximum sensitivity, Provider Profile revision, and exact origin. For
+every turn, Swift creates a derived `GenerationEgressAuthorization` bound to
+that grant ID, generation turn ID, content/source digests, and exact request
+scope. Changed content within the approved scope receives a new derived
+authorization without another prompt; a scope expansion requires a new user
+grant. No authorization can be reused for a later changed payload.
+
+If the user denies the initial disclosure, Swift aborts preparation before the
+first outbound request. If the user denies an expanded disclosure after tools
+have run, Swift submits non-retryable `egress_denied`; Rust terminates the run as
+failed with `execution.egress_denied`. In both cases denial stops the affected
+outbound request, not merely the first request in the run.
 
 Local inference does not create a remote egress decision.
 
@@ -983,9 +1202,10 @@ enum SupportState: String, Codable, Sendable {
 }
 ```
 
-Tool calling distinguishes unsupported, sequential, and parallel support.
-Reasoning capability describes supported control modes without exposing a
-provider request field.
+Tool calling distinguishes unsupported, sequential, and parallel model
+emission. Parallel emission means one turn may return multiple call IDs; V1
+still executes that complete batch sequentially. Reasoning capability describes
+supported control modes without exposing a provider request field.
 
 ### Provenance
 
@@ -1172,10 +1392,12 @@ Rules:
 ```text
 idle
   -> preparing
-  -> awaiting_approval
+  -> awaiting_initial_egress_approval
   -> loading_local | opening_cloud_session
   -> generating
   <-> awaiting_tool_result
+  -> awaiting_incremental_egress_approval
+  -> generating
   -> completing
   -> closing
   -> idle
@@ -1198,6 +1420,8 @@ Invariants:
 - Cloud preparation unloads the local RAM model before opening the provider
   session.
 - Tool execution occurs in Rust while the Swift LLM session remains reserved.
+- A remote resume request cannot leave
+  `awaiting_incremental_egress_approval` until its exact disclosure is granted.
 - Cancellation is idempotent and propagates to Rust and the active URLSession
   task or C++ generation session.
 - No backend or model fallback occurs automatically.
@@ -1218,6 +1442,8 @@ parameter defaults and overrides
 local installation records
 download task and resume metadata
 egress grants and validation state
+append-only generation disclosure/grant audit rows
+credential deletion tombstones
 sanitized LLM run snapshots
 ```
 
@@ -1233,6 +1459,13 @@ unredacted request/response bodies
 
 Local file paths stay inside the Swift local-model subsystem. UI DTOs expose
 opaque installation IDs and display-safe storage metadata.
+
+Rust separately persists only Agent-owned preparation leases and digests,
+resumable worker state, opaque Swift cross-links, and host-command outbox rows.
+An outbox row may retain the normalized Agent input/tool-result payload only
+until Swift acknowledges that command; Rust then removes the payload and keeps
+the command identity and digest needed for audit/deduplication. Rust never
+persists the provider-encoded request or a credential.
 
 ## Cross-Store Consistency
 
@@ -1250,24 +1483,42 @@ pending/active states, compensation, and startup reconciliation.
      -> publish token
 
 2. Swift stage_host_binding(publish token)
-     -> pending AgentHostConfiguration revision
+     -> pending AgentHostConfiguration binding ID, revision, and hash
+     -> HostBindingStagingReceipt bound to publish-token digest, slot, and
+        requirements hash
 
-3. Rust commit_profile_publish(publish token)
+3. Rust commit_profile_publish(
+       publish token,
+       binding ID,
+       binding revision,
+       binding hash,
+       HostBindingStagingReceipt)
      -> visible profile revision
+     -> persisted opaque host-binding cross-link
 
-4. Swift activate_host_binding(publish token)
+4. Swift activate_host_binding(
+       publish token,
+       binding ID,
+       binding revision,
+       binding hash)
      -> active binding revision
 ```
 
 Rules:
 
 - Every step is idempotent by the same operation key.
+- The pending Rust publication is already bound to profile revision, LLM slot
+  ID, and requirements hash. At commit, Rust validates the staging receipt and
+  atomically binds that pending record to the staged binding tuple. It rejects
+  a receipt/token mismatch or a tuple that differs from the Swift staging
+  result.
 - A Swift staging failure aborts the pending Rust publication.
 - A Rust commit failure deletes or expires the pending Swift binding.
 - A crash after Rust commit but before Swift activation leaves the profile
   visible but `host_unbound`; it is not runnable.
-- Startup reconciliation retries Swift activation when both committed records
-  match, otherwise it exposes a repair action.
+- Startup reconciliation retries Swift activation only when binding ID,
+  revision, hash, slot, and requirements match on both sides; otherwise it
+  exposes a repair action.
 - A committed Rust profile is not destructively rolled back merely because the
   host binding is temporarily unavailable.
 
@@ -1305,20 +1556,32 @@ The package binding saga is:
      -> package binding token
 
 2. Swift stage_host_binding(package binding token)
-     -> pending AgentHostConfiguration revision
+     -> pending AgentHostConfiguration binding ID, revision, and hash
+     -> HostBindingStagingReceipt
 
-3. Rust attach_host_binding(package binding token, opaque binding hash)
+3. Rust attach_host_binding(
+       package binding token,
+       binding ID,
+       binding revision,
+       binding hash,
+       HostBindingStagingReceipt)
      -> package/profile readiness becomes host_binding_attached
 
-4. Swift activate_host_binding(package binding token)
+4. Swift activate_host_binding(
+       package binding token,
+       binding ID,
+       binding revision,
+       binding hash)
      -> active binding revision and runnable readiness
 ```
 
 Each step is idempotent. A failure before Rust attachment removes or expires the
 pending Swift binding. A crash after attachment but before activation leaves the
 profile visible but not runnable; startup reconciliation activates the matching
-record or returns it to `needs_llm_binding` with a repair action. Rust stores
-only the opaque binding hash and never the target, provider, model, or path.
+record or returns it to `needs_llm_binding` with a repair action. The staging
+receipt is checked against the package token, slot, requirements, and full
+binding tuple. Rust stores only the opaque binding ID/revision/hash and never
+the target, provider, model, or path.
 
 Export carries requirements and optional hints, not the device-local binding.
 
@@ -1332,10 +1595,10 @@ The two-phase run handshake is also the run saga. The Rust run snapshot stores:
 
 ```text
 LLM slot ID and requirements hash
-opaque host binding revision and hash
+opaque host binding ID, revision, and hash
 opaque Swift LLM snapshot ID
 host process epoch
-preparation token digest
+stable preparation ID and final consumed token digest
 ```
 
 The Swift LLM snapshot stores:
@@ -1344,27 +1607,31 @@ The Swift LLM snapshot stores:
 proposed Rust run ID, which becomes the committed run ID
 agent profile ID and revision
 LLM slot ID
-host binding revision and hash
-preparation token digest
+host binding ID, revision, and hash
+stable preparation ID and final consumed token digest
 LLM target and sanitized runtime configuration
 ```
 
-The shared digests and idempotency key prove that both snapshots describe the
-same preparation without making Rust understand the target. A mismatch blocks
-the run and enters a repairable `host_binding_conflict` state.
+The stable preparation ID, shared digests, and idempotency key prove that both
+snapshots describe the same preparation without making Rust understand the
+target. A mismatch blocks the run and enters a repairable
+`host_binding_conflict` state.
 
 ### Provider and Target Deletion
 
 Provider Profile and LLM target revisions referenced by Agent bindings or run
 snapshots are archived, not hard-deleted. Archiving:
 
-- deletes the Keychain credential when requested;
 - prevents new sessions;
 - makes dependent Agent bindings not ready;
 - retains immutable, non-secret revision metadata and hashes for explanation
   and audit; and
 - permits garbage collection only after no binding, package install record, or
   retained run snapshot references the revision.
+
+Credential deletion is a separate logical-Profile deletion operation governed
+by the Keychain reference and active-session rules above. It is never a side
+effect of archiving one revision or one LLM target.
 
 Deleting an installed local model similarly leaves Agent bindings intact but
 not ready, so the UI can identify the exact model that must be downloaded.
@@ -1395,24 +1662,32 @@ Swift records a run-level LLM snapshot containing:
 Rust run ID
 agent profile ID and revision
 LLM slot ID and requirements hash
-host binding revision and hash
+host binding ID, revision, and hash
 LLM target ID and revision
 route class: local or cloud
 model ID
 capability snapshot hash
 resolved non-secret generation parameters
-egress disclosure ID when remote
+initial modelInputDigest and source revision digest
+initial egress disclosure, scope-grant, and generation-authorization IDs when remote
+append-only generation disclosure/grant audit hash
 adapter or engine version
 host process epoch
-preparation token digest
+stable preparation ID and final consumed token digest
 ```
+
+Each generation disclosure and grant is an append-only child record keyed by
+generation turn ID. The snapshot stores the current hash-chain head, so an
+incremental approval can be audited without rewriting or exposing earlier
+content.
 
 The snapshot does not contain the API key, absolute local path, full request,
 provider-private continuation state, or raw provider failure body.
 
-Rust persists the opaque Swift snapshot ID, host binding revision/hash, process
-epoch, and preparation-token digest for cross-linking. Swift remains the owner
-and resolver of the LLM target and runtime configuration behind that snapshot.
+Rust persists the opaque Swift snapshot ID, host binding ID/revision/hash,
+process epoch, stable preparation ID, and final token digest for cross-linking.
+Swift remains the owner and resolver of the LLM target and runtime
+configuration behind that snapshot.
 
 ## Failure Model
 
@@ -1449,6 +1724,7 @@ Only the following agent-relevant categories cross to Rust:
 not_ready
 unsupported_capability
 context_exceeded
+egress_denied
 rate_limited
 generation_failed
 stream_interrupted
@@ -1458,6 +1734,9 @@ cancelled
 `execution.llm_continuation_lost` and
 `execution.continuation_expired` are Rust run-recovery errors, not Swift
 `AgentLLMFailure` categories, so they remain in the Rust execution namespace.
+Likewise, `llm.command.*`, `llm.event.*`, and `llm.turn.*` describe Rust bridge
+protocol violations. They interrupt or fail the run deterministically and are
+not remapped to a provider error.
 
 Raw HTTP status details, response bodies, endpoints, and engine-private messages
 remain in Swift diagnostics and must be redacted.
@@ -1499,11 +1778,12 @@ Affected states include:
 
 ```text
 preparing
-awaiting_llm
-consuming_llm_stream
-waiting_tool
-suspended_for_approval
-awaiting_llm_resume
+awaiting_start_ack
+consuming_llm_turn
+executing_tool_batch
+suspended_for_tool_approval
+awaiting_incremental_egress_approval
+awaiting_resume_ack
 cancelling
 ```
 
@@ -1514,13 +1794,15 @@ Rust performs one recovery transaction per affected run:
 2. Mark the run interrupted and remove it from the active-run registry.
 3. Invalidate every pending tool request and approval for that run.
 4. Mark its preparation/session cross-link expired.
-5. Record the host epoch mismatch for diagnostics without persisting provider
+5. Cancel every pending old-epoch host-command outbox row.
+6. Record the host epoch mismatch for diagnostics without persisting provider
    continuation state.
 
 Only after these transactions commit may the app list actionable pending tools
-or approvals. A late approval, rejection, or tool result returns the stable
-error `execution.continuation_expired`. It does not restart the model request,
-recreate a Provider Session, or append the result to another run.
+or approvals. A late approval, rejection, tool result, command acknowledgement,
+or stream event returns the stable error `execution.continuation_expired`. It
+does not restart the model request, recreate a Provider Session, or append the
+result to another run.
 
 This intentionally replaces the current behavior that replays waiting-tool and
 suspended runs after SQLite restart when the continuation depended on a live
@@ -1563,6 +1845,10 @@ effect.
 - Parameter preservation and pruning on model switch.
 - Target and Agent Host Configuration revision pinning.
 - Global single-run state-machine invariants.
+- Generation disclosures are bound to exact content/source digests; unknown
+  tool-result labels conservatively require approval.
+- Archiving one Provider Profile revision retains a CredentialRef still used by
+  another revision; logical-profile deletion reconciles Keychain tombstones.
 - Sanitized snapshots and error redaction.
 
 ### Provider Adapter Fixture Tests
@@ -1573,6 +1859,7 @@ Each provider adapter has recorded, secret-free fixtures covering:
 - standard and reasoning parameter mapping;
 - text streaming;
 - tool-call argument deltas;
+- mixed text/tool-call turns and ordered multi-call terminal batches;
 - tool-result continuation;
 - provider-private thinking/signature preservation;
 - usage normalization;
@@ -1605,17 +1892,25 @@ data or secrets.
 - Rust product code does not construct or resolve Provider Profiles, model
   installations, Base URLs, credentials, model paths, or backend adapters.
 - The resumable worker persists and yields before host generation.
+- Worker state and each `HostCommandEnvelope` outbox row commit atomically;
+  crash injection between commit, copy receipt, and command acknowledgement
+  cannot strand a run or duplicate execution.
 - No Swift host vtable callback occurs while the Rust runtime mutex is held.
 - Event sequence duplication, gaps, terminal events, stale handles, and bounded
   backpressure follow the bridge contract.
 - Cancellation/final-event races produce one deterministic terminal state.
-- Preparation tokens are single-use, expire, abort idempotently, and reject
-  stale frame/plan/tool-schema digests.
+- Preparation tokens rotate idempotently on valid renewal, expire at the total
+  lease bound, abort idempotently, and reject stale input/source digests.
+- Start/resume command acknowledgement timeout and deduplication use the same
+  command ID, sequence, and payload digest.
+- Rust waits for `generation_completed`, rejects malformed tool batches, and
+  executes a valid multi-call batch sequentially before one batched resume.
 - Normalized text and tool-call events drive the resumable agent worker.
 - Swift-side cancellation terminates the Rust run.
 - A host LLM failure maps to the limited agent-facing failure taxonomy.
-- Architecture lint rejects reintroduction of provider or engine concepts into
-  the Rust agent path.
+- During migration, architecture lint rejects growth of the checked-in legacy
+  allowlist; after Phase 5 it rejects all provider or engine concepts in the
+  Rust agent path.
 
 ### End-to-End Tests
 
@@ -1623,6 +1918,8 @@ data or secrets.
   matching Rust/Swift snapshots.
 - Failure injection at every Profile publish and Package binding saga boundary
   converges through compensation or startup reconciliation.
+- Profile publication rejects a staged/committed binding ID, revision, or hash
+  mismatch.
 - Agent Profile -> Swift AgentHostConfiguration -> local fake engine -> Rust
   tool loop -> final response.
 - Agent Profile -> Swift Provider fixture adapter -> Rust tool loop -> final
@@ -1630,6 +1927,13 @@ data or secrets.
 - Local/cloud switch affects only the next run.
 - Missing download, credential, capability, or egress approval blocks before
   Rust starts the agent run.
+- A sensitive tool result pauses before its resume network request, records an
+  incremental digest-bound grant, and maps denial to
+  `execution.egress_denied` without sending that result.
+- Crash injection after Rust outbox commit and before Swift acknowledgement
+  redispatches the same command identity without a duplicate provider request.
+- `legacy_v1` remains runnable through Phases 1-3 while `host_slot_v2` remains
+  non-runnable until the Phase 4 route switch.
 - Restart invalidates LLM-dependent waiting-tool/approval state before it is
   exposed, and late results return `execution.continuation_expired`.
 - A committed or outcome-unknown host tool effect is never automatically
@@ -1641,18 +1945,59 @@ The current repository contains Rust provider/model/inference product paths and
 a Swift Model Center that projects Rust provider profiles. Migration must avoid
 a permanent dual architecture.
 
+### Transitional Schema and Routing Rules
+
+The migration uses an explicit tagged schema rather than changing the meaning
+of an existing field:
+
+```text
+legacy_v1
+  llm_binding_schema_version = 1
+  concrete ModelBinding
+  resolved by the existing RunSnapshotResolver and ModelRoutingClient
+
+host_slot_v2
+  llm_binding_schema_version = 2
+  portable LLMSlotV2 + AgentLLMRequirements
+  concrete AgentHostConfiguration exists only in Swift
+```
+
+A persisted profile or package-install record has exactly one tag and never
+stores both binding forms. Readers support both tags during migration. Writers
+preserve the tag for existing on-device records: editing a `legacy_v1` profile
+continues to write the legacy shape until an explicit migration action
+succeeds, while a new `host_slot_v2` writer never creates a concrete Rust model
+binding. A newly imported schema-v1 package file passes through the V1-to-V2
+translator and is stored as `host_slot_v2`; schema-v2 packages already use that
+shape. Both install as `needs_host_binding` and are not sent through the legacy
+resolver.
+
+During Phases 1-3, production execution accepts only `legacy_v1`; V2 records may
+be created, installed, and host-bound for validation but remain not runnable.
+Phase 4 dispatches `host_slot_v2` through the host-backed worker while retaining
+the legacy route for unmigrated V1 records. Phase 5 migrates or archives every
+remaining V1 profile and then removes the legacy reader, writer, resolver, and
+route.
+
+Architecture lint uses a checked-in temporary allowlist containing each
+pre-existing legacy occurrence as `path + owning item + forbidden symbol`, plus
+a non-increasing total count. It rejects a new `ModelBinding`, Provider Registry,
+or Rust inference-router dependency even inside an already listed file. The
+allowlist must shrink when code moves and is deleted entirely in Phase 5.
+
 ### Phase 1: Contracts, Slots, and Consistency Foundation
 
 - Add Swift LLM contract, core, storage, capability, and parameter targets.
 - Add `AgentHostConfiguration` and immutable `LLMTarget` revisions.
-- Replace the concrete Rust model slot contract with portable `LLMSlot` and
-  `AgentLLMRequirements`.
+- Introduce portable `LLMSlotV2` and `AgentLLMRequirements` alongside the
+  unchanged legacy `ModelBinding` contract.
 - Add Agent Package v2 requirements/hints and the legacy v1 translation rule.
 - Add profile publish/install host-binding saga records, idempotency keys, and
   startup reconciliation.
-- Add the `preview_run`/`commit_start`/`abort_preparation` contracts without
-  switching the production worker yet.
-- Do not change the active runtime path yet.
+- Add the `preview_run`/`renew_preparation`/`commit_start`/
+  `abort_preparation` contracts without switching the production worker yet.
+- Keep `RunSnapshotResolver::resolve_model_binding` and the active legacy
+  production route unchanged.
 
 ### Phase 2: Local Product Path
 
@@ -1667,6 +2012,8 @@ a permanent dual architecture.
 
 - Add Provider Profiles, Keychain storage, egress, validation, and provider
   adapters.
+- Add digest-bound initial and incremental `GenerationDisclosure` grants,
+  including conservative tool-result labeling and credential tombstones.
 - Complete fixture coverage before exposing a provider preset in release UI.
 
 ### Phase 4: Host LLM Session Bridge
@@ -1675,13 +2022,19 @@ a permanent dual architecture.
 - Replace synchronous `ExecutionModelClient::next_turn` execution with the
   durable resumable worker state machine.
 - Add the outbound command vtable and independent inbound event FFI entry.
+- Add the transactional host-command outbox, copy receipts, command
+  acknowledgements, deduplication, and acknowledgement deadlines.
 - Prove that no Swift callback occurs while the Rust runtime mutex is held.
 - Implement sequence handling, buffer ownership, bounded backpressure, late
   event behavior, and cancellation races.
+- Implement structured generation terminal outcomes and complete ordered
+  tool-call batches.
 - Implement host-process epoch recovery, continuation invalidation, and host
   tool effect idempotency.
 - Replace the production `BridgeExecutionModelClient` provider path with a
   host-backed LLM client.
+- Route `host_slot_v2` profiles through the host-backed worker; continue routing
+  unmigrated `legacy_v1` profiles through the old path during this phase.
 - Keep Rust Agent policy, context assembly, and tool semantics unchanged while
   changing the worker scheduling model.
 
@@ -1691,6 +2044,9 @@ a permanent dual architecture.
 - Remove provider construction from `AppBootstrapper` and
   `RustRuntimeConfiguration` product setup.
 - Move Agent-to-model composition to Swift `AgentHostConfiguration`.
+- Migrate each retained `legacy_v1` profile to `host_slot_v2` only after its
+  Swift host binding has been staged and verified; failed migrations leave the
+  V1 record and route intact.
 - Remove the production use of Rust `ModelBinding`, Provider Registry, local LLM
   provider, and Rust `InferenceRouter` after parity tests pass.
 - Retain only the provider-neutral agent model-client trait and test mocks in
@@ -1720,6 +2076,10 @@ established here.
 
 ## Acceptance Criteria
 
+Unless explicitly labeled as a migration invariant, these criteria describe
+the Phase 5 end state. Earlier phases must satisfy the transitional schema and
+lint rules above without pretending the legacy route is already gone.
+
 - [ ] Rust production code does not own LLM targets, Provider Profiles, model
       installations, credentials, Base URLs, model paths, or backend selection.
 - [ ] Rust Agent/Profile/Package contracts retain only portable LLM slots,
@@ -1730,12 +2090,18 @@ established here.
 - [ ] C++ renders engine/model-format-specific chat templates; Swift owns
       template selection, canonical messages/tools, and tool-call parsing.
 - [ ] Run start uses preview, Swift host preparation, and Rust commit with a
-      single-use expiring preparation token.
+      rotating digest-preserving preparation lease and a short-lived ready
+      attestation.
 - [ ] Rust never invokes the Swift host vtable while holding its runtime mutex.
 - [ ] The Rust worker is resumable and receives Swift stream events through an
       independent FFI entry with defined ownership, sequencing, and backpressure.
+- [ ] Every Rust-to-Swift command is committed with worker state in a durable
+      outbox and has stable identity, sequence, copy receipt, deduplication,
+      acknowledgement, and timeout behavior.
 - [ ] Profile publish, Package binding, and run cross-links use idempotent sagas
       and converge after every injected crash boundary.
+- [ ] Profile and Package sagas persist the exact opaque binding ID, revision,
+      and hash staged by Swift and reject cross-link mismatches.
 - [ ] Agent Package v2 carries LLM requirements/hints and no API key, device
       path, Provider Profile, or concrete host binding.
 - [ ] One Agent Profile revision resolves to one explicit LLM target revision.
@@ -1748,8 +2114,12 @@ established here.
       launch reconciliation.
 - [ ] Local catalog manifests are signed and arbitrary imports are absent in v1.
 - [ ] API keys exist only in Keychain and never cross into Rust.
+- [ ] Archiving a Provider Profile revision cannot delete a CredentialRef still
+      used by another revision, preparation, or live session.
 - [ ] Egress approval is bound to exact provider origin.
-- [ ] High-sensitivity remote input requires per-run approval.
+- [ ] Every remote start/resume request carries a disclosure bound to its exact
+      content and source revisions; expanded sensitive tool data requires
+      incremental approval before the affected request.
 - [ ] OpenAI, Claude, Gemini, Grok, DeepSeek, MiniMax, and GLM have explicit
       Swift adapter semantics.
 - [ ] Capability unknowns fail conservatively.
@@ -1758,6 +2128,9 @@ established here.
 - [ ] Parameter controls are capability-driven and adapter-validated.
 - [ ] Provider-private thinking/signature state remains inside Swift sessions.
 - [ ] Local and cloud sessions emit the same normalized agent event contract.
+- [ ] A structured generation terminal event distinguishes final response from
+      a complete ordered tool-call batch; V1 executes multi-call batches
+      sequentially and resumes once with all results.
 - [ ] Cancellation is idempotent and reaches Rust plus the active backend.
 - [ ] Process restart atomically interrupts LLM-dependent non-terminal runs,
       invalidates pending tool/approval state, and rejects late results.
@@ -1765,6 +2138,9 @@ established here.
       outcome-unknown effect.
 - [ ] No automatic model fallback occurs.
 - [ ] Provider adapter CI uses secret-free fixtures rather than live keys.
+- [ ] Migration keeps tagged `legacy_v1` and `host_slot_v2` records separate,
+      preserves the legacy resolver until Phase 4, and forbids growth of the
+      temporary architecture-lint allowlist.
 - [ ] The legacy Rust provider product path is removed after migration parity.
 
 ## Official API References
