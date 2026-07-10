@@ -1,0 +1,197 @@
+{
+  "schema_version": "1",
+  "domains": [
+    {
+      "domain": "agent-host-binding:v1",
+      "computing_authority": "swift",
+      "required_coverage": "binding, profile, slot, target, requirements hash, parameter overrides",
+      "excluded": "credential, provider payload, resolved local path"
+    },
+    {
+      "domain": "agent-requirements:v1",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "slot ID, capabilities, modalities, context, streaming, tool requirements",
+      "excluded": "host target and provider fields"
+    },
+    {
+      "domain": "conversation-frame:v1",
+      "computing_authority": "rust",
+      "required_coverage": "frame identity, revision, ordered entries, referenced blobs",
+      "excluded": "UI-only state"
+    },
+    {
+      "domain": "execution-plan:v1",
+      "computing_authority": "rust",
+      "required_coverage": "ordered agent plan steps and policy metadata",
+      "excluded": "runtime timestamps"
+    },
+    {
+      "domain": "tool-schema:v1",
+      "computing_authority": "rust",
+      "required_coverage": "ordered tool identities and complete input, output, data-label schemas",
+      "excluded": "tool implementation pointers"
+    },
+    {
+      "domain": "source-revisions:v1",
+      "computing_authority": "rust",
+      "required_coverage": "ordered frame, memory, context, attachment identity and revision tuples",
+      "excluded": "source content"
+    },
+    {
+      "domain": "agent-input:v1",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "ordered messages, tool schemas, attachment references, memory and context revisions",
+      "excluded": "provider encoding and diagnostics"
+    },
+    {
+      "domain": "generation-disclosure:v1",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "turn, content and source digests, data classes, sensitivity, safe source summary",
+      "excluded": "raw source content and grant identity"
+    },
+    {
+      "domain": "capability-attestation:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "generic capabilities, contributing observation digests, expiry",
+      "excluded": "provider-specific claims and evidence body"
+    },
+    {
+      "domain": "resolved-parameters:v1",
+      "computing_authority": "swift",
+      "required_coverage": "sorted semantic parameter IDs and resolved non-secret values",
+      "excluded": "provider and C++ field names"
+    },
+    {
+      "domain": "preparation-token:v1",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "preparation, proposed run, token generation, random token bytes",
+      "excluded": "bound preview fields"
+    },
+    {
+      "domain": "preparation-binding:v1",
+      "computing_authority": "rust",
+      "required_coverage": "preparation and run IDs, bound digests, token generation, epoch, expiry",
+      "excluded": "raw token value"
+    },
+    {
+      "domain": "saga-token:v1",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "operation kind and ID, token generation, random token bytes",
+      "excluded": "staged host binding details"
+    },
+    {
+      "domain": "host-binding-staging-receipt:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "operation and token digest, profile, slot, requirements, binding tuple",
+      "excluded": "Swift target details"
+    },
+    {
+      "domain": "host-command-payload:v1",
+      "computing_authority": "rust",
+      "required_coverage": "complete typed command payload",
+      "excluded": "delivery metadata"
+    },
+    {
+      "domain": "host-command-envelope:v1",
+      "computing_authority": "rust",
+      "required_coverage": "command, run, session, epoch, sequence, turn, kind, payload, disclosure",
+      "excluded": "dispatch attempts and receipt time"
+    },
+    {
+      "domain": "credential-use-lease:v1",
+      "computing_authority": "swift",
+      "required_coverage": "lease, credential slot, generation, purpose, preparation, epoch identities",
+      "excluded": "credential value, provider payload, session handle, mutable lifecycle"
+    },
+    {
+      "domain": "prepared-session-registration:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "preparation, proposed run, session, snapshot, epoch, binding, credential lease digest",
+      "excluded": "provider route and credential value"
+    },
+    {
+      "domain": "prepared-session-cleanup-command:v1",
+      "computing_authority": "rust",
+      "required_coverage": "cleanup command, preparation, proposed run, session, epoch, sequence, reason, registration",
+      "excluded": "provider route and credential value"
+    },
+    {
+      "domain": "prepared-session-closed-receipt:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "cleanup command, preparation, proposed run, session, epoch, sequence, registration, disposition",
+      "excluded": "provider diagnostics"
+    },
+    {
+      "domain": "llm-event-envelope:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "event, run, session, epoch, turn, sequence, kind, payload",
+      "excluded": "arrival time and diagnostics"
+    },
+    {
+      "domain": "llm-event-receipt:v1",
+      "computing_authority": "rust",
+      "required_coverage": "session, epoch, run, sequence, event identity and digest, disposition",
+      "excluded": "raw payload and arrival time"
+    },
+    {
+      "domain": "capability-evidence:v1",
+      "computing_authority": "swift",
+      "required_coverage": "evidence schema, source, version, complete redacted typed evidence",
+      "excluded": "raw provider response, credential, diagnostics"
+    },
+    {
+      "domain": "capability-observation:v1",
+      "computing_authority": "swift",
+      "required_coverage": "dimension, value, source, authority, subject, version, time, scope, invalidation, evidence digest",
+      "excluded": "raw evidence body"
+    },
+    {
+      "domain": "capability-snapshot:v1",
+      "computing_authority": "swift",
+      "required_coverage": "route subject, resolved capabilities, observation digests, nearest expiry",
+      "excluded": "provider-specific evidence body"
+    },
+    {
+      "domain": "egress-approval-summary:v1",
+      "computing_authority": "swift",
+      "required_coverage": "disclosure, prior grant, safe source summary, new data classes",
+      "excluded": "raw source content"
+    },
+    {
+      "domain": "egress-scope-grant:v1",
+      "computing_authority": "swift",
+      "required_coverage": "grant, profile, origin, generation, scope, decision, revision, issue and expiry",
+      "excluded": "credential value and raw source content"
+    },
+    {
+      "domain": "egress-generation-authorization:v1",
+      "computing_authority": "swift",
+      "required_coverage": "authorization, turn, disclosure, approval summary, scope grant, decision, issue and expiry",
+      "excluded": "credential value and raw source content"
+    },
+    {
+      "domain": "egress-subject:v1",
+      "computing_authority": "swift",
+      "required_coverage": "local not-applicable or cloud profile, origin, generation, scope grant, approval summary, turn authorization",
+      "excluded": "credential value"
+    },
+    {
+      "domain": "egress-attestation:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "preparation, run, session, snapshot, registration, binding, requirements, disclosure, capability, parameters, epoch, expiry, subject digest",
+      "excluded": "parsed provider fields"
+    },
+    {
+      "domain": "egress-audit-chain:v1",
+      "computing_authority": "swift",
+      "required_coverage": "previous head, turn, disclosure, grant, authorization, decision, timestamp",
+      "excluded": "raw content, credential, provider payload"
+    },
+    {
+      "domain": "host-tool-effect-result:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "effect, run, turn, call, tool, normalized result, replay class, completion metadata",
+      "excluded": "raw device object and private diagnostics"
+    }
+  ]
+}

@@ -11,6 +11,8 @@ mod agent_capability_contract;
 mod agent_package_agent_os;
 #[path = "contract/agent_profile_contract.rs"]
 mod agent_profile_contract;
+#[path = "contract/canonical_digest_v1.rs"]
+mod canonical_digest_v1;
 #[path = "contract/context_agent_os.rs"]
 mod context_agent_os;
 #[path = "contract/conversation_execution_boundary.rs"]

@@ -22,6 +22,8 @@ link-litert-local-inference = []
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
+sha2 = "0.10.9"
 
 [dev-dependencies]
 tempfile = "3.10"

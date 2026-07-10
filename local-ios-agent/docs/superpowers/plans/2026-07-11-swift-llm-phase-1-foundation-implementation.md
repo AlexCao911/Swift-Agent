@@ -134,9 +134,9 @@ This plan implements only “Phase 1: Contracts, Slots, and Consistency Foundati
 
 **Interfaces:**
 - Consumes: RFC 8785 typed JSON documents and the registry defined by the design.
-- Produces: `CanonicalDigestV1::canonicalize`, `CanonicalDigestV1::digest`, `CanonicalDigest`, `CanonicalDigestError`.
+- Produces: `CanonicalDigestV1::canonicalize`, `CanonicalDigestV1::digest`, `CanonicalDigestV1::registered_domains`, `CanonicalDigest`, `CanonicalDigestError`.
 
-- [ ] **Step 1: Add the failing Rust fixture tests**
+- [x] **Step 1: Add the failing Rust fixture tests**
 
 Create tests that load both shared fixtures and assert:
 
@@ -170,9 +170,15 @@ fn rejects_unregistered_domain_and_nul() {
         "canonical_digest.domain_invalid"
     );
 }
+
+#[test]
+fn runtime_registered_domains_match_shared_registry() {
+    let registry = registry();
+    assert_eq!(CanonicalDigestV1::registered_domains(), registry.domain_names());
+}
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -182,7 +188,7 @@ cargo test --test contract canonical_digest_v1 -- --nocapture
 
 Expected: FAIL because `canonical_digest`, fixtures, and dependencies do not exist.
 
-- [ ] **Step 3: Add the registry and fixtures**
+- [x] **Step 3: Add the registry and fixtures**
 
 The requirements fixture must contain this exact canonical document and digest:
 
@@ -214,7 +220,7 @@ The number fixture uses RFC 8785 canonical output:
 }
 ```
 
-- [ ] **Step 4: Implement the minimal Rust canonicalizer wrapper**
+- [x] **Step 4: Implement the minimal Rust canonicalizer wrapper**
 
 Add `serde_json_canonicalizer = "0.3.2"` and `sha2 = "0.10.9"`. Implement:
 
@@ -240,7 +246,7 @@ impl CanonicalDigest {
 `digest` must require a registered lowercase ASCII `*:v1` domain, reject NUL,
 build `UTF8(domain) || 0x00 || canonicalBytes`, and return lowercase SHA-256.
 
-- [ ] **Step 5: Run GREEN and the Rust suite**
+- [x] **Step 5: Run GREEN and the Rust suite**
 
 ```bash
 cargo test --test contract canonical_digest_v1 -- --nocapture
@@ -249,7 +255,7 @@ cargo test
 
 Expected: canonical digest tests pass; complete Rust suite has zero failures.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add local-ios-agent/contracts/canonical-digest-v1 local-ios-agent/rust-core

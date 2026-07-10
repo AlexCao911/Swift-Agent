@@ -1,0 +1,20 @@
+{
+  "name": "agent-requirements-v1",
+  "domain": "agent-requirements:v1",
+  "document": {
+    "schema_version": "1",
+    "slot_id": "llm.primary",
+    "capabilities": [
+      "streaming",
+      "tool_calling"
+    ],
+    "input_modalities": [
+      "text"
+    ],
+    "context_budget": "8192",
+    "streaming_required": true,
+    "tool_calling_required": true
+  },
+  "expected_canonical_utf8": "{\"capabilities\":[\"streaming\",\"tool_calling\"],\"context_budget\":\"8192\",\"input_modalities\":[\"text\"],\"schema_version\":\"1\",\"slot_id\":\"llm.primary\",\"streaming_required\":true,\"tool_calling_required\":true}",
+  "expected_sha256": "df309a1f80fb005d51e9aa7f249939f9480d106d5d5ea43d102935bdd1baee30"
+}
