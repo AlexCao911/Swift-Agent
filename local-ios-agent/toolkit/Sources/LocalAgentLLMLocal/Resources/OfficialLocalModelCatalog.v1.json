@@ -1,0 +1,75 @@
+{
+  "signature" : "fvfn3gecqsa_DHTmA1JoLdpzrf5uaLeFW8DLz2sLTVzuFC9SfR2NKpR1mCDvjNX9qj3yhtr0RwQep6yI-x2CAQ",
+  "signed" : {
+    "catalog_revision" : "1",
+    "key_id" : "local-catalog-2026-01",
+    "models" : [
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+            "byte_size" : "806058240",
+            "download_url" : "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/61333bac858461ec0c309b7baafdc408d7d2c381/gemma-3-1b-it-Q4_K_M.gguf?download=true",
+            "relative_path" : "gemma-3-1b-it-Q4_K_M.gguf",
+            "role" : "weights"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "gemma"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "context_window_tokens",
+            "value" : "32768",
+            "value_type" : "verified_upper_bound"
+          }
+        ],
+        "display_name" : "Gemma 3 1B Instruct (Q4_K_M)",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "small",
+        "family" : "gemma-3",
+        "id" : {
+          "model_id" : "gemma-3-1b-it-q4",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "806058240",
+        "load_template" : {
+          "context_tokens" : "32768",
+          "manifest_controlled_options" : {
+            "mmap" : true
+          },
+          "required_artifact_roles" : [
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ]
+      }
+    ],
+    "revoked_model_revisions" : [
+
+    ],
+    "schema_version" : "1"
+  }
+}

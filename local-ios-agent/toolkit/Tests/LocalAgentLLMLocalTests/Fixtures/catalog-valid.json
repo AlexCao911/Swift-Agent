@@ -1,0 +1,70 @@
+{
+  "signature" : "qpKa6AvLOXzNRkkppkj7MbOylmYqsOINEQ7o_VMl3lPgOdacWPMAxhF5Ch_6qh3OxKKnz9kMKPmLBLWmlYsNCw",
+  "signed" : {
+    "catalog_revision" : "2",
+    "key_id" : "test-local-catalog-key",
+    "models" : [
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "byte_size" : "9007199254740993",
+            "download_url" : "https://fixtures.invalid/model.gguf",
+            "relative_path" : "model.gguf",
+            "role" : "weights"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "gemma"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          }
+        ],
+        "display_name" : "Test Gemma Q4",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "small",
+        "family" : "gemma-test",
+        "id" : {
+          "model_id" : "test-gemma-q4",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "9007199254740993",
+        "load_template" : {
+          "context_tokens" : "8192",
+          "manifest_controlled_options" : {
+
+          },
+          "required_artifact_roles" : [
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ]
+      }
+    ],
+    "revoked_model_revisions" : [
+
+    ],
+    "schema_version" : "1"
+  }
+}

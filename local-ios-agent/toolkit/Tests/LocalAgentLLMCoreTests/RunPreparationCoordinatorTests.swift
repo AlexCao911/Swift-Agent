@@ -22,7 +22,7 @@ private func swiftConfiguration(bindingID: String = "binding-1") -> AgentHostCon
         agentProfileRevision: 4,
         llmSlotID: "assistant",
         requirementsHash: "requirements-1",
-        llmTargetID: "fake-target-1",
+        llmTargetID: LLMTargetID(rawValue: "fake-target-1"),
         llmTargetRevision: 1,
         parameterOverrides: GenerationConfiguration()
     )

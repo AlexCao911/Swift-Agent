@@ -46,6 +46,7 @@ var packageTargets: [Target] = [
     .target(
         name: "LocalAgentLLMLocal",
         dependencies: ["LocalAgentLLMContracts", "LocalAgentLLMCore", "CSQLite", "LocalAgentInferenceNative"],
+        resources: [.process("Resources")],
         linkerSettings: [
             .linkedLibrary("c++"),
             .linkedFramework("Accelerate"),
@@ -71,11 +72,16 @@ var packageTargets: [Target] = [
     ),
     .testTarget(
         name: "LocalAgentLLMLocalTests",
-        dependencies: ["LocalAgentLLMLocal"]
+        dependencies: ["LocalAgentLLMLocal"],
+        resources: [.process("Fixtures")]
     ),
     .testTarget(
         name: "LocalNativeToolkitTests",
         dependencies: ["LocalNativeToolkit"]
+    ),
+    .executableTarget(
+        name: "LocalModelCatalogSigner",
+        dependencies: ["LocalAgentLLMLocal"]
     ),
 ]
 
@@ -107,6 +113,10 @@ let package = Package(
         .library(
             name: "LocalNativeToolkit",
             targets: ["LocalNativeToolkit"]
+        ),
+        .executable(
+            name: "LocalModelCatalogSigner",
+            targets: ["LocalModelCatalogSigner"]
         ),
     ],
     targets: packageTargets

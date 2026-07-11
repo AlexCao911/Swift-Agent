@@ -11,7 +11,7 @@ private func configuration(bindingID: String = "binding-1", revision: UInt64 = 1
         agentProfileRevision: 4,
         llmSlotID: "assistant",
         requirementsHash: "requirements-hash-1",
-        llmTargetID: "target-1",
+        llmTargetID: LLMTargetID(rawValue: "target-1"),
         llmTargetRevision: 2,
         parameterOverrides: GenerationConfiguration()
     )

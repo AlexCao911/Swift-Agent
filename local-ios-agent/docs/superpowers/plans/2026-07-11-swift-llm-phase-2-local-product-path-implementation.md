@@ -253,7 +253,7 @@ git commit -m "build: give local inference one native artifact"
 - Replaces the provisional bare local/cloud target tag with the exact immutable target model from the 7/10 design.
 - The bundled production catalog and public key ring are SwiftPM resources embedded in the App's `LocalAgentLLMLocal` resource bundle. Test fixtures use a distinct key ID/key and cannot be accepted by production construction.
 
-- [ ] **Step 1: Write failing trust and schema tests**
+- [x] **Step 1: Write failing trust and schema tests**
 
 Cover valid Ed25519 signature, unknown/revoked key ID, changed URL/hash/size/revocation after signing, unsupported schema, duplicate model revision, duplicate artifact role/path, non-HTTPS URL, path traversal, zero sizes, unknown engine, unsupported OS/device, and precision boundaries above `2^53`. Test that release resources exist through `Bundle.module`, decode with the production key ring, are present in a built App resource bundle, contain at least one release model, and use exactly the engine-ID set from `inference/release-engines.json`—no enabled engine without a catalog entry and no catalog engine absent from the native artifact. Add a repository scan proving no production private key, seed, or signing environment value is committed.
 
@@ -359,7 +359,7 @@ public struct LLMTargetRevision: Codable, Equatable, Sendable {
 
 Define `VerifiedLocalModelCatalog` beside the verifier with an explicit `fileprivate` initializer; no other source file or external caller can construct a trusted candidate.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter OfficialModelCatalogTests
@@ -367,7 +367,7 @@ swift test --package-path toolkit --filter OfficialModelCatalogTests
 
 Expected: fail because catalog types and signature validation do not exist.
 
-- [ ] **Step 3: Implement canonical signature verification and invariants**
+- [x] **Step 3: Implement canonical signature verification and invariants**
 
 Use exactly this envelope:
 
@@ -404,7 +404,7 @@ Bring the Phase 1 capability DTO up to the full 7/10 design without breaking exi
 
 Extend `CapabilityMatrix.resolve` to accept an exact `CapabilitySubject` plus `CapabilityResolutionPolicy`. `.local` requires non-expired subject-matching `modelSupports` and `engineCanExecute` dimensions for every positive capability; authoritative negative wins and a missing/subject-mismatched dimension resolves to `unknown`. Phase 3 will add its cloud policy rather than weakening `.local`.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 swift test --package-path toolkit --filter OfficialModelCatalogTests
@@ -413,7 +413,7 @@ swift test --package-path toolkit --filter CapabilityMatrixTests
 scripts/test-local-inference-app-link.sh --require-catalog-resources
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMContracts/LLMCapabilities.swift \

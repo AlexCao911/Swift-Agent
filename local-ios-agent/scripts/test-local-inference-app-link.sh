@@ -8,6 +8,15 @@ XCODEBUILD="/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
 NM="/usr/bin/nm"
 DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 MODULE_CACHE="${LOCAL_AGENT_LINK_TEST_MODULE_CACHE:-/private/tmp/local-agent-inference-link-module-cache}"
+REQUIRE_CATALOG_RESOURCES=0
+if [[ "${1:-}" == "--require-catalog-resources" ]]; then
+  REQUIRE_CATALOG_RESOURCES=1
+  shift
+fi
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--require-catalog-resources]" >&2
+  exit 2
+fi
 mkdir -p "$DERIVED_DATA" "$MODULE_CACHE"
 
 require_text() {
@@ -74,6 +83,19 @@ assert_complete_native_abi() {
   fi
 }
 
+assert_catalog_resources() {
+  local app="$1"
+  local catalog_count
+  local key_count
+  # build-for-testing embeds an independent test plug-in and its own SwiftPM
+  # resource bundle inside PlugIns/. Count only the shipping App payload here.
+  catalog_count="$(find "$app" -path "$app/PlugIns" -prune -o -name 'OfficialLocalModelCatalog.v1.json' -type f -print | wc -l | tr -d ' ')"
+  key_count="$(find "$app" -path "$app/PlugIns" -prune -o -name 'OfficialLocalModelCatalogKeys.v1.json' -type f -print | wc -l | tr -d ' ')"
+  if [[ "$catalog_count" != "1" || "$key_count" != "1" ]]; then
+    fail "$app must embed exactly one signed local catalog and public key ring; found catalog=$catalog_count keys=$key_count"
+  fi
+}
+
 require_text '.binaryTarget(' "$ROOT/toolkit/Package.swift"
 require_text 'name: "LocalAgentInferenceNative"' "$ROOT/toolkit/Package.swift"
 require_text 'path: "Artifacts/LocalAgentInferenceNative.xcframework"' "$ROOT/toolkit/Package.swift"
@@ -94,6 +116,7 @@ require_text '"llama_cpp"' "$ROOT/inference/release-engines.json"
 require_file "$ARTIFACT/Info.plist"
 require_file "$ROOT/toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift"
 require_text 'name: "LocalAgentLLMLocal"' "$ROOT/toolkit/Package.swift"
+require_text 'resources: [.process("Resources")]' "$ROOT/toolkit/Package.swift"
 require_text 'dependencies: ["LocalAgentLLMContracts", "LocalAgentLLMCore", "CSQLite", "LocalAgentInferenceNative"]' \
   "$ROOT/toolkit/Package.swift"
 require_text 'import LocalAgentInferenceNative' \
@@ -147,6 +170,9 @@ if [[ ! -f "$SIMULATOR_BINARY" ]]; then
   SIMULATOR_BINARY="$SIMULATOR_APP/LocalAgentApp"
 fi
 assert_complete_native_abi "$SIMULATOR_BINARY"
+if [[ "$REQUIRE_CATALOG_RESOURCES" == "1" ]]; then
+  assert_catalog_resources "$SIMULATOR_APP"
+fi
 
 run_xcodebuild "$DERIVED_DATA/iphoneos.log" \
   -project "$ROOT/apps/LocalAgentApp/LocalAgentApp.xcodeproj" \
@@ -158,5 +184,9 @@ run_xcodebuild "$DERIVED_DATA/iphoneos.log" \
   build
 assert_complete_native_abi \
   "$DERIVED_DATA/iphoneos/Build/Products/Release-iphoneos/LocalAgentApp.app/LocalAgentApp"
+if [[ "$REQUIRE_CATALOG_RESOURCES" == "1" ]]; then
+  assert_catalog_resources \
+    "$DERIVED_DATA/iphoneos/Build/Products/Release-iphoneos/LocalAgentApp.app"
+fi
 
 echo "local inference package/link contract passed"

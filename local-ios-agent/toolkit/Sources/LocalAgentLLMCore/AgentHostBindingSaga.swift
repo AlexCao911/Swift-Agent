@@ -162,7 +162,7 @@ func agentHostConfigurationDigest(_ configuration: AgentHostConfiguration) throw
         .init(name: "binding_revision", value: .string(String(configuration.revision))),
         .init(name: "llm_slot_id", value: .string(configuration.llmSlotID)),
         .init(name: "requirements_hash", value: .string(configuration.requirementsHash)),
-        .init(name: "llm_target_id", value: .string(configuration.llmTargetID)),
+        .init(name: "llm_target_id", value: .string(configuration.llmTargetID.rawValue)),
         .init(name: "llm_target_revision", value: .string(String(configuration.llmTargetRevision))),
         .init(name: "parameter_overrides", value: parameters),
     ])

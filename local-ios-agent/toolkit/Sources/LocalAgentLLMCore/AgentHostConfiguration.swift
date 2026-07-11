@@ -7,7 +7,7 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
     public let agentProfileRevision: UInt64
     public let llmSlotID: String
     public let requirementsHash: String
-    public let llmTargetID: String
+    public let llmTargetID: LLMTargetID
     public let llmTargetRevision: UInt64
     public let parameterOverrides: GenerationConfiguration
 
@@ -18,7 +18,7 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
         agentProfileRevision: UInt64,
         llmSlotID: String,
         requirementsHash: String,
-        llmTargetID: String,
+        llmTargetID: LLMTargetID,
         llmTargetRevision: UInt64,
         parameterOverrides: GenerationConfiguration
     ) {

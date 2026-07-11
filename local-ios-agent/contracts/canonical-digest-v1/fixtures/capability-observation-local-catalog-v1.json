@@ -1,0 +1,32 @@
+{
+  "name": "capability-observation-local-catalog-v1",
+  "domain": "capability-observation:v1",
+  "document": {
+    "schema_version": "1",
+    "capability_id": "streaming",
+    "dimension": "model_supports",
+    "value": { "type": "support", "value": "supported" },
+    "source": "signed_local_catalog",
+    "authority": "authoritative",
+    "subject": {
+      "adapter_id": null,
+      "engine_id": "llama_cpp",
+      "provider_profile_id": null,
+      "provider_profile_revision": null,
+      "credential_generation": null,
+      "llm_target_id": null,
+      "llm_target_revision": null,
+      "model_id": "gemma-3-1b-it-q4",
+      "model_revision": "1",
+      "catalog_revision": "1"
+    },
+    "adapter_or_engine_version": "engine-1",
+    "observed_at": "2027-01-15T08:00:00.000Z",
+    "expires_at": null,
+    "validation_scope": "signed_declaration",
+    "invalidation_triggers": ["app_build", "catalog_revision", "engine_version", "os_capabilities"],
+    "evidence_digest": "cd9f04e55a66333302f1ee2658d2b02fff0c2fdf4289bf52c9716d42ee5602b5"
+  },
+  "expected_canonical_utf8": "{\"adapter_or_engine_version\":\"engine-1\",\"authority\":\"authoritative\",\"capability_id\":\"streaming\",\"dimension\":\"model_supports\",\"evidence_digest\":\"cd9f04e55a66333302f1ee2658d2b02fff0c2fdf4289bf52c9716d42ee5602b5\",\"expires_at\":null,\"invalidation_triggers\":[\"app_build\",\"catalog_revision\",\"engine_version\",\"os_capabilities\"],\"observed_at\":\"2027-01-15T08:00:00.000Z\",\"schema_version\":\"1\",\"source\":\"signed_local_catalog\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"1\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":null,\"llm_target_revision\":null,\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null},\"validation_scope\":\"signed_declaration\",\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
+  "expected_sha256": "2883eb7b88d530816406bb584647719d997de6efffe4caf4f94e41b4f5646946"
+}

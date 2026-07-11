@@ -150,7 +150,7 @@ private func fixtureConfiguration() -> AgentHostConfiguration {
         agentProfileRevision: 1,
         llmSlotID: "assistant",
         requirementsHash: "requirements-1",
-        llmTargetID: "target-1",
+        llmTargetID: LLMTargetID(rawValue: "target-1"),
         llmTargetRevision: 1,
         parameterOverrides: GenerationConfiguration()
     )

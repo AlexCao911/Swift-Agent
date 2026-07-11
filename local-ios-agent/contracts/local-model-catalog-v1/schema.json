@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-agent.invalid/contracts/local-model-catalog-v1/schema.json",
+  "title": "Official local model catalog envelope v1",
+  "type": "object",
+  "required": ["signed", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "signed": { "$ref": "#/$defs/signedCatalog" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+  },
+  "$defs": {
+    "uint64": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "revisionID": {
+      "type": "object",
+      "required": ["model_id", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "model_id": { "type": "string", "minLength": 1 },
+        "revision": { "$ref": "#/$defs/uint64" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["artifact_id", "role", "relative_path", "download_url", "byte_size", "artifact_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["weights", "tokenizer", "multimodal_projection", "chat_template"] },
+        "relative_path": { "type": "string", "minLength": 1 },
+        "download_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "byte_size": { "$ref": "#/$defs/uint64" },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "required": ["capability_id", "value_type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "capability_id": { "type": "string", "minLength": 1 },
+        "value_type": { "enum": ["support", "verified_upper_bound"] },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+    "loadTemplate": {
+      "type": "object",
+      "required": ["context_tokens", "required_artifact_roles", "manifest_controlled_options"],
+      "additionalProperties": false,
+      "properties": {
+        "context_tokens": { "$ref": "#/$defs/uint64" },
+        "required_artifact_roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["weights", "tokenizer", "multimodal_projection", "chat_template"] }
+        },
+        "manifest_controlled_options": { "type": "object" }
+      }
+    },
+    "chatTemplate": {
+      "type": "object",
+      "required": ["source", "template_id"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["gguf", "catalog_artifact"] },
+        "template_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "id", "display_name", "family", "engine_id", "model_format", "artifacts",
+        "installed_byte_size", "minimum_os_major", "supported_device_classes",
+        "estimated_memory_class", "declared_capabilities", "parameter_schema",
+        "parameter_defaults", "load_template", "chat_template"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/revisionID" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "family": { "type": "string", "minLength": 1 },
+        "engine_id": { "enum": ["llama_cpp"] },
+        "model_format": { "enum": ["gguf"] },
+        "artifacts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/artifact" } },
+        "installed_byte_size": { "$ref": "#/$defs/uint64" },
+        "minimum_os_major": { "type": "integer", "minimum": 17, "maximum": 99 },
+        "supported_device_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["phone", "tablet"] }
+        },
+        "estimated_memory_class": { "enum": ["small", "medium", "large"] },
+        "declared_capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+        "parameter_schema": { "type": "object" },
+        "parameter_defaults": { "type": "object" },
+        "load_template": { "$ref": "#/$defs/loadTemplate" },
+        "chat_template": { "$ref": "#/$defs/chatTemplate" },
+        "tool_call_codec_id": { "type": ["string", "null"] }
+      }
+    },
+    "signedCatalog": {
+      "type": "object",
+      "required": ["schema_version", "key_id", "catalog_revision", "models", "revoked_model_revisions"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1" },
+        "key_id": { "type": "string", "minLength": 1 },
+        "catalog_revision": { "$ref": "#/$defs/uint64" },
+        "models": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/model" } },
+        "revoked_model_revisions": { "type": "array", "items": { "$ref": "#/$defs/revisionID" } }
+      }
+    }
+  }
+}

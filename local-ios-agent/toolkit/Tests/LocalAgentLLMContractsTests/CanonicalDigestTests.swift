@@ -29,6 +29,24 @@ struct CanonicalDigestTests {
     }
 
     @Test
+    func localCapabilityDigestsMatchSharedFixtures() throws {
+        for name in [
+            "capability-evidence-local-catalog-v1.json",
+            "capability-observation-local-catalog-v1.json",
+        ] {
+            let fixture = try DigestFixture.load(name)
+            let canonical = try CanonicalDigestV1.canonicalize(fixture.document)
+            #expect(String(decoding: canonical, as: UTF8.self) == fixture.expectedCanonicalUTF8)
+            let digest = try CanonicalDigestV1.digest(
+                domain: try #require(fixture.domain),
+                document: fixture.document
+            )
+            let expected = try #require(fixture.expectedSHA256)
+            #expect(digest.hex == expected)
+        }
+    }
+
+    @Test
     func preparedStartDigestsMatchRustGoldens() throws {
         let registration = try CanonicalJSONValue.object(entries: [
             .init(name: "preparation_id", value: .string("prep-1")),

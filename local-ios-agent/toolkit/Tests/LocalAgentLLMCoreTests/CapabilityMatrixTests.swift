@@ -75,4 +75,130 @@ struct CapabilityMatrixTests {
 
         #expect(snapshot.support(for: "image_input") == .unsupported)
     }
+
+    @Test
+    func localPolicyRequiresMatchingModelAndEngineDimensions() {
+        let exact = CapabilitySubject(
+            engineID: "llama_cpp",
+            modelID: "model-a",
+            modelRevision: "1",
+            catalogRevision: 3
+        )
+        let model = observation(
+            dimension: .modelSupports,
+            subject: exact,
+            digest: "model-digest"
+        )
+        let engine = observation(
+            dimension: .engineCanExecute,
+            subject: CapabilitySubject(engineID: "llama_cpp"),
+            digest: "engine-digest"
+        )
+
+        let missingEngine = CapabilityMatrix.resolve(
+            observations: [model],
+            subject: exact,
+            policy: .local,
+            now: now
+        )
+        #expect(missingEngine.support(for: "tool_calling") == .unknown)
+
+        let complete = CapabilityMatrix.resolve(
+            observations: [model, engine],
+            subject: exact,
+            policy: .local,
+            now: now
+        )
+        #expect(complete.support(for: "tool_calling") == .supported)
+        #expect(complete.contributingObservationDigests == ["engine-digest", "model-digest"])
+    }
+
+    @Test
+    func localPolicyRejectsSubjectMismatchAndTracksNearestExpiry() {
+        let exact = CapabilitySubject(
+            engineID: "llama_cpp",
+            modelID: "model-a",
+            modelRevision: "2",
+            catalogRevision: 3
+        )
+        let wrongModel = observation(
+            dimension: .modelSupports,
+            subject: CapabilitySubject(
+                engineID: "llama_cpp",
+                modelID: "model-a",
+                modelRevision: "1",
+                catalogRevision: 3
+            ),
+            digest: "wrong"
+        )
+        let engine = observation(
+            dimension: .engineCanExecute,
+            subject: CapabilitySubject(engineID: "llama_cpp"),
+            digest: "engine",
+            expiresAt: now.addingTimeInterval(60)
+        )
+
+        let snapshot = CapabilityMatrix.resolve(
+            observations: [wrongModel, engine],
+            subject: exact,
+            policy: .local,
+            now: now
+        )
+        #expect(snapshot.support(for: "tool_calling") == .unknown)
+        #expect(snapshot.nearestExpiry == now.addingTimeInterval(60))
+        #expect(snapshot.contributingObservationDigests == ["engine"])
+    }
+
+    @Test
+    func advisoryClaimsCannotSatisfyLocalPolicy() {
+        let exact = CapabilitySubject(engineID: "llama_cpp", modelID: "model-a", modelRevision: "1")
+        let advisoryModel = CapabilityObservation(
+            capabilityID: "tool_calling",
+            dimension: .modelSupports,
+            value: .support(.supported),
+            authority: .advisory,
+            source: .providerNeutral,
+            subject: exact,
+            observedAt: now,
+            expiresAt: now.addingTimeInterval(10),
+            observationDigest: "advisory"
+        )
+        let engine = observation(
+            dimension: .engineCanExecute,
+            subject: CapabilitySubject(engineID: "llama_cpp"),
+            digest: "engine"
+        )
+        let snapshot = CapabilityMatrix.resolve(
+            observations: [advisoryModel, engine],
+            subject: exact,
+            policy: .local,
+            now: now
+        )
+        #expect(snapshot.support(for: "tool_calling") == .unknown)
+        #expect(snapshot.contributingObservationDigests == ["engine"])
+        #expect(snapshot.nearestExpiry == nil)
+    }
+
+    private func observation(
+        dimension: CapabilityDimension,
+        subject: CapabilitySubject,
+        digest: String,
+        expiresAt: Date? = nil
+    ) -> CapabilityObservation {
+        CapabilityObservation(
+            capabilityID: "tool_calling",
+            dimension: dimension,
+            value: .support(.supported),
+            authority: .authoritative,
+            source: dimension == .modelSupports ? .signedLocalCatalog : .compiledLocalEngine,
+            subject: subject,
+            adapterOrEngineVersion: "1",
+            observedAt: now,
+            expiresAt: expiresAt,
+            validationScope: dimension == .modelSupports ? .signedDeclaration : .compiledDescriptor,
+            invalidationTriggers: [.engineVersion],
+            evidenceDigest: "evidence-\(digest)",
+            observationDigest: digest
+        )
+    }
 }
