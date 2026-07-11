@@ -1,10 +1,9 @@
 use local_ios_agent_runtime::agent_package::{
     AgentPackageExporter, AgentPackageInstaller, AgentPackageLock, AgentPackageManifest,
     AgentPackageReader, AgentPackageValidator, AgentProfileUpgradePlanner, ComponentVersionStatus,
-    InMemoryPackageInstallStore, LocalBindings, PackageModelBinding, PackagePath,
-    RuntimeComponentCatalog,
+    InMemoryPackageInstallStore, PackageModelBinding, PackagePath, RuntimeComponentCatalog,
 };
-use local_ios_agent_runtime::model::InMemoryModelBindingCatalog;
+use local_ios_agent_runtime::llm_contracts::LLMBindingSchema;
 use local_ios_agent_runtime::storage::{
     InMemoryTransactionRunner, StorageError, StorageResult, TransactionName, TransactionOperation,
     TransactionRunner,
@@ -20,14 +19,6 @@ fn fixture_profile_reference() -> AgentProfileReference {
     AgentProfileReference::pinned(
         AgentProfileId::new("profile:agent.fixture"),
         AgentProfileVersion::initial(),
-    )
-}
-
-fn fixture_local_bindings() -> LocalBindings {
-    LocalBindings::empty().with_credential_ref(
-        "model.account",
-        "credential.openai.default",
-        "sha256:local-binding",
     )
 }
 
@@ -198,20 +189,15 @@ fn package_export_does_not_include_local_lock() {
 fn package_install_rejects_invalid_manifest_before_writing_lock() {
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
     let installer = AgentPackageInstaller::new(
         Box::new(InMemoryTransactionRunner::default()),
         store.clone(),
         profile_repository.clone(),
-        model_catalog,
     );
 
-    let error = installer
-        .install(
-            AgentPackageManifest::fixture_with_credential_ref_and_local_path(),
-            LocalBindings::empty(),
-        )
-        .unwrap_err();
+    let mut manifest = AgentPackageManifest::fixture_valid();
+    manifest.unknown_fields.push("surprise".to_string());
+    let error = installer.install(manifest).unwrap_err();
 
     assert_eq!(error.code(), "package.validation_failed");
     assert!(store.installations().is_empty());
@@ -226,19 +212,15 @@ fn package_install_rejects_invalid_manifest_before_writing_lock() {
 fn package_install_rejects_signed_manifest_before_transaction() {
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
     let installer = AgentPackageInstaller::new(
         Box::new(InMemoryTransactionRunner::default()),
         store.clone(),
         profile_repository.clone(),
-        model_catalog,
     );
     let mut manifest = AgentPackageManifest::fixture_valid();
     manifest.signature = Some("sig-fixture".to_string());
 
-    let error = installer
-        .install(manifest, LocalBindings::empty())
-        .unwrap_err();
+    let error = installer.install(manifest).unwrap_err();
 
     assert_eq!(error.code(), "package.validation_failed");
     assert!(store.installations().is_empty());
@@ -265,19 +247,14 @@ impl TransactionRunner for FailingInstallRunner {
 fn package_install_rolls_back_local_records_when_transaction_fails() {
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
     let installer = AgentPackageInstaller::new(
         Box::new(FailingInstallRunner),
         store.clone(),
         profile_repository.clone(),
-        model_catalog,
     );
 
     let error = installer
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            fixture_local_bindings(),
-        )
+        .install(AgentPackageManifest::fixture_valid())
         .unwrap_err();
 
     assert_eq!(error.code(), "storage.forced");
@@ -293,12 +270,10 @@ fn package_install_rolls_back_local_records_when_transaction_fails() {
 fn installer_preview_reports_records_without_writing_store() {
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
     let installer = AgentPackageInstaller::new(
         Box::new(InMemoryTransactionRunner::default()),
         store.clone(),
         profile_repository.clone(),
-        model_catalog,
     );
 
     let preview = installer.preview(&AgentPackageManifest::fixture_valid());
@@ -311,8 +286,8 @@ fn installer_preview_reports_records_without_writing_store() {
     assert!(preview
         .operations
         .iter()
-        .any(|operation| operation.code == "package.install.model_binding.create"));
-    assert_eq!(preview.required_local_bindings[0].key, "model.account");
+        .any(|operation| operation.code == "package.install.llm_slot.create"));
+    assert!(preview.required_local_bindings.is_empty());
     assert!(store.installations().is_empty());
     assert!(store.agent_profile_references().is_empty());
     assert!(store.package_locks().is_empty());
@@ -325,12 +300,10 @@ fn installer_preview_reports_records_without_writing_store() {
 fn installer_preview_reports_validation_issues_without_happy_path_writes() {
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
     let installer = AgentPackageInstaller::new(
         Box::new(InMemoryTransactionRunner::default()),
         store.clone(),
         profile_repository.clone(),
-        model_catalog,
     );
     let mut manifest = AgentPackageManifest::fixture_valid();
     manifest.model = None;
@@ -340,7 +313,7 @@ fn installer_preview_reports_validation_issues_without_happy_path_writes() {
     assert!(preview
         .validation_issues
         .iter()
-        .any(|issue| issue.code == "package.model_file.model_missing"));
+        .any(|issue| issue.code == "package.llm_slot.required"));
     assert!(preview.operations.is_empty());
     assert!(preview.required_local_bindings.is_empty());
     assert!(store.installations().is_empty());
@@ -357,19 +330,11 @@ fn package_install_commits_records_and_event_in_single_transaction() {
     let event_store = runner.event_store();
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
-    let installer = AgentPackageInstaller::new(
-        Box::new(runner),
-        store.clone(),
-        profile_repository.clone(),
-        model_catalog,
-    );
+    let installer =
+        AgentPackageInstaller::new(Box::new(runner), store.clone(), profile_repository.clone());
 
     installer
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            fixture_local_bindings(),
-        )
+        .install(AgentPackageManifest::fixture_valid())
         .unwrap();
 
     assert_eq!(store.installations().len(), 1);
@@ -402,39 +367,145 @@ fn package_install_creates_resolvable_agent_profile() {
     let runner = InMemoryTransactionRunner::default();
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
-    let installer = AgentPackageInstaller::new(
-        Box::new(runner),
-        store.clone(),
-        profile_repository.clone(),
-        model_catalog.clone(),
-    );
+    let installer =
+        AgentPackageInstaller::new(Box::new(runner), store.clone(), profile_repository.clone());
 
     let installed = installer
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            fixture_local_bindings(),
-        )
+        .install(AgentPackageManifest::fixture_valid())
         .unwrap();
     let profile = profile_repository.profile(installed.profile()).unwrap();
 
     assert_eq!(profile.id().as_str(), "profile:agent.fixture");
     assert_eq!(profile.version(), AgentProfileVersion::initial());
     assert_eq!(profile.name(), "Fixture Agent");
-    let model_binding = profile.model_binding().unwrap();
-    assert_eq!(model_binding.slot_kind(), AgentSlotKind::Model);
+    assert!(profile.model_binding().is_none());
     assert_eq!(
-        model_binding.selection().provider_id(),
-        "provider.openai_compatible"
+        profile.llm_slot().unwrap().model_id_hint(),
+        Some("gpt-fixture")
     );
-    assert_eq!(model_binding.selection().model_id(), "gpt-fixture");
-    assert!(model_catalog.contains_exact_selection(model_binding.selection()));
+    assert!(profile.local_bindings().is_empty());
+}
+
+#[test]
+fn schema_v1_install_translates_to_portable_host_slot_without_local_secrets() {
+    let runner = InMemoryTransactionRunner::default();
+    let store = InMemoryPackageInstallStore::default();
+    let profile_repository = InMemoryAgentProfileRepository::default();
+    let installer =
+        AgentPackageInstaller::new(Box::new(runner), store.clone(), profile_repository.clone());
+
+    let installed = installer
+        .install(AgentPackageManifest::fixture_with_credential_ref_and_local_path())
+        .unwrap();
+    let profile = profile_repository.profile(installed.profile()).unwrap();
+    let slot = profile
+        .llm_slot()
+        .expect("schema-v1 import becomes a V2 slot");
+
     assert_eq!(
-        profile
-            .local_bindings()
-            .credential_ref(model_binding.selection().provider_account_id()),
-        Some("credential.openai.default")
+        profile.llm_binding_schema(),
+        Some(LLMBindingSchema::HostSlotV2)
     );
+    assert!(profile.model_binding().is_none());
+    assert!(profile.local_bindings().is_empty());
+    assert_eq!(slot.model_id_hint(), Some("gpt-fixture"));
+    assert_eq!(slot.model_family_hint(), None);
+    assert!(profile.readiness().has_issue("host_binding.missing"));
+
+    let installation = &store.installations()[0];
+    assert_eq!(installation.schema_version, 2);
+    let lock = &store.package_locks()[0];
+    assert_eq!(lock.schema_version, 2);
+    assert!(lock.local_binding_hashes.is_empty());
+    assert!(lock.manifest().model.is_none());
+    assert!(lock.manifest().model_file.is_none());
+    assert_eq!(lock.manifest().llm_slot.as_ref(), Some(slot));
+    let persisted = serde_json::to_string(lock.manifest()).unwrap();
+    for forbidden in [
+        "provider.openai_compatible",
+        "CredentialRef",
+        "/Users/alex",
+        "credential.openai.default",
+    ] {
+        assert!(
+            !persisted.contains(forbidden),
+            "persisted forbidden value: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn native_schema_v2_fixture_is_portable_and_installable_without_local_binding() {
+    let manifest: AgentPackageManifest = serde_json::from_str(include_str!(
+        "../fixtures/agent_package/v2_portable_llm_slot.json"
+    ))
+    .unwrap();
+    let report = AgentPackageValidator::default().validate(&manifest);
+    assert!(report.is_valid(), "unexpected issues: {:?}", report.issues);
+
+    let store = InMemoryPackageInstallStore::default();
+    let profiles = InMemoryAgentProfileRepository::default();
+    let installer = AgentPackageInstaller::new(
+        Box::new(InMemoryTransactionRunner::default()),
+        store,
+        profiles.clone(),
+    );
+    let installed = installer.install(manifest).unwrap();
+    let profile = profiles.profile(installed.profile()).unwrap();
+
+    assert_eq!(
+        profile.llm_slot().unwrap().model_id_hint(),
+        Some("gemma-3-4b-it")
+    );
+    assert!(profile.model_binding().is_none());
+}
+
+#[test]
+fn installed_v2_lock_exports_and_reads_back_portable_slot() {
+    let store = InMemoryPackageInstallStore::default();
+    let installer = AgentPackageInstaller::new(
+        Box::new(InMemoryTransactionRunner::default()),
+        store.clone(),
+        InMemoryAgentProfileRepository::default(),
+    );
+    installer
+        .install(AgentPackageManifest::fixture_valid())
+        .unwrap();
+    let lock = store.package_locks().pop().unwrap();
+
+    let exported = AgentPackageExporter::default().export(&lock).unwrap();
+    let manifest = AgentPackageReader::fixture_with_files(exported.files.clone())
+        .read_manifest(&PackagePath::fixture())
+        .unwrap();
+
+    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(manifest.llm_slot, lock.manifest().llm_slot);
+    assert!(manifest.model.is_none());
+    assert!(!exported.files.contains_key("model.yaml"));
+    assert!(!exported
+        .serialized_text()
+        .contains("provider.openai_compatible"));
+}
+
+#[test]
+fn schema_v2_rejects_host_and_provider_owned_fields() {
+    let base = include_str!("../fixtures/agent_package/v2_portable_llm_slot.json");
+    let value: serde_json::Value = serde_json::from_str(base).unwrap();
+    for forbidden in [
+        "provider_profile_id",
+        "api_key",
+        "credential_ref",
+        "base_url",
+        "installation_id",
+        "local_path",
+    ] {
+        let mut candidate = value.clone();
+        candidate["llm_slot"][forbidden] = serde_json::json!("forbidden");
+        assert!(
+            serde_json::from_value::<AgentPackageManifest>(candidate).is_err(),
+            "schema-v2 accepted forbidden field: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -442,19 +513,11 @@ fn package_install_uses_package_template_with_required_model_only() {
     let runner = InMemoryTransactionRunner::default();
     let store = InMemoryPackageInstallStore::default();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
-    let installer = AgentPackageInstaller::new(
-        Box::new(runner),
-        store.clone(),
-        profile_repository.clone(),
-        model_catalog,
-    );
+    let installer =
+        AgentPackageInstaller::new(Box::new(runner), store.clone(), profile_repository.clone());
 
     let installed = installer
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            fixture_local_bindings(),
-        )
+        .install(AgentPackageManifest::fixture_valid())
         .unwrap();
     let profile = profile_repository.profile(installed.profile()).unwrap();
 
@@ -462,7 +525,8 @@ fn package_install_uses_package_template_with_required_model_only() {
         profile.template_id().as_str(),
         "template.package.installed.v1"
     );
-    assert!(profile.model_binding().is_some());
+    assert!(profile.llm_slot().is_some());
+    assert!(profile.model_binding().is_none());
     assert!(profile.bindings_for_kind(AgentSlotKind::Persona).is_empty());
 }
 
@@ -472,19 +536,11 @@ fn package_install_store_validation_failure_rolls_back_package_event() {
     let event_store = runner.event_store();
     let store = InMemoryPackageInstallStore::fixture_rejecting_commits();
     let profile_repository = InMemoryAgentProfileRepository::default();
-    let model_catalog = InMemoryModelBindingCatalog::default();
-    let installer = AgentPackageInstaller::new(
-        Box::new(runner),
-        store.clone(),
-        profile_repository.clone(),
-        model_catalog,
-    );
+    let installer =
+        AgentPackageInstaller::new(Box::new(runner), store.clone(), profile_repository.clone());
 
     let error = installer
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            fixture_local_bindings(),
-        )
+        .install(AgentPackageManifest::fixture_valid())
         .unwrap_err();
 
     assert_eq!(error.code(), "package.install_store.rejected");

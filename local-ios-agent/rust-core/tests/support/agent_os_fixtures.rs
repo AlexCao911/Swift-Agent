@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use local_ios_agent_runtime::agent_package::{
     AgentPackageInstaller, AgentPackageManifest, InMemoryPackageInstallStore,
-    InstalledAgentProfileReference, LocalBindings,
+    InstalledAgentProfileReference,
 };
 use local_ios_agent_runtime::model::InMemoryModelBindingCatalog;
 use local_ios_agent_runtime::security::{
@@ -44,20 +44,12 @@ impl AgentOsTestWorld {
             Box::new(InMemoryTransactionRunner::default()),
             self.package_store.clone(),
             self.profile_repository.clone(),
-            self.model_catalog.clone(),
         )
     }
 
     pub fn install_fixture_package(&self) -> InstalledAgentProfileReference {
         self.package_installer()
-            .install(
-                AgentPackageManifest::fixture_valid(),
-                LocalBindings::empty().with_credential_ref(
-                    "model.account",
-                    "credential.openai.default",
-                    "sha256:local-binding",
-                ),
-            )
+            .install(AgentPackageManifest::fixture_valid())
             .unwrap()
     }
 }

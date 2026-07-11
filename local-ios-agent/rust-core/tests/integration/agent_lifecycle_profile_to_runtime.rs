@@ -18,36 +18,23 @@ fn frame_ref_fixture() -> ConversationRunFrameRef {
 }
 
 #[test]
-fn package_install_profile_model_binding_readiness_is_satisfied() {
+fn package_install_profile_requires_host_binding_without_concrete_model_state() {
     let world = AgentOsTestWorld::new();
     let installed = world.install_fixture_package();
     let profile = world
         .profile_repository
         .profile(installed.profile())
         .unwrap();
-    let model_binding = profile.model_binding().unwrap();
 
     assert_eq!(profile.id().as_str(), "profile:agent.fixture");
-    assert!(
-        profile.readiness().is_ready(),
-        "package-installed profile should satisfy model binding readiness; full runtime readiness belongs to snapshot/application services"
-    );
-    assert!(
-        world
-            .model_catalog
-            .contains_exact_selection(model_binding.selection()),
-        "runtime snapshot resolution needs package-installed model selection to be catalog-resolvable"
-    );
-    assert_eq!(
-        profile
-            .local_bindings()
-            .credential_ref(model_binding.selection().provider_account_id()),
-        Some("credential.openai.default")
-    );
+    assert!(profile.model_binding().is_none());
+    assert!(profile.llm_slot().is_some());
+    assert!(profile.local_bindings().is_empty());
+    assert!(profile.readiness().has_issue("host_binding.missing"));
 }
 
 #[test]
-fn package_install_profile_resolves_to_persisted_run_snapshot() {
+fn host_slot_v2_stops_before_legacy_snapshot_model_resolution() {
     let world = AgentOsTestWorld::new();
     let installed = world.install_fixture_package();
     let service = RunSnapshotService::from_real_repositories(
@@ -66,38 +53,21 @@ fn package_install_profile_resolves_to_persisted_run_snapshot() {
         Box::new(InMemoryTransactionRunner::default()),
     );
 
-    let snapshot = service
+    let error = service
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
             installed.profile().profile_version().unwrap(),
             "hello",
             frame_ref_fixture(),
         ))
-        .unwrap();
+        .unwrap_err();
 
-    assert!(service.repository().contains(snapshot.snapshot_id()));
-    assert_eq!(
-        snapshot.agent_profile_id(),
-        installed.profile().profile_id()
-    );
-    assert_eq!(
-        snapshot.profile_version(),
-        installed.profile().profile_version().unwrap()
-    );
-    assert!(snapshot.component_versions().is_empty());
-    assert_eq!(snapshot.model_binding().model_id().as_str(), "gpt-fixture");
-    assert!(snapshot.readiness_report().is_ready());
-    assert_eq!(
-        snapshot
-            .trusted_host_state()
-            .credential_availability()
-            .credential_ref_for("package.provider_account:agent.fixture:model.account"),
-        Some("credential.openai.default")
-    );
+    assert_eq!(error.code(), "execution.host_slot_v2_not_runnable");
+    assert!(!service.repository().contains(RunSnapshotId::new(1)));
 }
 
 #[test]
-fn run_snapshot_denied_permission_stops_before_repository_commit() {
+fn host_slot_v2_gate_precedes_permission_and_repository_commit() {
     let world = AgentOsTestWorld::new();
     let installed = world.install_fixture_package();
     let service = RunSnapshotService::from_real_repositories(
@@ -125,6 +95,6 @@ fn run_snapshot_denied_permission_stops_before_repository_commit() {
         ))
         .unwrap_err();
 
-    assert_eq!(error.code(), "snapshot.not_ready");
+    assert_eq!(error.code(), "execution.host_slot_v2_not_runnable");
     assert!(!service.repository().contains(RunSnapshotId::new(1)));
 }

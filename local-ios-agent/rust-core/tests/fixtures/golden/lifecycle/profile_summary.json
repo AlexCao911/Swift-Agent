@@ -4,18 +4,22 @@
   "template_id": "template.package.installed.v1",
   "name": "Fixture Agent",
   "component_bindings": [],
-  "model_binding": {
+  "llm_binding_schema": "host_slot_v2",
+  "llm_slot": {
     "slot_id": "slot.model.primary",
-    "binding_id": "model_binding:agent.fixture:primary",
-    "provider_account_id": "package.provider_account:agent.fixture:model.account",
-    "provider_id": "provider.openai_compatible",
-    "model_id": "gpt-fixture",
-    "catalog_version": 1
+    "capabilities": [
+      "streaming",
+      "tool_calling"
+    ],
+    "input_modalities": [
+      "text"
+    ],
+    "context_budget": "8192",
+    "streaming_required": true,
+    "tool_calling_mode": "required",
+    "model_family_hint": null,
+    "model_id_hint": "gpt-fixture"
   },
-  "local_bindings": [
-    {
-      "binding_key": "package.provider_account:agent.fixture:model.account",
-      "credential_ref": "[redacted]"
-    }
-  ]
+  "model_binding": null,
+  "local_bindings": []
 }

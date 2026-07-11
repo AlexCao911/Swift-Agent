@@ -4,7 +4,7 @@ use crate::support::assertions::assert_redacted_debug_output;
 use local_ios_agent_runtime::agent_package::AgentPackageManifest;
 use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
 use local_ios_agent_runtime::core::{EntryId, SessionId};
-use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
+use local_ios_agent_runtime::run_snapshot::{RunSnapshotId, RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
@@ -72,44 +72,22 @@ fn package_installed_run_snapshot_summary_matches_golden_and_is_redacted() {
         )),
         Box::new(InMemoryTransactionRunner::default()),
     );
-    let snapshot = service
+    let error = service
         .resolve_and_persist(StartRunRequest::new(
             installed.profile().profile_id().as_str(),
             AgentProfileVersion::initial(),
             "golden run",
             frame_ref_fixture(),
         ))
-        .unwrap();
-    let model_account = snapshot.model_binding().provider_account_id();
+        .unwrap_err();
     let actual = serde_json::to_string_pretty(&json!({
-        "snapshot_id": snapshot.snapshot_id().as_u64(),
-        "profile_id": snapshot.agent_profile_id().as_str(),
-        "profile_version": snapshot.profile_version().as_u64(),
-        "component_versions": snapshot.component_versions().iter().map(|component| json!({
-            "slot_id": component.slot_id().as_str(),
-            "slot_kind": format!("{:?}", component.slot_kind()).to_lowercase(),
-            "version_id": component.version_id().as_str(),
-            "entity_version": component.entity_version().as_u64(),
-        })).collect::<Vec<_>>(),
-        "model_binding": {
-            "binding_id": snapshot.model_binding().binding_id(),
-            "provider_account_id": model_account,
-            "provider_id": snapshot.model_binding().provider_id(),
-            "model_id": snapshot.model_binding().model_id().as_str(),
-            "catalog_version": snapshot.model_binding().catalog_version().as_u64(),
+        "profile_id": installed.profile().profile_id().as_str(),
+        "profile_version": AgentProfileVersion::initial().as_u64(),
+        "execution": {
+            "code": error.code(),
+            "message": error.message(),
         },
-        "trusted_host_state": {
-            "permission_state": format!("{:?}", snapshot.trusted_host_state().permission_state()).to_lowercase(),
-            "model_credential_available": snapshot
-                .trusted_host_state()
-                .credential_availability()
-                .credential_ref_for(model_account)
-                .is_some(),
-        },
-        "readiness": {
-            "ready": snapshot.readiness_report().is_ready(),
-            "issues": snapshot.readiness_report().issues().iter().map(|issue| issue.code()).collect::<Vec<_>>(),
-        }
+        "snapshot_persisted": service.repository().contains(RunSnapshotId::new(1)),
     }))
     .unwrap()
         + "\n";

@@ -52,7 +52,7 @@ fn domain_publish_and_install_paths_stage_writes_through_unit_of_work() {
     assert!(component_source.contains("tx.push_store_write"));
     assert!(profile_source.contains("pub fn stage(&self, tx: &mut UnitOfWork"));
     assert!(profile_source.contains("self.repository.stage(tx, profile)?"));
-    assert!(package_source.contains("self.model_catalog.stage(tx, plan.model_selection)?"));
+    assert!(!package_source.contains("model_catalog.stage"));
     assert!(package_source.contains("self.profile_repository.stage(tx, plan.profile)?"));
     assert!(package_source.contains("self.store.stage(tx, commit.clone())?"));
     assert!(

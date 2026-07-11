@@ -1,29 +1,23 @@
 use crate::support::agent_os_fixtures::AgentOsTestWorld;
 
-use local_ios_agent_runtime::agent_package::{AgentPackageManifest, LocalBindings};
+use local_ios_agent_runtime::agent_package::AgentPackageManifest;
 use local_ios_agent_runtime::security::{DataEgressRequest, SecurityManager};
-use local_ios_agent_runtime::user_customization::{AgentProfileId, AgentProfileReference};
 
 #[test]
-fn lifecycle_fails_before_runtime_when_model_credential_binding_is_missing() {
+fn package_install_does_not_require_model_credential_before_host_binding() {
     let world = AgentOsTestWorld::new();
 
-    let error = world
+    let installed = world
         .package_installer()
-        .install(
-            AgentPackageManifest::fixture_valid(),
-            LocalBindings::empty(),
-        )
-        .unwrap_err();
-
-    assert_eq!(error.code(), "package.local_binding.model_account_required");
-    assert!(world.package_store.installations().is_empty());
-    assert!(world
+        .install(AgentPackageManifest::fixture_valid())
+        .unwrap();
+    let profile = world
         .profile_repository
-        .profile(&AgentProfileReference::latest(AgentProfileId::new(
-            "profile:agent.fixture"
-        )))
-        .is_none());
+        .profile(installed.profile())
+        .unwrap();
+
+    assert!(profile.local_bindings().is_empty());
+    assert!(profile.readiness().has_issue("host_binding.missing"));
 }
 
 #[test]

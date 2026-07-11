@@ -6,52 +6,14 @@ use serde::Serialize;
 use crate::agent_package::{
     AgentPackageLock, AgentPackageManifest, AgentPackageValidator, PackageValidationIssue,
 };
-use crate::model::{
-    InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
-};
 use crate::storage::{
     EventRecord, PendingStoreWrite, StorageError, StorageResult, TransactionName,
     TransactionOperation, TransactionRunner, UnitOfWork,
 };
 use crate::user_customization::{
-    AgentProfile, AgentProfileId, AgentProfileLocalBindings, AgentProfileModelBinding,
-    AgentProfileReference, AgentSlotKind, AgentTemplate, InMemoryAgentProfileRepository,
+    AgentProfile, AgentProfileId, AgentProfileReference, AgentSlotKind, AgentTemplate,
+    InMemoryAgentProfileRepository,
 };
-
-const MODEL_ACCOUNT_BINDING_KEY: &str = "model.account";
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LocalBindings {
-    binding_hashes: BTreeMap<String, String>,
-    credential_refs: BTreeMap<String, String>,
-}
-
-impl LocalBindings {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    pub fn binding_hashes(&self) -> &BTreeMap<String, String> {
-        &self.binding_hashes
-    }
-
-    pub fn with_credential_ref(
-        mut self,
-        binding_key: impl Into<String>,
-        credential_ref: impl Into<String>,
-        binding_hash: impl Into<String>,
-    ) -> Self {
-        let binding_key = binding_key.into();
-        self.credential_refs
-            .insert(binding_key.clone(), credential_ref.into());
-        self.binding_hashes.insert(binding_key, binding_hash.into());
-        self
-    }
-
-    pub fn credential_ref(&self, binding_key: &str) -> Option<&str> {
-        self.credential_refs.get(binding_key).map(String::as_str)
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageInstallationRecord {
@@ -198,7 +160,6 @@ pub struct AgentPackageInstaller {
     runner: Box<dyn TransactionRunner>,
     store: InMemoryPackageInstallStore,
     profile_repository: InMemoryAgentProfileRepository,
-    model_catalog: InMemoryModelBindingCatalog,
 }
 
 impl AgentPackageInstaller {
@@ -206,21 +167,19 @@ impl AgentPackageInstaller {
         runner: Box<dyn TransactionRunner>,
         store: InMemoryPackageInstallStore,
         profile_repository: InMemoryAgentProfileRepository,
-        model_catalog: InMemoryModelBindingCatalog,
     ) -> Self {
         Self {
             runner,
             store,
             profile_repository,
-            model_catalog,
         }
     }
 
     pub fn install(
         &self,
         manifest: AgentPackageManifest,
-        bindings: LocalBindings,
     ) -> StorageResult<InstalledAgentProfileReference> {
+        let manifest = manifest.translated_for_install();
         let plan = PackageInstallPlan::from_manifest(&manifest);
         if !plan.validation_issues.is_empty() {
             return Err(StorageError::new(
@@ -231,10 +190,8 @@ impl AgentPackageInstaller {
 
         let mut operation = PackageInstallOperation {
             manifest,
-            bindings,
             store: self.store.clone(),
             profile_repository: self.profile_repository.clone(),
-            model_catalog: self.model_catalog.clone(),
             result: None,
         };
 
@@ -250,7 +207,7 @@ impl AgentPackageInstaller {
     }
 
     pub fn preview(&self, manifest: &AgentPackageManifest) -> PackageInstallPreview {
-        PackageInstallPlan::from_manifest(manifest).into_preview()
+        PackageInstallPlan::from_manifest(&manifest.translated_for_install()).into_preview()
     }
 }
 
@@ -315,16 +272,13 @@ impl PackageInstallPlan {
                     code: "package.install.profile.create".to_string(),
                 },
                 PackageInstallPreviewOperation {
-                    code: "package.install.model_binding.create".to_string(),
+                    code: "package.install.llm_slot.create".to_string(),
                 },
                 PackageInstallPreviewOperation {
                     code: "package.install.lock.create".to_string(),
                 },
             ],
-            required_local_bindings: vec![PackageInstallLocalBindingRequirement {
-                key: MODEL_ACCOUNT_BINDING_KEY.to_string(),
-                purpose: "remote_provider_account".to_string(),
-            }],
+            required_local_bindings: Vec::new(),
         }
     }
 
@@ -349,21 +303,18 @@ impl PackageInstallPreviewIssue {
 
 struct PackageInstallOperation {
     manifest: AgentPackageManifest,
-    bindings: LocalBindings,
     store: InMemoryPackageInstallStore,
     profile_repository: InMemoryAgentProfileRepository,
-    model_catalog: InMemoryModelBindingCatalog,
     result: Option<PackageInstallCommit>,
 }
 
 struct InstalledProfilePlan {
     profile: AgentProfile,
-    model_selection: ModelSelection,
 }
 
 impl TransactionOperation for PackageInstallOperation {
     fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        let plan = installed_profile_from_manifest(&self.manifest, &self.bindings)?;
+        let plan = installed_profile_from_manifest(&self.manifest)?;
         let profile = InstalledAgentProfileReference::new(
             plan.profile.reference(),
             self.manifest.package_id.clone(),
@@ -374,16 +325,12 @@ impl TransactionOperation for PackageInstallOperation {
                 schema_version: self.manifest.schema_version,
             },
             profile: profile.clone(),
-            lock: AgentPackageLock::from_installed_manifest(
-                self.manifest.clone(),
-                self.bindings.binding_hashes().clone(),
-            ),
+            lock: AgentPackageLock::from_installed_manifest(self.manifest.clone(), BTreeMap::new()),
         };
         tx.events().append(EventRecord::new(
             &self.manifest.package_id,
             "package.installed",
         ))?;
-        self.model_catalog.stage(tx, plan.model_selection)?;
         self.profile_repository.stage(tx, plan.profile)?;
         self.store.stage(tx, commit.clone())?;
         self.result = Some(commit);
@@ -393,23 +340,14 @@ impl TransactionOperation for PackageInstallOperation {
 
 fn installed_profile_from_manifest(
     manifest: &AgentPackageManifest,
-    bindings: &LocalBindings,
 ) -> StorageResult<InstalledProfilePlan> {
     let template = AgentTemplate::package_installed_v1();
-    let model = manifest.model.as_ref().ok_or_else(|| {
+    let llm_slot = manifest.llm_slot.clone().ok_or_else(|| {
         StorageError::new(
-            "package.model.required",
-            "installable agent packages must include a model manifest",
+            "package.llm_slot.required",
+            "installable agent packages must include a portable LLM slot",
         )
     })?;
-    let credential_ref = bindings
-        .credential_ref(MODEL_ACCOUNT_BINDING_KEY)
-        .ok_or_else(|| {
-            StorageError::new(
-                "package.local_binding.model_account_required",
-                "installing a package model requires a local model account binding",
-            )
-        })?;
     let model_slot_id = template
         .slot_id_for_kind(AgentSlotKind::Model)
         .ok_or_else(|| {
@@ -419,32 +357,18 @@ fn installed_profile_from_manifest(
             )
         })?
         .clone();
-    let provider_account_id = format!(
-        "package.provider_account:{}:{}",
-        manifest.package_id, MODEL_ACCOUNT_BINDING_KEY
-    );
-    let model_selection = ModelSelection::new(
-        ModelBindingId::new(format!("model_binding:{}:primary", manifest.package_id)),
-        provider_account_id.clone(),
-        model.provider_id.clone(),
-        model.model_id.clone(),
-        ModelCatalogVersion::new(manifest.schema_version as u64),
-    );
-    let local_bindings = AgentProfileLocalBindings::default()
-        .with_credential_ref(provider_account_id, credential_ref.to_string());
-    let profile = AgentProfile::installed_package_profile(
+    if llm_slot.requirements().slot_id() != model_slot_id.as_str() {
+        return Err(StorageError::new(
+            "package.llm_slot.slot_mismatch",
+            "package LLM slot must target the package template model slot",
+        ));
+    }
+    let profile = AgentProfile::installed_package_host_slot_profile(
         AgentProfileId::new(format!("profile:{}", manifest.package_id)),
         &template,
         manifest.name.clone(),
-        Some(AgentProfileModelBinding::new(
-            model_slot_id,
-            model_selection.clone(),
-        )),
-        local_bindings,
+        llm_slot,
     );
 
-    Ok(InstalledProfilePlan {
-        profile,
-        model_selection,
-    })
+    Ok(InstalledProfilePlan { profile })
 }

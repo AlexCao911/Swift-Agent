@@ -24,6 +24,7 @@ pub enum LLMToolCallingMode {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentLLMRequirements {
     slot_id: String,
     #[serde(rename = "capabilities")]

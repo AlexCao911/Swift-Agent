@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::Serialize;
 
 use crate::{
-    llm_contracts::{LLMBindingSchema, LLMSlotV2},
+    llm_contracts::{LLMBindingSchema, LLMInputModality, LLMSlotV2, LLMToolCallingMode},
     model::{ModelBindingCatalog, ModelSelection},
     protocol::{BindingId, ComponentBinding as ProtocolComponentBinding, InstanceId, SlotKey},
     storage::{
@@ -82,6 +82,8 @@ pub struct AgentProfileDebugSummary {
     pub template_id: String,
     pub name: String,
     pub component_bindings: Vec<ComponentBindingDebugSummary>,
+    pub llm_binding_schema: Option<String>,
+    pub llm_slot: Option<LLMSlotDebugSummary>,
     pub model_binding: Option<ModelBindingDebugSummary>,
     pub local_bindings: Vec<LocalBindingDebugSummary>,
 }
@@ -101,6 +103,18 @@ pub struct ModelBindingDebugSummary {
     pub provider_id: String,
     pub model_id: String,
     pub catalog_version: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LLMSlotDebugSummary {
+    pub slot_id: String,
+    pub capabilities: Vec<String>,
+    pub input_modalities: Vec<String>,
+    pub context_budget: String,
+    pub streaming_required: bool,
+    pub tool_calling_mode: String,
+    pub model_family_hint: Option<String>,
+    pub model_id_hint: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -735,12 +749,11 @@ fn expected_component_kind_for_slot(slot_kind: AgentSlotKind) -> Option<Componen
 }
 
 impl AgentProfile {
-    pub(crate) fn installed_package_profile(
+    pub(crate) fn installed_package_host_slot_profile(
         id: AgentProfileId,
         template: &AgentTemplate,
         name: impl Into<String>,
-        model_binding: Option<AgentProfileModelBinding>,
-        local_bindings: AgentProfileLocalBindings,
+        llm_slot: LLMSlotV2,
     ) -> Self {
         Self {
             id,
@@ -748,8 +761,8 @@ impl AgentProfile {
             template_id: template.id().clone(),
             name: name.into(),
             bindings: Vec::new(),
-            llm_binding: model_binding.map(AgentProfileLLMBinding::LegacyV1),
-            local_bindings,
+            llm_binding: Some(AgentProfileLLMBinding::HostSlotV2(llm_slot)),
+            local_bindings: AgentProfileLocalBindings::default(),
         }
     }
 
@@ -872,6 +885,33 @@ impl AgentProfile {
                     component_version_id: binding.component_version_id().as_u64(),
                 })
                 .collect(),
+            llm_binding_schema: self
+                .llm_binding_schema()
+                .map(llm_binding_schema_name)
+                .map(str::to_string),
+            llm_slot: self.llm_slot().map(|slot| LLMSlotDebugSummary {
+                slot_id: slot.requirements().slot_id().to_string(),
+                capabilities: slot
+                    .requirements()
+                    .capability_requirements()
+                    .iter()
+                    .map(|requirement| requirement.as_str().to_string())
+                    .collect(),
+                input_modalities: slot
+                    .requirements()
+                    .input_modalities()
+                    .iter()
+                    .map(|modality| llm_input_modality_name(*modality).to_string())
+                    .collect(),
+                context_budget: slot.requirements().context_budget().to_string(),
+                streaming_required: slot.requirements().streaming_required(),
+                tool_calling_mode: llm_tool_calling_mode_name(
+                    slot.requirements().tool_calling_mode(),
+                )
+                .to_string(),
+                model_family_hint: slot.model_family_hint().map(str::to_string),
+                model_id_hint: slot.model_id_hint().map(str::to_string),
+            }),
             model_binding: self
                 .model_binding()
                 .map(|binding| ModelBindingDebugSummary {
@@ -892,6 +932,30 @@ impl AgentProfile {
                 })
                 .collect(),
         }
+    }
+}
+
+fn llm_binding_schema_name(schema: LLMBindingSchema) -> &'static str {
+    match schema {
+        LLMBindingSchema::LegacyV1 => "legacy_v1",
+        LLMBindingSchema::HostSlotV2 => "host_slot_v2",
+    }
+}
+
+fn llm_input_modality_name(modality: LLMInputModality) -> &'static str {
+    match modality {
+        LLMInputModality::Text => "text",
+        LLMInputModality::Image => "image",
+        LLMInputModality::Audio => "audio",
+        LLMInputModality::Video => "video",
+    }
+}
+
+fn llm_tool_calling_mode_name(mode: LLMToolCallingMode) -> &'static str {
+    match mode {
+        LLMToolCallingMode::Disabled => "disabled",
+        LLMToolCallingMode::Allowed => "allowed",
+        LLMToolCallingMode::Required => "required",
     }
 }
 

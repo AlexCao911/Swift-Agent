@@ -509,32 +509,32 @@ git commit -m "feat: add swift llm configuration foundation"
 - Consumes: Task 3 `LLMSlotV2`.
 - Produces: schema-v2 portable package records and a deterministic schema-v1 translator.
 
-- [ ] **Step 1: Write failing translation/install tests**
+- [x] **Step 1: Write failing translation/install tests**
 
 Assert a schema-v1 import becomes `HostSlotV2`, keeps provider/model only as
 optional non-binding hints, drops credential/path fields, and installs with
 `needs_llm_binding`. Assert schema-v2 rejects Provider Profile, API key,
 CredentialRef, Base URL, installation ID, and local path fields.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test contract agent_package_agent_os -- --nocapture
 ```
 
-- [ ] **Step 3: Implement translation and tagged persistence**
+- [x] **Step 3: Implement translation and tagged persistence**
 
 Native schema-v2 packages carry `llm_slot`; schema-v1 decoding is immediately
 translated before repository writes. Package locks store requirements and hints,
 never the source concrete binding.
 
-- [ ] **Step 4: Prove V2 is not executable**
+- [x] **Step 4: Prove V2 is not executable**
 
 The run attempt must fail before `RunSnapshotResolver::resolve_model_binding`
 with `execution.host_slot_v2_not_runnable`, while the existing development
 `legacy_v1` profile still resolves and runs.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 cargo test --test contract agent_package_agent_os -- --nocapture

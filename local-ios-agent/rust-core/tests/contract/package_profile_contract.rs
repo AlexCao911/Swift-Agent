@@ -1,6 +1,7 @@
 use crate::support::agent_os_fixtures::AgentOsTestWorld;
 
-use local_ios_agent_runtime::agent_package::{AgentPackageManifest, LocalBindings};
+use local_ios_agent_runtime::agent_package::AgentPackageManifest;
+use local_ios_agent_runtime::llm_contracts::{AgentLLMRequirements, LLMSlotV2, LLMToolCallingMode};
 use local_ios_agent_runtime::model::ModelBindingId;
 use local_ios_agent_runtime::user_customization::{AgentProfileId, AgentProfileReference};
 
@@ -22,60 +23,50 @@ fn package_install_creates_profile_that_is_version_pinned_and_repository_resolva
 
     assert_eq!(profile.id(), profile_ref.profile_id());
     assert_eq!(Some(profile.version()), profile_ref.profile_version());
+    assert!(profile.model_binding().is_none());
     assert!(
-        profile.model_binding().is_some(),
-        "fixture package must install a model binding"
+        profile.llm_slot().is_some(),
+        "fixture package must install a V2 LLM slot"
     );
 }
 
 #[test]
-fn package_installed_model_binding_is_catalog_resolvable_and_has_local_credential_binding() {
+fn package_installed_slot_has_no_concrete_catalog_or_credential_binding() {
     let world = AgentOsTestWorld::new();
     let installed = world.install_fixture_package();
     let profile = world
         .profile_repository
         .profile(installed.profile())
         .unwrap();
-    let model_binding = profile.model_binding().expect("model binding exists");
-
-    assert!(
-        world
-            .model_catalog
-            .contains_exact_selection(model_binding.selection()),
-        "installed package must register the model selection it puts in the profile"
-    );
-
-    assert_eq!(
-        profile
-            .local_bindings()
-            .credential_ref(model_binding.selection().provider_account_id()),
-        Some("credential.openai.default"),
-        "model provider account must resolve to installed local credential binding"
-    );
+    assert!(profile.llm_slot().is_some());
+    assert!(profile.model_binding().is_none());
+    assert!(profile.local_bindings().is_empty());
+    assert!(world
+        .model_catalog
+        .selection(&ModelBindingId::new("model_binding:agent.fixture:primary"))
+        .is_none());
 }
 
 #[test]
-fn package_install_rejects_manifest_that_would_create_non_pinnable_profile() {
+fn package_install_rejects_llm_slot_that_does_not_match_template() {
     let world = AgentOsTestWorld::new();
-    let mut manifest = AgentPackageManifest::fixture_valid();
-    manifest.model.as_mut().unwrap().model_id.clear();
+    let mut manifest = AgentPackageManifest::fixture_valid().translated_for_install();
+    manifest.llm_slot = Some(LLMSlotV2::new(AgentLLMRequirements::new(
+        "slot.model.wrong",
+        8_192,
+        true,
+        LLMToolCallingMode::Required,
+    )));
 
     let error = world
         .package_installer()
-        .install(
-            manifest,
-            LocalBindings::empty().with_credential_ref(
-                "model.account",
-                "credential.openai.default",
-                "sha256:local-binding",
-            ),
-        )
-        .expect_err("blank model id must fail before profile persistence");
+        .install(manifest)
+        .expect_err("mismatched portable slot must fail before profile persistence");
 
-    assert_eq!(error.code(), "package.validation_failed");
+    assert_eq!(error.code(), "package.llm_slot.slot_mismatch");
     assert!(
         world.package_store.installations().is_empty(),
-        "invalid package install must not write installation records"
+        "mismatched package install must not write installation records"
     );
 }
 
@@ -87,14 +78,7 @@ fn package_install_rejects_secret_like_manifest_and_leaves_no_install_side_effec
 
     let error = world
         .package_installer()
-        .install(
-            manifest,
-            LocalBindings::empty().with_credential_ref(
-                "model.account",
-                "credential.openai.default",
-                "sha256:local-binding",
-            ),
-        )
+        .install(manifest)
         .expect_err("secret-like package values must fail before persistence");
 
     assert_eq!(error.code(), "package.validation_failed");

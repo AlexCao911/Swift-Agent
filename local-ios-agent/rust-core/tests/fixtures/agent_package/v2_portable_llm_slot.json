@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "package_id": "agent.portable-v2",
+  "name": "Portable V2 Agent",
+  "llm_slot": {
+    "requirements": {
+      "slot_id": "slot.model.primary",
+      "capabilities": ["streaming", "tool_calling"],
+      "input_modalities": ["text"],
+      "context_budget": "8192",
+      "streaming_required": true,
+      "tool_calling_mode": "required"
+    },
+    "model_id_hint": "gemma-3-4b-it"
+  },
+  "package_hash": "sha256:portable-v2",
+  "unknown_fields": []
+}

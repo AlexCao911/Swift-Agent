@@ -145,6 +145,17 @@ impl AgentPackageReader {
         let model_file = agent_map.get("model_file").cloned();
         let package_hash = agent_map.get("package_hash").cloned();
         let signature = agent_map.get("signature").cloned();
+        let llm_slot = agent_map
+            .get("llm_slot_json")
+            .map(|encoded| {
+                serde_json::from_str(encoded).map_err(|error| {
+                    PackageError::new(
+                        "package.llm_slot.invalid",
+                        format!("portable LLM slot is invalid: {error}"),
+                    )
+                })
+            })
+            .transpose()?;
         let unknown_fields = unknown_fields(
             &agent_map,
             &[
@@ -152,6 +163,7 @@ impl AgentPackageReader {
                 "package_id",
                 "name",
                 "model_file",
+                "llm_slot_json",
                 "package_hash",
                 "signature",
             ],
@@ -167,6 +179,7 @@ impl AgentPackageReader {
             name,
             model_file,
             model,
+            llm_slot,
             package_hash,
             signature,
             unknown_fields,

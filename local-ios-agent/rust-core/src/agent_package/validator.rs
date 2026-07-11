@@ -35,10 +35,10 @@ impl AgentPackageValidator {
     pub fn validate(&self, manifest: &AgentPackageManifest) -> PackageValidationReport {
         let mut report = PackageValidationReport::default();
 
-        if manifest.schema_version == 0 {
+        if !matches!(manifest.schema_version, 1 | 2) {
             report.add_issue(
                 "package.schema_version.invalid",
-                "schema_version must be greater than zero",
+                "schema_version must be 1 or 2",
             );
         }
         if manifest.package_id.trim().is_empty() {
@@ -69,6 +69,9 @@ impl AgentPackageValidator {
                 );
             }
         }
+        if manifest.schema_version == 2 {
+            validate_v2_slot(manifest, &mut report);
+        }
         if let Some(model_file) = &manifest.model_file {
             if normalize_package_path(model_file).is_err() {
                 report.add_issue(
@@ -83,7 +86,9 @@ impl AgentPackageValidator {
                 );
             }
         }
-        if manifest.model_file.is_none() || manifest.model.is_none() {
+        if manifest.schema_version == 1
+            && (manifest.model_file.is_none() || manifest.model.is_none())
+        {
             report.add_issue(
                 "package.model.required",
                 "installable agent packages must include a model file and model manifest",
@@ -149,6 +154,21 @@ impl AgentPackageValidator {
         }
 
         report
+    }
+}
+
+fn validate_v2_slot(manifest: &AgentPackageManifest, report: &mut PackageValidationReport) {
+    if manifest.model_file.is_some() || manifest.model.is_some() {
+        report.add_issue(
+            "package.v2.concrete_model.forbidden",
+            "schema-v2 packages cannot contain concrete model bindings",
+        );
+    }
+    if manifest.llm_slot.is_none() {
+        report.add_issue(
+            "package.llm_slot.required",
+            "schema-v2 packages must contain a portable LLM slot",
+        );
     }
 }
 

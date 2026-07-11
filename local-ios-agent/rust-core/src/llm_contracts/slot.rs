@@ -10,6 +10,7 @@ pub enum LLMBindingSchema {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LLMSlotV2 {
     requirements: AgentLLMRequirements,
     #[serde(skip_serializing_if = "Option::is_none")]

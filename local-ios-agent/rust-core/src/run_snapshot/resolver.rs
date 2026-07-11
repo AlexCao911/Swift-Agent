@@ -97,6 +97,12 @@ impl RunSnapshotResolver {
         let profile = self
             .sources
             .profile(request.agent_profile_id(), request.profile_revision_id())?;
+        if profile.llm_slot().is_some() {
+            return Err(RunSnapshotError::new(
+                "execution.host_slot_v2_not_runnable",
+                "host-backed LLM slots are not executable until the Phase 4 worker route is enabled",
+            ));
+        }
         let component_versions = self.resolve_components(profile.bindings())?;
         let model_binding = self.resolve_model_binding(&profile)?;
         let tool_bindings = self.resolve_tool_bindings(&component_versions);
