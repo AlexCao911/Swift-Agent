@@ -12,4 +12,6 @@ pub use snapshot::{
     ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview, RunSnapshotReadinessIssue,
     RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent, StartRunRequest,
 };
-pub use snapshot_service::{RunSnapshotError, RunSnapshotResult, RunSnapshotService};
+pub use snapshot_service::{
+    RunPreparationService, RunSnapshotError, RunSnapshotResult, RunSnapshotService,
+};

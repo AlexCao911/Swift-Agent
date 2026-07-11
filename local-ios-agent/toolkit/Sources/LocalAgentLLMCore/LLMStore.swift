@@ -11,9 +11,34 @@ struct StoredHostBindingRecord: Codable, Equatable, Sendable {
     var state: StoredHostBindingState
 }
 
+public enum StoredPreparedSessionState: String, Codable, Equatable, Sendable {
+    case prepared
+    case closed
+}
+
+struct StoredPreparedSessionRecord: Codable, Equatable, Sendable {
+    let request: SwiftRunPreparationRequest
+    let session: SwiftPreparedSession
+    var state: StoredPreparedSessionState
+    var cleanup: SwiftPreparedSessionCleanupEnvelope?
+    var closeReceipt: SwiftPreparedSessionClosedReceipt?
+}
+
 private struct LLMStoreDocument: Codable, Equatable, Sendable {
     var schemaVersion: UInt64 = 1
     var hostBindings: [String: StoredHostBindingRecord] = [:]
+    var preparedSessions: [String: StoredPreparedSessionRecord] = [:]
+
+    enum CodingKeys: String, CodingKey { case schemaVersion, hostBindings, preparedSessions }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(UInt64.self, forKey: .schemaVersion) ?? 1
+        hostBindings = try container.decodeIfPresent([String: StoredHostBindingRecord].self, forKey: .hostBindings) ?? [:]
+        preparedSessions = try container.decodeIfPresent([String: StoredPreparedSessionRecord].self, forKey: .preparedSessions) ?? [:]
+    }
 }
 
 public actor LLMStore {
@@ -94,6 +119,63 @@ public actor LLMStore {
         document.hostBindings[token]?.state
     }
 
+    func prepareSession(_ record: StoredPreparedSessionRecord) throws -> SwiftPreparedSession {
+        let id = record.session.preparationID
+        if let existing = document.preparedSessions[id] {
+            guard existing.request == record.request, existing.session == record.session else {
+                throw RunPreparationCoordinatorError(
+                    code: "preparation.idempotency_conflict",
+                    message: "preparation was replayed with a different Swift snapshot"
+                )
+            }
+            return existing.session
+        }
+        let previous = document
+        document.preparedSessions[id] = record
+        do { try persist() } catch { document = previous; throw error }
+        return record.session
+    }
+
+    func closePreparedSession(
+        _ cleanup: SwiftPreparedSessionCleanupEnvelope
+    ) throws -> SwiftPreparedSessionClosedReceipt {
+        guard var record = document.preparedSessions[cleanup.preparationID] else {
+            throw cleanupMismatch()
+        }
+        let exact = cleanup.proposedRunID == record.session.proposedRunID
+            && cleanup.sessionHandle == record.session.sessionHandle
+            && cleanup.hostProcessEpoch == record.session.hostProcessEpoch
+            && cleanup.registrationDigest == record.session.registrationDigest
+        guard exact else { throw cleanupMismatch() }
+        if record.state == .closed {
+            guard record.cleanup == cleanup, let receipt = record.closeReceipt else {
+                throw cleanupMismatch()
+            }
+            return receipt
+        }
+        let receipt = SwiftPreparedSessionClosedReceipt(
+            cleanupCommandID: cleanup.cleanupCommandID,
+            preparationID: cleanup.preparationID,
+            proposedRunID: cleanup.proposedRunID,
+            sessionHandle: cleanup.sessionHandle,
+            hostProcessEpoch: cleanup.hostProcessEpoch,
+            cleanupSequence: cleanup.cleanupSequence,
+            closeDisposition: .closed,
+            receiptDigest: try digestPreparedClose(cleanup)
+        )
+        let previous = document
+        record.state = .closed
+        record.cleanup = cleanup
+        record.closeReceipt = receipt
+        document.preparedSessions[cleanup.preparationID] = record
+        do { try persist() } catch { document = previous; throw error }
+        return receipt
+    }
+
+    public func preparedSessionState(preparationID: String) -> StoredPreparedSessionState? {
+        document.preparedSessions[preparationID]?.state
+    }
+
     func failNextPersistenceForTesting() {
         injectedPersistenceFailure = true
     }
@@ -115,4 +197,11 @@ public actor LLMStore {
         encoder.outputFormatting = [.sortedKeys]
         try encoder.encode(document).write(to: fileURL, options: [.atomic])
     }
+}
+
+private func cleanupMismatch() -> RunPreparationCoordinatorError {
+    RunPreparationCoordinatorError(
+        code: "preparation.cleanup_mismatch",
+        message: "cleanup envelope does not match the prepared session identity"
+    )
 }

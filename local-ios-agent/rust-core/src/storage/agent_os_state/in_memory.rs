@@ -6,11 +6,11 @@ use crate::canonical_digest::CanonicalDigestV1;
 use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
-    HostBindingOperationState, LLMBindingSchema, PackageBindingPreparation,
-    ProfilePublishPreparation,
+    HostBindingOperationState, LLMBindingSchema, PackageBindingPreparation, PreparationError,
+    ProfilePublishPreparation, RunPreparationRecord, RunPreparationState,
 };
 
-use super::{AgentOSStateRepository, GlobalRunLeaseRepository};
+use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
 
 #[derive(Default)]
 pub struct InMemoryAgentOSStateStore {
@@ -19,6 +19,7 @@ pub struct InMemoryAgentOSStateStore {
     cross_links: HashMap<String, HostBindingCrossLink>,
     global_run_lease: Option<GlobalRunLease>,
     last_lease_generation: u64,
+    run_preparations: HashMap<String, RunPreparationRecord>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -251,6 +252,128 @@ impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {
     fn current_global_run_lease(&self) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
         Ok(self.global_run_lease.clone())
     }
+}
+
+impl RunPreparationRepository for InMemoryAgentOSStateStore {
+    fn create_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        if let Some(existing) = self.run_preparations.get(record.preview().preparation_id()) {
+            return if existing == &record {
+                Ok(existing.clone())
+            } else {
+                Err(preparation_conflict())
+            };
+        }
+        if self
+            .run_preparations
+            .values()
+            .any(|existing| existing.idempotency_key() == record.idempotency_key())
+        {
+            return Err(preparation_conflict());
+        }
+        self.run_preparations.insert(
+            record.preview().preparation_id().to_string(),
+            record.clone(),
+        );
+        Ok(record)
+    }
+
+    fn save_run_preparation(
+        &mut self,
+        expected_state: RunPreparationState,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let existing = self
+            .run_preparations
+            .get(record.preview().preparation_id())
+            .ok_or_else(preparation_not_found)?;
+        if existing.state() != expected_state {
+            return Err(preparation_stale());
+        }
+        self.run_preparations.insert(
+            record.preview().preparation_id().to_string(),
+            record.clone(),
+        );
+        Ok(record)
+    }
+
+    fn abort_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+        has_registered_session: bool,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let preview = record.preview();
+        self.begin_release(
+            preview.lease_generation(),
+            preview.preparation_id(),
+            preview.host_process_epoch(),
+        )
+        .map_err(preparation_lease_error)?;
+        if !has_registered_session {
+            self.complete_release(preview.lease_generation(), preview.host_process_epoch())
+                .map_err(preparation_lease_error)?;
+        }
+        self.run_preparations
+            .insert(preview.preparation_id().to_string(), record.clone());
+        Ok(record)
+    }
+
+    fn close_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let preview = record.preview();
+        self.complete_release(preview.lease_generation(), preview.host_process_epoch())
+            .map_err(preparation_lease_error)?;
+        self.run_preparations
+            .insert(preview.preparation_id().to_string(), record.clone());
+        Ok(record)
+    }
+
+    fn run_preparation(
+        &self,
+        preparation_id: &str,
+    ) -> Result<Option<RunPreparationRecord>, PreparationError> {
+        Ok(self.run_preparations.get(preparation_id).cloned())
+    }
+
+    fn active_run_preparation(&self) -> Result<Option<RunPreparationRecord>, PreparationError> {
+        let Some(lease) = &self.global_run_lease else {
+            return Ok(None);
+        };
+        Ok(lease
+            .preparation_id()
+            .and_then(|id| self.run_preparations.get(id))
+            .cloned())
+    }
+
+    fn list_run_preparations(&self) -> Result<Vec<RunPreparationRecord>, PreparationError> {
+        Ok(self.run_preparations.values().cloned().collect())
+    }
+}
+
+fn preparation_lease_error(error: GlobalRunLeaseError) -> PreparationError {
+    PreparationError::new(
+        "preparation.lease_transition_failed",
+        format!("{}: {error}", error.code()),
+    )
+}
+fn preparation_conflict() -> PreparationError {
+    PreparationError::new(
+        "preparation.idempotency_conflict",
+        "preparation identity was replayed with different input",
+    )
+}
+fn preparation_stale() -> PreparationError {
+    PreparationError::new(
+        "preparation.state_stale",
+        "preparation state changed before persistence",
+    )
+}
+fn preparation_not_found() -> PreparationError {
+    PreparationError::new("preparation.not_found", "run preparation was not found")
 }
 
 impl InMemoryAgentOSStateStore {

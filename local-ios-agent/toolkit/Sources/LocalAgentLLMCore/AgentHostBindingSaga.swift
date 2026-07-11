@@ -96,7 +96,7 @@ public struct AgentHostBindingSaga: Sendable {
                 message: "Swift configuration does not match the Rust slot and requirements"
             )
         }
-        let bindingHash = try configurationDigest(request.configuration)
+        let bindingHash = try agentHostConfigurationDigest(request.configuration)
         let binding = HostBindingTuple(
             bindingID: request.configuration.bindingID,
             bindingRevision: request.configuration.revision,
@@ -151,7 +151,7 @@ public struct AgentHostBindingSaga: Sendable {
     }
 }
 
-private func configurationDigest(_ configuration: AgentHostConfiguration) throws -> String {
+func agentHostConfigurationDigest(_ configuration: AgentHostConfiguration) throws -> String {
     let parameters = try CanonicalJSONValue.object(entries: configuration.parameterOverrides.parameters.map {
         CanonicalJSONObjectEntry(name: $0.key, value: parameterValue($0.value))
     })

@@ -7,12 +7,13 @@ use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
     HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple, LLMBindingSchema,
-    PackageBindingPreparation, ProfilePublishPreparation,
+    PackageBindingPreparation, PreparationError, ProfilePublishPreparation, RunPreparationRecord,
+    RunPreparationState,
 };
 
 use super::in_memory::{busy, stale};
 use super::in_memory::{conflict, not_found, saga_token, saga_token_digest, validate_commit};
-use super::{AgentOSStateRepository, GlobalRunLeaseRepository};
+use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
 
 pub struct SqliteAgentOSStateStore {
     conn: Connection,
@@ -82,14 +83,19 @@ impl SqliteAgentOSStateStore {
              create table if not exists run_preparations (
                preparation_id text primary key,
                idempotency_key text not null unique,
+               proposed_run_id text not null unique,
                token_digest text not null,
                binding_digest text not null,
                source_revisions_digest text not null,
-               state text not null
+               host_process_epoch text not null,
+               lease_generation text not null,
+               state text not null,
+               record_json text not null
              );",
         )
         .map_err(sqlite_error)?;
         ensure_lease_generation_counter(&conn)?;
+        ensure_preparation_columns(&conn)?;
         Ok(Self { conn })
     }
 
@@ -234,6 +240,33 @@ fn ensure_lease_generation_counter(conn: &Connection) -> Result<(), HostBindingE
     Ok(())
 }
 
+fn ensure_preparation_columns(conn: &Connection) -> Result<(), HostBindingError> {
+    for (name, definition) in [
+        ("proposed_run_id", "text not null default ''"),
+        ("host_process_epoch", "text not null default ''"),
+        ("lease_generation", "text not null default '0'"),
+        ("record_json", "text not null default '{}'"),
+    ] {
+        let mut statement = conn
+            .prepare("pragma table_info(run_preparations)")
+            .map_err(sqlite_error)?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_error)?;
+        drop(statement);
+        if !names.iter().any(|existing| existing == name) {
+            conn.execute(
+                &format!("alter table run_preparations add column {name} {definition}"),
+                [],
+            )
+            .map_err(sqlite_error)?;
+        }
+    }
+    Ok(())
+}
+
 impl AgentOSStateRepository for SqliteAgentOSStateStore {
     fn prepare_profile_publish(
         &mut self,
@@ -285,6 +318,245 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
     ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
         load_cross_link(&self.conn, operation_token)
     }
+}
+
+impl RunPreparationRepository for SqliteAgentOSStateStore {
+    fn create_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        if let Some(existing) = load_preparation(&self.conn, record.preview().preparation_id())? {
+            return if existing == record {
+                Ok(existing)
+            } else {
+                Err(preparation_conflict())
+            };
+        }
+        let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        self.conn
+            .execute(
+                "insert into run_preparations (
+               preparation_id, idempotency_key, proposed_run_id, token_digest, binding_digest,
+               source_revisions_digest, host_process_epoch, lease_generation, state, record_json
+             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    record.preview().preparation_id(),
+                    record.idempotency_key(),
+                    record.preview().proposed_run_id(),
+                    record.preview().token_digest(),
+                    record.preview().binding_digest(),
+                    record.preview().binding().source_revisions_digest(),
+                    record.preview().host_process_epoch(),
+                    record.preview().lease_generation().to_string(),
+                    record.state().as_str(),
+                    json
+                ],
+            )
+            .map_err(|error| {
+                if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+                    preparation_conflict()
+                } else {
+                    preparation_sqlite_error(error)
+                }
+            })?;
+        Ok(record)
+    }
+
+    fn save_run_preparation(
+        &mut self,
+        expected_state: RunPreparationState,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        let changed = self
+            .conn
+            .execute(
+                "update run_preparations set token_digest = ?1, state = ?2, record_json = ?3
+             where preparation_id = ?4 and state = ?5",
+                params![
+                    record.preview().token_digest(),
+                    record.state().as_str(),
+                    json,
+                    record.preview().preparation_id(),
+                    expected_state.as_str()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if changed != 1 {
+            return Err(preparation_stale());
+        }
+        Ok(record)
+    }
+
+    fn abort_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+        has_registered_session: bool,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(preparation_sqlite_error)?;
+        let preview = record.preview();
+        let changed = tx
+            .execute(
+                "update global_run_lease set state = 'releasing'
+             where singleton_id = 1 and lease_generation = ?1 and preparation_id = ?2
+               and host_process_epoch = ?3 and state = 'preparing'",
+                params![
+                    preview.lease_generation().to_string(),
+                    preview.preparation_id(),
+                    preview.host_process_epoch()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if changed != 1 {
+            return Err(preparation_stale());
+        }
+        let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        let updated = tx
+            .execute(
+                "update run_preparations set token_digest = ?1, state = ?2, record_json = ?3
+             where preparation_id = ?4 and state in ('pending', 'registered')",
+                params![
+                    record.preview().token_digest(),
+                    record.state().as_str(),
+                    json,
+                    preview.preparation_id()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if updated != 1 {
+            return Err(preparation_stale());
+        }
+        if !has_registered_session {
+            let released = tx
+                .execute(
+                    "delete from global_run_lease where singleton_id = 1 and lease_generation = ?1
+                 and host_process_epoch = ?2 and state = 'releasing'",
+                    params![
+                        preview.lease_generation().to_string(),
+                        preview.host_process_epoch()
+                    ],
+                )
+                .map_err(preparation_sqlite_error)?;
+            if released != 1 {
+                return Err(preparation_stale());
+            }
+        }
+        tx.commit().map_err(preparation_sqlite_error)?;
+        Ok(record)
+    }
+
+    fn close_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(preparation_sqlite_error)?;
+        let preview = record.preview();
+        let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        let updated = tx
+            .execute(
+                "update run_preparations set state = 'closed', record_json = ?1
+             where preparation_id = ?2 and state = 'aborting'",
+                params![json, preview.preparation_id()],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if updated != 1 {
+            return Err(preparation_stale());
+        }
+        let released = tx
+            .execute(
+                "delete from global_run_lease where singleton_id = 1 and lease_generation = ?1
+             and host_process_epoch = ?2 and state = 'releasing'",
+                params![
+                    preview.lease_generation().to_string(),
+                    preview.host_process_epoch()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if released != 1 {
+            return Err(preparation_stale());
+        }
+        tx.commit().map_err(preparation_sqlite_error)?;
+        Ok(record)
+    }
+
+    fn run_preparation(
+        &self,
+        preparation_id: &str,
+    ) -> Result<Option<RunPreparationRecord>, PreparationError> {
+        load_preparation(&self.conn, preparation_id)
+    }
+
+    fn active_run_preparation(&self) -> Result<Option<RunPreparationRecord>, PreparationError> {
+        self.conn
+            .query_row(
+                "select p.record_json from run_preparations p join global_run_lease l
+             on l.preparation_id = p.preparation_id where l.singleton_id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(preparation_sqlite_error)?
+            .map(|json| serde_json::from_str(&json).map_err(preparation_serde_error))
+            .transpose()
+    }
+
+    fn list_run_preparations(&self) -> Result<Vec<RunPreparationRecord>, PreparationError> {
+        let mut statement = self
+            .conn
+            .prepare("select record_json from run_preparations order by preparation_id")
+            .map_err(preparation_sqlite_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(preparation_sqlite_error)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(
+                serde_json::from_str(&row.map_err(preparation_sqlite_error)?)
+                    .map_err(preparation_serde_error)?,
+            );
+        }
+        Ok(records)
+    }
+}
+
+fn load_preparation(
+    conn: &Connection,
+    preparation_id: &str,
+) -> Result<Option<RunPreparationRecord>, PreparationError> {
+    conn.query_row(
+        "select record_json from run_preparations where preparation_id = ?1",
+        params![preparation_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(preparation_sqlite_error)?
+    .map(|json| serde_json::from_str(&json).map_err(preparation_serde_error))
+    .transpose()
+}
+
+fn preparation_conflict() -> PreparationError {
+    PreparationError::new(
+        "preparation.idempotency_conflict",
+        "preparation identity was replayed with different input",
+    )
+}
+fn preparation_stale() -> PreparationError {
+    PreparationError::new(
+        "preparation.state_stale",
+        "preparation state changed before persistence",
+    )
+}
+fn preparation_sqlite_error(error: rusqlite::Error) -> PreparationError {
+    PreparationError::new("storage.agent_os_state_sqlite", error.to_string())
+}
+fn preparation_serde_error(error: serde_json::Error) -> PreparationError {
+    PreparationError::new("preparation.record_invalid", error.to_string())
 }
 
 impl GlobalRunLeaseRepository for SqliteAgentOSStateStore {

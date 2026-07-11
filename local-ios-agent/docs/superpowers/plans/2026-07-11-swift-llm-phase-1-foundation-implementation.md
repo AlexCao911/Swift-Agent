@@ -676,20 +676,20 @@ git commit -m "feat: gate agent runs with durable global lease"
 **Interfaces:**
 - Produces the Phase A/B/C records and cleanup state machine, but no host-backed worker execution.
 
-- [ ] **Step 1: Write failing preparation lifecycle tests**
+- [x] **Step 1: Write failing preparation lifecycle tests**
 
 Cover preview freeze, five-minute renewal with thirty-minute ceiling,
 single-use tokens, registered-session identity matching, commit rejection,
 cleanup command deduplication, exact close receipt, and old-epoch release.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test contract run_preparation -- --nocapture
 swift test --package-path local-ios-agent/toolkit --filter RunPreparationCoordinatorTests
 ```
 
-- [ ] **Step 3: Implement Rust preparation records**
+- [x] **Step 3: Implement Rust preparation records**
 
 `preview_run` acquires `preparing` and persists frozen provider-neutral digests.
 `register_prepared_session` authenticates but does not consume the token.
@@ -701,13 +701,13 @@ is the entry point Phase 4 will call before its atomic run commit.
 `begin_abort_preparation` persists one cleanup identity and
 `confirm_prepared_session_closed` releases only the exact lease.
 
-- [ ] **Step 4: Implement Swift coordinator state validation**
+- [x] **Step 4: Implement Swift coordinator state validation**
 
 Swift stores target/config/capability/parameter snapshots and opaque binding
 digests, but Phase 1 uses a fake backend resource so no provider/C++ session or
 network request exists.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 cargo test --test contract run_preparation -- --nocapture

@@ -43,6 +43,8 @@ mod protocol_lifecycle;
 mod protocol_plugin_module;
 #[path = "contract/protocol_registry.rs"]
 mod protocol_registry;
+#[path = "contract/run_preparation.rs"]
+mod run_preparation;
 #[path = "contract/run_snapshot_resolution_agent_os.rs"]
 mod run_snapshot_resolution_agent_os;
 #[path = "contract/runtime_execution_agent_os.rs"]

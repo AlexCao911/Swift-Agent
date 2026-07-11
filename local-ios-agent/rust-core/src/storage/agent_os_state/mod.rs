@@ -6,7 +6,8 @@ pub use sqlite::SqliteAgentOSStateStore;
 
 use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, HostBindingCommit, HostBindingCrossLink, HostBindingError,
-    HostBindingOperation, PackageBindingPreparation, ProfilePublishPreparation,
+    HostBindingOperation, PackageBindingPreparation, PreparationError, ProfilePublishPreparation,
+    RunPreparationRecord,
 };
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +48,36 @@ pub trait GlobalRunLeaseRepository {
     fn current_global_run_lease(&self) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError>;
 }
 
-pub trait AgentOSStateRepository: GlobalRunLeaseRepository + Send {
+pub trait RunPreparationRepository {
+    fn create_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn save_run_preparation(
+        &mut self,
+        expected_state: crate::llm_contracts::RunPreparationState,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn abort_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+        has_registered_session: bool,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn close_run_preparation(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn run_preparation(
+        &self,
+        preparation_id: &str,
+    ) -> Result<Option<RunPreparationRecord>, PreparationError>;
+    fn active_run_preparation(&self) -> Result<Option<RunPreparationRecord>, PreparationError>;
+    fn list_run_preparations(&self) -> Result<Vec<RunPreparationRecord>, PreparationError>;
+}
+
+pub trait AgentOSStateRepository:
+    GlobalRunLeaseRepository + RunPreparationRepository + Send
+{
     fn prepare_profile_publish(
         &mut self,
         request: ProfilePublishPreparation,
@@ -101,11 +131,34 @@ impl SharedAgentOSStateStore {
         let store = self.inner.lock().map_err(|_| poisoned())?;
         operation(store.as_ref())
     }
+
+    pub fn with_preparation_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut dyn AgentOSStateRepository) -> Result<T, PreparationError>,
+    ) -> Result<T, PreparationError> {
+        let mut store = self.inner.lock().map_err(|_| preparation_poisoned())?;
+        operation(store.as_mut())
+    }
+
+    pub fn with_preparation<T>(
+        &self,
+        operation: impl FnOnce(&dyn AgentOSStateRepository) -> Result<T, PreparationError>,
+    ) -> Result<T, PreparationError> {
+        let store = self.inner.lock().map_err(|_| preparation_poisoned())?;
+        operation(store.as_ref())
+    }
 }
 
 fn poisoned() -> GlobalRunLeaseError {
     GlobalRunLeaseError::new(
         "execution.global_run_lease_store_poisoned",
         "global run lease store mutex is poisoned",
+    )
+}
+
+fn preparation_poisoned() -> PreparationError {
+    PreparationError::new(
+        "preparation.store_poisoned",
+        "run preparation store mutex is poisoned",
     )
 }
