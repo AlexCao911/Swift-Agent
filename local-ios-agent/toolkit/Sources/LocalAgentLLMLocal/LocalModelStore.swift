@@ -48,7 +48,10 @@ package struct LocalArtifactRecord: Equatable, Sendable {
     let receivedBytes: UInt64
     let artifactSHA256: String
     let resumeData: Data?
+    let etag: String?
+    let lastModified: String?
     let stateRevision: UInt64
+    let taskIdentifier: Int?
 }
 
 package struct LocalDownloadQueueEntry: Equatable, Sendable {
@@ -345,6 +348,22 @@ public final class LocalModelStore: @unchecked Sendable {
     ) throws {
         try lock.withLock {
             _ = try requiredInstallationUnlocked(installationID)
+            if let existing = try artifactUnlocked(
+                installationID: installationID,
+                artifactID: artifactID
+            ) {
+                guard existing.relativePath == relativePath,
+                      existing.downloadURL == downloadURL.absoluteString,
+                      existing.expectedBytes == expectedBytes,
+                      existing.artifactSHA256 == artifactSHA256
+                else {
+                    throw storeFailure(
+                        "download.artifact_conflict",
+                        "artifact identity is already bound to different signed metadata"
+                    )
+                }
+                return
+            }
             try database.execute(
                 """
                 INSERT INTO local_artifacts(
@@ -403,6 +422,79 @@ public final class LocalModelStore: @unchecked Sendable {
     ) throws -> LocalArtifactRecord? {
         try lock.withLock {
             try artifactUnlocked(installationID: installationID, artifactID: artifactID)
+        }
+    }
+
+    package func artifactRecords(installationID: String) throws -> [LocalArtifactRecord] {
+        try lock.withLock {
+            try database.queryRows(
+                "SELECT artifact_id FROM local_artifacts WHERE installation_id = ?1 ORDER BY rowid",
+                bindings: [.text(installationID)]
+            ).map { row in
+                guard let artifactID = row.text("artifact_id"),
+                      let artifact = try artifactUnlocked(
+                          installationID: installationID,
+                          artifactID: artifactID
+                      )
+                else { throw storeCorrupt() }
+                return artifact
+            }
+        }
+    }
+
+    package func artifactRecord(taskIdentifier: Int) throws -> LocalArtifactRecord? {
+        try lock.withLock {
+            guard let row = try database.queryRows(
+                "SELECT installation_id, artifact_id FROM local_artifacts WHERE task_identifier = ?1",
+                bindings: [.integer(Int64(taskIdentifier))]
+            ).first,
+                let installationID = row.text("installation_id"),
+                let artifactID = row.text("artifact_id")
+            else { return nil }
+            return try artifactUnlocked(installationID: installationID, artifactID: artifactID)
+        }
+    }
+
+    @discardableResult
+    package func updateArtifactTransfer(
+        installationID: String,
+        artifactID: String,
+        expectedStateRevision: UInt64,
+        receivedBytes: UInt64,
+        resumeData: Data?,
+        etag: String?,
+        lastModified: String?,
+        taskIdentifier: Int?
+    ) throws -> UInt64 {
+        try lock.withLock {
+            guard let artifact = try artifactUnlocked(
+                installationID: installationID,
+                artifactID: artifactID
+            ), receivedBytes <= artifact.expectedBytes else {
+                throw storeFailure(
+                    "download.artifact_progress_invalid",
+                    "artifact progress exceeds its signed size"
+                )
+            }
+            let next = try incrementStateRevision(expectedStateRevision)
+            let changed = try database.executeChanges(
+                """
+                UPDATE local_artifacts
+                SET received_bytes = ?1, resume_data = ?2, etag = ?3,
+                    last_modified = ?4, task_identifier = ?5, state_revision = ?6
+                WHERE installation_id = ?7 AND artifact_id = ?8 AND state_revision = ?9
+                """,
+                bindings: [
+                    .text(String(receivedBytes)), resumeData.map(SQLiteValue.blob) ?? .null,
+                    etag.map(SQLiteValue.text) ?? .null,
+                    lastModified.map(SQLiteValue.text) ?? .null,
+                    taskIdentifier.map { .integer(Int64($0)) } ?? .null,
+                    .integer(try sqliteInteger(next)), .text(installationID), .text(artifactID),
+                    .integer(try sqliteInteger(expectedStateRevision)),
+                ]
+            )
+            guard changed == 1 else { throw staleState() }
+            return next
         }
     }
 
@@ -646,6 +738,30 @@ public final class LocalModelStore: @unchecked Sendable {
         }
     }
 
+    package func completeDownloadCancellation(operationID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                guard let row = try database.queryRows(
+                    "SELECT installation_id, kind, state FROM local_filesystem_operations WHERE operation_id = ?1",
+                    bindings: [.text(operationID)]
+                ).first,
+                    let installationID = row.text("installation_id"),
+                    row.text("kind") == LocalFilesystemOperationKind.cancelDownload.rawValue,
+                    row.text("state") == LocalFilesystemOperationState.filesystemApplied.rawValue
+                else { throw staleState() }
+                let changed = try database.executeChanges(
+                    "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state = 'filesystem_applied'",
+                    bindings: [.text(operationID)]
+                )
+                guard changed == 1 else { throw staleState() }
+                try database.execute(
+                    "DELETE FROM local_installations WHERE installation_id = ?1",
+                    bindings: [.text(installationID)]
+                )
+            }
+        }
+    }
+
     package func acquireModelUseLease(_ lease: LocalModelUseLease) throws {
         try lock.withLock {
             try database.transaction {
@@ -874,7 +990,8 @@ public final class LocalModelStore: @unchecked Sendable {
         guard let row = try database.queryRows(
             """
             SELECT installation_id, artifact_id, relative_path, download_url,
-                   expected_bytes, received_bytes, artifact_sha256, resume_data, state_revision
+                   expected_bytes, received_bytes, artifact_sha256, resume_data,
+                   etag, last_modified, state_revision, task_identifier
             FROM local_artifacts WHERE installation_id = ?1 AND artifact_id = ?2
             """,
             bindings: [.text(installationID), .text(artifactID)]
@@ -895,7 +1012,10 @@ public final class LocalModelStore: @unchecked Sendable {
             receivedBytes: received,
             artifactSHA256: sha,
             resumeData: row.blob("resume_data"),
-            stateRevision: revision
+            etag: row.text("etag"),
+            lastModified: row.text("last_modified"),
+            stateRevision: revision,
+            taskIdentifier: row.integer("task_identifier").flatMap(Int.init(exactly:))
         )
     }
 
@@ -996,6 +1116,12 @@ public final class LocalModelStore: @unchecked Sendable {
                   queue_position INTEGER NOT NULL UNIQUE,
                   enqueued_at TEXT NOT NULL
                 )
+                """
+            )
+            try database.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS local_artifacts_task_identifier_idx
+                ON local_artifacts(task_identifier) WHERE task_identifier IS NOT NULL
                 """
             )
             try database.execute(

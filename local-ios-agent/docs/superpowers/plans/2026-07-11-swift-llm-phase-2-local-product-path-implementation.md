@@ -638,17 +638,17 @@ git commit -m "feat: enforce local model disk policy"
 - Persists background task identifiers, validators, progress, and opaque resume data before publishing state.
 - Produces `restore(pendingCancellations:)`, which reattaches known tasks, completes durable cancel intents, and only then starts the next queued transfer.
 
-- [ ] **Step 1: Write failing queue, pause/resume, and restoration tests**
+- [x] **Step 1: Write failing queue, pause/resume, and restoration tests**
 
 Use a deterministic fake transport to prove: FIFO ordering; only one active model artifact transfer; pause stores resume data when supplied; resume uses the same artifact identity; invalid resume data clears only that artifact and restarts it from zero; ETag/Last-Modified mismatch restarts safely; duplicate enqueue is idempotent; network failure enters `failed` with `download.network_failed`; process restoration reattaches known tasks and receives their later progress/completion/failure through the same event stream; unknown restored tasks are cancelled/quarantined. Crash-inject cancellation before transport cancel, after cancel acknowledgement, and after staging cleanup to prove the durable `cancel_download` intent converges without claiming filesystem/SQLite atomicity.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter ModelDownloadCoordinatorTests
 ```
 
-- [ ] **Step 3: Implement the transport seam and actor**
+- [x] **Step 3: Implement the transport seam and actor**
 
 Use:
 
@@ -697,13 +697,13 @@ The coordinator subscribes to `events` immediately when constructed, before it a
 
 The live transport uses a background `URLSessionConfiguration` on iOS and a deterministic identifier derived from the app bundle plus installation subsystem name. Delegate callbacks copy temporary files immediately into the installation staging directory. It retains the system background-events completion handler until `urlSessionDidFinishEvents`; Phase 5 only forwards the application callback and does not own download state. Swift actor state is advisory; SQLite is authoritative after restart.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 swift test --package-path toolkit --filter ModelDownloadCoordinatorTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMLocal/ModelDownloadTransport.swift \
