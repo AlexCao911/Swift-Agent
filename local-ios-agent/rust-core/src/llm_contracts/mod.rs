@@ -12,12 +12,12 @@ pub use host_binding::{
     HostBindingOperation, HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple,
     PackageBindingPreparation, ProfilePublishPreparation,
 };
+pub(crate) use preparation::RunPreparationRequest;
 pub use preparation::{
     HostAttestation, PreparationAbortReason, PreparationBinding, PreparationError,
     PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
     PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
-    RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationRequest,
-    RunPreparationState,
+    RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationState,
 };
 pub use requirements::{
     AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMToolCallingMode,

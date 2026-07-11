@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingCatalog, ModelBindingId, ModelCatalogVersion,
     ModelSelection,
@@ -326,6 +327,39 @@ impl AgentOSApplicationService {
         )
         .publish(
             draft,
+            &template,
+            &component_catalog,
+            &model_catalog_for_publish,
+        )
+        .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+
+        let model_slot_id = template
+            .slot_id_for_kind(AgentSlotKind::Model)
+            .expect("assistant template has model slot")
+            .as_str()
+            .to_string();
+        let v2_draft = AgentProfileDraft::new(
+            AgentProfileId::new("profile_v2"),
+            template.id().clone(),
+            "Development Host Slot Agent",
+        )
+        .bind(ComponentBinding::persona(
+            template
+                .slot_id_for_kind(AgentSlotKind::Persona)
+                .expect("assistant template has persona slot")
+                .clone(),
+            persona_version,
+        ))
+        .with_llm_slot(LLMSlotV2::new(
+            AgentLLMRequirements::new(model_slot_id, 4096, true, LLMToolCallingMode::Allowed)
+                .requiring_input_modality(LLMInputModality::Text),
+        ));
+        AgentProfilePublisher::new(
+            Box::new(InMemoryTransactionRunner::default()),
+            profile_repository.clone(),
+        )
+        .publish(
+            v2_draft,
             &template,
             &component_catalog,
             &model_catalog_for_publish,

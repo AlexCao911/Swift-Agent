@@ -85,6 +85,15 @@ impl PreparationBinding {
     pub fn requirements_hash(&self) -> &str {
         &self.requirements_hash
     }
+    pub fn conversation_frame_digest(&self) -> &str {
+        &self.conversation_frame_digest
+    }
+    pub fn execution_plan_digest(&self) -> &str {
+        &self.execution_plan_digest
+    }
+    pub fn tool_schema_digest(&self) -> &str {
+        &self.tool_schema_digest
+    }
     pub fn model_input_id(&self) -> &str {
         &self.model_input_id
     }
@@ -94,11 +103,14 @@ impl PreparationBinding {
     pub fn source_revisions_digest(&self) -> &str {
         &self.source_revisions_digest
     }
+    pub fn initial_disclosure_digest(&self) -> &str {
+        &self.initial_disclosure_digest
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RunPreparationRequest {
+pub(crate) struct RunPreparationRequest {
     idempotency_key: String,
     preparation_id: String,
     proposed_run_id: String,
@@ -106,7 +118,7 @@ pub struct RunPreparationRequest {
 }
 
 impl RunPreparationRequest {
-    pub fn new(
+    pub(crate) fn new(
         idempotency_key: impl Into<String>,
         preparation_id: impl Into<String>,
         proposed_run_id: impl Into<String>,
@@ -119,16 +131,16 @@ impl RunPreparationRequest {
             binding,
         }
     }
-    pub fn idempotency_key(&self) -> &str {
+    pub(crate) fn idempotency_key(&self) -> &str {
         &self.idempotency_key
     }
-    pub fn preparation_id(&self) -> &str {
+    pub(crate) fn preparation_id(&self) -> &str {
         &self.preparation_id
     }
-    pub fn proposed_run_id(&self) -> &str {
+    pub(crate) fn proposed_run_id(&self) -> &str {
         &self.proposed_run_id
     }
-    pub fn binding(&self) -> &PreparationBinding {
+    pub(crate) fn binding(&self) -> &PreparationBinding {
         &self.binding
     }
 }

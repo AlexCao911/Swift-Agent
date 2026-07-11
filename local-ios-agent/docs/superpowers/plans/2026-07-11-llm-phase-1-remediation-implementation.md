@@ -225,24 +225,24 @@ git commit -m "fix: authenticate prepared session cleanup"
 - Produces `AuthoritativePreparationPreviewService::preview(StartRunRequest) -> FrozenPreparationInput`.
 - Produces process-scoped `PreparedModelInputVault` keyed by frozen input ID.
 
-- [ ] **Step 1: Add failing authority tests**
+- [x] **Step 1: Add failing authority tests**
 
 Test that old digest fields are rejected as unknown FFI fields. Build real Profile/frame/tool/context fixtures and prove Rust-derived digests change when each source changes. Prove the vault bytes recompute to `model_input_digest`. Add an instrumentation test proving V2 preparation never calls legacy `resolve_model_binding`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation authoritative -- --nocapture
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration ffi_bridge preparation_preview -- --nocapture
 ```
 
-- [ ] **Step 3: Implement the shared trusted-source preview**
+- [x] **Step 3: Implement the shared trusted-source preview**
 
 Extract trusted source capture/component/tool resolution shared with `RunSnapshotService.preview`. Add a V2-specific preparation preview that loads the exact Profile revision and `LLMSlotV2`, resolves the conversation frame and plan, assembles the actual first-turn model input, computes disclosure and registered digests, and stores canonical input bytes in the vault. It must not resolve a concrete model binding or persist a run snapshot.
 
 Change the Rust C ABI and Swift DTO so the caller sends the real start request and no derived digest. On transaction failure remove the vault entry; on old-epoch recovery clear recovered vault entries.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation -- --nocapture
@@ -251,7 +251,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test li
 swift test --package-path toolkit --filter RustRuntimeClientContractTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core toolkit

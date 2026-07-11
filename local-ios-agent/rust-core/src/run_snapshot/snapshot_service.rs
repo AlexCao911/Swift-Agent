@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::canonical_digest::CanonicalDigestV1;
+use crate::conversation::ConversationRunFrame;
 use crate::llm_contracts::{
     HostAttestation, PreparationAbortReason, PreparationError,
     PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
@@ -10,8 +12,9 @@ use crate::llm_contracts::{
 };
 use crate::model::InMemoryModelBindingCatalog;
 use crate::run_snapshot::{
-    ResolvedRunSnapshot, RunSnapshotPreview, RunSnapshotRepository, RunSnapshotResolveInput,
-    RunSnapshotResolver, RunSnapshotSourceCatalog, StartRunRequest,
+    derive_authoritative_preparation, ResolvedRunSnapshot, RunSnapshotPreview,
+    RunSnapshotRepository, RunSnapshotResolveInput, RunSnapshotResolver, RunSnapshotSourceCatalog,
+    StartRunRequest,
 };
 use crate::security::{CredentialRefResolver, PermissionState, SecurityPermissionService};
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
@@ -41,6 +44,8 @@ pub struct RunSnapshotService {
 pub struct RunPreparationService {
     state_store: SharedAgentOSStateStore,
     host_process_epoch: String,
+    snapshot_service: Option<Arc<RunSnapshotService>>,
+    frozen_inputs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
 }
 
 struct SnapshotPersistOperation<'a> {
@@ -175,6 +180,14 @@ impl RunSnapshotService {
         )
     }
 
+    pub fn fixture_with_host_slot_v2() -> Self {
+        Self::new(
+            RunSnapshotSourceCatalog::fixture_with_host_slot_v2(),
+            RunSnapshotRepository::default(),
+            Box::new(InMemoryTransactionRunner::default()),
+        )
+    }
+
     pub fn preview(&self, request: StartRunRequest) -> RunSnapshotResult<RunSnapshotPreview> {
         let trusted_host_state = self.sources.capture_trusted_host_state(&request)?;
         let snapshot = self.resolver.resolve(RunSnapshotResolveInput::new(
@@ -241,10 +254,77 @@ impl RunPreparationService {
         Self {
             state_store,
             host_process_epoch: host_process_epoch.into(),
+            snapshot_service: None,
+            frozen_inputs: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
-    pub fn preview_run(
+    pub fn with_authoritative_preview(
+        state_store: SharedAgentOSStateStore,
+        host_process_epoch: impl Into<String>,
+        snapshot_service: Arc<RunSnapshotService>,
+    ) -> Self {
+        Self {
+            state_store,
+            host_process_epoch: host_process_epoch.into(),
+            snapshot_service: Some(snapshot_service),
+            frozen_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn preview_authoritative(
+        &self,
+        idempotency_key: impl Into<String>,
+        preparation_id: impl Into<String>,
+        proposed_run_id: impl Into<String>,
+        start_request: StartRunRequest,
+        frame: &ConversationRunFrame,
+        now_millis: u64,
+    ) -> Result<RunPreparationPreview, PreparationError> {
+        let snapshot_service = self.snapshot_service.as_ref().ok_or_else(|| {
+            PreparationError::new(
+                "preparation.authoritative_preview_unavailable",
+                "run preparation service was not configured with Rust snapshot authority",
+            )
+        })?;
+        let sources = snapshot_service
+            .resolver
+            .resolve_host_slot_preparation(&start_request)
+            .map_err(preparation_snapshot_error)?;
+        let derived = derive_authoritative_preparation(&start_request, frame, &sources)
+            .map_err(preparation_snapshot_error)?;
+        let input_id = derived.binding.model_input_id().to_string();
+        self.frozen_inputs
+            .lock()
+            .map_err(|_| preparation_vault_poisoned())?
+            .insert(input_id.clone(), derived.canonical_model_input);
+        let request = RunPreparationRequest::new(
+            idempotency_key,
+            preparation_id,
+            proposed_run_id,
+            derived.binding,
+        );
+        match self.preview_derived(request, now_millis) {
+            Ok(preview) => Ok(preview),
+            Err(error) => {
+                self.frozen_inputs
+                    .lock()
+                    .map_err(|_| preparation_vault_poisoned())?
+                    .remove(&input_id);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn frozen_model_input(&self, input_id: &str) -> Result<Option<Vec<u8>>, PreparationError> {
+        self.frozen_inputs
+            .lock()
+            .map(|inputs| inputs.get(input_id).cloned())
+            .map_err(|_| preparation_vault_poisoned())
+    }
+
+    fn preview_derived(
         &self,
         request: RunPreparationRequest,
         now_millis: u64,
@@ -747,6 +827,18 @@ fn preparation_not_found() -> PreparationError {
     PreparationError::new(
         "preparation.not_found",
         "active run preparation was not found",
+    )
+}
+fn preparation_snapshot_error(error: RunSnapshotError) -> PreparationError {
+    PreparationError::new(
+        "preparation.authoritative_preview_failed",
+        format!("{}: {error}", error.code()),
+    )
+}
+fn preparation_vault_poisoned() -> PreparationError {
+    PreparationError::new(
+        "preparation.model_input_vault_poisoned",
+        "prepared model input vault lock was poisoned",
     )
 }
 fn token_expired() -> PreparationError {

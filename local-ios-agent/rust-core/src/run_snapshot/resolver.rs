@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
@@ -44,6 +45,13 @@ pub struct RunSnapshotSourceCatalog {
     security: Arc<dyn SecurityPermissionService>,
     credential_resolver: Arc<dyn CredentialRefResolver>,
     component_entity_versions: Arc<Mutex<BTreeMap<UserComponentVersionId, u64>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HostSlotPreparationSources {
+    pub(crate) requirements: AgentLLMRequirements,
+    pub(crate) component_versions: Vec<ResolvedComponentBinding>,
+    pub(crate) tool_bindings: Vec<ResolvedToolBinding>,
 }
 
 #[derive(Debug)]
@@ -123,6 +131,28 @@ impl RunSnapshotResolver {
             readiness_report,
             0,
         ))
+    }
+
+    pub(crate) fn resolve_host_slot_preparation(
+        &self,
+        request: &StartRunRequest,
+    ) -> RunSnapshotResult<HostSlotPreparationSources> {
+        let profile = self
+            .sources
+            .profile(request.agent_profile_id(), request.profile_revision_id())?;
+        let slot = profile.llm_slot().ok_or_else(|| {
+            RunSnapshotError::new(
+                "preparation.host_slot_v2_required",
+                "authoritative LLM preparation requires an LLMSlotV2 profile revision",
+            )
+        })?;
+        let component_versions = self.resolve_components(profile.bindings())?;
+        let tool_bindings = self.resolve_tool_bindings(&component_versions);
+        Ok(HostSlotPreparationSources {
+            requirements: slot.requirements().clone(),
+            component_versions,
+            tool_bindings,
+        })
     }
 
     fn resolve_components(
@@ -279,6 +309,14 @@ impl RunSnapshotSourceCatalog {
         })
     }
 
+    pub fn fixture_with_host_slot_v2() -> Self {
+        Self::fixture_with_options(FixtureOptions {
+            host_slot_v2: true,
+            include_credentials: false,
+            ..FixtureOptions::default()
+        })
+    }
+
     fn fixture_with_options(options: FixtureOptions) -> Self {
         let template = AgentTemplate::assistant_default();
         let component_catalog = ComponentCatalogService::default();
@@ -295,7 +333,7 @@ impl RunSnapshotSourceCatalog {
         stage_model_selection(&model_catalog, model_selection.clone());
 
         let profile_repository = InMemoryAgentProfileRepository::default();
-        let profile = AgentProfileDraft::new(
+        let draft = AgentProfileDraft::new(
             AgentProfileId::new("profile_1"),
             template.id().clone(),
             "Fixture Agent",
@@ -306,20 +344,37 @@ impl RunSnapshotSourceCatalog {
                 .expect("fixture template has persona slot")
                 .clone(),
             persona_version,
-        ))
-        .with_model_binding(AgentProfileModelBinding::new(
-            template
-                .slot_id_for_kind(AgentSlotKind::Model)
-                .expect("fixture template has model slot")
-                .clone(),
-            model_selection,
-        ))
-        .with_local_bindings(
-            AgentProfileLocalBindings::default()
-                .with_credential_ref("account.openai.default", "credential.openai.default"),
-        )
-        .into_published()
-        .with_version(AgentProfileVersion::new(options.profile_version));
+        ));
+        let draft = if options.host_slot_v2 {
+            draft.with_llm_slot(LLMSlotV2::new(
+                AgentLLMRequirements::new(
+                    template
+                        .slot_id_for_kind(AgentSlotKind::Model)
+                        .expect("fixture template has model slot")
+                        .as_str(),
+                    4096,
+                    true,
+                    LLMToolCallingMode::Allowed,
+                )
+                .requiring_input_modality(LLMInputModality::Text),
+            ))
+        } else {
+            draft
+                .with_model_binding(AgentProfileModelBinding::new(
+                    template
+                        .slot_id_for_kind(AgentSlotKind::Model)
+                        .expect("fixture template has model slot")
+                        .clone(),
+                    model_selection,
+                ))
+                .with_local_bindings(
+                    AgentProfileLocalBindings::default()
+                        .with_credential_ref("account.openai.default", "credential.openai.default"),
+                )
+        };
+        let profile = draft
+            .into_published()
+            .with_version(AgentProfileVersion::new(options.profile_version));
         stage_profile(&profile_repository, profile);
 
         let security = Arc::new(
@@ -544,6 +599,7 @@ struct FixtureOptions {
     model_id: String,
     permission_state: PermissionState,
     include_credentials: bool,
+    host_slot_v2: bool,
 }
 
 impl Default for FixtureOptions {
@@ -555,6 +611,7 @@ impl Default for FixtureOptions {
             model_id: "gpt-4.1-mini".to_string(),
             permission_state: PermissionState::Granted,
             include_credentials: true,
+            host_slot_v2: false,
         }
     }
 }

@@ -39,10 +39,10 @@ use crate::execution::{
 use crate::llm_contracts::{
     HostAttestation, HostBindingCommit, PackageBindingPreparation, PreparationAbortReason,
     PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
-    PreparedSessionRegistration, ProfilePublishPreparation, RunPreparationRequest,
+    PreparedSessionRegistration, ProfilePublishPreparation,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
-use crate::run_snapshot::RunPreparationService;
+use crate::run_snapshot::{RunPreparationService, StartRunRequest};
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
@@ -243,7 +243,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         );
         let execution = ExecutionService::with_runtime_parts_and_agent_os_state(
             frames.clone(),
-            snapshot_service,
+            snapshot_service.clone(),
             ExecutionPlanner,
             event_log,
             completed_runs.clone(),
@@ -251,8 +251,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             host_process_epoch.clone(),
         );
-        let run_preparation =
-            RunPreparationService::new(agent_os_state.clone(), host_process_epoch);
+        let run_preparation = RunPreparationService::with_authoritative_preview(
+            agent_os_state.clone(),
+            host_process_epoch,
+            snapshot_service,
+        );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
         Ok(Self {
@@ -456,9 +459,33 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: PreviewRunPreparationJson = from_json(request_json)?;
+        let frame_ref = request
+            .start_request
+            .conversation_run_frame_ref
+            .clone()
+            .into_domain();
+        let frame = self.frames.get(&frame_ref).ok_or_else(|| {
+            AgentError::Storage(
+                "preparation.frame_ref_untrusted: conversation frame ref was not issued by Rust"
+                    .to_string(),
+            )
+        })?;
+        let start_request = StartRunRequest::new(
+            request.start_request.agent_profile_id,
+            AgentProfileVersion::new(request.start_request.profile_revision_id),
+            request.start_request.user_intent,
+            frame_ref,
+        );
         let preview = self
             .run_preparation
-            .preview_run(request.request, request.now_millis)
+            .preview_authoritative(
+                request.idempotency_key,
+                request.preparation_id,
+                request.proposed_run_id,
+                start_request,
+                &frame,
+                request.now_millis,
+            )
             .map_err(preparation_agent_error)?;
         to_json(&preview)
     }
@@ -746,6 +773,14 @@ impl RuntimeJsonBridge {
             runtime,
             AgentOSApplicationService::empty(),
         ))
+    }
+
+    pub fn new_development_seeded(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
+        let app_services = AgentOSApplicationService::from_config(
+            AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
+        )
+        .expect("development Agent OS seed must be valid");
+        Self::InMemory(BridgeRuntime::new(runtime, app_services))
     }
 
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
@@ -2137,9 +2172,22 @@ struct RuntimeBridgeConfigJson {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PreviewRunPreparationJson {
-    request: RunPreparationRequest,
+    idempotency_key: String,
+    preparation_id: String,
+    proposed_run_id: String,
+    start_request: AuthoritativePreparationStartJson,
     now_millis: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoritativePreparationStartJson {
+    agent_profile_id: String,
+    profile_revision_id: u64,
+    user_intent: String,
+    conversation_run_frame_ref: ConversationRunFrameRefJson,
 }
 
 #[derive(Deserialize)]

@@ -706,13 +706,6 @@ struct RustRuntimeClientContractTests {
          "agent_profile_revision":1,"llm_slot_id":"assistant","requirements_hash":"requirements-digest","state":"pending"}
         """
 
-        let binding = PreparationBindingDTO(
-            agentProfileId: "profile-1", agentProfileRevision: 1,
-            conversationFrameDigest: "frame-digest", executionPlanDigest: "plan-digest",
-            requirementsHash: "requirements-digest", toolSchemaDigest: "tool-digest",
-            modelInputId: "input-1", modelInputDigest: "input-digest",
-            sourceRevisionsDigest: "source-digest", initialDisclosureDigest: "disclosure-digest"
-        )
         let client = try RustRuntimeClient(functions: probe.table())
         let operation: HostBindingOperationDTO = try await client.request(
             .prepareProfilePublish,
@@ -726,9 +719,17 @@ struct RustRuntimeClientContractTests {
         let preview: RunPreparationPreviewDTO = try await client.request(
             .previewRunPreparation,
             PreviewRunPreparationRequestDTO(
-                request: RunPreparationRequestDTO(
-                    idempotencyKey: "preview-1", preparationId: "preparation-1",
-                    proposedRunId: "run-v2-1", binding: binding
+                idempotencyKey: "preview-1",
+                preparationId: "preparation-1",
+                proposedRunId: "run-v2-1",
+                startRequest: AuthoritativePreparationStartRequestDTO(
+                    agentProfileId: "profile-1",
+                    profileRevisionId: 1,
+                    userIntent: "hello",
+                    conversationRunFrameRef: ConversationRunFrameRefDTO(
+                        frameId: "frame-1", sessionId: "session-1",
+                        branchHeadId: "branch-1", userTurnId: "turn-1"
+                    )
                 ),
                 nowMillis: 0
             ),

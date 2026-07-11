@@ -1,8 +1,10 @@
+mod preparation_preview;
 mod resolved_bindings;
 mod resolver;
 mod snapshot;
 mod snapshot_service;
 
+pub(crate) use preparation_preview::derive_authoritative_preparation;
 pub use resolved_bindings::{
     CredentialAvailability, LocalBindingState, ResolvedComponentBinding, ResolvedMemoryBinding,
     ResolvedModelBinding, ResolvedToolBinding, ResolvedVoiceBinding, TrustedHostRunState,

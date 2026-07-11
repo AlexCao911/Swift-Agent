@@ -1,35 +1,128 @@
 use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
+use local_ios_agent_runtime::conversation::{
+    ConversationFrameId, ConversationFrameMessage, ConversationLineage, ConversationRunFrame,
+    ConversationRunFrameRef,
+};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::llm_contracts::{
-    HostAttestation, PreparationAbortReason, PreparationBinding,
-    PreparedSessionCleanupAcknowledgement, PreparedSessionCloseDisposition,
-    PreparedSessionClosedReceipt, PreparedSessionRegistration, RunPreparationRequest,
+    HostAttestation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
     RunPreparationState,
 };
-use local_ios_agent_runtime::run_snapshot::RunPreparationService;
+use local_ios_agent_runtime::run_snapshot::{
+    RunPreparationService, RunSnapshotService, StartRunRequest,
+};
 use local_ios_agent_runtime::storage::agent_os_state::{
     SharedAgentOSStateStore, SqliteAgentOSStateStore,
 };
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 const MINUTE: u64 = 60_000;
 
-fn request() -> RunPreparationRequest {
-    RunPreparationRequest::new(
-        "preview-operation-1",
-        "preparation-1",
-        "proposed-run-1",
-        PreparationBinding::new(
-            "profile-1",
-            4,
-            "frame-digest",
-            "plan-digest",
-            "requirements-digest",
-            "tool-schema-digest",
-            "input-1",
-            "model-input-digest",
-            "source-revisions-digest",
-            "disclosure-digest",
-        ),
+#[test]
+fn authoritative_preview_derives_model_input_and_source_digests_from_rust_sources() {
+    let snapshot = std::sync::Arc::new(RunSnapshotService::fixture_with_host_slot_v2());
+    let first_service = RunPreparationService::with_authoritative_preview(
+        SharedAgentOSStateStore::in_memory(),
+        "epoch-authoritative-1",
+        snapshot.clone(),
+    );
+    let second_service = RunPreparationService::with_authoritative_preview(
+        SharedAgentOSStateStore::in_memory(),
+        "epoch-authoritative-2",
+        snapshot,
+    );
+    let first_frame = authoritative_frame("first input");
+    let second_frame = authoritative_frame("changed input");
+    let first = first_service
+        .preview_authoritative(
+            "authoritative-preview-1",
+            "authoritative-preparation-1",
+            "authoritative-run-1",
+            authoritative_start(first_frame.frame_ref().clone(), "first input"),
+            &first_frame,
+            0,
+        )
+        .unwrap();
+    let second = second_service
+        .preview_authoritative(
+            "authoritative-preview-2",
+            "authoritative-preparation-2",
+            "authoritative-run-2",
+            authoritative_start(second_frame.frame_ref().clone(), "changed input"),
+            &second_frame,
+            0,
+        )
+        .unwrap();
+
+    assert_ne!(
+        first.binding().conversation_frame_digest(),
+        second.binding().conversation_frame_digest()
+    );
+    assert_ne!(
+        first.binding().model_input_digest(),
+        second.binding().model_input_digest()
+    );
+    let bytes = first_service
+        .frozen_model_input(first.binding().model_input_id())
+        .unwrap()
+        .unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        CanonicalDigestV1::digest("agent-input:v1", &document)
+            .unwrap()
+            .as_str(),
+        first.binding().model_input_digest()
+    );
+}
+
+fn authoritative_start(frame_ref: ConversationRunFrameRef, intent: &str) -> StartRunRequest {
+    StartRunRequest::new("profile_1", AgentProfileVersion::new(1), intent, frame_ref)
+}
+
+fn authoritative_frame(text: &str) -> ConversationRunFrame {
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame-authoritative"),
+        SessionId("session-authoritative".to_string()),
+        EntryId("branch-authoritative".to_string()),
+        EntryId("turn-authoritative".to_string()),
+    );
+    ConversationRunFrame::new(
+        frame_ref,
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("turn-authoritative".to_string()),
+            text,
+        )],
+        vec![],
+        ConversationLineage::new(EntryId("branch-authoritative".to_string()), None, None),
     )
+}
+
+fn test_service(state: SharedAgentOSStateStore, epoch: &str) -> RunPreparationService {
+    RunPreparationService::with_authoritative_preview(
+        state,
+        epoch,
+        std::sync::Arc::new(RunSnapshotService::fixture_with_host_slot_v2()),
+    )
+}
+
+fn preview_fixture(
+    service: &RunPreparationService,
+    suffix: &str,
+    now_millis: u64,
+) -> local_ios_agent_runtime::llm_contracts::RunPreparationPreview {
+    let frame = authoritative_frame("fixture input");
+    service
+        .preview_authoritative(
+            format!("preview-operation-{suffix}"),
+            format!("preparation-{suffix}"),
+            format!("proposed-run-{suffix}"),
+            authoritative_start(frame.frame_ref().clone(), "fixture input"),
+            &frame,
+            now_millis,
+        )
+        .unwrap()
 }
 
 fn registration(
@@ -50,11 +143,11 @@ fn registration(
 #[test]
 fn preview_freezes_binding_and_renewal_rotates_with_total_ceiling() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     assert_eq!(preview.expiration_millis(), 5 * MINUTE);
     assert_eq!(preview.total_deadline_millis(), 30 * MINUTE);
-    assert_eq!(preview.binding(), request().binding());
+    assert_eq!(preview.binding().agent_profile_id(), "profile_1");
 
     let renewed = service
         .renew_preparation(
@@ -127,8 +220,8 @@ fn preview_freezes_binding_and_renewal_rotates_with_total_ceiling() {
 #[test]
 fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     let registered = service
         .register_prepared_session(preview.token(), registration(&preview), MINUTE)
         .unwrap();
@@ -199,8 +292,8 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
 #[test]
 fn exact_prepared_close_receipt_is_required_to_release() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     service
         .register_prepared_session(preview.token(), registration(&preview), MINUTE)
         .unwrap();
@@ -294,8 +387,8 @@ fn sqlite_cleanup_outbox_requires_ack_before_atomic_close_and_release() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent-os.sqlite");
     let state = SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap());
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     service
         .register_prepared_session(preview.token(), registration(&preview), MINUTE)
         .unwrap();
@@ -363,8 +456,8 @@ fn close_receipt_digest(
 #[test]
 fn abort_before_registration_releases_immediately_and_old_epoch_recovers_registered_session() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     let released = service
         .begin_abort_preparation(
             preview.preparation_id(),
@@ -380,13 +473,7 @@ fn abort_before_registration_releases_immediately_and_old_epoch_recovers_registe
         .unwrap()
         .is_none());
 
-    let second_request = RunPreparationRequest::new(
-        "preview-operation-2",
-        "preparation-2",
-        "proposed-run-2",
-        request().binding().clone(),
-    );
-    let second = service.preview_run(second_request, MINUTE).unwrap();
+    let second = preview_fixture(&service, "2", MINUTE);
     service
         .register_prepared_session(second.token(), registration_for(&second), 2 * MINUTE)
         .unwrap();
@@ -418,8 +505,8 @@ fn sqlite_preparation_record_survives_reopen_without_bearer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent-os.sqlite");
     let state = SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap());
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     let renewed = service
         .renew_preparation(
             preview.token(),
@@ -460,8 +547,8 @@ fn sqlite_preparation_record_survives_reopen_without_bearer() {
 #[test]
 fn token_expiry_after_registration_enters_the_same_cleanup_path() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state.clone(), "epoch-1");
-    let preview = service.preview_run(request(), 0).unwrap();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "1", 0);
     service
         .register_prepared_session(preview.token(), registration(&preview), MINUTE)
         .unwrap();

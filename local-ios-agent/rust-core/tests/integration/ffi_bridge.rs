@@ -53,6 +53,17 @@ fn bridge() -> RuntimeJsonBridge {
     }))
 }
 
+fn seeded_bridge() -> RuntimeJsonBridge {
+    RuntimeJsonBridge::new_development_seeded(AgentRuntime::new(AgentRuntimeConfig {
+        system_prompt: "system".into(),
+        runtime_policy: "policy".into(),
+        tool_schemas: Vec::new(),
+        tokenizer: Box::new(MockTokenizer::new(100)),
+        provider: Box::new(MockStreamingProvider::new()),
+        tool_router: None,
+    }))
+}
+
 #[derive(Clone, Debug)]
 struct BlockingUntilCancelledProvider {
     probe: Arc<CancellationProbe>,
@@ -240,14 +251,30 @@ fn c_abi_streaming_send_message_emits_events_during_provider_callback() {
 #[test]
 fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets() {
     unsafe {
-        let runtime = Box::into_raw(Box::new(bridge()));
+        let runtime = Box::into_raw(Box::new(seeded_bridge()));
+
+        let session = decode(&take_bridge_string(
+            local_agent_runtime_bridge_create_session(runtime),
+        ));
+        let prepared_turn_request = CString::new(
+            json!({
+                "session_id":session,
+                "parent_event_id":null,
+                "text":"authoritative preparation input"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let prepared_turn = decode(&take_bridge_string(
+            local_agent_runtime_bridge_prepare_user_turn(runtime, prepared_turn_request.as_ptr()),
+        ));
 
         let profile_request = CString::new(
             r#"{
             "idempotency_key":"publish-ffi-1",
-            "agent_profile_id":"profile-ffi-1",
+            "agent_profile_id":"profile_v2",
             "agent_profile_revision":1,
-            "llm_slot_id":"assistant",
+            "llm_slot_id":"slot.model.primary",
             "requirements_hash":"requirements-ffi-1"
         }"#,
         )
@@ -275,22 +302,14 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         assert_provider_neutral(&cross_link);
 
         let preview_request = json!({
-            "request": {
-                "idempotency_key":"preview-ffi-1",
-                "preparation_id":"preparation-ffi-1",
-                "proposed_run_id":"run-ffi-v2-1",
-                "binding": {
-                    "agent_profile_id":"profile-ffi-1",
-                    "agent_profile_revision":1,
-                    "conversation_frame_digest":"frame-digest-ffi",
-                    "execution_plan_digest":"plan-digest-ffi",
-                    "requirements_hash":"requirements-ffi-1",
-                    "tool_schema_digest":"tool-digest-ffi",
-                    "model_input_id":"input-ffi-1",
-                    "model_input_digest":"input-digest-ffi",
-                    "source_revisions_digest":"source-digest-ffi",
-                    "initial_disclosure_digest":"disclosure-digest-ffi"
-                }
+            "idempotency_key":"preview-ffi-1",
+            "preparation_id":"preparation-ffi-1",
+            "proposed_run_id":"run-ffi-v2-1",
+            "start_request": {
+                "agent_profile_id":"profile_v2",
+                "profile_revision_id":1,
+                "user_intent":"authoritative preparation input",
+                "conversation_run_frame_ref":prepared_turn["conversation_run_frame_ref"]
             },
             "now_millis": 0
         });
@@ -298,6 +317,7 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         let preview = decode(&take_bridge_string(
             local_agent_runtime_bridge_preview_run_preparation(runtime, preview_request.as_ptr()),
         ));
+        assert!(preview.get("error").is_none(), "{preview}");
         assert_provider_neutral(&preview);
 
         let renew = CString::new(
@@ -413,6 +433,45 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         assert_eq!(closed_record["state"], "closed");
         assert_provider_neutral(&closed_record);
 
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_preparation_preview_rejects_swift_supplied_digest_binding() {
+    unsafe {
+        let runtime = Box::into_raw(Box::new(bridge()));
+        let request = CString::new(
+            json!({
+                "request": {
+                    "idempotency_key":"untrusted-preview",
+                    "preparation_id":"untrusted-preparation",
+                    "proposed_run_id":"untrusted-run",
+                    "binding": {
+                        "agent_profile_id":"profile_1",
+                        "agent_profile_revision":1,
+                        "conversation_frame_digest":"caller-frame",
+                        "execution_plan_digest":"caller-plan",
+                        "requirements_hash":"caller-requirements",
+                        "tool_schema_digest":"caller-tools",
+                        "model_input_id":"caller-input",
+                        "model_input_digest":"caller-model-input",
+                        "source_revisions_digest":"caller-sources",
+                        "initial_disclosure_digest":"caller-disclosure"
+                    }
+                },
+                "now_millis":0
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let response = decode(&take_bridge_string(
+            local_agent_runtime_bridge_preview_run_preparation(runtime, request.as_ptr()),
+        ));
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field"));
         local_agent_runtime_bridge_free(runtime);
     }
 }

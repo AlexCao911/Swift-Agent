@@ -818,7 +818,7 @@ fn legacy_llm_architecture_allowlist_never_grows() {
 #[test]
 fn run_preparation_service_uses_atomic_creation_repository_operation() {
     let source = std::fs::read_to_string("src/run_snapshot/snapshot_service.rs").unwrap();
-    let preview_start = source.find("pub fn preview_run(").unwrap();
+    let preview_start = source.find("fn preview_derived(").unwrap();
     let preview_end = source[preview_start..]
         .find("pub fn renew_preparation(")
         .map(|offset| preview_start + offset)
@@ -842,6 +842,37 @@ fn bridge_startup_uses_atomic_preparation_epoch_recovery() {
 
     assert!(constructor.contains("recover_preparations_for_new_epoch"));
     assert!(!constructor.contains("store.recover_old_epoch"));
+}
+
+#[test]
+fn phase_a_bridge_accepts_real_start_references_not_caller_digests() {
+    let ffi = std::fs::read_to_string("src/ffi_bridge.rs").unwrap();
+    let start = ffi.find("struct PreviewRunPreparationJson").unwrap();
+    let end = ffi[start..]
+        .find("struct RenewRunPreparationJson")
+        .map(|offset| start + offset)
+        .unwrap();
+    let dto = &ffi[start..end];
+    assert!(dto.contains("start_request: AuthoritativePreparationStartJson"));
+    for forbidden in [
+        "RunPreparationRequest",
+        "PreparationBinding",
+        "conversation_frame_digest",
+        "execution_plan_digest",
+        "model_input_digest",
+        "source_revisions_digest",
+        "initial_disclosure_digest",
+    ] {
+        assert!(
+            !dto.contains(forbidden),
+            "caller-owned Phase A field: {forbidden}"
+        );
+    }
+
+    let swift =
+        std::fs::read_to_string("../toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift").unwrap();
+    assert!(!swift.contains("struct RunPreparationRequestDTO"));
+    assert!(swift.contains("struct AuthoritativePreparationStartRequestDTO"));
 }
 
 #[test]

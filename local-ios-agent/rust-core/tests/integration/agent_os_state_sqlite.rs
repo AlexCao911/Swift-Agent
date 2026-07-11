@@ -1,14 +1,19 @@
+use local_ios_agent_runtime::conversation::{
+    ConversationFrameId, ConversationFrameMessage, ConversationLineage, ConversationRunFrame,
+    ConversationRunFrameRef,
+};
+use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::llm_contracts::{
     HostBindingCommit, HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple,
     PackageBindingPreparation, ProfilePublishPreparation,
 };
+use local_ios_agent_runtime::run_snapshot::{
+    RunPreparationService, RunSnapshotService, StartRunRequest,
+};
 use local_ios_agent_runtime::storage::agent_os_state::{
     AgentOSStateRepository, SharedAgentOSStateStore, SqliteAgentOSStateStore,
 };
-use local_ios_agent_runtime::{
-    llm_contracts::{PreparationBinding, RunPreparationRequest},
-    run_snapshot::RunPreparationService,
-};
+use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 fn profile_request(key: &str) -> ProfilePublishPreparation {
     ProfilePublishPreparation::new(key, "profile-1", 4, "assistant", "requirements-hash-1")
@@ -171,26 +176,39 @@ fn preparation_bearer_is_not_serialized_into_sqlite_record() {
     let raw = {
         let store = SqliteAgentOSStateStore::open(&path).unwrap();
         let state = SharedAgentOSStateStore::new(store);
-        let service = RunPreparationService::new(state, "epoch-random");
+        let service = RunPreparationService::with_authoritative_preview(
+            state,
+            "epoch-random",
+            std::sync::Arc::new(RunSnapshotService::fixture_with_host_slot_v2()),
+        );
+        let frame_ref = ConversationRunFrameRef::new(
+            ConversationFrameId::new("random-frame"),
+            SessionId("random-session".to_string()),
+            EntryId("random-branch".to_string()),
+            EntryId("random-turn".to_string()),
+        );
+        let frame = ConversationRunFrame::new(
+            frame_ref.clone(),
+            None,
+            vec![ConversationFrameMessage::user(
+                EntryId("random-turn".to_string()),
+                "random input",
+            )],
+            vec![],
+            ConversationLineage::new(EntryId("random-branch".to_string()), None, None),
+        );
         let preview = service
-            .preview_run(
-                RunPreparationRequest::new(
-                    "random-preview-op",
-                    "random-preparation",
-                    "random-proposed-run",
-                    PreparationBinding::new(
-                        "profile-1",
-                        1,
-                        "frame",
-                        "plan",
-                        "requirements",
-                        "tools",
-                        "input",
-                        "input-digest",
-                        "sources",
-                        "disclosure",
-                    ),
+            .preview_authoritative(
+                "random-preview-op",
+                "random-preparation",
+                "random-proposed-run",
+                StartRunRequest::new(
+                    "profile_1",
+                    AgentProfileVersion::new(1),
+                    "random input",
+                    frame_ref,
                 ),
+                &frame,
                 0,
             )
             .unwrap();

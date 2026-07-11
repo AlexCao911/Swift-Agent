@@ -73,16 +73,45 @@ public struct PreparationBindingDTO: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", conversationFrameDigest = "conversation_frame_digest", executionPlanDigest = "execution_plan_digest", requirementsHash = "requirements_hash", toolSchemaDigest = "tool_schema_digest", modelInputId = "model_input_id", modelInputDigest = "model_input_digest", sourceRevisionsDigest = "source_revisions_digest", initialDisclosureDigest = "initial_disclosure_digest" }
 }
 
-public struct RunPreparationRequestDTO: Codable, Equatable, Sendable {
-    public let idempotencyKey: String; public let preparationId: String; public let proposedRunId: String; public let binding: PreparationBindingDTO
-    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, binding: PreparationBindingDTO) { self.idempotencyKey = idempotencyKey; self.preparationId = preparationId; self.proposedRunId = proposedRunId; self.binding = binding }
-    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", preparationId = "preparation_id", proposedRunId = "proposed_run_id", binding }
+public struct AuthoritativePreparationStartRequestDTO: Codable, Equatable, Sendable {
+    public let agentProfileId: String
+    public let profileRevisionId: UInt64
+    public let userIntent: String
+    public let conversationRunFrameRef: ConversationRunFrameRefDTO
+    public init(agentProfileId: String, profileRevisionId: UInt64, userIntent: String, conversationRunFrameRef: ConversationRunFrameRefDTO) {
+        self.agentProfileId = agentProfileId
+        self.profileRevisionId = profileRevisionId
+        self.userIntent = userIntent
+        self.conversationRunFrameRef = conversationRunFrameRef
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentProfileId = "agent_profile_id"
+        case profileRevisionId = "profile_revision_id"
+        case userIntent = "user_intent"
+        case conversationRunFrameRef = "conversation_run_frame_ref"
+    }
 }
 
 public struct PreviewRunPreparationRequestDTO: Codable, Equatable, Sendable {
-    public let request: RunPreparationRequestDTO; public let nowMillis: UInt64
-    public init(request: RunPreparationRequestDTO, nowMillis: UInt64) { self.request = request; self.nowMillis = nowMillis }
-    private enum CodingKeys: String, CodingKey { case request, nowMillis = "now_millis" }
+    public let idempotencyKey: String
+    public let preparationId: String
+    public let proposedRunId: String
+    public let startRequest: AuthoritativePreparationStartRequestDTO
+    public let nowMillis: UInt64
+    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, startRequest: AuthoritativePreparationStartRequestDTO, nowMillis: UInt64) {
+        self.idempotencyKey = idempotencyKey
+        self.preparationId = preparationId
+        self.proposedRunId = proposedRunId
+        self.startRequest = startRequest
+        self.nowMillis = nowMillis
+    }
+    private enum CodingKeys: String, CodingKey {
+        case idempotencyKey = "idempotency_key"
+        case preparationId = "preparation_id"
+        case proposedRunId = "proposed_run_id"
+        case startRequest = "start_request"
+        case nowMillis = "now_millis"
+    }
 }
 
 public struct RunPreparationPreviewDTO: Codable, Equatable, Sendable {
