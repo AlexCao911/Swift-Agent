@@ -389,11 +389,11 @@ git commit -m "fix: bind llm sagas to agent domain state"
 - `LLMStore(fileURL:)` opens a normalized SQLite database and performs migration/import before returning.
 - All state changes use `BEGIN IMMEDIATE` and SQL CAS.
 
-- [ ] **Step 1: Add failing SQLite behavior tests**
+- [x] **Step 1: Add failing SQLite behavior tests**
 
 Test file header is SQLite rather than JSON; inspect normalized tables/indexes; test reopen, rollback injection, CAS conflict, multi-row cleanup atomicity, `PRAGMA user_version`, successful legacy JSON import and `.migrated` backup, corrupt import failure without source mutation, and absence of bearer/Provider/credential/path fields in every SQLite text value.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LLMStoreTests
@@ -401,11 +401,11 @@ swift test --package-path toolkit --filter LLMStoreTests
 
 Expected: fail because `LLMStore` currently atomically overwrites one JSON document.
 
-- [ ] **Step 3: Implement SQLite repository**
+- [x] **Step 3: Implement SQLite repository**
 
 Add a `CSQLite` system library target linking `sqlite3`. Implement checked statement binding/column reads, error codes, `BEGIN IMMEDIATE` transaction rollback, schema version 1 tables/indexes from the design, and deterministic JSON only inside per-record `record_json` columns. Keep response bearer types out of stored record types. Implement one-time legacy JSON import in one transaction and rename only after commit.
 
-- [ ] **Step 4: Run GREEN and Swift regressions**
+- [x] **Step 4: Run GREEN and Swift regressions**
 
 ```bash
 swift test --package-path toolkit --filter LLMStoreTests
@@ -414,7 +414,7 @@ swift test --package-path toolkit --filter RunPreparationCoordinatorTests
 swift test --package-path toolkit
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit

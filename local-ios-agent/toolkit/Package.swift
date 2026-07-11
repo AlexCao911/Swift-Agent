@@ -51,6 +51,11 @@ if hasLlamaCppXCFramework {
 }
 
 var packageTargets: [Target] = [
+    .systemLibrary(
+        name: "CSQLite",
+        pkgConfig: "sqlite3",
+        providers: [.brew(["sqlite3"])]
+    ),
     .target(
         name: "CLocalAgentRuntime",
         publicHeadersPath: "include"
@@ -65,7 +70,7 @@ var packageTargets: [Target] = [
     ),
     .target(
         name: "LocalAgentLLMCore",
-        dependencies: ["LocalAgentLLMContracts"]
+        dependencies: ["LocalAgentLLMContracts", "CSQLite"]
     ),
     .target(
         name: "LocalNativeToolkit",

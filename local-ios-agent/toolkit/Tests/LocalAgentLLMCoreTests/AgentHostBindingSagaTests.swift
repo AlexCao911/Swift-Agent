@@ -98,7 +98,7 @@ func reconciliationConvergesAfterStoreReopen() async throws {
     let saga = AgentHostBindingSaga(store: reopened)
     let outcome = try await saga.reconcileHostBindings([
         RustHostBindingCrossLink(
-            operationToken: request.operationToken,
+            operationToken: request.tokenDigest,
             tokenDigest: request.tokenDigest,
             llmSlotID: request.llmSlotID,
             requirementsHash: request.requirementsHash,
@@ -106,9 +106,9 @@ func reconciliationConvergesAfterStoreReopen() async throws {
         )
     ])
 
-    #expect(outcome.activatedTokens == [request.operationToken])
+    #expect(outcome.activatedTokens == [request.tokenDigest])
     #expect(outcome.repairTokens.isEmpty)
-    #expect(await reopened.bindingState(token: request.operationToken) == .active)
+    #expect(await reopened.bindingState(token: request.tokenDigest) == .active)
 }
 
 @Test
