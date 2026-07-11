@@ -605,3 +605,28 @@ to run the new architecture lints. The lints reject:
 | Saga detached from Profile/Package state | Section 8 |
 | Swift store is JSON rather than SQLite | Section 9 |
 | Predictable bearer tokens | Section 10 |
+
+## 14. Implemented remediation evidence (2026-07-11)
+
+The remediation plan is implemented on `codex/llm-runtime-provider-design`.
+The final Phase 1 behavior is intentionally still non-runnable, but every
+pre-run security and durability boundary described above is now executable and
+covered by repository tests:
+
+- Phase A accepts real start references and derives/freeze-digests the actual
+  first model input inside Rust.
+- Preparation records and the global lease create, renew, abort, close, and
+  recover through repository-level transactions.
+- Registered prepared sessions require cleanup acknowledgement and a
+  recomputed exact close receipt before lease release.
+- `PreparedStartValidator` recomputes preparation, registration, capability,
+  egress, and model-input digests and requires an active exact host cross-link.
+- `AgentHostBindingService` validates actual Profile/Package revisions and
+  advances `pending/needs_llm_binding -> host_unbound -> active/ready` only
+  after exact Swift activation confirmation.
+- Swift `LLMStore` uses normalized SQLite tables, `BEGIN IMMEDIATE`, SQL CAS,
+  forward schema versioning, and one-time JSON import, while persisted
+  projections remove raw host/preparation bearer tokens.
+- `scripts/run-llm-phase-1-contracts.sh` executes Rust, architecture lint,
+  Rust static-library build, Swift, and FFI panic-strategy gates locally with
+  no network or live Provider dependency.

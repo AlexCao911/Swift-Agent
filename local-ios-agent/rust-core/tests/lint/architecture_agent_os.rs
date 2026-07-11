@@ -876,6 +876,68 @@ fn phase_a_bridge_accepts_real_start_references_not_caller_digests() {
 }
 
 #[test]
+fn llm_store_is_transactional_sqlite_and_redacts_bearers() {
+    let store = read_workspace_file("toolkit/Sources/LocalAgentLLMCore/LLMStore.swift");
+    let connection =
+        read_workspace_file("toolkit/Sources/LocalAgentLLMCore/SQLiteConnection.swift");
+    assert!(store.contains("SQLiteConnection"));
+    assert!(connection.contains("BEGIN IMMEDIATE"));
+    assert!(store.contains("PRAGMA user_version = 1"));
+    assert!(store.contains("persistedHostBinding"));
+    assert!(store.contains("operationToken: \"\""));
+    assert!(store.contains("persistedPreparedSession"));
+    assert!(store.contains("token: \"\""));
+    assert!(!store.contains("encoder.encode(document).write"));
+}
+
+#[test]
+fn host_binding_ffi_routes_through_semantic_service() {
+    let ffi = fs::read_to_string("src/ffi_bridge.rs").unwrap();
+    assert!(ffi.contains("host_binding: AgentHostBindingService"));
+    assert!(ffi.contains("confirm_host_binding_activation_json"));
+    for raw_bypass in [
+        "store.prepare_profile_publish(request)",
+        "store.commit_profile_publish(request)",
+        "store.begin_package_binding(request)",
+        "store.attach_host_binding(request)",
+    ] {
+        assert!(
+            !ffi.contains(raw_bypass),
+            "host-binding FFI bypasses AgentHostBindingService: {raw_bypass}"
+        );
+    }
+}
+
+#[test]
+fn prepared_start_requires_active_cross_link_and_public_validator() {
+    let validator = fs::read_to_string("src/llm_contracts/prepared_start_validator.rs").unwrap();
+    let service = fs::read_to_string("src/run_snapshot/snapshot_service.rs").unwrap();
+    assert!(validator.contains("HostBindingOperationState::Active"));
+    assert!(validator.contains("capability.expected_digest()"));
+    assert!(validator.contains("attestation.expected_egress_digest()"));
+    assert!(validator.contains("CanonicalDigestV1::digest(\"agent-input:v1\""));
+    assert!(service.contains("PreparedStartValidator::validate"));
+}
+
+#[test]
+fn prepared_cleanup_external_contract_requires_ack_and_excludes_epoch_end() {
+    let preparation = fs::read_to_string("src/llm_contracts/preparation.rs").unwrap();
+    let start = preparation
+        .find("pub enum PreparedSessionCloseDisposition")
+        .unwrap();
+    let end = preparation[start..]
+        .find("impl PreparedSessionCloseDisposition")
+        .map(|offset| start + offset)
+        .unwrap();
+    let external_disposition = &preparation[start..end];
+    assert!(!external_disposition.contains("EpochEnded"));
+
+    let ffi = fs::read_to_string("src/ffi_bridge.rs").unwrap();
+    assert!(ffi.contains("local_agent_runtime_bridge_ack_prepared_session_cleanup"));
+    assert!(ffi.contains("local_agent_runtime_bridge_confirm_prepared_session_closed"));
+}
+
+#[test]
 fn v2_llm_contracts_do_not_gain_concrete_host_fields() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let files = [

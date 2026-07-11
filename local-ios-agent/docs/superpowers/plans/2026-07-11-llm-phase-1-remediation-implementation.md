@@ -443,11 +443,11 @@ git commit -m "fix: persist swift llm state in sqlite"
 - Final C ABI exposes authoritative preview, cleanup acknowledgement, and host-binding activation confirmation with provider-neutral DTOs.
 - Architecture lint rejects every provisional unsafe path.
 
-- [ ] **Step 1: Add failing bridge/lint tests**
+- [x] **Step 1: Add failing bridge/lint tests**
 
 Test all new C functions round-trip provider-neutral JSON, old digest-bearing preview payloads fail unknown-field decoding, external `epoch_ended` fails, and forbidden Provider/credential/path keys remain absent. Add lints for split lifecycle writes, raw token fields/columns, JSON-document production store, raw host-binding FFI repository calls, and caller-supplied Phase A digests.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration ffi_bridge llm -- --nocapture
@@ -455,11 +455,11 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test li
 swift test --package-path toolkit --filter RustRuntimeClientContractTests
 ```
 
-- [ ] **Step 3: Complete bridge migration and docs**
+- [x] **Step 3: Complete bridge migration and docs**
 
 Remove provisional bridge DTOs and functions that accept derived digests or unacknowledged close receipts. Route host-binding FFI through `AgentHostBindingService`. Extend the unified runner only with deterministic local checks. Update the main design's Phase 1 evidence and remediation status without claiming Provider/local inference execution.
 
-- [ ] **Step 4: Run focused GREEN**
+- [x] **Step 4: Run focused GREEN**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration ffi_bridge -- --nocapture
@@ -468,7 +468,7 @@ swift test --package-path toolkit --filter RustRuntimeClientContractTests
 scripts/test-check-rust-ffi-panic-strategy.sh
 ```
 
-- [ ] **Step 5: Run final clean-worktree gate**
+- [x] **Step 5: Run final clean-worktree gate**
 
 ```bash
 scripts/run-llm-phase-1-contracts.sh
@@ -478,14 +478,14 @@ git status --short
 
 Expected: all Rust tests, Rust build, all Swift tests, FFI panic checks, and architecture lints pass; only the intended Task 8 changes are present before commit.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add rust-core toolkit scripts docs
 git commit -m "test: enforce remediated llm phase one contracts"
 ```
 
-- [ ] **Step 7: Re-run final gate after commit**
+- [x] **Step 7: Re-run final gate after commit**
 
 ```bash
 scripts/run-llm-phase-1-contracts.sh
