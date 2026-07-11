@@ -19,6 +19,8 @@ mod context_agent_os;
 mod conversation_execution_boundary;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
+#[path = "contract/llm_slot_v2.rs"]
+mod llm_slot_v2;
 #[path = "contract/memory_agent_os.rs"]
 mod memory_agent_os;
 #[path = "contract/model_inference_security_contract.rs"]

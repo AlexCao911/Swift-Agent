@@ -379,7 +379,7 @@ git commit -m "feat: add swift canonical digest parity"
 **Interfaces:**
 - Produces: `AgentLLMRequirements`, `LLMSlotV2`, `LLMCapabilityRequirement`, `LLMInputModality`, `LLMBindingSchema`, `AgentProfileLLMBinding`.
 
-- [ ] **Step 1: Write failing tagged-binding tests**
+- [x] **Step 1: Write failing tagged-binding tests**
 
 Tests must prove a profile contains exactly one of:
 
@@ -393,13 +393,13 @@ pub enum AgentProfileLLMBinding {
 They also assert that V2 requirements serialize without provider/model/path or
 credential fields and that `agent-requirements:v1` is stable under set insertion order.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test contract llm_slot_v2 -- --nocapture
 ```
 
-- [ ] **Step 3: Implement the minimal contracts**
+- [x] **Step 3: Implement the minimal contracts**
 
 `AgentLLMRequirements` must contain slot ID, sorted capability requirements,
 sorted input modalities, decimal-string context budget, streaming requirement,
@@ -407,14 +407,14 @@ and tool-calling mode. `LLMSlotV2` contains requirements plus optional model
 family/model ID hints only. Existing `model_binding()` remains as a compatibility
 view for `LegacyV1`; V2 returns `None`.
 
-- [ ] **Step 4: Run GREEN and existing profile tests**
+- [x] **Step 4: Run GREEN and existing profile tests**
 
 ```bash
 cargo test --test contract llm_slot_v2 -- --nocapture
 cargo test --test contract agent_profile_contract -- --nocapture
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add local-ios-agent/rust-core

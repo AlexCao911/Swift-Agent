@@ -7,6 +7,7 @@ pub mod core;
 pub mod execution;
 pub mod ffi_bridge;
 pub mod inference;
+pub mod llm_contracts;
 pub mod memory;
 pub mod model;
 pub mod prompt;

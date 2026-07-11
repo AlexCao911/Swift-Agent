@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::Serialize;
 
 use crate::{
+    llm_contracts::{LLMBindingSchema, LLMSlotV2},
     model::{ModelBindingCatalog, ModelSelection},
     protocol::{BindingId, ComponentBinding as ProtocolComponentBinding, InstanceId, SlotKey},
     storage::{
@@ -48,12 +49,18 @@ pub struct AgentProfileModelBinding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentProfileLLMBinding {
+    LegacyV1(AgentProfileModelBinding),
+    HostSlotV2(LLMSlotV2),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentProfileDraft {
     id: AgentProfileId,
     template_id: AgentTemplateId,
     name: String,
     bindings: Vec<ComponentBinding>,
-    model_binding: Option<AgentProfileModelBinding>,
+    llm_binding: Option<AgentProfileLLMBinding>,
     local_bindings: AgentProfileLocalBindings,
 }
 
@@ -64,7 +71,7 @@ pub struct AgentProfile {
     template_id: AgentTemplateId,
     name: String,
     bindings: Vec<ComponentBinding>,
-    model_binding: Option<AgentProfileModelBinding>,
+    llm_binding: Option<AgentProfileLLMBinding>,
     local_bindings: AgentProfileLocalBindings,
 }
 
@@ -286,6 +293,22 @@ impl AgentProfileModelBinding {
     }
 }
 
+impl AgentProfileLLMBinding {
+    pub fn schema(&self) -> LLMBindingSchema {
+        match self {
+            Self::LegacyV1(_) => LLMBindingSchema::LegacyV1,
+            Self::HostSlotV2(_) => LLMBindingSchema::HostSlotV2,
+        }
+    }
+
+    fn slot_id(&self) -> &str {
+        match self {
+            Self::LegacyV1(binding) => binding.slot_id().as_str(),
+            Self::HostSlotV2(slot) => slot.requirements().slot_id(),
+        }
+    }
+}
+
 impl AgentProfileDraft {
     pub fn new(id: AgentProfileId, template_id: AgentTemplateId, name: impl Into<String>) -> Self {
         Self {
@@ -293,7 +316,7 @@ impl AgentProfileDraft {
             template_id,
             name: name.into(),
             bindings: Vec::new(),
-            model_binding: None,
+            llm_binding: None,
             local_bindings: AgentProfileLocalBindings::default(),
         }
     }
@@ -304,7 +327,12 @@ impl AgentProfileDraft {
     }
 
     pub fn with_model_binding(mut self, binding: AgentProfileModelBinding) -> Self {
-        self.model_binding = Some(binding);
+        self.llm_binding = Some(AgentProfileLLMBinding::LegacyV1(binding));
+        self
+    }
+
+    pub fn with_llm_slot(mut self, slot: LLMSlotV2) -> Self {
+        self.llm_binding = Some(AgentProfileLLMBinding::HostSlotV2(slot));
         self
     }
 
@@ -320,7 +348,7 @@ impl AgentProfileDraft {
             template_id: self.template_id,
             name: self.name,
             bindings: self.bindings,
-            model_binding: self.model_binding,
+            llm_binding: self.llm_binding,
             local_bindings: self.local_bindings,
         }
     }
@@ -334,7 +362,21 @@ impl AgentProfileDraft {
     }
 
     pub fn model_binding(&self) -> Option<&AgentProfileModelBinding> {
-        self.model_binding.as_ref()
+        match self.llm_binding.as_ref() {
+            Some(AgentProfileLLMBinding::LegacyV1(binding)) => Some(binding),
+            _ => None,
+        }
+    }
+
+    pub fn llm_binding(&self) -> Option<&AgentProfileLLMBinding> {
+        self.llm_binding.as_ref()
+    }
+
+    pub fn llm_slot(&self) -> Option<&LLMSlotV2> {
+        match self.llm_binding.as_ref() {
+            Some(AgentProfileLLMBinding::HostSlotV2(slot)) => Some(slot),
+            _ => None,
+        }
     }
 }
 
@@ -541,8 +583,13 @@ fn validate_profile_draft(
         validate_component_version(binding, catalog)?;
     }
 
-    if let Some(model_binding) = draft.model_binding() {
-        validate_model_binding(model_binding, template, model_catalog)?;
+    if let Some(llm_binding) = draft.llm_binding() {
+        match llm_binding {
+            AgentProfileLLMBinding::LegacyV1(model_binding) => {
+                validate_model_binding(model_binding, template, model_catalog)?;
+            }
+            AgentProfileLLMBinding::HostSlotV2(slot) => validate_llm_slot(slot, template)?,
+        }
     }
 
     validate_required_slots(draft, template)?;
@@ -586,6 +633,29 @@ fn validate_model_binding(
     Ok(())
 }
 
+fn validate_llm_slot(slot: &LLMSlotV2, template: &AgentTemplate) -> StorageResult<()> {
+    let slot_id = slot.requirements().slot_id();
+    let Some(template_slot) = template
+        .slots()
+        .iter()
+        .find(|candidate| candidate.id().as_str() == slot_id)
+    else {
+        return Err(StorageError::new(
+            "agent_profile.model_slot_unsupported",
+            "agent profile LLM slot references a slot outside the template",
+        ));
+    };
+
+    if template_slot.kind() != AgentSlotKind::Model {
+        return Err(StorageError::new(
+            "agent_profile.model_slot_kind_mismatch",
+            "agent profile LLM slot must target a model slot",
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_required_slots(
     draft: &AgentProfileDraft,
     template: &AgentTemplate,
@@ -593,8 +663,8 @@ fn validate_required_slots(
     for slot in template.slots().iter().filter(|slot| slot.is_required()) {
         let satisfied = match slot.kind() {
             AgentSlotKind::Model => draft
-                .model_binding()
-                .map(|binding| binding.slot_id() == slot.id())
+                .llm_binding()
+                .map(|binding| binding.slot_id() == slot.id().as_str())
                 .unwrap_or(false),
             _ => draft
                 .bindings()
@@ -678,7 +748,7 @@ impl AgentProfile {
             template_id: template.id().clone(),
             name: name.into(),
             bindings: Vec::new(),
-            model_binding,
+            llm_binding: model_binding.map(AgentProfileLLMBinding::LegacyV1),
             local_bindings,
         }
     }
@@ -709,7 +779,27 @@ impl AgentProfile {
     }
 
     pub fn model_binding(&self) -> Option<&AgentProfileModelBinding> {
-        self.model_binding.as_ref()
+        match self.llm_binding.as_ref() {
+            Some(AgentProfileLLMBinding::LegacyV1(binding)) => Some(binding),
+            _ => None,
+        }
+    }
+
+    pub fn llm_binding(&self) -> Option<&AgentProfileLLMBinding> {
+        self.llm_binding.as_ref()
+    }
+
+    pub fn llm_binding_schema(&self) -> Option<LLMBindingSchema> {
+        self.llm_binding
+            .as_ref()
+            .map(AgentProfileLLMBinding::schema)
+    }
+
+    pub fn llm_slot(&self) -> Option<&LLMSlotV2> {
+        match self.llm_binding.as_ref() {
+            Some(AgentProfileLLMBinding::HostSlotV2(slot)) => Some(slot),
+            _ => None,
+        }
     }
 
     pub fn local_bindings(&self) -> &AgentProfileLocalBindings {
@@ -735,7 +825,7 @@ impl AgentProfile {
 
     pub fn readiness(&self) -> AgentReadinessReport {
         let mut report = AgentReadinessReport::ready();
-        let Some(model_binding) = self.model_binding() else {
+        let Some(llm_binding) = self.llm_binding() else {
             report.push_issue(AgentReadinessIssue::new(
                 "model.missing",
                 "profile is missing model binding",
@@ -743,15 +833,25 @@ impl AgentProfile {
             return report;
         };
 
-        if self
-            .local_bindings()
-            .credential_ref(model_binding.selection().provider_account_id())
-            .is_none()
-        {
-            report.push_issue(AgentReadinessIssue::new(
-                "local_binding.model_account.missing",
-                "profile model binding is missing a local credential binding",
-            ));
+        match llm_binding {
+            AgentProfileLLMBinding::LegacyV1(model_binding) => {
+                if self
+                    .local_bindings()
+                    .credential_ref(model_binding.selection().provider_account_id())
+                    .is_none()
+                {
+                    report.push_issue(AgentReadinessIssue::new(
+                        "local_binding.model_account.missing",
+                        "profile model binding is missing a local credential binding",
+                    ));
+                }
+            }
+            AgentProfileLLMBinding::HostSlotV2(_) => {
+                report.push_issue(AgentReadinessIssue::new(
+                    "host_binding.missing",
+                    "profile LLM slot requires a Swift host binding",
+                ));
+            }
         }
 
         report
@@ -773,8 +873,7 @@ impl AgentProfile {
                 })
                 .collect(),
             model_binding: self
-                .model_binding
-                .as_ref()
+                .model_binding()
                 .map(|binding| ModelBindingDebugSummary {
                     slot_id: binding.slot_id().as_str().to_string(),
                     binding_id: binding.selection().binding_id().as_str().to_string(),
