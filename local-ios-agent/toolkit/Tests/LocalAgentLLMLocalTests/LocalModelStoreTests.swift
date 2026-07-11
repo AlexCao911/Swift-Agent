@@ -153,7 +153,7 @@ struct LocalModelStoreTests {
             "downloading->paused", "downloading->verifying", "downloading->failed",
             "paused->downloading", "paused->failed",
             "verifying->installed", "verifying->failed",
-            "failed->queued", "installed->deleting",
+            "failed->queued", "installed->deleting", "installed->failed",
         ]
         for source in LocalInstallationState.allCases {
             for destination in LocalInstallationState.allCases {

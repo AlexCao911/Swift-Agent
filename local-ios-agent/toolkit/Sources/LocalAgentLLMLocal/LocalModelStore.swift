@@ -338,6 +338,19 @@ public final class LocalModelStore: @unchecked Sendable {
         try lock.withLock { try installationUnlocked(installationID) }
     }
 
+    package func installationRecords() throws -> [LocalInstallationRecord] {
+        try lock.withLock {
+            try database.queryRows(
+                "SELECT installation_id FROM local_installations ORDER BY installation_id"
+            ).map { row in
+                guard let installationID = row.text("installation_id"),
+                      let record = try installationUnlocked(installationID)
+                else { throw storeCorrupt() }
+                return record
+            }
+        }
+    }
+
     package func recordArtifact(
         installationID: String,
         artifactID: String,
@@ -762,6 +775,79 @@ public final class LocalModelStore: @unchecked Sendable {
         }
     }
 
+    package func completePromotion(operationID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                guard let row = try database.queryRows(
+                    "SELECT installation_id, kind, state FROM local_filesystem_operations WHERE operation_id = ?1",
+                    bindings: [.text(operationID)]
+                ).first,
+                    let installationID = row.text("installation_id"),
+                    row.text("kind") == LocalFilesystemOperationKind.promoteInstallation.rawValue,
+                    row.text("state") == LocalFilesystemOperationState.filesystemApplied.rawValue
+                else { throw staleState() }
+                let installation = try requiredInstallationUnlocked(installationID)
+                guard installation.state == .verifying else { throw staleState() }
+                let nextRevision = try incrementStateRevision(installation.stateRevision)
+                let installationChanged = try database.executeChanges(
+                    """
+                    UPDATE local_installations
+                    SET state = 'installed', state_revision = ?1, failure_code = NULL
+                    WHERE installation_id = ?2 AND state = 'verifying' AND state_revision = ?3
+                    """,
+                    bindings: [
+                        .integer(try sqliteInteger(nextRevision)), .text(installationID),
+                        .integer(try sqliteInteger(installation.stateRevision)),
+                    ]
+                )
+                guard installationChanged == 1 else { throw staleState() }
+                let operationChanged = try database.executeChanges(
+                    "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state = 'filesystem_applied'",
+                    bindings: [.text(operationID)]
+                )
+                guard operationChanged == 1 else { throw staleState() }
+            }
+        }
+    }
+
+    package func failPromotion(
+        operationID: String,
+        failureCode: String
+    ) throws {
+        try lock.withLock {
+            try database.transaction {
+                guard let row = try database.queryRows(
+                    "SELECT installation_id, kind, state FROM local_filesystem_operations WHERE operation_id = ?1",
+                    bindings: [.text(operationID)]
+                ).first,
+                    let installationID = row.text("installation_id"),
+                    row.text("kind") == LocalFilesystemOperationKind.promoteInstallation.rawValue,
+                    row.text("state") != LocalFilesystemOperationState.committed.rawValue
+                else { throw staleState() }
+                let installation = try requiredInstallationUnlocked(installationID)
+                guard installation.state == .verifying else { throw staleState() }
+                let nextRevision = try incrementStateRevision(installation.stateRevision)
+                let installationChanged = try database.executeChanges(
+                    """
+                    UPDATE local_installations
+                    SET state = 'failed', state_revision = ?1, failure_code = ?2
+                    WHERE installation_id = ?3 AND state = 'verifying' AND state_revision = ?4
+                    """,
+                    bindings: [
+                        .integer(try sqliteInteger(nextRevision)), .text(failureCode),
+                        .text(installationID), .integer(try sqliteInteger(installation.stateRevision)),
+                    ]
+                )
+                guard installationChanged == 1 else { throw staleState() }
+                let operationChanged = try database.executeChanges(
+                    "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state != 'committed'",
+                    bindings: [.text(operationID)]
+                )
+                guard operationChanged == 1 else { throw staleState() }
+            }
+        }
+    }
+
     package func acquireModelUseLease(_ lease: LocalModelUseLease) throws {
         try lock.withLock {
             try database.transaction {
@@ -1053,7 +1139,7 @@ public final class LocalModelStore: @unchecked Sendable {
              (.downloading, .paused), (.downloading, .verifying), (.downloading, .failed),
              (.paused, .downloading), (.paused, .failed),
              (.verifying, .installed), (.verifying, .failed),
-             (.installed, .deleting):
+             (.installed, .deleting), (.installed, .failed):
             return true
         case (.failed, .queued):
             return explicitRetry

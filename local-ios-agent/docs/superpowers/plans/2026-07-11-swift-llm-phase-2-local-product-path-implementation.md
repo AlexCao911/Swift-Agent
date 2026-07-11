@@ -729,7 +729,7 @@ git commit -m "feat: add resumable local model downloads"
 - Produces `LocalModelReconciler.reconcileAtLaunch()` before downloads/runtime become available.
 - Installation becomes visible only after every signed artifact passes exact size and SHA-256.
 
-- [ ] **Step 1: Write failing verification and crash-boundary tests**
+- [x] **Step 1: Write failing verification and crash-boundary tests**
 
 Use this validator seam:
 
@@ -752,14 +752,14 @@ installation.engine_incompatible
 installation.interrupted
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelInstallerTests
 swift test --package-path toolkit --filter LocalModelReconcilerTests
 ```
 
-- [ ] **Step 3: Implement staged verification and recoverable promotion**
+- [x] **Step 3: Implement staged verification and recoverable promotion**
 
 Stream file bytes through `CryptoKit.SHA256`; never load model weights into `Data`. Before rename, call the injected `LocalModelConfigValidator` with paths resolved from the signed manifest. The fake validator proves installer behavior in this task; Task 9 binds its live implementation to `local_agent_model_validate` after the ABI lands in Task 8. Persist a `promote_installation` filesystem operation intent, atomically rename `.staging/<installationID>` to `installed/<installationID>` on the same volume, then CAS `verifying -> installed` and clear the intent.
 
@@ -782,14 +782,14 @@ package struct LocalFilesystemRecoveryResult: Equatable, Sendable {
 
 `reconcileAtLaunch() -> LocalFilesystemRecoveryResult` contains pending task IDs/cancel operation IDs. Task 7 passes that result to `ModelDownloadCoordinator.restore(pendingCancellations:)`; the coordinator cancels/reattaches the restored URLSession task through the unified event path, then commits staging/reservation/row cleanup. This preserves the required filesystem-repair-before-download-exposure order without pretending SQLite can cancel a system task.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelInstallerTests
 swift test --package-path toolkit --filter LocalModelReconcilerTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMLocal/LocalModelInstaller.swift \
