@@ -5,18 +5,27 @@ use local_ios_agent_runtime::core::{
 };
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
-    local_agent_runtime_bridge_build_agent, local_agent_runtime_bridge_commit_assistant_result,
+    local_agent_runtime_bridge_begin_abort_preparation, local_agent_runtime_bridge_build_agent,
+    local_agent_runtime_bridge_commit_assistant_result,
+    local_agent_runtime_bridge_commit_prepared_start,
+    local_agent_runtime_bridge_commit_profile_publish,
+    local_agent_runtime_bridge_confirm_prepared_session_closed,
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
     local_agent_runtime_bridge_free, local_agent_runtime_bridge_list_agent_profiles,
     local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
     local_agent_runtime_bridge_observe_events_streaming,
     local_agent_runtime_bridge_pending_approval_requests,
-    local_agent_runtime_bridge_pending_tool_requests, local_agent_runtime_bridge_prepare_user_turn,
-    local_agent_runtime_bridge_preview_context, local_agent_runtime_bridge_register_tool_schema,
-    local_agent_runtime_bridge_send_message, local_agent_runtime_bridge_send_message_streaming,
-    local_agent_runtime_bridge_session_ids, local_agent_runtime_bridge_set_permission_state,
-    local_agent_runtime_bridge_start_run, local_agent_runtime_bridge_string_free,
-    local_agent_runtime_bridge_submit_tool_result, RuntimeJsonBridge,
+    local_agent_runtime_bridge_pending_tool_requests,
+    local_agent_runtime_bridge_prepare_profile_publish,
+    local_agent_runtime_bridge_prepare_user_turn, local_agent_runtime_bridge_preview_context,
+    local_agent_runtime_bridge_preview_run_preparation,
+    local_agent_runtime_bridge_register_prepared_session,
+    local_agent_runtime_bridge_register_tool_schema,
+    local_agent_runtime_bridge_renew_run_preparation, local_agent_runtime_bridge_send_message,
+    local_agent_runtime_bridge_send_message_streaming, local_agent_runtime_bridge_session_ids,
+    local_agent_runtime_bridge_set_permission_state, local_agent_runtime_bridge_start_run,
+    local_agent_runtime_bridge_string_free, local_agent_runtime_bridge_submit_tool_result,
+    RuntimeJsonBridge,
 };
 use local_ios_agent_runtime::tool::{
     ToolCall, ToolRecipe, ToolRecipeCompiler, ToolRegistry, ToolRouter,
@@ -225,6 +234,194 @@ fn c_abi_streaming_send_message_emits_events_during_provider_callback() {
 
         local_agent_runtime_bridge_free(runtime);
     }
+}
+
+#[test]
+fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets() {
+    unsafe {
+        let runtime = Box::into_raw(Box::new(bridge()));
+
+        let profile_request = CString::new(
+            r#"{
+            "idempotency_key":"publish-ffi-1",
+            "agent_profile_id":"profile-ffi-1",
+            "agent_profile_revision":1,
+            "llm_slot_id":"assistant",
+            "requirements_hash":"requirements-ffi-1"
+        }"#,
+        )
+        .unwrap();
+        let pending = decode(&take_bridge_string(
+            local_agent_runtime_bridge_prepare_profile_publish(runtime, profile_request.as_ptr()),
+        ));
+        assert_provider_neutral(&pending);
+        let commit = json!({
+            "token": pending["token"],
+            "binding": {"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+            "receipt": {
+                "token_digest": pending["token_digest"],
+                "llm_slot_id": pending["llm_slot_id"],
+                "requirements_hash": pending["requirements_hash"],
+                "binding": {"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                "receipt_digest":"receipt-ffi-1"
+            }
+        });
+        let commit = CString::new(commit.to_string()).unwrap();
+        let cross_link = decode(&take_bridge_string(
+            local_agent_runtime_bridge_commit_profile_publish(runtime, commit.as_ptr()),
+        ));
+        assert_eq!(cross_link["state"], "host_unbound");
+        assert_provider_neutral(&cross_link);
+
+        let preview_request = json!({
+            "request": {
+                "idempotency_key":"preview-ffi-1",
+                "preparation_id":"preparation-ffi-1",
+                "proposed_run_id":"run-ffi-v2-1",
+                "binding": {
+                    "agent_profile_id":"profile-ffi-1",
+                    "agent_profile_revision":1,
+                    "conversation_frame_digest":"frame-digest-ffi",
+                    "execution_plan_digest":"plan-digest-ffi",
+                    "requirements_hash":"requirements-ffi-1",
+                    "tool_schema_digest":"tool-digest-ffi",
+                    "model_input_id":"input-ffi-1",
+                    "model_input_digest":"input-digest-ffi",
+                    "source_revisions_digest":"source-digest-ffi",
+                    "initial_disclosure_digest":"disclosure-digest-ffi"
+                }
+            },
+            "now_millis": 0
+        });
+        let preview_request = CString::new(preview_request.to_string()).unwrap();
+        let preview = decode(&take_bridge_string(
+            local_agent_runtime_bridge_preview_run_preparation(runtime, preview_request.as_ptr()),
+        ));
+        assert_provider_neutral(&preview);
+
+        let renew = CString::new(
+            json!({
+                "token":preview["token"], "binding_digest":preview["binding_digest"],
+                "idempotency_key":"renew-ffi-1", "now_millis":60_000
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let renewed = decode(&take_bridge_string(
+            local_agent_runtime_bridge_renew_run_preparation(runtime, renew.as_ptr()),
+        ));
+        assert_ne!(renewed["token"], preview["token"]);
+
+        let registration = json!({
+            "idempotency_key":"register-ffi-1",
+            "preparation_id":renewed["preparation_id"],
+            "proposed_run_id":renewed["proposed_run_id"],
+            "session_handle":"session-ffi-1",
+            "swift_snapshot_id":"swift-snapshot-ffi-1",
+            "host_process_epoch":renewed["host_process_epoch"],
+            "binding_hash":"binding-hash-ffi-1",
+            "registration_digest":"registration-digest-ffi-1"
+        });
+        let register = CString::new(
+            json!({
+                "token":renewed["token"], "registration":registration, "now_millis":90_000
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let registered = decode(&take_bridge_string(
+            local_agent_runtime_bridge_register_prepared_session(runtime, register.as_ptr()),
+        ));
+        assert_eq!(registered["state"], "registered");
+        assert_provider_neutral(&registered);
+
+        let commit_start = CString::new(
+            json!({
+                "token":renewed["token"],
+                "attestation":{
+                    "registration":registration,
+                    "preparation_binding_digest":renewed["binding_digest"],
+                    "egress_attestation_digest":"egress-attestation-ffi-1",
+                    "expiration_millis":120_000
+                },
+                "now_millis":90_000
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let commit_error = decode(&take_bridge_string(
+            local_agent_runtime_bridge_commit_prepared_start(runtime, commit_start.as_ptr()),
+        ));
+        assert_eq!(commit_error["error"]["kind"], "storage");
+        assert!(commit_error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("execution.host_slot_v2_not_runnable"));
+
+        let abort = CString::new(
+            json!({
+                "preparation_id":renewed["preparation_id"], "token":renewed["token"],
+                "idempotency_key":"abort-ffi-1", "reason":"user_denied"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let aborting = decode(&take_bridge_string(
+            local_agent_runtime_bridge_begin_abort_preparation(runtime, abort.as_ptr()),
+        ));
+        let cleanup = &aborting["cleanup"];
+        assert_eq!(aborting["state"], "aborting");
+
+        let closed = CString::new(
+            json!({
+                "cleanup_command_id":cleanup["cleanup_command_id"],
+                "preparation_id":cleanup["preparation_id"],
+                "proposed_run_id":cleanup["proposed_run_id"],
+                "session_handle":cleanup["session_handle"],
+                "host_process_epoch":cleanup["host_process_epoch"],
+                "preparation_cleanup_sequence":cleanup["preparation_cleanup_sequence"],
+                "close_disposition":"closed",
+                "receipt_digest":"close-receipt-ffi-1"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let closed_record = decode(&take_bridge_string(
+            local_agent_runtime_bridge_confirm_prepared_session_closed(runtime, closed.as_ptr()),
+        ));
+        assert_eq!(closed_record["state"], "closed");
+        assert_provider_neutral(&closed_record);
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+fn assert_provider_neutral(value: &Value) {
+    fn visit(value: &Value) {
+        match value {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    assert!(
+                        !matches!(
+                            key.as_str(),
+                            "provider"
+                                | "provider_profile"
+                                | "api_key"
+                                | "credential_ref"
+                                | "base_url"
+                                | "local_path"
+                                | "model_id"
+                        ),
+                        "forbidden Rust DTO key: {key}"
+                    );
+                    visit(value);
+                }
+            }
+            Value::Array(values) => values.iter().for_each(visit),
+            _ => {}
+        }
+    }
+    visit(value);
 }
 
 #[test]

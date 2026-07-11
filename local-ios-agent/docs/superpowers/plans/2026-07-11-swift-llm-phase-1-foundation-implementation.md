@@ -732,26 +732,26 @@ git commit -m "feat: add llm run preparation contracts"
 **Interfaces:**
 - Exposes JSON/C ABI operations for host-binding sagas and preparation lifecycle; all DTOs remain provider-neutral on the Rust side.
 
-- [ ] **Step 1: Write failing Rust/Swift ABI tests**
+- [x] **Step 1: Write failing Rust/Swift ABI tests**
 
 Round-trip preview, renewal, session registration, abort cleanup, binding stage
 receipt commit, and exact stable errors. Assert forbidden provider/credential/
 path keys are absent from every Rust DTO.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test integration ffi_bridge -- --nocapture
 swift test --package-path local-ios-agent/toolkit --filter RustRuntimeClientContractTests
 ```
 
-- [ ] **Step 3: Add C functions and Swift gateway cases**
+- [x] **Step 3: Add C functions and Swift gateway cases**
 
 Each FFI function follows the existing caller-owned JSON string convention and
 panic boundary. No function invokes Swift callbacks or starts V2 execution in
 Phase 1.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```bash
 cargo test --test integration ffi_bridge -- --nocapture

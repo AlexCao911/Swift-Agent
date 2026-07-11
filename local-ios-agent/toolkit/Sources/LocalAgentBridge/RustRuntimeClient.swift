@@ -275,6 +275,11 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     public var approveTool: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var cancelRun: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var previewContext: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
+    public var llmContractRequest: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
 
     public init(
         makeRuntime: @escaping () -> RuntimeHandle?,
@@ -345,7 +350,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         commitAssistantResult: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
         approveTool: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
         cancelRun: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
-        previewContext: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil }
+        previewContext: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
+        llmContractRequest: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?
+        ) -> StringResult = { _, _, _ in nil }
     ) {
         self.makeRuntime = makeRuntime
         self.freeRuntime = freeRuntime
@@ -384,6 +394,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.approveTool = approveTool
         self.cancelRun = cancelRun
         self.previewContext = previewContext
+        self.llmContractRequest = llmContractRequest
     }
 
     public static func live(configuration: RustRuntimeConfiguration) throws -> Self {
@@ -589,6 +600,33 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     requestJson
                 )
+            },
+            llmContractRequest: { runtime, operation, requestJson -> RustRuntimeCFunctionTable.StringResult in
+                guard let operation else { return nil }
+                switch String(cString: operation) {
+                case RustAgentOSOperation.prepareProfilePublish.rawValue:
+                    return local_agent_runtime_bridge_prepare_profile_publish(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.commitProfilePublish.rawValue:
+                    return local_agent_runtime_bridge_commit_profile_publish(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.beginPackageBinding.rawValue:
+                    return local_agent_runtime_bridge_begin_package_binding(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.attachHostBinding.rawValue:
+                    return local_agent_runtime_bridge_attach_host_binding(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.previewRunPreparation.rawValue:
+                    return local_agent_runtime_bridge_preview_run_preparation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.renewRunPreparation.rawValue:
+                    return local_agent_runtime_bridge_renew_run_preparation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.registerPreparedSession.rawValue:
+                    return local_agent_runtime_bridge_register_prepared_session(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.commitPreparedStart.rawValue:
+                    return local_agent_runtime_bridge_commit_prepared_start(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.beginAbortPreparation.rawValue:
+                    return local_agent_runtime_bridge_begin_abort_preparation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.confirmPreparedSessionClosed.rawValue:
+                    return local_agent_runtime_bridge_confirm_prepared_session_closed(runtime.map { OpaquePointer($0) }, requestJson)
+                default:
+                    return nil
+                }
             }
         )
     }
@@ -672,6 +710,13 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                 result = functions.updateRuntimeOptions(handle, pointer)
             case .previewContext:
                 result = functions.previewContext(handle, pointer)
+            case .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
+                 .attachHostBinding, .previewRunPreparation, .renewRunPreparation,
+                 .registerPreparedSession, .commitPreparedStart, .beginAbortPreparation,
+                 .confirmPreparedSessionClosed:
+                result = operation.rawValue.withCString { operationPointer in
+                    functions.llmContractRequest(handle, operationPointer, pointer)
+                }
             case .observeEvents:
                 throw RuntimeBridgeError(
                     kind: "unsupported_operation",

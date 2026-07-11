@@ -100,6 +100,16 @@ char *local_agent_runtime_bridge_start_run(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json
 );
+char *local_agent_runtime_bridge_prepare_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_commit_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_begin_package_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_attach_host_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_preview_run_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_renew_run_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_register_prepared_session(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_commit_prepared_start(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_begin_abort_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_confirm_prepared_session_closed(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_list_agent_profiles(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json

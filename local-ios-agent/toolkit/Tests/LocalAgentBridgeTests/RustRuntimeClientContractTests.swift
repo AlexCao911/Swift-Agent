@@ -679,6 +679,92 @@ struct RustRuntimeClientContractTests {
         #expect(events.map(\.payload).contains("run.completed"))
         #expect(sessionIds.contains(createdSession))
     }
+
+    @Test
+    func llmPhaseOneGatewayRoutesProviderNeutralContracts() async throws {
+        let probe = RuntimeCFunctionProbe()
+        let previewJSON = """
+        {
+          "preparation_id":"preparation-1","proposed_run_id":"run-v2-1",
+          "token":"token-1","token_digest":"token-digest-1","token_generation":1,
+          "binding":{
+            "agent_profile_id":"profile-1","agent_profile_revision":1,
+            "conversation_frame_digest":"frame-digest","execution_plan_digest":"plan-digest",
+            "requirements_hash":"requirements-digest","tool_schema_digest":"tool-digest",
+            "model_input_id":"input-1","model_input_digest":"input-digest",
+            "source_revisions_digest":"source-digest","initial_disclosure_digest":"disclosure-digest"
+          },
+          "binding_digest":"binding-digest","host_process_epoch":"epoch-1",
+          "lease_generation":1,"expiration_millis":300000,"total_deadline_millis":1800000
+        }
+        """
+        probe.llmContractResponses[.previewRunPreparation] = previewJSON
+        probe.llmContractResponses[.renewRunPreparation] = previewJSON.replacingOccurrences(of: "token-1", with: "token-2")
+        probe.llmContractResponses[.prepareProfilePublish] = """
+        {"kind":"profile_publish","idempotency_key":"publish-1","token":"publish-token",
+         "token_digest":"publish-token-digest","subject_id":"profile-1","agent_profile_id":"profile-1",
+         "agent_profile_revision":1,"llm_slot_id":"assistant","requirements_hash":"requirements-digest","state":"pending"}
+        """
+
+        let binding = PreparationBindingDTO(
+            agentProfileId: "profile-1", agentProfileRevision: 1,
+            conversationFrameDigest: "frame-digest", executionPlanDigest: "plan-digest",
+            requirementsHash: "requirements-digest", toolSchemaDigest: "tool-digest",
+            modelInputId: "input-1", modelInputDigest: "input-digest",
+            sourceRevisionsDigest: "source-digest", initialDisclosureDigest: "disclosure-digest"
+        )
+        let client = try RustRuntimeClient(functions: probe.table())
+        let operation: HostBindingOperationDTO = try await client.request(
+            .prepareProfilePublish,
+            ProfilePublishPreparationDTO(
+                idempotencyKey: "publish-1", agentProfileId: "profile-1",
+                agentProfileRevision: 1, llmSlotId: "assistant",
+                requirementsHash: "requirements-digest"
+            ),
+            as: HostBindingOperationDTO.self
+        )
+        let preview: RunPreparationPreviewDTO = try await client.request(
+            .previewRunPreparation,
+            PreviewRunPreparationRequestDTO(
+                request: RunPreparationRequestDTO(
+                    idempotencyKey: "preview-1", preparationId: "preparation-1",
+                    proposedRunId: "run-v2-1", binding: binding
+                ),
+                nowMillis: 0
+            ),
+            as: RunPreparationPreviewDTO.self
+        )
+        let renewed: RunPreparationPreviewDTO = try await client.request(
+            .renewRunPreparation,
+            RenewRunPreparationRequestDTO(
+                token: preview.token, bindingDigest: preview.bindingDigest,
+                idempotencyKey: "renew-1", nowMillis: 60_000
+            ),
+            as: RunPreparationPreviewDTO.self
+        )
+
+        #expect(operation.state == "pending")
+        #expect(preview.preparationId == "preparation-1")
+        #expect(renewed.token == "token-2")
+        #expect(probe.llmContractRequests.map(\.0) == [
+            .prepareProfilePublish, .previewRunPreparation, .renewRunPreparation
+        ])
+        for (_, requestJSON) in probe.llmContractRequests {
+            let object = try #require(JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: Any])
+            assertProviderNeutralBridgeObject(object)
+        }
+    }
+}
+
+private func assertProviderNeutralBridgeObject(_ value: Any) {
+    if let object = value as? [String: Any] {
+        for (key, nested) in object {
+            #expect(!["provider", "provider_profile", "api_key", "credential_ref", "base_url", "local_path", "model_id"].contains(key))
+            assertProviderNeutralBridgeObject(nested)
+        }
+    } else if let values = value as? [Any] {
+        values.forEach(assertProviderNeutralBridgeObject)
+    }
 }
 
 private final class RuntimeCFunctionProbe: @unchecked Sendable {
@@ -714,6 +800,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
     var renamedSessionId: String?
     var renamedSessionTitle: String?
     var deletedSessionId: String?
+    var llmContractResponses: [RustAgentOSOperation: String] = [:]
+    private(set) var llmContractRequests: [(RustAgentOSOperation, String)] = []
 
     private let handle = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
     private let lock = NSLock()
@@ -763,7 +851,8 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
             commitAssistantResult: commitAssistantResult,
             approveTool: approveTool,
             cancelRun: cancelRun,
-            previewContext: previewContext
+            previewContext: previewContext,
+            llmContractRequest: llmContractRequest
         )
     }
 
@@ -1184,6 +1273,20 @@ private final class RuntimeCFunctionProbe: @unchecked Sendable {
         return "run_agent_os".withCString { runId in
             cancel(runtime, runId)
         }
+    }
+
+    func llmContractRequest(
+        _ runtime: UnsafeMutableRawPointer?,
+        _ operation: UnsafePointer<CChar>?,
+        _ requestJson: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>? {
+        guard let operation, let requestJson,
+              let parsed = RustAgentOSOperation(rawValue: String(cString: operation)) else {
+            return nil
+        }
+        let json = String(cString: requestJson)
+        llmContractRequests.append((parsed, json))
+        return makeCString(llmContractResponses[parsed] ?? "null")
     }
 
     private func makeCString(_ string: String) -> UnsafeMutablePointer<CChar> {

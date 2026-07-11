@@ -36,7 +36,13 @@ use crate::execution::{
     ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
     ExecutionWorkerDependencies, RunHandle, RuntimeOptions, StartExecutionRequest,
 };
+use crate::llm_contracts::{
+    HostAttestation, HostBindingCommit, PackageBindingPreparation, PreparationAbortReason,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
+    RunPreparationRequest,
+};
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
+use crate::run_snapshot::RunPreparationService;
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
@@ -52,6 +58,14 @@ pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
 
 fn execution_start_agent_error(error: ExecutionStartError) -> AgentError {
+    AgentError::Storage(format!("{}: {error}", error.code()))
+}
+
+fn host_binding_agent_error(error: crate::llm_contracts::HostBindingError) -> AgentError {
+    AgentError::Storage(format!("{}: {error}", error.code()))
+}
+
+fn preparation_agent_error(error: crate::llm_contracts::PreparationError) -> AgentError {
     AgentError::Storage(format!("{}: {error}", error.code()))
 }
 
@@ -194,6 +208,8 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     execution: ExecutionService<InMemoryConversationFrameRepository>,
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
+    agent_os_state: SharedAgentOSStateStore,
+    run_preparation: RunPreparationService,
     ffi_tainted: AtomicBool,
 }
 
@@ -230,9 +246,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             event_log,
             completed_runs.clone(),
             worker_dependencies,
-            agent_os_state,
-            host_process_epoch,
+            agent_os_state.clone(),
+            host_process_epoch.clone(),
         );
+        let run_preparation =
+            RunPreparationService::new(agent_os_state.clone(), host_process_epoch);
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
         Ok(Self {
@@ -245,6 +263,8 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             execution,
             app_services,
             conversation_commits,
+            agent_os_state,
+            run_preparation,
             ffi_tainted: AtomicBool::new(false),
         })
     }
@@ -394,6 +414,108 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             ))
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&RunHandleJson::from(handle))
+    }
+
+    fn prepare_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ProfilePublishPreparation = from_json(request_json)?;
+        let operation = self
+            .agent_os_state
+            .with_host_binding_mut(|store| store.prepare_profile_publish(request))
+            .map_err(host_binding_agent_error)?;
+        to_json(&operation)
+    }
+
+    fn commit_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: HostBindingCommit = from_json(request_json)?;
+        let cross_link = self
+            .agent_os_state
+            .with_host_binding_mut(|store| store.commit_profile_publish(request))
+            .map_err(host_binding_agent_error)?;
+        to_json(&cross_link)
+    }
+
+    fn begin_package_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: PackageBindingPreparation = from_json(request_json)?;
+        let operation = self
+            .agent_os_state
+            .with_host_binding_mut(|store| store.begin_package_binding(request))
+            .map_err(host_binding_agent_error)?;
+        to_json(&operation)
+    }
+
+    fn attach_host_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: HostBindingCommit = from_json(request_json)?;
+        let cross_link = self
+            .agent_os_state
+            .with_host_binding_mut(|store| store.attach_host_binding(request))
+            .map_err(host_binding_agent_error)?;
+        to_json(&cross_link)
+    }
+
+    fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: PreviewRunPreparationJson = from_json(request_json)?;
+        let preview = self
+            .run_preparation
+            .preview_run(request.request, request.now_millis)
+            .map_err(preparation_agent_error)?;
+        to_json(&preview)
+    }
+
+    fn renew_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: RenewRunPreparationJson = from_json(request_json)?;
+        let preview = self
+            .run_preparation
+            .renew_preparation(
+                &request.token,
+                &request.binding_digest,
+                &request.idempotency_key,
+                request.now_millis,
+            )
+            .map_err(preparation_agent_error)?;
+        to_json(&preview)
+    }
+
+    fn register_prepared_session_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: RegisterPreparedSessionJson = from_json(request_json)?;
+        let record = self
+            .run_preparation
+            .register_prepared_session(&request.token, request.registration, request.now_millis)
+            .map_err(preparation_agent_error)?;
+        to_json(&record)
+    }
+
+    fn commit_prepared_start_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: CommitPreparedStartJson = from_json(request_json)?;
+        self.run_preparation
+            .commit_start(&request.token, request.attestation, request.now_millis)
+            .map_err(preparation_agent_error)?;
+        Ok("null".to_string())
+    }
+
+    fn begin_abort_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: BeginAbortPreparationJson = from_json(request_json)?;
+        let record = self
+            .run_preparation
+            .begin_abort_preparation(
+                &request.preparation_id,
+                request.token.as_deref(),
+                &request.idempotency_key,
+                request.reason,
+            )
+            .map_err(preparation_agent_error)?;
+        to_json(&record)
+    }
+
+    fn confirm_prepared_session_closed_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let receipt: PreparedSessionClosedReceipt = from_json(request_json)?;
+        let record = self
+            .run_preparation
+            .confirm_prepared_session_closed(receipt)
+            .map_err(preparation_agent_error)?;
+        to_json(&record)
     }
 
     fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
@@ -989,6 +1111,70 @@ impl RuntimeJsonBridge {
         Ok(handle)
     }
 
+    pub fn prepare_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.prepare_profile_publish_json(request_json),
+            Self::Sqlite(runtime) => runtime.prepare_profile_publish_json(request_json),
+        }
+    }
+    pub fn commit_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.commit_profile_publish_json(request_json),
+            Self::Sqlite(runtime) => runtime.commit_profile_publish_json(request_json),
+        }
+    }
+    pub fn begin_package_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.begin_package_binding_json(request_json),
+            Self::Sqlite(runtime) => runtime.begin_package_binding_json(request_json),
+        }
+    }
+    pub fn attach_host_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.attach_host_binding_json(request_json),
+            Self::Sqlite(runtime) => runtime.attach_host_binding_json(request_json),
+        }
+    }
+    pub fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.preview_run_preparation_json(request_json),
+            Self::Sqlite(runtime) => runtime.preview_run_preparation_json(request_json),
+        }
+    }
+    pub fn renew_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.renew_run_preparation_json(request_json),
+            Self::Sqlite(runtime) => runtime.renew_run_preparation_json(request_json),
+        }
+    }
+    pub fn register_prepared_session_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.register_prepared_session_json(request_json),
+            Self::Sqlite(runtime) => runtime.register_prepared_session_json(request_json),
+        }
+    }
+    pub fn commit_prepared_start_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.commit_prepared_start_json(request_json),
+            Self::Sqlite(runtime) => runtime.commit_prepared_start_json(request_json),
+        }
+    }
+    pub fn begin_abort_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.begin_abort_preparation_json(request_json),
+            Self::Sqlite(runtime) => runtime.begin_abort_preparation_json(request_json),
+        }
+    }
+    pub fn confirm_prepared_session_closed_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.confirm_prepared_session_closed_json(request_json),
+            Self::Sqlite(runtime) => runtime.confirm_prepared_session_closed_json(request_json),
+        }
+    }
+
     pub fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.list_agent_profiles_json(request_json),
@@ -1362,6 +1548,62 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_start_run(
         bridge_ref(runtime)?.start_run_json(request_json)
     })
 }
+
+macro_rules! json_bridge_function {
+    ($name:ident, $method:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(
+            runtime: *mut RuntimeJsonBridge,
+            request_json: *const c_char,
+        ) -> *mut c_char {
+            c_runtime_result(runtime, || {
+                let request_json = c_str_arg(request_json, "request_json")?;
+                bridge_ref(runtime)?.$method(request_json)
+            })
+        }
+    };
+}
+
+json_bridge_function!(
+    local_agent_runtime_bridge_prepare_profile_publish,
+    prepare_profile_publish_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_commit_profile_publish,
+    commit_profile_publish_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_begin_package_binding,
+    begin_package_binding_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_attach_host_binding,
+    attach_host_binding_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_preview_run_preparation,
+    preview_run_preparation_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_renew_run_preparation,
+    renew_run_preparation_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_register_prepared_session,
+    register_prepared_session_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_commit_prepared_start,
+    commit_prepared_start_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_begin_abort_preparation,
+    begin_abort_preparation_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_confirm_prepared_session_closed,
+    confirm_prepared_session_closed_json
+);
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_list_agent_profiles(
@@ -1868,6 +2110,42 @@ struct RuntimeBridgeConfigJson {
     store: StoreConfigJson,
     #[serde(default)]
     agent_os: RuntimeAgentOSConfigJson,
+}
+
+#[derive(Deserialize)]
+struct PreviewRunPreparationJson {
+    request: RunPreparationRequest,
+    now_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct RenewRunPreparationJson {
+    token: String,
+    binding_digest: String,
+    idempotency_key: String,
+    now_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct RegisterPreparedSessionJson {
+    token: String,
+    registration: PreparedSessionRegistration,
+    now_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct CommitPreparedStartJson {
+    token: String,
+    attestation: HostAttestation,
+    now_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct BeginAbortPreparationJson {
+    preparation_id: String,
+    token: Option<String>,
+    idempotency_key: String,
+    reason: PreparationAbortReason,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

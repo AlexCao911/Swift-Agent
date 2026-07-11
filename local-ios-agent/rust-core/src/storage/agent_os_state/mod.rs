@@ -147,6 +147,22 @@ impl SharedAgentOSStateStore {
         let store = self.inner.lock().map_err(|_| preparation_poisoned())?;
         operation(store.as_ref())
     }
+
+    pub fn with_host_binding_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut dyn AgentOSStateRepository) -> Result<T, HostBindingError>,
+    ) -> Result<T, HostBindingError> {
+        let mut store = self.inner.lock().map_err(|_| host_binding_poisoned())?;
+        operation(store.as_mut())
+    }
+
+    pub fn with_host_binding<T>(
+        &self,
+        operation: impl FnOnce(&dyn AgentOSStateRepository) -> Result<T, HostBindingError>,
+    ) -> Result<T, HostBindingError> {
+        let store = self.inner.lock().map_err(|_| host_binding_poisoned())?;
+        operation(store.as_ref())
+    }
 }
 
 fn poisoned() -> GlobalRunLeaseError {
@@ -160,5 +176,12 @@ fn preparation_poisoned() -> PreparationError {
     PreparationError::new(
         "preparation.store_poisoned",
         "run preparation store mutex is poisoned",
+    )
+}
+
+fn host_binding_poisoned() -> HostBindingError {
+    HostBindingError::new(
+        "host_binding.store_poisoned",
+        "host-binding store mutex is poisoned",
     )
 }

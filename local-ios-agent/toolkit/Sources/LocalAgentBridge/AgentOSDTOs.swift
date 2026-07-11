@@ -1,5 +1,173 @@
 import Foundation
 
+public struct ProfilePublishPreparationDTO: Codable, Equatable, Sendable {
+    public let idempotencyKey: String
+    public let agentProfileId: String
+    public let agentProfileRevision: UInt64
+    public let llmSlotId: String
+    public let requirementsHash: String
+    public init(idempotencyKey: String, agentProfileId: String, agentProfileRevision: UInt64, llmSlotId: String, requirementsHash: String) {
+        self.idempotencyKey = idempotencyKey; self.agentProfileId = agentProfileId
+        self.agentProfileRevision = agentProfileRevision; self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash
+    }
+    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash" }
+}
+
+public struct PackageBindingPreparationDTO: Codable, Equatable, Sendable {
+    public let idempotencyKey: String; public let installationId: String; public let agentProfileId: String
+    public let agentProfileRevision: UInt64; public let llmSlotId: String; public let requirementsHash: String
+    public init(idempotencyKey: String, installationId: String, agentProfileId: String, agentProfileRevision: UInt64, llmSlotId: String, requirementsHash: String) {
+        self.idempotencyKey = idempotencyKey; self.installationId = installationId; self.agentProfileId = agentProfileId
+        self.agentProfileRevision = agentProfileRevision; self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash
+    }
+    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", installationId = "installation_id", agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash" }
+}
+
+public struct HostBindingTupleDTO: Codable, Equatable, Sendable {
+    public let bindingId: String; public let bindingRevision: UInt64; public let bindingHash: String
+    public init(bindingId: String, bindingRevision: UInt64, bindingHash: String) { self.bindingId = bindingId; self.bindingRevision = bindingRevision; self.bindingHash = bindingHash }
+    private enum CodingKeys: String, CodingKey { case bindingId = "binding_id", bindingRevision = "binding_revision", bindingHash = "binding_hash" }
+}
+
+public struct HostBindingStagingReceiptDTO: Codable, Equatable, Sendable {
+    public let tokenDigest: String; public let llmSlotId: String; public let requirementsHash: String
+    public let binding: HostBindingTupleDTO; public let receiptDigest: String
+    public init(tokenDigest: String, llmSlotId: String, requirementsHash: String, binding: HostBindingTupleDTO, receiptDigest: String) {
+        self.tokenDigest = tokenDigest; self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash; self.binding = binding; self.receiptDigest = receiptDigest
+    }
+    private enum CodingKeys: String, CodingKey { case tokenDigest = "token_digest", llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", binding, receiptDigest = "receipt_digest" }
+}
+
+public struct HostBindingCommitDTO: Codable, Equatable, Sendable {
+    public let token: String; public let binding: HostBindingTupleDTO; public let receipt: HostBindingStagingReceiptDTO
+    public init(token: String, binding: HostBindingTupleDTO, receipt: HostBindingStagingReceiptDTO) { self.token = token; self.binding = binding; self.receipt = receipt }
+}
+
+public struct HostBindingOperationDTO: Codable, Equatable, Sendable {
+    public let kind: String; public let idempotencyKey: String; public let token: String; public let tokenDigest: String
+    public let subjectId: String; public let agentProfileId: String; public let agentProfileRevision: UInt64
+    public let llmSlotId: String; public let requirementsHash: String; public let state: String
+    private enum CodingKeys: String, CodingKey { case kind, idempotencyKey = "idempotency_key", token, tokenDigest = "token_digest", subjectId = "subject_id", agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", state }
+}
+
+public struct HostBindingCrossLinkDTO: Codable, Equatable, Sendable {
+    public let operationToken: String; public let tokenDigest: String; public let kind: String
+    public let llmSlotId: String; public let requirementsHash: String; public let binding: HostBindingTupleDTO
+    public let stagingReceiptDigest: String; public let state: String
+    private enum CodingKeys: String, CodingKey { case operationToken = "operation_token", tokenDigest = "token_digest", kind, llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", binding, stagingReceiptDigest = "staging_receipt_digest", state }
+}
+
+public struct PreparationBindingDTO: Codable, Equatable, Sendable {
+    public let agentProfileId: String; public let agentProfileRevision: UInt64
+    public let conversationFrameDigest: String; public let executionPlanDigest: String
+    public let requirementsHash: String; public let toolSchemaDigest: String
+    public let modelInputId: String; public let modelInputDigest: String
+    public let sourceRevisionsDigest: String; public let initialDisclosureDigest: String
+    public init(agentProfileId: String, agentProfileRevision: UInt64, conversationFrameDigest: String, executionPlanDigest: String, requirementsHash: String, toolSchemaDigest: String, modelInputId: String, modelInputDigest: String, sourceRevisionsDigest: String, initialDisclosureDigest: String) {
+        self.agentProfileId = agentProfileId; self.agentProfileRevision = agentProfileRevision
+        self.conversationFrameDigest = conversationFrameDigest; self.executionPlanDigest = executionPlanDigest
+        self.requirementsHash = requirementsHash; self.toolSchemaDigest = toolSchemaDigest
+        self.modelInputId = modelInputId; self.modelInputDigest = modelInputDigest
+        self.sourceRevisionsDigest = sourceRevisionsDigest; self.initialDisclosureDigest = initialDisclosureDigest
+    }
+    private enum CodingKeys: String, CodingKey { case agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", conversationFrameDigest = "conversation_frame_digest", executionPlanDigest = "execution_plan_digest", requirementsHash = "requirements_hash", toolSchemaDigest = "tool_schema_digest", modelInputId = "model_input_id", modelInputDigest = "model_input_digest", sourceRevisionsDigest = "source_revisions_digest", initialDisclosureDigest = "initial_disclosure_digest" }
+}
+
+public struct RunPreparationRequestDTO: Codable, Equatable, Sendable {
+    public let idempotencyKey: String; public let preparationId: String; public let proposedRunId: String; public let binding: PreparationBindingDTO
+    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, binding: PreparationBindingDTO) { self.idempotencyKey = idempotencyKey; self.preparationId = preparationId; self.proposedRunId = proposedRunId; self.binding = binding }
+    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", preparationId = "preparation_id", proposedRunId = "proposed_run_id", binding }
+}
+
+public struct PreviewRunPreparationRequestDTO: Codable, Equatable, Sendable {
+    public let request: RunPreparationRequestDTO; public let nowMillis: UInt64
+    public init(request: RunPreparationRequestDTO, nowMillis: UInt64) { self.request = request; self.nowMillis = nowMillis }
+    private enum CodingKeys: String, CodingKey { case request, nowMillis = "now_millis" }
+}
+
+public struct RunPreparationPreviewDTO: Codable, Equatable, Sendable {
+    public let preparationId: String; public let proposedRunId: String; public let token: String; public let tokenDigest: String
+    public let tokenGeneration: UInt64; public let binding: PreparationBindingDTO; public let bindingDigest: String
+    public let hostProcessEpoch: String; public let leaseGeneration: UInt64; public let expirationMillis: UInt64; public let totalDeadlineMillis: UInt64
+    private enum CodingKeys: String, CodingKey { case preparationId = "preparation_id", proposedRunId = "proposed_run_id", token, tokenDigest = "token_digest", tokenGeneration = "token_generation", binding, bindingDigest = "binding_digest", hostProcessEpoch = "host_process_epoch", leaseGeneration = "lease_generation", expirationMillis = "expiration_millis", totalDeadlineMillis = "total_deadline_millis" }
+}
+
+public struct RenewRunPreparationRequestDTO: Codable, Equatable, Sendable {
+    public let token: String; public let bindingDigest: String; public let idempotencyKey: String; public let nowMillis: UInt64
+    public init(token: String, bindingDigest: String, idempotencyKey: String, nowMillis: UInt64) { self.token = token; self.bindingDigest = bindingDigest; self.idempotencyKey = idempotencyKey; self.nowMillis = nowMillis }
+    private enum CodingKeys: String, CodingKey { case token, bindingDigest = "binding_digest", idempotencyKey = "idempotency_key", nowMillis = "now_millis" }
+}
+
+public struct PreparedSessionRegistrationDTO: Codable, Equatable, Sendable {
+    public let idempotencyKey: String; public let preparationId: String; public let proposedRunId: String
+    public let sessionHandle: String; public let swiftSnapshotId: String; public let hostProcessEpoch: String
+    public let bindingHash: String; public let registrationDigest: String
+    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, sessionHandle: String, swiftSnapshotId: String, hostProcessEpoch: String, bindingHash: String, registrationDigest: String) {
+        self.idempotencyKey = idempotencyKey; self.preparationId = preparationId; self.proposedRunId = proposedRunId
+        self.sessionHandle = sessionHandle; self.swiftSnapshotId = swiftSnapshotId; self.hostProcessEpoch = hostProcessEpoch
+        self.bindingHash = bindingHash; self.registrationDigest = registrationDigest
+    }
+    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", swiftSnapshotId = "swift_snapshot_id", hostProcessEpoch = "host_process_epoch", bindingHash = "binding_hash", registrationDigest = "registration_digest" }
+}
+
+public struct RegisterPreparedSessionRequestDTO: Codable, Equatable, Sendable {
+    public let token: String; public let registration: PreparedSessionRegistrationDTO; public let nowMillis: UInt64
+    public init(token: String, registration: PreparedSessionRegistrationDTO, nowMillis: UInt64) { self.token = token; self.registration = registration; self.nowMillis = nowMillis }
+    private enum CodingKeys: String, CodingKey { case token, registration, nowMillis = "now_millis" }
+}
+
+public enum PreparationAbortReasonDTO: String, Codable, Equatable, Sendable { case userDenied = "user_denied", preparationFailed = "preparation_failed", tokenExpired = "token_expired", commitRejected = "commit_rejected", commitConflict = "commit_conflict", hostShutdown = "host_shutdown" }
+
+public struct BeginAbortPreparationRequestDTO: Codable, Equatable, Sendable {
+    public let preparationId: String; public let token: String?; public let idempotencyKey: String; public let reason: PreparationAbortReasonDTO
+    public init(preparationId: String, token: String?, idempotencyKey: String, reason: PreparationAbortReasonDTO) { self.preparationId = preparationId; self.token = token; self.idempotencyKey = idempotencyKey; self.reason = reason }
+    private enum CodingKeys: String, CodingKey { case preparationId = "preparation_id", token, idempotencyKey = "idempotency_key", reason }
+}
+
+public struct PreparedSessionCleanupEnvelopeDTO: Codable, Equatable, Sendable {
+    public let cleanupCommandId: String; public let preparationId: String; public let proposedRunId: String
+    public let sessionHandle: String; public let hostProcessEpoch: String; public let preparationCleanupSequence: UInt64
+    public let reason: PreparationAbortReasonDTO; public let preparedSessionRegistrationDigest: String; public let cleanupCommandDigest: String
+    private enum CodingKeys: String, CodingKey { case cleanupCommandId = "cleanup_command_id", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", hostProcessEpoch = "host_process_epoch", preparationCleanupSequence = "preparation_cleanup_sequence", reason, preparedSessionRegistrationDigest = "prepared_session_registration_digest", cleanupCommandDigest = "cleanup_command_digest" }
+}
+
+public struct PreparedSessionClosedReceiptDTO: Codable, Equatable, Sendable {
+    public let cleanupCommandId: String; public let preparationId: String; public let proposedRunId: String
+    public let sessionHandle: String; public let hostProcessEpoch: String; public let preparationCleanupSequence: UInt64
+    public let closeDisposition: String; public let receiptDigest: String
+    public init(cleanupCommandId: String, preparationId: String, proposedRunId: String, sessionHandle: String, hostProcessEpoch: String, preparationCleanupSequence: UInt64, closeDisposition: String, receiptDigest: String) {
+        self.cleanupCommandId = cleanupCommandId; self.preparationId = preparationId; self.proposedRunId = proposedRunId
+        self.sessionHandle = sessionHandle; self.hostProcessEpoch = hostProcessEpoch; self.preparationCleanupSequence = preparationCleanupSequence
+        self.closeDisposition = closeDisposition; self.receiptDigest = receiptDigest
+    }
+    private enum CodingKeys: String, CodingKey { case cleanupCommandId = "cleanup_command_id", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", hostProcessEpoch = "host_process_epoch", preparationCleanupSequence = "preparation_cleanup_sequence", closeDisposition = "close_disposition", receiptDigest = "receipt_digest" }
+}
+
+public struct RunPreparationRecordDTO: Codable, Equatable, Sendable {
+    public let preview: RunPreparationPreviewDTO; public let state: String
+    public let registration: PreparedSessionRegistrationDTO?; public let cleanup: PreparedSessionCleanupEnvelopeDTO?
+    public let closedReceipt: PreparedSessionClosedReceiptDTO?
+    private enum CodingKeys: String, CodingKey { case preview, state, registration, cleanup, closedReceipt = "closed_receipt" }
+}
+
+public struct HostAttestationDTO: Codable, Equatable, Sendable {
+    public let registration: PreparedSessionRegistrationDTO
+    public let preparationBindingDigest: String
+    public let egressAttestationDigest: String
+    public let expirationMillis: UInt64
+    public init(registration: PreparedSessionRegistrationDTO, preparationBindingDigest: String, egressAttestationDigest: String, expirationMillis: UInt64) {
+        self.registration = registration; self.preparationBindingDigest = preparationBindingDigest
+        self.egressAttestationDigest = egressAttestationDigest; self.expirationMillis = expirationMillis
+    }
+    private enum CodingKeys: String, CodingKey { case registration, preparationBindingDigest = "preparation_binding_digest", egressAttestationDigest = "egress_attestation_digest", expirationMillis = "expiration_millis" }
+}
+
+public struct CommitPreparedStartRequestDTO: Codable, Equatable, Sendable {
+    public let token: String; public let attestation: HostAttestationDTO; public let nowMillis: UInt64
+    public init(token: String, attestation: HostAttestationDTO, nowMillis: UInt64) { self.token = token; self.attestation = attestation; self.nowMillis = nowMillis }
+    private enum CodingKeys: String, CodingKey { case token, attestation, nowMillis = "now_millis" }
+}
+
 @available(*, deprecated, message: "Use StartExecutionRequestDTO with ConversationRunFrameRefDTO")
 public struct StartRunRequestDTO: Codable, Equatable, Sendable {
     public var agentProfileId: String
