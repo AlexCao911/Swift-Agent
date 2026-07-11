@@ -5,11 +5,11 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::llm_contracts::{
-    HostAttestation, HostBindingCommit, HostBindingStagingReceipt, HostBindingTuple,
-    LLMInputModality, PreparationAbortReason, PreparedCapabilityAttestation,
-    PreparedSessionCleanupAcknowledgement, PreparedSessionCloseDisposition,
-    PreparedSessionClosedReceipt, PreparedSessionRegistration, PreparedStartValidator,
-    ProfilePublishPreparation, RunPreparationState,
+    HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
+    HostBindingStagingReceipt, HostBindingTuple, LLMInputModality, PreparationAbortReason,
+    PreparedCapabilityAttestation, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
+    PreparedStartValidator, ProfilePublishPreparation, RunPreparationState,
 };
 use local_ios_agent_runtime::run_snapshot::{
     RunPreparationService, RunSnapshotService, StartRunRequest,
@@ -290,10 +290,18 @@ fn install_exact_host_binding(
                 binding.clone(),
                 format!("receipt:{}", preview.preparation_id()),
             );
-            store.commit_profile_publish(HostBindingCommit::new(
+            let link = store.commit_profile_publish(HostBindingCommit::new(
                 operation.token(),
                 binding,
                 receipt,
+            ))?;
+            store.activate_matching_cross_link(&HostBindingActivationConfirmation::new(
+                link.agent_profile_id(),
+                link.agent_profile_revision(),
+                link.llm_slot_id(),
+                link.requirements_hash(),
+                link.binding().clone(),
+                link.staging_receipt_digest(),
             ))?;
             Ok(())
         })

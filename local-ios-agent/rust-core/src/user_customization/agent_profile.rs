@@ -54,6 +54,15 @@ pub enum AgentProfileLLMBinding {
     HostSlotV2(LLMSlotV2),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfileHostBindingState {
+    NotRequired,
+    PendingHostBinding,
+    HostUnbound,
+    Active,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentProfileDraft {
     id: AgentProfileId,
@@ -73,6 +82,7 @@ pub struct AgentProfile {
     bindings: Vec<ComponentBinding>,
     llm_binding: Option<AgentProfileLLMBinding>,
     local_bindings: AgentProfileLocalBindings,
+    host_binding_state: AgentProfileHostBindingState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -86,6 +96,7 @@ pub struct AgentProfileDebugSummary {
     pub llm_slot: Option<LLMSlotDebugSummary>,
     pub model_binding: Option<ModelBindingDebugSummary>,
     pub local_bindings: Vec<LocalBindingDebugSummary>,
+    pub host_binding_state: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -356,6 +367,12 @@ impl AgentProfileDraft {
     }
 
     pub(crate) fn into_published(self) -> AgentProfile {
+        let host_binding_state = match self.llm_binding.as_ref() {
+            Some(AgentProfileLLMBinding::HostSlotV2(_)) => {
+                AgentProfileHostBindingState::PendingHostBinding
+            }
+            _ => AgentProfileHostBindingState::NotRequired,
+        };
         AgentProfile {
             id: self.id,
             version: AgentProfileVersion::initial(),
@@ -364,6 +381,7 @@ impl AgentProfileDraft {
             bindings: self.bindings,
             llm_binding: self.llm_binding,
             local_bindings: self.local_bindings,
+            host_binding_state,
         }
     }
 
@@ -433,7 +451,9 @@ impl InMemoryAgentProfileRepository {
     pub fn latest_profiles(&self) -> Vec<AgentProfile> {
         let inner = self.records();
         let mut latest_by_id: BTreeMap<AgentProfileId, AgentProfile> = BTreeMap::new();
-        for profile in inner.profiles.values() {
+        for profile in inner.profiles.values().filter(|profile| {
+            profile.host_binding_state() != AgentProfileHostBindingState::PendingHostBinding
+        }) {
             let replace = latest_by_id
                 .get(profile.id())
                 .map(|current| profile.version() > current.version())
@@ -452,6 +472,33 @@ impl InMemoryAgentProfileRepository {
             .filter(|(id, _)| id == profile_id)
             .map(|(_, version)| *version)
             .max()
+    }
+
+    pub fn transition_host_binding_state(
+        &self,
+        profile_id: &AgentProfileId,
+        version: AgentProfileVersion,
+        expected: AgentProfileHostBindingState,
+        next: AgentProfileHostBindingState,
+    ) -> StorageResult<AgentProfile> {
+        let mut inner = self.records();
+        let profile = inner
+            .profiles
+            .get_mut(&(profile_id.clone(), version))
+            .ok_or_else(|| {
+                StorageError::new(
+                    "agent_profile.not_found",
+                    "agent profile revision was not found",
+                )
+            })?;
+        if profile.host_binding_state != expected {
+            return Err(StorageError::new(
+                "agent_profile.host_binding_state_stale",
+                "agent profile host-binding state changed before transition",
+            ));
+        }
+        profile.host_binding_state = next;
+        Ok(profile.clone())
     }
 
     fn validate_profile(&self, profile: &AgentProfile) -> StorageResult<()> {
@@ -763,6 +810,7 @@ impl AgentProfile {
             bindings: Vec::new(),
             llm_binding: Some(AgentProfileLLMBinding::HostSlotV2(llm_slot)),
             local_bindings: AgentProfileLocalBindings::default(),
+            host_binding_state: AgentProfileHostBindingState::PendingHostBinding,
         }
     }
 
@@ -819,6 +867,10 @@ impl AgentProfile {
         &self.local_bindings
     }
 
+    pub fn host_binding_state(&self) -> AgentProfileHostBindingState {
+        self.host_binding_state
+    }
+
     pub fn binding_for_slot(&self, slot_id: &AgentSlotId) -> Option<&ComponentBinding> {
         self.bindings
             .iter()
@@ -859,12 +911,15 @@ impl AgentProfile {
                     ));
                 }
             }
-            AgentProfileLLMBinding::HostSlotV2(_) => {
+            AgentProfileLLMBinding::HostSlotV2(_)
+                if self.host_binding_state != AgentProfileHostBindingState::Active =>
+            {
                 report.push_issue(AgentReadinessIssue::new(
                     "host_binding.missing",
                     "profile LLM slot requires a Swift host binding",
                 ));
             }
+            AgentProfileLLMBinding::HostSlotV2(_) => {}
         }
 
         report
@@ -931,6 +986,13 @@ impl AgentProfile {
                     credential_ref: "[redacted]".to_string(),
                 })
                 .collect(),
+            host_binding_state: match self.host_binding_state {
+                AgentProfileHostBindingState::NotRequired => "not_required",
+                AgentProfileHostBindingState::PendingHostBinding => "pending_host_binding",
+                AgentProfileHostBindingState::HostUnbound => "host_unbound",
+                AgentProfileHostBindingState::Active => "active",
+            }
+            .to_string(),
         }
     }
 }

@@ -1,9 +1,16 @@
 use local_ios_agent_runtime::agent_package::{
     AgentPackageExporter, AgentPackageInstaller, AgentPackageLock, AgentPackageManifest,
     AgentPackageReader, AgentPackageValidator, AgentProfileUpgradePlanner, ComponentVersionStatus,
-    InMemoryPackageInstallStore, PackageModelBinding, PackagePath, RuntimeComponentCatalog,
+    InMemoryPackageInstallStore, PackageHostBindingState, PackageModelBinding, PackagePath,
+    RuntimeComponentCatalog,
 };
-use local_ios_agent_runtime::llm_contracts::LLMBindingSchema;
+use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
+use local_ios_agent_runtime::llm_contracts::{
+    AgentHostBindingService, HostBindingActivationConfirmation, HostBindingCommit,
+    HostBindingStagingReceipt, HostBindingSubjectCatalog, HostBindingTuple, LLMBindingSchema,
+    PackageBindingPreparation,
+};
+use local_ios_agent_runtime::storage::agent_os_state::SharedAgentOSStateStore;
 use local_ios_agent_runtime::storage::{
     InMemoryTransactionRunner, StorageError, StorageResult, TransactionName, TransactionOperation,
     TransactionRunner,
@@ -20,6 +27,85 @@ fn fixture_profile_reference() -> AgentProfileReference {
         AgentProfileId::new("profile:agent.fixture"),
         AgentProfileVersion::initial(),
     )
+}
+
+#[test]
+fn package_binding_saga_advances_actual_installation_and_profile_state() {
+    let store = InMemoryPackageInstallStore::default();
+    let profiles = InMemoryAgentProfileRepository::default();
+    let installer = AgentPackageInstaller::new(
+        Box::new(InMemoryTransactionRunner::default()),
+        store.clone(),
+        profiles.clone(),
+    );
+    let installed = installer
+        .install(AgentPackageManifest::fixture_valid())
+        .unwrap();
+    let profile = profiles.profile(installed.profile()).unwrap();
+    let requirements = profile.llm_slot().unwrap().requirements();
+    let requirements_hash = CanonicalDigestV1::digest("agent-requirements:v1", requirements)
+        .unwrap()
+        .as_str()
+        .to_string();
+    assert_eq!(
+        store
+            .installation("agent.fixture")
+            .unwrap()
+            .host_binding_state,
+        PackageHostBindingState::NeedsLLMBinding
+    );
+    let service = AgentHostBindingService::new(
+        SharedAgentOSStateStore::in_memory(),
+        HostBindingSubjectCatalog::new(profiles.clone()).with_package_store(store.clone()),
+    );
+    let pending = service
+        .begin_package_binding(PackageBindingPreparation::new(
+            "bind-agent-fixture",
+            "agent.fixture",
+            profile.id().as_str(),
+            profile.version().as_u64(),
+            requirements.slot_id(),
+            &requirements_hash,
+        ))
+        .unwrap();
+    let binding = HostBindingTuple::new("binding-package", 1, "binding-package-hash");
+    let link = service
+        .attach_host_binding(HostBindingCommit::new(
+            pending.token(),
+            binding.clone(),
+            HostBindingStagingReceipt::new(
+                pending.token_digest(),
+                pending.llm_slot_id(),
+                pending.requirements_hash(),
+                binding.clone(),
+                "package-staging-receipt",
+            ),
+        ))
+        .unwrap();
+    assert_eq!(
+        store
+            .installation("agent.fixture")
+            .unwrap()
+            .host_binding_state,
+        PackageHostBindingState::HostUnbound
+    );
+    service
+        .confirm_activation(HostBindingActivationConfirmation::new(
+            profile.id().as_str(),
+            profile.version().as_u64(),
+            requirements.slot_id(),
+            &requirements_hash,
+            binding,
+            link.staging_receipt_digest(),
+        ))
+        .unwrap();
+    assert_eq!(
+        store
+            .installation("agent.fixture")
+            .unwrap()
+            .host_binding_state,
+        PackageHostBindingState::Ready
+    );
 }
 
 #[test]

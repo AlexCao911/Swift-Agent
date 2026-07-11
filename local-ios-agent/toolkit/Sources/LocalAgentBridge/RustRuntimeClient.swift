@@ -612,6 +612,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_begin_package_binding(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.attachHostBinding.rawValue:
                     return local_agent_runtime_bridge_attach_host_binding(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.confirmHostBindingActivation.rawValue:
+                    return local_agent_runtime_bridge_confirm_host_binding_activation(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.previewRunPreparation.rawValue:
                     return local_agent_runtime_bridge_preview_run_preparation(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.renewRunPreparation.rawValue:
@@ -713,7 +715,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
             case .previewContext:
                 result = functions.previewContext(handle, pointer)
             case .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
-                 .attachHostBinding, .previewRunPreparation, .renewRunPreparation,
+                 .attachHostBinding, .confirmHostBindingActivation, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .beginAbortPreparation,
                  .ackPreparedSessionCleanup, .confirmPreparedSessionClosed:
                 result = operation.rawValue.withCString { operationPointer in

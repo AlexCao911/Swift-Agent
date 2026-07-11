@@ -10,6 +10,7 @@ use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_commit_assistant_result,
     local_agent_runtime_bridge_commit_prepared_start,
     local_agent_runtime_bridge_commit_profile_publish,
+    local_agent_runtime_bridge_confirm_host_binding_activation,
     local_agent_runtime_bridge_confirm_prepared_session_closed,
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
     local_agent_runtime_bridge_free, local_agent_runtime_bridge_list_agent_profiles,
@@ -269,38 +270,6 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
             local_agent_runtime_bridge_prepare_user_turn(runtime, prepared_turn_request.as_ptr()),
         ));
 
-        let profile_request = CString::new(
-            r#"{
-            "idempotency_key":"publish-ffi-1",
-            "agent_profile_id":"profile_v2",
-            "agent_profile_revision":1,
-            "llm_slot_id":"slot.model.primary",
-            "requirements_hash":"requirements-ffi-1"
-        }"#,
-        )
-        .unwrap();
-        let pending = decode(&take_bridge_string(
-            local_agent_runtime_bridge_prepare_profile_publish(runtime, profile_request.as_ptr()),
-        ));
-        assert_provider_neutral(&pending);
-        let commit = json!({
-            "token": pending["token"],
-            "binding": {"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
-            "receipt": {
-                "token_digest": pending["token_digest"],
-                "llm_slot_id": pending["llm_slot_id"],
-                "requirements_hash": pending["requirements_hash"],
-                "binding": {"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
-                "receipt_digest":"receipt-ffi-1"
-            }
-        });
-        let commit = CString::new(commit.to_string()).unwrap();
-        let cross_link = decode(&take_bridge_string(
-            local_agent_runtime_bridge_commit_profile_publish(runtime, commit.as_ptr()),
-        ));
-        assert_eq!(cross_link["state"], "host_unbound");
-        assert_provider_neutral(&cross_link);
-
         let preview_request = json!({
             "idempotency_key":"preview-ffi-1",
             "preparation_id":"preparation-ffi-1",
@@ -356,6 +325,25 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
             local_agent_runtime_bridge_commit_profile_publish(runtime, exact_commit.as_ptr()),
         ));
         assert_eq!(exact_cross_link["state"], "host_unbound");
+        let activation = CString::new(
+            json!({
+                "agent_profile_id":"profile_v2",
+                "agent_profile_revision":1,
+                "llm_slot_id":preview["binding"]["requirements"]["slot_id"],
+                "requirements_hash":preview["binding"]["requirements_hash"],
+                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                "staging_receipt_digest":exact_cross_link["staging_receipt_digest"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let active_cross_link = decode(&take_bridge_string(
+            local_agent_runtime_bridge_confirm_host_binding_activation(
+                runtime,
+                activation.as_ptr(),
+            ),
+        ));
+        assert_eq!(active_cross_link["state"], "active");
 
         let renew = CString::new(
             json!({

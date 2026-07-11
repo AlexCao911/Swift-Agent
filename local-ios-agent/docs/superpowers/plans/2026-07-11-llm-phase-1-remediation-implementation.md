@@ -337,22 +337,22 @@ git commit -m "fix: validate llm prepared start bindings"
 - Produces package installation states `needs_llm_binding | host_unbound | ready`.
 - Produces `confirm_host_binding_activation` C ABI/Swift operation.
 
-- [ ] **Step 1: Add failing subject-state tests**
+- [x] **Step 1: Add failing subject-state tests**
 
 Test prepare/begin reject nonexistent or mismatched subjects. Test V2 Profile is hidden before commit, visible but not runnable at `host_unbound`, and active only after exact Swift activation confirmation. Test package state advances through all three states. Test legacy publication/install behavior is unchanged. Test reconciliation repairs partial side-table/subject-state transitions without moving backward.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_binding_saga -- --nocapture
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration agent_package_agent_os host_binding -- --nocapture
 ```
 
-- [ ] **Step 3: Implement semantic saga service**
+- [x] **Step 3: Implement semantic saga service**
 
 Add actual V2 readiness state to Profile revision and Package installation records. Keep legacy APIs unchanged. Move FFI semantics from raw `AgentOSStateRepository` calls into `AgentHostBindingService`, which validates actual subjects, invokes persistence primitives, advances subject state, and reconciles. Add stable operation ID/request digest plus staging receipt v2. Add activation confirmation using exact binding tuple and receipt.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_binding_saga -- --nocapture
@@ -361,7 +361,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration ffi_bridge -- --nocapture
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core toolkit

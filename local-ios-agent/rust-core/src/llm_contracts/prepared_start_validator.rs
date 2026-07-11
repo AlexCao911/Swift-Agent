@@ -1,8 +1,8 @@
 use crate::canonical_digest::CanonicalDigestV1;
 
 use super::{
-    HostAttestation, HostBindingCrossLink, LLMToolCallingMode, PreparationError,
-    PreparedSessionRegistration, RunPreparationRecord, RunPreparationRequest,
+    HostAttestation, HostBindingCrossLink, HostBindingOperationState, LLMToolCallingMode,
+    PreparationError, PreparedSessionRegistration, RunPreparationRecord, RunPreparationRequest,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -167,6 +167,7 @@ impl PreparedStartValidator {
             || link.binding().binding_id() != registration.binding_id()
             || link.binding().binding_revision() != registration.binding_revision()
             || link.binding().binding_hash() != registration.binding_hash()
+            || link.state() != HostBindingOperationState::Active
         {
             return Err(error(
                 "preparation.host_binding_cross_link_mismatch",

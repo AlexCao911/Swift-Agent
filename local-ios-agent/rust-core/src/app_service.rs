@@ -132,6 +132,10 @@ impl AgentOSApplicationService {
         self.snapshot_service.clone()
     }
 
+    pub fn profile_repository(&self) -> InMemoryAgentProfileRepository {
+        self.profile_repository.clone()
+    }
+
     pub fn resolve_and_persist_snapshot(
         &self,
         request: StartRunRequest,

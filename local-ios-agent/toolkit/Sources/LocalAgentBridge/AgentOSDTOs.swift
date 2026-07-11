@@ -43,6 +43,25 @@ public struct HostBindingCommitDTO: Codable, Equatable, Sendable {
     public init(token: String, binding: HostBindingTupleDTO, receipt: HostBindingStagingReceiptDTO) { self.token = token; self.binding = binding; self.receipt = receipt }
 }
 
+public struct HostBindingActivationConfirmationDTO: Codable, Equatable, Sendable {
+    public let agentProfileId: String
+    public let agentProfileRevision: UInt64
+    public let llmSlotId: String
+    public let requirementsHash: String
+    public let binding: HostBindingTupleDTO
+    public let stagingReceiptDigest: String
+    public init(agentProfileId: String, agentProfileRevision: UInt64, llmSlotId: String, requirementsHash: String, binding: HostBindingTupleDTO, stagingReceiptDigest: String) {
+        self.agentProfileId = agentProfileId; self.agentProfileRevision = agentProfileRevision
+        self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash
+        self.binding = binding; self.stagingReceiptDigest = stagingReceiptDigest
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision"
+        case llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", binding
+        case stagingReceiptDigest = "staging_receipt_digest"
+    }
+}
+
 public struct HostBindingOperationDTO: Codable, Equatable, Sendable {
     public let kind: String; public let idempotencyKey: String; public let token: String; public let tokenDigest: String
     public let subjectId: String; public let agentProfileId: String; public let agentProfileRevision: UInt64

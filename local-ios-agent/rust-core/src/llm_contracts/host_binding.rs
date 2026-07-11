@@ -34,6 +34,7 @@ impl HostBindingKind {
 pub enum HostBindingOperationState {
     Pending,
     HostUnbound,
+    Active,
 }
 
 impl HostBindingOperationState {
@@ -41,6 +42,7 @@ impl HostBindingOperationState {
         match self {
             Self::Pending => "pending",
             Self::HostUnbound => "host_unbound",
+            Self::Active => "active",
         }
     }
 
@@ -48,6 +50,7 @@ impl HostBindingOperationState {
         match value {
             "pending" => Ok(Self::Pending),
             "host_unbound" => Ok(Self::HostUnbound),
+            "active" => Ok(Self::Active),
             _ => Err(HostBindingError::new(
                 "host_binding.invalid_persisted_state",
                 format!("unknown host-binding operation state: {value}"),
@@ -401,6 +404,59 @@ impl HostBindingCrossLink {
     }
     pub fn state(&self) -> HostBindingOperationState {
         self.state
+    }
+    pub(crate) fn with_state(mut self, state: HostBindingOperationState) -> Self {
+        self.state = state;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostBindingActivationConfirmation {
+    agent_profile_id: String,
+    agent_profile_revision: u64,
+    llm_slot_id: String,
+    requirements_hash: String,
+    binding: HostBindingTuple,
+    staging_receipt_digest: String,
+}
+
+impl HostBindingActivationConfirmation {
+    pub fn new(
+        agent_profile_id: impl Into<String>,
+        agent_profile_revision: u64,
+        llm_slot_id: impl Into<String>,
+        requirements_hash: impl Into<String>,
+        binding: HostBindingTuple,
+        staging_receipt_digest: impl Into<String>,
+    ) -> Self {
+        Self {
+            agent_profile_id: agent_profile_id.into(),
+            agent_profile_revision,
+            llm_slot_id: llm_slot_id.into(),
+            requirements_hash: requirements_hash.into(),
+            binding,
+            staging_receipt_digest: staging_receipt_digest.into(),
+        }
+    }
+    pub fn agent_profile_id(&self) -> &str {
+        &self.agent_profile_id
+    }
+    pub fn agent_profile_revision(&self) -> u64 {
+        self.agent_profile_revision
+    }
+    pub fn llm_slot_id(&self) -> &str {
+        &self.llm_slot_id
+    }
+    pub fn requirements_hash(&self) -> &str {
+        &self.requirements_hash
+    }
+    pub fn binding(&self) -> &HostBindingTuple {
+        &self.binding
+    }
+    pub fn staging_receipt_digest(&self) -> &str {
+        &self.staging_receipt_digest
     }
 }
 

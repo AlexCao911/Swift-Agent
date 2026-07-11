@@ -129,6 +129,10 @@ pub trait AgentOSStateRepository:
         binding_revision: u64,
         binding_hash: &str,
     ) -> Result<Option<HostBindingCrossLink>, HostBindingError>;
+    fn activate_matching_cross_link(
+        &mut self,
+        confirmation: &crate::llm_contracts::HostBindingActivationConfirmation,
+    ) -> Result<HostBindingCrossLink, HostBindingError>;
 }
 
 #[derive(Clone)]

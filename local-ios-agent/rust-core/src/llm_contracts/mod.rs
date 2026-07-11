@@ -1,6 +1,7 @@
 mod bearer_token;
 mod global_run_lease;
 mod host_binding;
+mod host_binding_service;
 mod preparation;
 mod prepared_start_validator;
 mod requirements;
@@ -9,10 +10,11 @@ mod slot;
 pub use bearer_token::{BearerAuthority, BearerTokenError, BearerTokenIssuer, IssuedBearerToken};
 pub use global_run_lease::{GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState};
 pub use host_binding::{
-    HostBindingCommit, HostBindingCrossLink, HostBindingError, HostBindingKind,
-    HostBindingOperation, HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple,
-    PackageBindingPreparation, ProfilePublishPreparation,
+    HostBindingActivationConfirmation, HostBindingCommit, HostBindingCrossLink, HostBindingError,
+    HostBindingKind, HostBindingOperation, HostBindingOperationState, HostBindingStagingReceipt,
+    HostBindingTuple, PackageBindingPreparation, ProfilePublishPreparation,
 };
+pub use host_binding_service::{AgentHostBindingService, HostBindingSubjectCatalog};
 pub(crate) use preparation::RunPreparationRequest;
 pub use preparation::{
     HostAttestation, PreparationAbortReason, PreparationBinding, PreparationError,

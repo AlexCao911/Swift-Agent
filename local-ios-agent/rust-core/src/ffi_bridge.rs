@@ -37,7 +37,8 @@ use crate::execution::{
     ExecutionWorkerDependencies, RunHandle, RuntimeOptions, StartExecutionRequest,
 };
 use crate::llm_contracts::{
-    HostAttestation, HostBindingCommit, PackageBindingPreparation, PreparationAbortReason,
+    AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
+    HostBindingSubjectCatalog, PackageBindingPreparation, PreparationAbortReason,
     PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
     PreparedSessionRegistration, ProfilePublishPreparation,
 };
@@ -208,7 +209,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     execution: ExecutionService<InMemoryConversationFrameRepository>,
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
-    agent_os_state: SharedAgentOSStateStore,
+    host_binding: AgentHostBindingService,
     run_preparation: RunPreparationService,
     ffi_tainted: AtomicBool,
 }
@@ -258,6 +259,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
+        let host_binding = AgentHostBindingService::new(
+            agent_os_state.clone(),
+            HostBindingSubjectCatalog::new(app_services.profile_repository()),
+        );
         Ok(Self {
             runtime,
             cancellations,
@@ -268,7 +273,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             execution,
             app_services,
             conversation_commits,
-            agent_os_state,
+            host_binding,
             run_preparation,
             ffi_tainted: AtomicBool::new(false),
         })
@@ -424,8 +429,8 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn prepare_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: ProfilePublishPreparation = from_json(request_json)?;
         let operation = self
-            .agent_os_state
-            .with_host_binding_mut(|store| store.prepare_profile_publish(request))
+            .host_binding
+            .prepare_profile_publish(request)
             .map_err(host_binding_agent_error)?;
         to_json(&operation)
     }
@@ -433,8 +438,8 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn commit_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: HostBindingCommit = from_json(request_json)?;
         let cross_link = self
-            .agent_os_state
-            .with_host_binding_mut(|store| store.commit_profile_publish(request))
+            .host_binding
+            .commit_profile_publish(request)
             .map_err(host_binding_agent_error)?;
         to_json(&cross_link)
     }
@@ -442,8 +447,8 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn begin_package_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: PackageBindingPreparation = from_json(request_json)?;
         let operation = self
-            .agent_os_state
-            .with_host_binding_mut(|store| store.begin_package_binding(request))
+            .host_binding
+            .begin_package_binding(request)
             .map_err(host_binding_agent_error)?;
         to_json(&operation)
     }
@@ -451,8 +456,20 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn attach_host_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: HostBindingCommit = from_json(request_json)?;
         let cross_link = self
-            .agent_os_state
-            .with_host_binding_mut(|store| store.attach_host_binding(request))
+            .host_binding
+            .attach_host_binding(request)
+            .map_err(host_binding_agent_error)?;
+        to_json(&cross_link)
+    }
+
+    fn confirm_host_binding_activation_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let request: HostBindingActivationConfirmation = from_json(request_json)?;
+        let cross_link = self
+            .host_binding
+            .confirm_activation(request)
             .map_err(host_binding_agent_error)?;
         to_json(&cross_link)
     }
@@ -1181,6 +1198,15 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime.attach_host_binding_json(request_json),
         }
     }
+    pub fn confirm_host_binding_activation_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.confirm_host_binding_activation_json(request_json),
+            Self::Sqlite(runtime) => runtime.confirm_host_binding_activation_json(request_json),
+        }
+    }
     pub fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.preview_run_preparation_json(request_json),
@@ -1634,6 +1660,10 @@ json_bridge_function!(
 json_bridge_function!(
     local_agent_runtime_bridge_attach_host_binding,
     attach_host_binding_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_confirm_host_binding_activation,
+    confirm_host_binding_activation_json
 );
 json_bridge_function!(
     local_agent_runtime_bridge_preview_run_preparation,

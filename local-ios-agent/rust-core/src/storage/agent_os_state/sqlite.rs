@@ -408,6 +408,51 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
             .map_err(sqlite_error)?;
         token.map_or(Ok(None), |token| load_cross_link(&self.conn, &token))
     }
+    fn activate_matching_cross_link(
+        &mut self,
+        confirmation: &crate::llm_contracts::HostBindingActivationConfirmation,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        let existing = self
+            .matching_cross_link(
+                confirmation.agent_profile_id(),
+                confirmation.agent_profile_revision(),
+                confirmation.llm_slot_id(),
+                confirmation.requirements_hash(),
+                confirmation.binding().binding_id(),
+                confirmation.binding().binding_revision(),
+                confirmation.binding().binding_hash(),
+            )?
+            .ok_or_else(|| {
+                HostBindingError::new(
+                    "host_binding.activation_mismatch",
+                    "activation confirmation does not match an exact host-unbound cross-link",
+                )
+            })?;
+        if existing.staging_receipt_digest() != confirmation.staging_receipt_digest() {
+            return Err(HostBindingError::new(
+                "host_binding.activation_mismatch",
+                "activation confirmation staging receipt differs from the cross-link",
+            ));
+        }
+        if existing.state() == HostBindingOperationState::Active {
+            return Ok(existing);
+        }
+        let changed = self
+            .conn
+            .execute(
+                "update host_binding_cross_links set state = 'active'
+             where operation_token = ?1 and state = 'host_unbound'",
+                params![existing.operation_token()],
+            )
+            .map_err(sqlite_error)?;
+        if changed != 1 {
+            return Err(HostBindingError::new(
+                "host_binding.activation_state_stale",
+                "host binding is not awaiting activation",
+            ));
+        }
+        load_cross_link(&self.conn, existing.operation_token())?.ok_or_else(not_found)
+    }
 }
 
 impl RunPreparationRepository for SqliteAgentOSStateStore {
@@ -1276,15 +1321,17 @@ fn load_cross_link(
             );
             let commit = HostBindingCommit::new(operation.token(), binding, receipt);
             let state: String = row.get(9)?;
-            if HostBindingOperationState::from_str(&state).map_err(conversion_error)?
-                != HostBindingOperationState::HostUnbound
-            {
+            let state = HostBindingOperationState::from_str(&state).map_err(conversion_error)?;
+            if !matches!(
+                state,
+                HostBindingOperationState::HostUnbound | HostBindingOperationState::Active
+            ) {
                 return Err(conversion_error(HostBindingError::new(
                     "host_binding.invalid_persisted_state",
-                    "cross-link must be host_unbound",
+                    "cross-link must be host_unbound or active",
                 )));
             }
-            Ok(HostBindingCrossLink::new(&operation, &commit))
+            Ok(HostBindingCrossLink::new(&operation, &commit).with_state(state))
         },
     )
     .optional()

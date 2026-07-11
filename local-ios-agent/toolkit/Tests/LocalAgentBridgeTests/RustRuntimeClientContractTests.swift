@@ -705,6 +705,12 @@ struct RustRuntimeClientContractTests {
          "token_digest":"publish-token-digest","subject_id":"profile-1","agent_profile_id":"profile-1",
          "agent_profile_revision":1,"llm_slot_id":"assistant","requirements_hash":"requirements-digest","state":"pending"}
         """
+        probe.llmContractResponses[.confirmHostBindingActivation] = """
+        {"operation_token":"operation-1","token_digest":"publish-token-digest","kind":"profile_publish",
+         "llm_slot_id":"assistant","requirements_hash":"requirements-digest",
+         "binding":{"binding_id":"binding-1","binding_revision":1,"binding_hash":"binding-hash-1"},
+         "staging_receipt_digest":"staging-1","state":"active"}
+        """
 
         let client = try RustRuntimeClient(functions: probe.table())
         let operation: HostBindingOperationDTO = try await client.request(
@@ -743,12 +749,27 @@ struct RustRuntimeClientContractTests {
             ),
             as: RunPreparationPreviewDTO.self
         )
+        let active: HostBindingCrossLinkDTO = try await client.request(
+            .confirmHostBindingActivation,
+            HostBindingActivationConfirmationDTO(
+                agentProfileId: "profile-1", agentProfileRevision: 1,
+                llmSlotId: "assistant", requirementsHash: "requirements-digest",
+                binding: HostBindingTupleDTO(
+                    bindingId: "binding-1", bindingRevision: 1,
+                    bindingHash: "binding-hash-1"
+                ),
+                stagingReceiptDigest: "staging-1"
+            ),
+            as: HostBindingCrossLinkDTO.self
+        )
 
         #expect(operation.state == "pending")
         #expect(preview.preparationId == "preparation-1")
         #expect(renewed.token == "token-2")
+        #expect(active.state == "active")
         #expect(probe.llmContractRequests.map(\.0) == [
-            .prepareProfilePublish, .previewRunPreparation, .renewRunPreparation
+            .prepareProfilePublish, .previewRunPreparation, .renewRunPreparation,
+            .confirmHostBindingActivation
         ])
         for (_, requestJSON) in probe.llmContractRequests {
             let object = try #require(JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: Any])

@@ -1,5 +1,15 @@
+use local_ios_agent_runtime::app_service::{
+    AgentOSApplicationService, AgentOSApplicationServiceConfig,
+};
+use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
 use local_ios_agent_runtime::llm_contracts::{
-    HostBindingCommit, HostBindingStagingReceipt, HostBindingTuple,
+    AgentHostBindingService, HostBindingActivationConfirmation, HostBindingCommit,
+    HostBindingOperationState, HostBindingStagingReceipt, HostBindingSubjectCatalog,
+    HostBindingTuple, ProfilePublishPreparation,
+};
+use local_ios_agent_runtime::storage::agent_os_state::SharedAgentOSStateStore;
+use local_ios_agent_runtime::user_customization::{
+    AgentProfileHostBindingState, AgentProfileId, AgentProfileReference, AgentProfileVersion,
 };
 
 #[test]
@@ -45,4 +55,99 @@ fn host_binding_contract_contains_no_swift_owned_target_details() {
             "forbidden field: {forbidden}"
         );
     }
+}
+
+#[test]
+fn semantic_profile_saga_binds_actual_revision_before_activation() {
+    let app = AgentOSApplicationService::from_config(
+        AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
+    )
+    .unwrap();
+    let profiles = app.profile_repository();
+    let profile_ref = AgentProfileReference::pinned(
+        AgentProfileId::new("profile_v2"),
+        AgentProfileVersion::new(1),
+    );
+    let profile = profiles.profile(&profile_ref).unwrap();
+    assert_eq!(
+        profile.host_binding_state(),
+        AgentProfileHostBindingState::PendingHostBinding
+    );
+    assert!(app
+        .list_agent_profiles()
+        .iter()
+        .all(|profile| profile.id().as_str() != "profile_v2"));
+    let requirements = profile.llm_slot().unwrap().requirements();
+    let requirements_hash = CanonicalDigestV1::digest("agent-requirements:v1", requirements)
+        .unwrap()
+        .as_str()
+        .to_string();
+    let state = SharedAgentOSStateStore::in_memory();
+    let service =
+        AgentHostBindingService::new(state, HostBindingSubjectCatalog::new(profiles.clone()));
+
+    assert_eq!(
+        service
+            .prepare_profile_publish(ProfilePublishPreparation::new(
+                "missing-profile",
+                "does-not-exist",
+                1,
+                requirements.slot_id(),
+                &requirements_hash,
+            ))
+            .unwrap_err()
+            .code(),
+        "host_binding.profile_revision_not_found"
+    );
+    let pending = service
+        .prepare_profile_publish(ProfilePublishPreparation::new(
+            "publish-profile-v2",
+            "profile_v2",
+            1,
+            requirements.slot_id(),
+            &requirements_hash,
+        ))
+        .unwrap();
+    let binding = HostBindingTuple::new("binding-v2", 3, "binding-hash-v2");
+    let receipt = HostBindingStagingReceipt::new(
+        pending.token_digest(),
+        pending.llm_slot_id(),
+        pending.requirements_hash(),
+        binding.clone(),
+        "staging-receipt-v2",
+    );
+    let link = service
+        .commit_profile_publish(HostBindingCommit::new(
+            pending.token(),
+            binding.clone(),
+            receipt,
+        ))
+        .unwrap();
+    assert_eq!(link.state(), HostBindingOperationState::HostUnbound);
+    assert_eq!(
+        profiles.profile(&profile_ref).unwrap().host_binding_state(),
+        AgentProfileHostBindingState::HostUnbound
+    );
+    assert!(app
+        .list_agent_profiles()
+        .iter()
+        .any(|profile| profile.id().as_str() == "profile_v2"));
+
+    let active = service
+        .confirm_activation(HostBindingActivationConfirmation::new(
+            "profile_v2",
+            1,
+            requirements.slot_id(),
+            &requirements_hash,
+            binding,
+            link.staging_receipt_digest(),
+        ))
+        .unwrap();
+    assert_eq!(active.state(), HostBindingOperationState::Active);
+    let profile = profiles.profile(&profile_ref).unwrap();
+    assert_eq!(
+        profile.host_binding_state(),
+        AgentProfileHostBindingState::Active
+    );
+    assert!(profile.readiness().is_ready());
 }

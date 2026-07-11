@@ -182,6 +182,41 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
             })
             .cloned())
     }
+    fn activate_matching_cross_link(
+        &mut self,
+        confirmation: &crate::llm_contracts::HostBindingActivationConfirmation,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        let (key, existing) = self
+            .cross_links
+            .iter()
+            .find(|(_, link)| {
+                link.agent_profile_id() == confirmation.agent_profile_id()
+                    && link.agent_profile_revision() == confirmation.agent_profile_revision()
+                    && link.llm_slot_id() == confirmation.llm_slot_id()
+                    && link.requirements_hash() == confirmation.requirements_hash()
+                    && link.binding() == confirmation.binding()
+                    && link.staging_receipt_digest() == confirmation.staging_receipt_digest()
+            })
+            .map(|(key, link)| (key.clone(), link.clone()))
+            .ok_or_else(|| {
+                HostBindingError::new(
+                    "host_binding.activation_mismatch",
+                    "activation confirmation does not match an exact host-unbound cross-link",
+                )
+            })?;
+        if existing.state() == HostBindingOperationState::Active {
+            return Ok(existing);
+        }
+        if existing.state() != HostBindingOperationState::HostUnbound {
+            return Err(HostBindingError::new(
+                "host_binding.activation_state_stale",
+                "host binding is not awaiting activation",
+            ));
+        }
+        let active = existing.with_state(HostBindingOperationState::Active);
+        self.cross_links.insert(key, active.clone());
+        Ok(active)
+    }
 }
 
 impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {

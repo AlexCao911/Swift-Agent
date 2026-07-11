@@ -19,6 +19,14 @@ use crate::user_customization::{
 pub struct PackageInstallationRecord {
     pub package_id: String,
     pub schema_version: u32,
+    pub host_binding_state: PackageHostBindingState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageHostBindingState {
+    NeedsLLMBinding,
+    HostUnbound,
+    Ready,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -123,6 +131,59 @@ impl InMemoryPackageInstallStore {
             .expect("package install store mutex poisoned")
             .package_locks
             .clone()
+    }
+
+    pub fn installation(&self, installation_id: &str) -> Option<PackageInstallationRecord> {
+        self.inner
+            .lock()
+            .expect("package install store mutex poisoned")
+            .installations
+            .iter()
+            .find(|record| record.package_id == installation_id)
+            .cloned()
+    }
+
+    pub fn installed_profile(
+        &self,
+        installation_id: &str,
+    ) -> Option<InstalledAgentProfileReference> {
+        self.inner
+            .lock()
+            .expect("package install store mutex poisoned")
+            .agent_profile_references
+            .iter()
+            .find(|record| record.package_id == installation_id)
+            .cloned()
+    }
+
+    pub fn transition_host_binding_state(
+        &self,
+        installation_id: &str,
+        expected: PackageHostBindingState,
+        next: PackageHostBindingState,
+    ) -> StorageResult<PackageInstallationRecord> {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("package install store mutex poisoned");
+        let installation = inner
+            .installations
+            .iter_mut()
+            .find(|record| record.package_id == installation_id)
+            .ok_or_else(|| {
+                StorageError::new(
+                    "package.installation_not_found",
+                    "package installation was not found",
+                )
+            })?;
+        if installation.host_binding_state != expected {
+            return Err(StorageError::new(
+                "package.host_binding_state_stale",
+                "package host-binding state changed before transition",
+            ));
+        }
+        installation.host_binding_state = next;
+        Ok(installation.clone())
     }
 }
 
@@ -323,6 +384,7 @@ impl TransactionOperation for PackageInstallOperation {
             installation: PackageInstallationRecord {
                 package_id: self.manifest.package_id.clone(),
                 schema_version: self.manifest.schema_version,
+                host_binding_state: PackageHostBindingState::NeedsLLMBinding,
             },
             profile: profile.clone(),
             lock: AgentPackageLock::from_installed_manifest(self.manifest.clone(), BTreeMap::new()),

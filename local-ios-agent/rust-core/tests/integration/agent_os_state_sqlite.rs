@@ -4,8 +4,9 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::llm_contracts::{
-    HostBindingCommit, HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple,
-    PackageBindingPreparation, ProfilePublishPreparation,
+    HostBindingActivationConfirmation, HostBindingCommit, HostBindingOperationState,
+    HostBindingStagingReceipt, HostBindingTuple, PackageBindingPreparation,
+    ProfilePublishPreparation,
 };
 use local_ios_agent_runtime::run_snapshot::{
     RunPreparationService, RunSnapshotService, StartRunRequest,
@@ -64,6 +65,51 @@ fn profile_publish_is_exactly_idempotent_and_survives_reopen() {
 
     let store = SqliteAgentOSStateStore::open(&path).unwrap();
     assert_eq!(store.cross_link(pending.token()).unwrap(), Some(cross_link));
+}
+
+#[test]
+fn exact_activation_is_durable_and_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent-os.sqlite");
+    let mut store = SqliteAgentOSStateStore::open(&path).unwrap();
+    let pending = store
+        .prepare_profile_publish(profile_request("activate-profile"))
+        .unwrap();
+    let binding = HostBindingTuple::new("binding-active", 2, "binding-active-hash");
+    let link = store
+        .commit_profile_publish(HostBindingCommit::new(
+            pending.token(),
+            binding.clone(),
+            HostBindingStagingReceipt::new(
+                pending.token_digest(),
+                pending.llm_slot_id(),
+                pending.requirements_hash(),
+                binding.clone(),
+                "activation-receipt",
+            ),
+        ))
+        .unwrap();
+    let confirmation = HostBindingActivationConfirmation::new(
+        link.agent_profile_id(),
+        link.agent_profile_revision(),
+        link.llm_slot_id(),
+        link.requirements_hash(),
+        binding,
+        link.staging_receipt_digest(),
+    );
+    let active = store.activate_matching_cross_link(&confirmation).unwrap();
+    assert_eq!(active.state(), HostBindingOperationState::Active);
+    assert_eq!(
+        store.activate_matching_cross_link(&confirmation).unwrap(),
+        active
+    );
+    drop(store);
+
+    let store = SqliteAgentOSStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.cross_link(pending.token()).unwrap().unwrap().state(),
+        HostBindingOperationState::Active
+    );
 }
 
 #[test]
