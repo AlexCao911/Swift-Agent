@@ -816,6 +816,35 @@ fn legacy_llm_architecture_allowlist_never_grows() {
 }
 
 #[test]
+fn run_preparation_service_uses_atomic_creation_repository_operation() {
+    let source = std::fs::read_to_string("src/run_snapshot/snapshot_service.rs").unwrap();
+    let preview_start = source.find("pub fn preview_run(").unwrap();
+    let preview_end = source[preview_start..]
+        .find("pub fn renew_preparation(")
+        .map(|offset| preview_start + offset)
+        .unwrap();
+    let preview_body = &source[preview_start..preview_end];
+
+    assert!(preview_body.contains("create_preparation_and_acquire_lease"));
+    assert!(!preview_body.contains(".acquire_preparation("));
+    assert!(!preview_body.contains(".create_run_preparation("));
+}
+
+#[test]
+fn bridge_startup_uses_atomic_preparation_epoch_recovery() {
+    let source = std::fs::read_to_string("src/ffi_bridge.rs").unwrap();
+    let start = source.find("fn try_new(").unwrap();
+    let end = source[start..]
+        .find("let frames =")
+        .map(|offset| start + offset)
+        .unwrap();
+    let constructor = &source[start..end];
+
+    assert!(constructor.contains("recover_preparations_for_new_epoch"));
+    assert!(!constructor.contains("store.recover_old_epoch"));
+}
+
+#[test]
 fn v2_llm_contracts_do_not_gain_concrete_host_fields() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let files = [

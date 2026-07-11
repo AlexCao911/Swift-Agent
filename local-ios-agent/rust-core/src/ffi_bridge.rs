@@ -226,7 +226,9 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     ) -> Result<Self, AgentError> {
         let host_process_epoch = next_host_process_epoch();
         agent_os_state
-            .with_mut(|store| store.recover_old_epoch(&host_process_epoch))
+            .with_preparation_mut(|store| {
+                store.recover_preparations_for_new_epoch(&host_process_epoch)
+            })
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         let frames = InMemoryConversationFrameRepository::default();
         let cancellations = runtime.provider_cancellation_registry();

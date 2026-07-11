@@ -100,6 +100,10 @@ impl GlobalRunLease {
         self.state = GlobalRunLeaseState::Releasing;
         self
     }
+    pub(crate) fn renewed(mut self, expiration: u64) -> Self {
+        self.preparation_expiration = Some(expiration);
+        self
+    }
     pub(crate) fn owner_matches(&self, owner_id: &str) -> bool {
         self.owner_run_id.as_deref() == Some(owner_id)
             || self.preparation_id.as_deref() == Some(owner_id)

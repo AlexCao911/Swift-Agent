@@ -47,7 +47,7 @@ fn registration(
 #[test]
 fn preview_freezes_binding_and_renewal_rotates_with_total_ceiling() {
     let state = SharedAgentOSStateStore::in_memory();
-    let service = RunPreparationService::new(state, "epoch-1");
+    let service = RunPreparationService::new(state.clone(), "epoch-1");
     let preview = service.preview_run(request(), 0).unwrap();
     assert_eq!(preview.expiration_millis(), 5 * MINUTE);
     assert_eq!(preview.total_deadline_millis(), 30 * MINUTE);
@@ -63,6 +63,14 @@ fn preview_freezes_binding_and_renewal_rotates_with_total_ceiling() {
         .unwrap();
     assert_ne!(renewed.token(), preview.token());
     assert_eq!(renewed.expiration_millis(), 9 * MINUTE);
+    assert_eq!(
+        state
+            .with(|store| store.current_global_run_lease())
+            .unwrap()
+            .unwrap()
+            .preparation_expiration(),
+        Some(renewed.expiration_millis())
+    );
     assert_eq!(
         service
             .renew_preparation(
@@ -298,28 +306,43 @@ fn registration_for(
 fn sqlite_preparation_record_survives_reopen_without_bearer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent-os.sqlite");
-    let service = RunPreparationService::new(
-        SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap()),
-        "epoch-1",
-    );
+    let state = SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap());
+    let service = RunPreparationService::new(state.clone(), "epoch-1");
     let preview = service.preview_run(request(), 0).unwrap();
+    let renewed = service
+        .renew_preparation(
+            preview.token(),
+            preview.binding_digest(),
+            "sqlite-renewal",
+            4 * MINUTE,
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .with(|store| store.current_global_run_lease())
+            .unwrap()
+            .unwrap()
+            .preparation_expiration(),
+        Some(renewed.expiration_millis())
+    );
     drop(service);
+    drop(state);
 
     let reopened = RunPreparationService::new(
         SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap()),
         "epoch-1",
     );
     let record = reopened
-        .preparation(preview.preparation_id())
+        .preparation(renewed.preparation_id())
         .unwrap()
         .unwrap();
     assert!(record.preview().token().is_empty());
-    assert_eq!(record.preview().token_digest(), preview.token_digest());
-    assert_eq!(record.preview().binding(), preview.binding());
-    assert_eq!(record.preview().binding_digest(), preview.binding_digest());
+    assert_eq!(record.preview().token_digest(), renewed.token_digest());
+    assert_eq!(record.preview().binding(), renewed.binding());
+    assert_eq!(record.preview().binding_digest(), renewed.binding_digest());
     assert_eq!(
         record.preview().lease_generation(),
-        preview.lease_generation()
+        renewed.lease_generation()
     );
 }
 

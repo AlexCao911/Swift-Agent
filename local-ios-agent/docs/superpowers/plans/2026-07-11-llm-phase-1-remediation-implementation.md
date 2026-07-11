@@ -104,11 +104,11 @@ git commit -m "fix: use random digest-only llm bearer tokens"
 - Replaces split preparation lease writes with `create_preparation_and_acquire_lease`, `renew_preparation_and_lease`, `abort_preparation_and_begin_release`, `close_preparation_and_release`, and `recover_preparations_for_new_epoch`.
 - Startup recovery returns recovered preparation IDs only after one committed transaction.
 
-- [ ] **Step 1: Add failing atomicity/CAS/recovery tests**
+- [x] **Step 1: Add failing atomicity/CAS/recovery tests**
 
 Add repository tests for: injected failure after lease insertion rolls back the preparation and lease; renewal updates both expirations; wrong token generation/digest, lease generation, state, or epoch loses CAS; reopen recovery closes pending/registered/aborting old-epoch records and releases the matching lease. Add an FFI initialization test proving runtime construction invokes preparation recovery rather than lease-only recovery.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration agent_os_state_sqlite preparation -- --nocapture
@@ -117,13 +117,13 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 
 Expected: fail because create/renew are split and bridge initialization calls `store.recover_old_epoch`.
 
-- [ ] **Step 3: Implement repository-level transactions**
+- [x] **Step 3: Implement repository-level transactions**
 
 Remove preparation lifecycle use of public `acquire_preparation`, `create_run_preparation`, and generic `save_run_preparation`. Implement each new operation with `TransactionBehavior::Immediate` and exact SQL predicates over preparation ID, lease generation, epoch, state, token generation, and token digest. Renewal updates `global_run_lease.preparation_expiration` in the same transaction as the preparation record.
 
 Implement `recover_preparations_for_new_epoch` to update all old live preparation rows to closed with internal epoch recovery records, cancel any cleanup rows, and delete the matching old lease before commit. Construct the bridge's `RunPreparationService`, execution service, and callable runtime only after recovery succeeds.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation -- --nocapture
@@ -131,7 +131,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration ffi_bridge -- --nocapture
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core

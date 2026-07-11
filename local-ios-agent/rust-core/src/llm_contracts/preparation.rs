@@ -217,6 +217,10 @@ impl RunPreparationPreview {
         next.expiration_millis = expiration;
         next
     }
+
+    pub(crate) fn set_lease_generation(&mut self, generation: u64) {
+        self.lease_generation = generation;
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -500,6 +504,9 @@ impl RunPreparationRecord {
     }
     pub(crate) fn preview_mut(&mut self) -> &mut RunPreparationPreview {
         &mut self.preview
+    }
+    pub(crate) fn set_lease_generation(&mut self, generation: u64) {
+        self.preview.set_lease_generation(generation);
     }
     pub(crate) fn renewals_mut(&mut self) -> &mut BTreeMap<String, RenewalReplay> {
         &mut self.renewals

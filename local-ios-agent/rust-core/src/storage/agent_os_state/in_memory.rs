@@ -260,6 +260,37 @@ impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {
 }
 
 impl RunPreparationRepository for InMemoryAgentOSStateStore {
+    fn create_preparation_and_acquire_lease(
+        &mut self,
+        mut record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        if self.global_run_lease.is_some() {
+            return Err(PreparationError::new(
+                "execution.global_run_busy",
+                "another run or preparation owns the global run lease",
+            ));
+        }
+        if self.run_preparations.values().any(|existing| {
+            existing.preview().preparation_id() == record.preview().preparation_id()
+                || existing.idempotency_key() == record.idempotency_key()
+        }) {
+            return Err(preparation_conflict());
+        }
+        let lease = self
+            .acquire_preparation(
+                record.preview().preparation_id(),
+                record.preview().host_process_epoch(),
+                record.preview().expiration_millis(),
+            )
+            .map_err(preparation_lease_error)?;
+        record.set_lease_generation(lease.generation());
+        self.run_preparations.insert(
+            record.preview().preparation_id().to_string(),
+            record.clone(),
+        );
+        Ok(record)
+    }
+
     fn create_run_preparation(
         &mut self,
         record: RunPreparationRecord,
@@ -302,6 +333,65 @@ impl RunPreparationRepository for InMemoryAgentOSStateStore {
             record.clone(),
         );
         Ok(record)
+    }
+
+    fn renew_preparation_and_lease(
+        &mut self,
+        expected_state: RunPreparationState,
+        expected_token_generation: u64,
+        expected_token_digest: &str,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let existing = self
+            .run_preparations
+            .get(record.preview().preparation_id())
+            .ok_or_else(preparation_not_found)?;
+        if existing.state() != expected_state
+            || existing.preview().token_generation() != expected_token_generation
+            || existing.preview().token_digest() != expected_token_digest
+        {
+            return Err(preparation_stale());
+        }
+        let lease = self
+            .global_run_lease
+            .clone()
+            .ok_or_else(preparation_stale)?;
+        if lease.state() != GlobalRunLeaseState::Preparing
+            || lease.preparation_id() != Some(record.preview().preparation_id())
+            || lease.generation() != record.preview().lease_generation()
+            || lease.host_process_epoch() != record.preview().host_process_epoch()
+        {
+            return Err(preparation_stale());
+        }
+        self.global_run_lease = Some(lease.renewed(record.preview().expiration_millis()));
+        self.run_preparations.insert(
+            record.preview().preparation_id().to_string(),
+            record.clone(),
+        );
+        Ok(record)
+    }
+
+    fn recover_preparations_for_new_epoch(
+        &mut self,
+        current_host_epoch: &str,
+    ) -> Result<Vec<String>, PreparationError> {
+        let mut recovered = Vec::new();
+        for record in self.run_preparations.values_mut().filter(|record| {
+            record.state() != RunPreparationState::Closed
+                && record.preview().host_process_epoch() != current_host_epoch
+        }) {
+            record.close_for_epoch_end();
+            recovered.push(record.preview().preparation_id().to_string());
+        }
+        if self
+            .global_run_lease
+            .as_ref()
+            .is_some_and(|lease| lease.host_process_epoch() != current_host_epoch)
+        {
+            self.global_run_lease = None;
+        }
+        recovered.sort();
+        Ok(recovered)
     }
 
     fn abort_run_preparation(

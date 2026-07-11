@@ -49,6 +49,10 @@ pub trait GlobalRunLeaseRepository {
 }
 
 pub trait RunPreparationRepository {
+    fn create_preparation_and_acquire_lease(
+        &mut self,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError>;
     fn create_run_preparation(
         &mut self,
         record: RunPreparationRecord,
@@ -58,6 +62,17 @@ pub trait RunPreparationRepository {
         expected_state: crate::llm_contracts::RunPreparationState,
         record: RunPreparationRecord,
     ) -> Result<RunPreparationRecord, PreparationError>;
+    fn renew_preparation_and_lease(
+        &mut self,
+        expected_state: crate::llm_contracts::RunPreparationState,
+        expected_token_generation: u64,
+        expected_token_digest: &str,
+        record: RunPreparationRecord,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn recover_preparations_for_new_epoch(
+        &mut self,
+        current_host_epoch: &str,
+    ) -> Result<Vec<String>, PreparationError>;
     fn abort_run_preparation(
         &mut self,
         record: RunPreparationRecord,

@@ -280,40 +280,20 @@ impl RunPreparationService {
         )?;
 
         self.state_store.with_preparation_mut(|store| {
-            let lease = store
-                .acquire_preparation(
-                    request.preparation_id(),
-                    &self.host_process_epoch,
-                    expiration,
-                )
-                .map_err(preparation_lease_error)?;
             let preview = RunPreparationPreview::new(
                 &request,
                 token,
                 token_digest,
                 binding_digest,
                 self.host_process_epoch.clone(),
-                lease.generation(),
+                0,
                 expiration,
                 deadline,
             );
             let record =
                 RunPreparationRecord::new(request.idempotency_key().to_string(), preview.clone());
-            match store.create_run_preparation(record) {
-                Ok(_) => Ok(preview),
-                Err(error) => {
-                    let _ = store
-                        .begin_release(
-                            lease.generation(),
-                            request.preparation_id(),
-                            &self.host_process_epoch,
-                        )
-                        .and_then(|_| {
-                            store.complete_release(lease.generation(), &self.host_process_epoch)
-                        });
-                    Err(error)
-                }
-            }
+            let persisted = store.create_preparation_and_acquire_lease(record)?;
+            Ok(persisted.preview().clone())
         })
     }
 
@@ -372,12 +352,19 @@ impl RunPreparationService {
                 .preview()
                 .renewed(next_token, next_digest, expiration);
             let expected_state = record.state();
+            let expected_token_generation = record.preview().token_generation();
+            let expected_token_digest = record.preview().token_digest().to_string();
             record.renewals_mut().insert(
                 presented_digest,
                 RenewalReplay::new(idempotency_key.to_string(), renewed.clone()),
             );
             *record.preview_mut() = renewed.clone();
-            store.save_run_preparation(expected_state, record)?;
+            store.renew_preparation_and_lease(
+                expected_state,
+                expected_token_generation,
+                &expected_token_digest,
+                record,
+            )?;
             Ok(renewed)
         })
     }
@@ -565,26 +552,9 @@ impl RunPreparationService {
         &self,
         current_host_epoch: &str,
     ) -> Result<Vec<String>, PreparationError> {
-        let records = self
-            .state_store
-            .with_preparation(|store| store.list_run_preparations())?;
-        let mut recovered = Vec::new();
-        for mut record in records.into_iter().filter(|record| {
-            record.state() != RunPreparationState::Closed
-                && record.preview().host_process_epoch() != current_host_epoch
-        }) {
-            let expected = record.state();
-            self.state_store
-                .with_mut(|store| store.recover_old_epoch(current_host_epoch))
-                .map_err(preparation_lease_error)?;
-            record.close_for_epoch_end();
-            let id = record.preview().preparation_id().to_string();
-            self.state_store
-                .with_preparation_mut(|store| store.save_run_preparation(expected, record))?;
-            recovered.push(id);
-        }
-        recovered.sort();
-        Ok(recovered)
+        self.state_store.with_preparation_mut(|store| {
+            store.recover_preparations_for_new_epoch(current_host_epoch)
+        })
     }
 }
 
@@ -701,12 +671,6 @@ fn digest<T: serde::Serialize>(domain: &str, value: &T) -> Result<String, Prepar
     CanonicalDigestV1::digest(domain, value)
         .map(|digest| digest.as_str().to_string())
         .map_err(|error| PreparationError::new("preparation.digest_failed", error.to_string()))
-}
-fn preparation_lease_error(error: crate::llm_contracts::GlobalRunLeaseError) -> PreparationError {
-    PreparationError::new(
-        "preparation.lease_transition_failed",
-        format!("{}: {error}", error.code()),
-    )
 }
 fn preparation_not_found() -> PreparationError {
     PreparationError::new(
