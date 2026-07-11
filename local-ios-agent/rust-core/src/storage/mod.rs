@@ -1,3 +1,4 @@
+pub mod agent_os_state;
 pub mod archive_store;
 pub mod event_store;
 pub mod migration;

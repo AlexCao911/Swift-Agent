@@ -9,6 +9,8 @@ mod agent_lifecycle_failure_paths;
 mod agent_lifecycle_profile_to_runtime;
 #[path = "integration/agent_loop.rs"]
 mod agent_loop;
+#[path = "integration/agent_os_state_sqlite.rs"]
+mod agent_os_state_sqlite;
 #[path = "integration/app_service_builder_publish.rs"]
 mod app_service_builder_publish;
 #[path = "integration/context_assembly_lifecycle.rs"]

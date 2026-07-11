@@ -560,32 +560,32 @@ git commit -m "feat: translate agent packages to llm slot v2"
 **Interfaces:**
 - Produces Rust `prepare_profile_publish`, `commit_profile_publish`, `begin_package_binding`, `attach_host_binding` and Swift `stageHostBinding`, `activateHostBinding`, `reconcileHostBindings`.
 
-- [ ] **Step 1: Write failing saga/state-store tests**
+- [x] **Step 1: Write failing saga/state-store tests**
 
 Inject failure after each stage and assert exact idempotency-key replay,
 binding ID/revision/hash equality, `host_unbound` after Rust commit but before
 Swift activation, and convergence after reopen.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test contract host_binding_saga -- --nocapture
 swift test --package-path local-ios-agent/toolkit --filter AgentHostBindingSagaTests
 ```
 
-- [ ] **Step 3: Add SQLite tables and transaction APIs**
+- [x] **Step 3: Add SQLite tables and transaction APIs**
 
 Create tables for `global_run_lease`, `host_binding_operations`,
 `host_binding_cross_links`, and `run_preparations`. Use explicit state strings,
 unique idempotency keys, opaque digest columns, and compare-and-swap updates.
 
-- [ ] **Step 4: Implement both saga halves and reconciliation**
+- [x] **Step 4: Implement both saga halves and reconciliation**
 
 Rust validates only operation token digest, slot/requirements hash, and opaque
 binding tuple/receipt. Swift owns the target behind the tuple. Exact retries
 return the original operation; conflicting retries fail closed.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 cargo test --test integration agent_os_state_sqlite -- --nocapture
