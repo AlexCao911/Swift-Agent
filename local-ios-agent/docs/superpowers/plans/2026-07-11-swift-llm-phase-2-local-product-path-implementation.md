@@ -816,7 +816,7 @@ git commit -m "feat: verify and atomically install local models"
 - Produces `LocalModelDeletionService.delete(installationID:)` with an intent/trash/commit protocol.
 - Deletion never mutates Agent bindings; later readiness reports the exact missing installation.
 
-- [ ] **Step 1: Write failing deletion tests**
+- [x] **Step 1: Write failing deletion tests**
 
 Reject deletion while loaded, session-active, verifying, or downloading. Require the caller to cancel a paused/downloading installation first. Prove an installed unused model is moved to private trash before its record is removed, a crash after trash move completes on launch, a duplicate delete is idempotent, and deleting one installation does not affect another revision.
 
@@ -832,13 +832,13 @@ subscribe to the permanent download event stream and restore background tasks
 return LocalStartupRecoveryResult to Task 9; it alone may construct/expose runtime
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelDeletionServiceTests
 ```
 
-- [ ] **Step 3: Implement leases and recoverable deletion**
+- [x] **Step 3: Implement leases and recoverable deletion**
 
 Use Task 1's common `HostProcessEpoch` type; do not redeclare or generate it in the local module:
 
@@ -888,7 +888,7 @@ package enum LocalModelStartupRecovery {
 }
 ```
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelDeletionServiceTests
@@ -896,7 +896,7 @@ swift test --package-path toolkit --filter LocalModelReconcilerTests
 swift test --package-path toolkit --filter LocalModelStartupRecoveryTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMLocal/LocalModelStartupRecovery.swift \

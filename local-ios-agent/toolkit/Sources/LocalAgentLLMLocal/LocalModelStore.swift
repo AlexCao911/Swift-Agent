@@ -87,10 +87,23 @@ package struct LocalFilesystemOperationRecord: Equatable, Sendable {
 }
 
 package struct LocalModelUseLease: Equatable, Sendable {
+    package enum Purpose: String, Sendable {
+        case loaded
+        case activeSession = "active_session"
+    }
+
+    package enum State: String, Sendable {
+        case active
+        case released
+        case endedEpoch = "ended_epoch"
+    }
+
     let leaseID: String
     let installationID: String
-    let hostProcessEpoch: String
-    let sessionHandle: String
+    let purpose: Purpose
+    let hostProcessEpoch: HostProcessEpoch
+    let state: State
+    let leaseRevision: UInt64
 }
 
 package struct StoredLocalCatalogState: Sendable {
@@ -326,6 +339,112 @@ public final class LocalModelStore: @unchecked Sendable {
                     bindings: [.text(installationID), .integer(try sqliteInteger(expectedStateRevision))]
                 )
                 guard changed == 1 else { throw staleState() }
+            }
+        }
+    }
+
+    package func beginDeletion(
+        operationID: String,
+        installationID: String
+    ) throws -> LocalFilesystemOperationRecord? {
+        try lock.withLock {
+            try database.transaction {
+                guard let installation = try installationUnlocked(installationID) else { return nil }
+                if installation.state == .deleting {
+                    guard let row = try database.queryRows(
+                        """
+                        SELECT operation_id, state FROM local_filesystem_operations
+                        WHERE installation_id = ?1 AND kind = 'delete_installation' AND state != 'committed'
+                        ORDER BY created_at LIMIT 1
+                        """,
+                        bindings: [.text(installationID)]
+                    ).first,
+                        let existingID = row.text("operation_id"),
+                        let stateText = row.text("state"),
+                        let state = LocalFilesystemOperationState(rawValue: stateText)
+                    else { throw storeCorrupt() }
+                    return LocalFilesystemOperationRecord(
+                        operationID: existingID,
+                        installationID: installationID,
+                        kind: .deleteInstallation,
+                        state: state,
+                        taskIdentifier: nil,
+                        reservationID: nil
+                    )
+                }
+                guard installation.state == .installed else {
+                    let code: String
+                    switch installation.state {
+                    case .queued, .downloading, .paused, .verifying:
+                        code = "deletion.cancellation_required"
+                    case .failed, .deleting, .installed:
+                        code = "deletion.state_invalid"
+                    }
+                    throw storeFailure(code, "local model must be unused and installed before deletion")
+                }
+                let activeLeases = try database.queryRows(
+                    "SELECT COUNT(*) AS count FROM local_model_use_leases WHERE installation_id = ?1 AND state = 'active'",
+                    bindings: [.text(installationID)]
+                ).first?.integer("count") ?? 0
+                guard activeLeases == 0 else {
+                    throw storeFailure("deletion.model_in_use", "local model has an active use lease")
+                }
+                try database.execute(
+                    """
+                    INSERT INTO local_filesystem_operations(
+                      operation_id, installation_id, kind, state, created_at
+                    ) VALUES (?1, ?2, 'delete_installation', 'pending', ?3)
+                    """,
+                    bindings: [
+                        .text(operationID), .text(installationID),
+                        .text(Self.timestamp(Date())),
+                    ]
+                )
+                let nextRevision = try incrementStateRevision(installation.stateRevision)
+                let changed = try database.executeChanges(
+                    """
+                    UPDATE local_installations SET state = 'deleting', state_revision = ?1
+                    WHERE installation_id = ?2 AND state = 'installed' AND state_revision = ?3
+                    """,
+                    bindings: [
+                        .integer(try sqliteInteger(nextRevision)), .text(installationID),
+                        .integer(try sqliteInteger(installation.stateRevision)),
+                    ]
+                )
+                guard changed == 1 else { throw staleState() }
+                return LocalFilesystemOperationRecord(
+                    operationID: operationID,
+                    installationID: installationID,
+                    kind: .deleteInstallation,
+                    state: .pending,
+                    taskIdentifier: nil,
+                    reservationID: nil
+                )
+            }
+        }
+    }
+
+    package func completeDeletionOperation(operationID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                guard let row = try database.queryRows(
+                    "SELECT installation_id, kind, state FROM local_filesystem_operations WHERE operation_id = ?1",
+                    bindings: [.text(operationID)]
+                ).first,
+                    let installationID = row.text("installation_id"),
+                    row.text("kind") == LocalFilesystemOperationKind.deleteInstallation.rawValue,
+                    row.text("state") == LocalFilesystemOperationState.filesystemApplied.rawValue
+                else { throw staleState() }
+                let changed = try database.executeChanges(
+                    "DELETE FROM local_installations WHERE installation_id = ?1 AND state = 'deleting'",
+                    bindings: [.text(installationID)]
+                )
+                guard changed == 1 else { throw staleState() }
+                let operationChanged = try database.executeChanges(
+                    "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state = 'filesystem_applied'",
+                    bindings: [.text(operationID)]
+                )
+                guard operationChanged == 1 else { throw staleState() }
             }
         }
     }
@@ -851,26 +970,44 @@ public final class LocalModelStore: @unchecked Sendable {
     package func acquireModelUseLease(_ lease: LocalModelUseLease) throws {
         try lock.withLock {
             try database.transaction {
-                let count = try database.queryRows(
-                    "SELECT COUNT(*) AS count FROM local_model_use_leases"
-                ).first?.integer("count") ?? 0
-                guard count == 0 else {
+                guard lease.state == .active, lease.leaseRevision == 1 else {
+                    throw storeFailure("runtime.local_lease_invalid", "new model use lease must start active at revision one")
+                }
+                if let existing = try modelUseLeaseUnlocked(leaseID: lease.leaseID) {
+                    guard existing == lease else { throw staleState() }
+                    return
+                }
+                let installation = try requiredInstallationUnlocked(lease.installationID)
+                guard installation.state == .installed else {
                     throw storeFailure(
-                        "runtime.local_model_busy",
-                        "only one local model use lease may be active"
+                        "runtime.local_model_not_installed",
+                        "only an installed local model can acquire a use lease"
                     )
                 }
-                _ = try requiredInstallationUnlocked(lease.installationID)
+                let activeRows = try database.queryRows(
+                    "SELECT installation_id, purpose FROM local_model_use_leases WHERE state = 'active'"
+                )
+                let conflicts = activeRows.contains { row in
+                    row.text("installation_id") != lease.installationID
+                        || row.text("purpose") == lease.purpose.rawValue
+                }
+                guard !conflicts else {
+                    throw storeFailure(
+                        "runtime.local_model_busy",
+                        "another local model or lease of this purpose is active"
+                    )
+                }
                 try database.execute(
                     """
                     INSERT INTO local_model_use_leases(
-                      lease_id, installation_id, host_process_epoch, session_handle, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5)
+                      lease_id, installation_id, host_process_epoch, session_handle,
+                      purpose, state, lease_revision, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', 1, ?6)
                     """,
                     bindings: [
                         .text(lease.leaseID), .text(lease.installationID),
-                        .text(lease.hostProcessEpoch), .text(lease.sessionHandle),
-                        .text(Self.timestamp(Date())),
+                        .text(lease.hostProcessEpoch.rawValue), .text(lease.leaseID),
+                        .text(lease.purpose.rawValue), .text(Self.timestamp(Date())),
                     ]
                 )
             }
@@ -880,10 +1017,76 @@ public final class LocalModelStore: @unchecked Sendable {
     package func releaseModelUseLease(leaseID: String) throws {
         try lock.withLock {
             let changed = try database.executeChanges(
-                "DELETE FROM local_model_use_leases WHERE lease_id = ?1",
+                """
+                UPDATE local_model_use_leases
+                SET state = 'released', lease_revision = lease_revision + 1
+                WHERE lease_id = ?1 AND state = 'active'
+                """,
                 bindings: [.text(leaseID)]
             )
             guard changed == 1 else { throw staleState() }
+        }
+    }
+
+    package func modelUseLease(leaseID: String) throws -> LocalModelUseLease? {
+        try lock.withLock { try modelUseLeaseUnlocked(leaseID: leaseID) }
+    }
+
+    package func recoverLocalSessionsAndUseLeasesForNewEpoch(
+        _ epoch: HostProcessEpoch
+    ) throws {
+        try lock.withLock {
+            try database.transaction {
+                try database.execute(
+                    """
+                    UPDATE prepared_local_sessions
+                    SET state = 'closed'
+                    WHERE host_process_epoch != ?1 AND state != 'closed'
+                    """,
+                    bindings: [.text(epoch.rawValue)]
+                )
+                try database.execute(
+                    """
+                    UPDATE local_model_use_leases
+                    SET state = 'ended_epoch', lease_revision = lease_revision + 1
+                    WHERE host_process_epoch != ?1 AND state = 'active'
+                    """,
+                    bindings: [.text(epoch.rawValue)]
+                )
+            }
+        }
+    }
+
+    package func seedPreparedLocalSessionForTesting(
+        preparationID: String,
+        installationID: String,
+        hostProcessEpoch: HostProcessEpoch
+    ) throws {
+        try lock.withLock {
+            try database.execute(
+                """
+                INSERT INTO prepared_local_sessions(
+                  preparation_id, installation_id, target_id, target_revision,
+                  binding_id, binding_revision, binding_hash, requirements_hash,
+                  host_process_epoch, state, snapshot_blob
+                ) VALUES (?1, ?2, 'target', '1', 'binding', '1', 'hash', 'requirements', ?3, 'prepared', ?4)
+                """,
+                bindings: [
+                    .text(preparationID), .text(installationID),
+                    .text(hostProcessEpoch.rawValue), .blob(Data([1])),
+                ]
+            )
+        }
+    }
+
+    package func preparedLocalSessionStateForTesting(
+        preparationID: String
+    ) throws -> String? {
+        try lock.withLock {
+            try database.queryRows(
+                "SELECT state FROM prepared_local_sessions WHERE preparation_id = ?1",
+                bindings: [.text(preparationID)]
+            ).first?.text("state")
         }
     }
 
@@ -1105,6 +1308,36 @@ public final class LocalModelStore: @unchecked Sendable {
         )
     }
 
+    private func modelUseLeaseUnlocked(leaseID: String) throws -> LocalModelUseLease? {
+        guard let row = try database.queryRows(
+            """
+            SELECT lease_id, installation_id, purpose, host_process_epoch,
+                   state, lease_revision
+            FROM local_model_use_leases WHERE lease_id = ?1
+            """,
+            bindings: [.text(leaseID)]
+        ).first else { return nil }
+        guard let leaseID = row.text("lease_id"),
+              let installationID = row.text("installation_id"),
+              let purposeText = row.text("purpose"),
+              let purpose = LocalModelUseLease.Purpose(rawValue: purposeText),
+              let epochText = row.text("host_process_epoch"),
+              let epoch = HostProcessEpoch(rawValue: epochText),
+              let stateText = row.text("state"),
+              let state = LocalModelUseLease.State(rawValue: stateText),
+              let revisionValue = row.integer("lease_revision"),
+              let revision = UInt64(exactly: revisionValue)
+        else { throw storeCorrupt() }
+        return LocalModelUseLease(
+            leaseID: leaseID,
+            installationID: installationID,
+            purpose: purpose,
+            hostProcessEpoch: epoch,
+            state: state,
+            leaseRevision: revision
+        )
+    }
+
     private func catalogStateUnlocked() throws -> StoredLocalCatalogState? {
         guard let row = try database.queryRows(
             """
@@ -1246,6 +1479,9 @@ public final class LocalModelStore: @unchecked Sendable {
                   installation_id TEXT NOT NULL REFERENCES local_installations(installation_id) ON DELETE CASCADE,
                   host_process_epoch TEXT NOT NULL,
                   session_handle TEXT NOT NULL,
+                  purpose TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  lease_revision INTEGER NOT NULL,
                   created_at TEXT NOT NULL
                 )
                 """
@@ -1267,20 +1503,37 @@ public final class LocalModelStore: @unchecked Sendable {
                 )
                 """
             )
-            try database.execute("PRAGMA user_version = 1")
+            try database.execute("PRAGMA user_version = 2")
         }
     }
 
     private static func migrate(_ database: SQLiteConnection) throws {
         let version = try database.queryRows("PRAGMA user_version")
             .first?.integer("user_version") ?? 0
-        guard version == 0 || version == 1 else {
+        guard version >= 0, version <= 2 else {
             throw storeFailure(
                 "download.store_schema_unsupported",
                 "local model database schema is newer than this app"
             )
         }
-        try createSchema(database)
+        if version == 0 {
+            try createSchema(database)
+        } else if version == 1 {
+            try database.transaction {
+                try database.execute(
+                    "ALTER TABLE local_model_use_leases ADD COLUMN purpose TEXT NOT NULL DEFAULT 'active_session'"
+                )
+                try database.execute(
+                    "ALTER TABLE local_model_use_leases ADD COLUMN state TEXT NOT NULL DEFAULT 'active'"
+                )
+                try database.execute(
+                    "ALTER TABLE local_model_use_leases ADD COLUMN lease_revision INTEGER NOT NULL DEFAULT 1"
+                )
+                try database.execute("PRAGMA user_version = 2")
+            }
+        } else {
+            try createSchema(database)
+        }
     }
 
     private static func reconstructableStorageURLs(fileURL: URL) -> [URL] {

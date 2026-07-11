@@ -61,14 +61,15 @@ package struct LocalModelReconciler: Sendable {
                     installationID: operation.installationID
                 ))
             case .deleteInstallation:
-                // Task 7 adds deletion intent reconciliation to this same ordered pass.
-                continue
+                try LocalModelDeletionService(store: store, paths: paths)
+                    .resumeDeletion(operationID: operation.operationID)
             }
         }
 
         try reconcileInstalledRecords()
         try removeOrphanStagingDirectories()
         try quarantineOrphanFinalDirectories()
+        try removeOrphanTrashDirectories()
         return LocalFilesystemRecoveryResult(
             pendingTransportCancellations: pendingCancellations.sorted {
                 $0.operationID < $1.operationID
@@ -120,6 +121,12 @@ package struct LocalModelReconciler: Sendable {
             }
             try FileManager.default.moveItem(at: directory, to: trash)
             try FileManager.default.removeItem(at: trash)
+        }
+    }
+
+    private func removeOrphanTrashDirectories() throws {
+        for directory in try childDirectories(of: paths.trashRoot) {
+            try FileManager.default.removeItem(at: directory)
         }
     }
 }

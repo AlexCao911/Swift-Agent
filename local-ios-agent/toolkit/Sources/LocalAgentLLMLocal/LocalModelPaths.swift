@@ -40,6 +40,10 @@ package struct LocalModelPaths: Sendable {
         try childDirectory(installationID, under: trashRoot)
     }
 
+    package func trashOperation(_ operationID: String) throws -> URL {
+        try childDirectory(operationID, under: trashRoot)
+    }
+
     package func resumeState(_ installationID: String, artifactID: String) throws -> URL {
         let directory = try childDirectory(installationID, under: resumeRoot)
         try validateOpaqueComponent(artifactID)

@@ -16,7 +16,7 @@ struct LocalModelStoreTests {
             backupExclusion: backupExclusion
         )
         #expect(store.fileURL == root.appending(path: "LocalAgent/LLM/local-models.sqlite"))
-        #expect(store.schemaVersionForTesting() == 1)
+        #expect(store.schemaVersionForTesting() == 2)
         #expect(Set(store.tableNamesForTesting()) == [
             "local_catalog_state",
             "local_installations",
@@ -312,22 +312,55 @@ struct LocalModelStoreTests {
         )
         #expect(try store.unfinishedFilesystemOperations().isEmpty)
 
+        let storedInstallable = try store.installationSummary(installationID: "queue-b")
+        var installable = try #require(storedInstallable)
+        installable = try store.transitionInstallation(
+            installationID: "queue-b",
+            expectedStateRevision: installable.stateRevision,
+            to: .downloading
+        )
+        installable = try store.transitionInstallation(
+            installationID: "queue-b",
+            expectedStateRevision: installable.stateRevision,
+            to: .verifying
+        )
+        _ = try store.transitionInstallation(
+            installationID: "queue-b",
+            expectedStateRevision: installable.stateRevision,
+            to: .installed
+        )
+
+        let epoch = try HostProcessEpoch.generate()
         let lease = LocalModelUseLease(
             leaseID: "lease-a",
             installationID: "queue-b",
-            hostProcessEpoch: "epoch-a",
-            sessionHandle: "session-a"
+            purpose: .loaded,
+            hostProcessEpoch: epoch,
+            state: .active,
+            leaseRevision: 1
         )
         try store.acquireModelUseLease(lease)
+        let sessionLease = LocalModelUseLease(
+            leaseID: "lease-session",
+            installationID: "queue-b",
+            purpose: .activeSession,
+            hostProcessEpoch: epoch,
+            state: .active,
+            leaseRevision: 1
+        )
+        try store.acquireModelUseLease(sessionLease)
         try expectFailure("runtime.local_model_busy") {
             try store.acquireModelUseLease(LocalModelUseLease(
                 leaseID: "lease-b",
                 installationID: "queue-b",
-                hostProcessEpoch: "epoch-a",
-                sessionHandle: "session-b"
+                purpose: .loaded,
+                hostProcessEpoch: epoch,
+                state: .active,
+                leaseRevision: 1
             ))
         }
         try store.releaseModelUseLease(leaseID: lease.leaseID)
+        try store.releaseModelUseLease(leaseID: sessionLease.leaseID)
         try store.releaseDiskReservation(reservationID: "reservation-a")
         #expect(try store.totalReservedBytes() == 0)
     }
