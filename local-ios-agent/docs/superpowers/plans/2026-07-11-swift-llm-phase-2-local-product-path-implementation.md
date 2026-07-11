@@ -445,7 +445,7 @@ git commit -m "feat: verify the official local model catalog"
 - Reserves normalized `prepared_local_sessions` rows for Task 9's sanitized immutable local session snapshots and old-epoch closure.
 - Stores absolute paths only in this local repository; public records return opaque IDs.
 
-- [ ] **Step 1: Write failing schema, reopen, rollback, and CAS tests**
+- [x] **Step 1: Write failing schema, reopen, rollback, and CAS tests**
 
 Require `PRAGMA user_version = 1` and normalized tables:
 
@@ -476,13 +476,13 @@ installed -> deleting -> deleted
 
 Add catalog acceptance tests: first launch atomically accepts the verified bundled revision; a higher verified remote revision replaces it; invalid remote bytes leave persisted/bundled accepted state unchanged; equal content is idempotent; equal revision/different canonical bytes conflicts; lower revision returns `download.catalog_revision_rollback`; injected crash cannot advance only the revision or only the envelope; reopen re-verifies the persisted envelope/key and never falls back to an older bundled catalog. Corrupt/unknown-key persisted accepted state fails closed as `download.catalog_state_invalid` instead of resetting its monotonic floor.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelStoreTests
 ```
 
-- [ ] **Step 3: Extend the SQLite primitive and implement the repository**
+- [x] **Step 3: Extend the SQLite primitive and implement the repository**
 
 Make `SQLiteConnection` and `SQLiteValue` package-visible. Add `.integer(Int64)` and `.blob(Data)` bindings plus typed `SQLiteRow` accessors without changing existing `LLMStore` behavior.
 
@@ -525,14 +525,14 @@ The transaction CASes the stored revision, envelope bytes, signature, and key ID
 
 Filesystem work is never described as atomic with SQLite. `local_filesystem_operations` stores `promote_installation`, `cancel_download`, and `delete_installation` intents with `pending | filesystem_applied | committed` state. A cancel first persists intent/task/reservation identities, then cancels the transport and cleans staging, then transactionally removes rows; `LocalModelReconciler` compensates any crash boundary.
 
-- [ ] **Step 4: Run GREEN and Core regressions**
+- [x] **Step 4: Run GREEN and Core regressions**
 
 ```bash
 swift test --package-path toolkit --filter LocalModelStoreTests
 swift test --package-path toolkit --filter LLMStoreTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMCore/SQLiteConnection.swift \
