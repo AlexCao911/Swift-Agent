@@ -8,7 +8,7 @@
 
 **Tech Stack:** Swift 6, SwiftPM, Foundation `URLSession`, CryptoKit Ed25519/SHA-256, Apple SQLite3, C++17, the existing `local_agent_inference.h` v2 C ABI, llama.cpp fixtures, Swift Testing, and shell contract runners.
 
-**Review revision:** 2026-07-11 — closes native-artifact ownership, catalog acceptance, restored-download events, epoch lease recovery, immutable local sessions, C-handle/backpressure ownership, SQLite ownership, engine identity, and path-boundary findings.
+**Review revision:** 2026-07-11 — closes package-contained native artifacts and vendor linkage, non-empty release-engine/catalog parity, exact target/binding session identity, one App-owned Rust/Swift host epoch, at-most-once backend cancellation, catalog acceptance, restored-download events, epoch lease recovery, immutable local sessions, C-handle/backpressure ownership, SQLite ownership, engine identity, and path-boundary findings.
 
 ## Global Constraints
 
@@ -22,7 +22,9 @@
 - Exactly one local generation may be active. Downloading never loads a model; selecting/configuring never loads a model.
 - Swift owns catalog trust, download/resume data, paths, hashes, disk policy, installation records, capability composition, canonical parameters, tool-call parsing, and runtime orchestration.
 - C++ owns only compiled engine discovery, model/load/generation validation, format-specific prompt/template rendering, load, stream, cancel, release, and unload.
-- App, SwiftPM, and Rust test hosts resolve the C ABI from one `LocalAgentInferenceNative.xcframework`; standalone C++ unit-test executables may compile source directly but are never linked into product/test hosts.
+- App, SwiftPM, and Rust test hosts resolve the C ABI plus every enabled static vendor runtime from one `LocalAgentInferenceNative.xcframework`; standalone C++ unit-test executables may compile source directly but are never linked into product/test hosts.
+- `inference/release-engines.json`, the shipped native registry, and the official catalog have the same non-empty release-engine ID set; an engine cannot be selectable until every Apple slice resolves its vendor runtime.
+- App composition creates one 256-bit `HostProcessEpoch`; Rust, local/cloud Swift stores, commands, sessions, events, preparations, and leases consume that exact value rather than generating subsystem-local epochs.
 - Rust receives no catalog entry, artifact URL, installation ID, filesystem path, engine ID, model format, or C++ option. `host_slot_v2` remains non-runnable until Phase 4.
 - Phase 2 does not implement Provider Profiles, API keys, Keychain, egress, remote adapters, Rust host callbacks, event envelopes, Agent tool loops, Model Center UI, or legacy removal.
 - Local paths remain internal to `LocalAgentLLMLocal`. Public summaries expose opaque installation IDs and display-safe byte counts only.
@@ -69,7 +71,7 @@ inference/backends/llama_cpp/llama_cpp_prompt.h/.cpp
 inference/c_api/local_agent_inference.cpp
 ```
 
-The C++ sources produce exactly one `LocalAgentInferenceNative.xcframework`. Swift imports and links that artifact directly. Legacy Rust declares the same artifact as an unbundled native dependency and never compiles or embeds a second copy; the final App/test-host linker is the only link owner. The new Swift target never calls through Rust and C++ never imports Rust headers.
+The C++ sources and statically mergeable vendor runtimes produce exactly one `toolkit/Artifacts/LocalAgentInferenceNative.xcframework`, inside the Swift package root. Swift imports and links that artifact directly. Legacy Rust declares the same artifact as an unbundled native dependency and never compiles or embeds a second copy; the final App/test-host linker is the only link owner. The new Swift target never calls through Rust and C++ never imports Rust headers.
 
 ---
 
@@ -78,6 +80,7 @@ The C++ sources produce exactly one `LocalAgentInferenceNative.xcframework`. Swi
 **Files:**
 - Create: `scripts/build-local-agent-inference-xcframework.sh`
 - Create: `scripts/test-local-inference-app-link.sh`
+- Create: `inference/release-engines.json`
 - Create: `inference/include/module.modulemap`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/CppInferencePackagingTests.swift`
@@ -85,15 +88,24 @@ The C++ sources produce exactly one `LocalAgentInferenceNative.xcframework`. Swi
 - Modify: `.gitignore`
 - Modify: `toolkit/Package.swift`
 - Modify: `rust-core/build.rs`
+- Create: `toolkit/Sources/LocalAgentLLMCore/HostProcessEpoch.swift`
+- Modify: `toolkit/Sources/LocalAgentBridge/RustRuntimeClient.swift`
+- Modify: `toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift`
+- Modify: `rust-core/src/ffi_bridge.rs`
+- Modify: `rust-core/tests/integration/ffi_bridge.rs`
+- Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift`
 - Modify: `scripts/build-local-inference-xcode.sh`
 - Modify: `scripts/run-local-inference-cpp-contracts.sh`
 - Modify: `apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj`
 
 **Interfaces:**
-- Produces the sole native binary `artifacts/LocalAgentInferenceNative.xcframework` with macOS, iOS Simulator, and iPhoneOS static-library slices.
+- Produces the sole native binary `toolkit/Artifacts/LocalAgentInferenceNative.xcframework` with macOS, iOS Simulator, and iPhoneOS static-library slices, each containing adapter objects plus all static vendor objects for its enabled release engines.
 - Produces SwiftPM product `LocalAgentLLMLocal` depending on `LocalAgentLLMContracts`, `LocalAgentLLMCore`, `CSQLite`, and `LocalAgentInferenceNative`.
 - Produces `CppInferenceRegistryAPI`, an injectable Swift registry protocol; no product code outside the local target imports the C module.
 - Rust `staticlib` contains unresolved references to this ABI but no `local_agent_*` definition; App/test hosts resolve both Swift and legacy Rust calls from the one XCFramework slice.
+- Produces one Swift-generated `HostProcessEpoch` injected unchanged into Rust runtime construction and every Swift LLM subsystem/store.
 
 - [ ] **Step 1: Write the failing package-boundary test**
 
@@ -105,13 +117,16 @@ import Testing
 
 @Test func shippedNativeRegistryIsReachableDirectlyFromSwift() throws {
     let engines = try CppInferenceRegistry.live.listEngines()
+    #expect(!engines.isEmpty)
     #expect(engines.allSatisfy { !$0.testOnly && $0.engineID != "mock" })
 }
 ```
 
 Add a source scan asserting `LocalAgentInferenceNative` is imported only by `LocalAgentLLMLocal` and that no new Rust source contains `local_agent_engine_`, `model_path`, or `LocalModelInstallation`.
 
-Add link-ownership tests that fail while `rust-core/build.rs` still invokes `clang++` over `inference/`: build the Rust staticlib with its legacy local feature, run `nm`, and assert it does not define any `local_agent_engine_*`, `local_agent_model_*`, or `local_agent_generation_*` symbol. Build a Simulator App test host and an unsigned generic-iPhoneOS archive, then assert the final binary defines each exported C ABI symbol exactly once.
+Add link-ownership tests that fail while `rust-core/build.rs` still invokes `clang++` over `inference/`: build the Rust staticlib with its legacy local feature, run `nm`, and assert it does not define any `local_agent_engine_*`, `local_agent_model_*`, or `local_agent_generation_*` symbol. Build a Simulator App test host and an unsigned generic-iPhoneOS archive, then assert the final binary defines each exported C ABI symbol exactly once and has no unresolved llama.cpp/LiteRT vendor symbol. Assert the shipped registry is non-empty and exactly matches `inference/release-engines.json`.
+
+Add epoch tests first: `RustRuntimeConfiguration` encoding requires one 32-byte unpadded-base64url `host_process_epoch`; `RuntimeJsonBridge::from_config_json` rejects missing/invalid epochs; `BridgeRuntime` uses the supplied bytes for preparation recovery/snapshots and no longer calls `next_host_process_epoch`; a second initialization attempt on the same live App composition is rejected rather than replacing the epoch. App composition stores the value beside the Rust runtime so Task 9 must pass that exact instance to the local subsystem.
 
 - [ ] **Step 2: Run RED**
 
@@ -123,11 +138,24 @@ Expected: fail because Rust still compiles/bundles C++ objects and the App does 
 
 - [ ] **Step 3: Add the native package and local target**
 
-`scripts/build-local-agent-inference-xcframework.sh` compiles `inference/c_api`, `core`, and enabled production backends once per Apple slice, archives each slice, copies `local_agent_inference.h` plus `module.modulemap`, and runs `xcodebuild -create-xcframework`. The artifact never defines `LOCAL_AGENT_ENABLE_TEST_ENGINES`; mock C++ is compiled only into standalone source-level contract executables, while Swift runtime tests inject a fake `CppInferenceAPI`. The output directory is reproducible, gitignored, and built by repository bootstrap/CI before Swift package resolution or Rust linking.
+`inference/release-engines.json` is the single build/catalog engine allowlist. Phase 2 requires at least `llama_cpp`; `litert` remains hidden unless its vendor supplies static archives for every Apple slice and passes the same gates. `scripts/build-local-agent-inference-xcframework.sh` compiles `inference/c_api`, `core`, and allowlisted adapters once per slice, then uses Apple `libtool -static` to flatten the pinned llama.cpp archive (and any allowlisted LiteRT static archives) into the same slice archive before `xcodebuild -create-xcframework`. A dynamic-only or missing vendor dependency fails the build and cannot appear in the registry/catalog. Apart from Apple system frameworks and libc++, final hosts link no additional llama/LiteRT binary target or framework.
 
-In `toolkit/Package.swift`, add a local `.binaryTarget(name: "LocalAgentInferenceNative", path: "../artifacts/LocalAgentInferenceNative.xcframework")`, the `LocalAgentLLMLocal` library/target/test target, processed local resources, and `.linkedLibrary("c++")`. Add `LocalAgentLLMLocal` to the App and App-test framework phases without routing any Agent run through it.
+The artifact never defines `LOCAL_AGENT_ENABLE_TEST_ENGINES`; mock C++ is compiled only into standalone source-level contract executables, while Swift runtime tests inject a fake `CppInferenceAPI`. The output directory is `toolkit/Artifacts/LocalAgentInferenceNative.xcframework`, is gitignored, and is built by repository bootstrap/CI before Swift package resolution or Rust linking.
+
+In `toolkit/Package.swift`, add `.binaryTarget(name: "LocalAgentInferenceNative", path: "Artifacts/LocalAgentInferenceNative.xcframework")`, the `LocalAgentLLMLocal` library/target/test target, processed local resources, and only Apple system/libc++ linker settings. Remove the existing separate `llama.xcframework` final-link settings. Add `LocalAgentLLMLocal` to the App and App-test framework phases without routing any Agent run through it.
 
 Replace the compile/archive loop in `rust-core/build.rs` with selection of the matching slice from `LOCAL_AGENT_INFERENCE_XCFRAMEWORK` and emit `cargo:rustc-link-lib=static:-bundle=local_agent_inference_native`. The default/`+bundle` behavior is forbidden because it would copy the archive into the Rust staticlib; the explicit `-bundle` modifier leaves final symbol resolution to the App/test host. `scripts/build-local-inference-xcode.sh` builds the XCFramework first, passes the same path to Cargo and SwiftPM, and never builds a second native archive.
+
+Move `HostProcessEpoch` to this foundation task. `AppBootstrapper` generates it once with `SecRandomCopyBytes`, inserts `host_process_epoch` into `RustRuntimeConfiguration`, and retains the typed value in `AppContainer`; Task 9 consumes that same value when the local subsystem exists. Rust removes `next_host_process_epoch`; its config DTO requires the supplied epoch, stores it immutably, and rejects any attempt to reinitialize/change it after bridge construction. Zero-config runtime construction remains test-only and architecture lint forbids App use.
+
+```swift
+public struct HostProcessEpoch: RawRepresentable, Codable, Equatable, Sendable {
+    public let rawValue: String
+    public static func generate() throws -> HostProcessEpoch
+}
+```
+
+Add required `hostProcessEpoch: HostProcessEpoch` to `RustRuntimeConfiguration` with coding key `host_process_epoch`. The decoder validates unpadded base64url that resolves to exactly 32 bytes. `BridgeRuntime::try_new(..., host_process_epoch)` accepts no fallback; all preparation/global-lease services receive that exact string. One `AppContainer` owns one epoch claim and rejects construction of a second live Rust/local subsystem with either the same or another epoch; a later process launch creates a fresh epoch and performs old-epoch recovery.
 
 Define the registry seam before calling the C ABI:
 
@@ -164,13 +192,17 @@ swift test --package-path toolkit --filter CppInferencePackagingTests
 scripts/test-local-inference-app-link.sh
 ```
 
-Expected: C++ contracts pass, the shipped artifact registry excludes `mock`, the Rust staticlib defines no native inference ABI symbol, the Simulator App links/tests, the unsigned generic-iPhoneOS archive links, and each final host contains one definition per C ABI export.
+Expected: C++ contracts pass, the shipped artifact registry is non-empty and exactly matches the release-engine manifest, the Rust staticlib defines no native inference ABI symbol, the Simulator App links/tests, the unsigned generic-iPhoneOS archive links, every vendor symbol resolves, and each final host contains one definition per C ABI export.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .gitignore inference/include/module.modulemap rust-core/build.rs toolkit \
+git add .gitignore inference/include/module.modulemap inference/release-engines.json \
+  rust-core/build.rs rust-core/src/ffi_bridge.rs rust-core/tests/integration/ffi_bridge.rs toolkit \
   apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj \
+  apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift \
+  apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift \
+  apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift \
   apps/LocalAgentApp/LocalAgentAppTests/Integration/LocalInferenceNativeLinkTests.swift \
   scripts/build-local-agent-inference-xcframework.sh scripts/build-local-inference-xcode.sh \
   scripts/run-local-inference-cpp-contracts.sh scripts/test-local-inference-app-link.sh
@@ -186,6 +218,10 @@ git commit -m "build: give local inference one native artifact"
 - Create: `toolkit/Sources/LocalAgentLLMLocal/OfficialModelCatalog.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/LocalModelCatalogCanonicalDocument.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/LocalCapabilityObservationFactory.swift`
+- Modify: `toolkit/Sources/LocalAgentLLMCore/LLMTarget.swift`
+- Modify: `toolkit/Sources/LocalAgentLLMCore/AgentHostConfiguration.swift`
+- Modify: `toolkit/Sources/LocalAgentLLMCore/AgentHostBindingSaga.swift`
+- Modify: `toolkit/Tests/LocalAgentLLMCoreTests/AgentHostConfigurationTests.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/Resources/OfficialLocalModelCatalog.v1.json`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/Resources/OfficialLocalModelCatalogKeys.v1.json`
 - Create: `toolkit/Sources/LocalModelCatalogSigner/main.swift`
@@ -208,11 +244,12 @@ git commit -m "build: give local inference one native artifact"
 - Produces immutable `LocalModelRevisionManifest` values keyed by `(modelID, revision)`.
 - Produces signed-catalog `modelSupports` capability observations with exact model/catalog subjects and registered evidence/observation digests; it does not trust a pre-resolved snapshot embedded in the manifest.
 - Produces one canonical signed-document builder shared by release signing and runtime verification.
+- Replaces the provisional bare local/cloud target tag with the exact immutable target model from the 7/10 design.
 - The bundled production catalog and public key ring are SwiftPM resources embedded in the App's `LocalAgentLLMLocal` resource bundle. Test fixtures use a distinct key ID/key and cannot be accepted by production construction.
 
 - [ ] **Step 1: Write failing trust and schema tests**
 
-Cover valid Ed25519 signature, unknown/revoked key ID, changed URL/hash/size/revocation after signing, unsupported schema, duplicate model revision, duplicate artifact role/path, non-HTTPS URL, path traversal, zero sizes, unknown engine, unsupported OS/device, and precision boundaries above `2^53`. Test that release resources exist through `Bundle.module`, decode with the production key ring, and are present in a built App resource bundle. Add a repository scan proving no production private key, seed, or signing environment value is committed.
+Cover valid Ed25519 signature, unknown/revoked key ID, changed URL/hash/size/revocation after signing, unsupported schema, duplicate model revision, duplicate artifact role/path, non-HTTPS URL, path traversal, zero sizes, unknown engine, unsupported OS/device, and precision boundaries above `2^53`. Test that release resources exist through `Bundle.module`, decode with the production key ring, are present in a built App resource bundle, contain at least one release model, and use exactly the engine-ID set from `inference/release-engines.json`—no enabled engine without a catalog entry and no catalog engine absent from the native artifact. Add a repository scan proving no production private key, seed, or signing environment value is committed.
 
 Also cover a higher signed catalog revision revoking a model revision: the catalog returns `.revoked` and invalidates its capability observations immediately. A missing entry is treated as superseded/unknown, not as an implicit revocation; explicit revocations are carried in the signed payload as `[LocalModelRevisionID]`. Task 9 proves the runtime rejects that disposition while leaving installed files for explicit deletion.
 
@@ -291,6 +328,29 @@ public struct LocalChatTemplateSelector: Codable, Equatable, Sendable {
 }
 ```
 
+Align the common target types before any local session exists:
+
+```swift
+public struct LLMTargetID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+}
+
+public enum LLMTargetKind: Codable, Equatable, Sendable {
+    case local(installationID: String)
+    case cloud(providerProfileID: String, providerProfileRevision: UInt64)
+}
+
+public struct LLMTargetRevision: Codable, Equatable, Sendable {
+    public let targetID: LLMTargetID
+    public let revision: UInt64
+    public let kind: LLMTargetKind
+    public let modelID: String
+    public let defaultParameters: GenerationConfiguration
+}
+```
+
+`LLMTargetID` uses a single-value string Codable representation so existing `AgentHostConfiguration` record JSON and `agent-host-binding:v1` bytes do not change merely because Swift gains a nominal type. Change `AgentHostConfiguration.llmTargetID` to `LLMTargetID`; its selected reference remains the exact target ID/revision. Update binding digest code to use `.rawValue` and prove existing golden digests remain unchanged. Encode `LLMTargetKind` as a tagged, versioned payload (`kind`, `payload.schema_version = 1`, and local `installation_id` or cloud provider identity); reject unknown payload versions rather than guessing. Local target creation always supplies an opaque installation ID. The bare `.local`/`.cloud` cases and the initializer that can create a local target without an installation are removed; Phase 1 tests/fixtures migrate explicitly.
+
 Define `VerifiedLocalModelCatalog` beside the verifier with an explicit `fileprivate` initializer; no other source file or external caller can construct a trusted candidate.
 
 - [ ] **Step 2: Run RED**
@@ -352,6 +412,9 @@ scripts/test-local-inference-app-link.sh --require-catalog-resources
 ```bash
 git add toolkit/Sources/LocalAgentLLMContracts/LLMCapabilities.swift \
   toolkit/Sources/LocalAgentLLMCore/CapabilityMatrix.swift \
+  toolkit/Sources/LocalAgentLLMCore/LLMTarget.swift \
+  toolkit/Sources/LocalAgentLLMCore/AgentHostConfiguration.swift \
+  toolkit/Sources/LocalAgentLLMCore/AgentHostBindingSaga.swift \
   toolkit/Sources/LocalAgentLLMLocal toolkit/Sources/LocalModelCatalogSigner \
   toolkit/Tests/LocalAgentLLMCoreTests toolkit/Tests/LocalAgentLLMLocalTests \
   toolkit/Package.swift contracts/canonical-digest-v1/fixtures \
@@ -735,7 +798,6 @@ git commit -m "feat: verify and atomically install local models"
 ### Task 7: Add Guarded Deletion and Model-Use Leases
 
 **Files:**
-- Create: `toolkit/Sources/LocalAgentLLMCore/HostProcessEpoch.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/LocalModelStartupRecovery.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/LocalModelDeletionService.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/LocalModelStartupRecoveryTests.swift`
@@ -744,7 +806,7 @@ git commit -m "feat: verify and atomically install local models"
 
 **Interfaces:**
 - Produces durable `LocalModelUseLease` owned by `LocalModelRuntime` while loaded/session-active.
-- Produces one 256-bit Swift `HostProcessEpoch` and ordered `LocalModelStartupRecovery.run`; Task 9's subsystem factory cannot expose a downloader/runtime before this result exists.
+- Consumes Task 1's App-owned 256-bit `HostProcessEpoch` and produces ordered `LocalModelStartupRecovery.run`; Task 9's subsystem factory cannot expose a downloader/runtime before this result exists.
 - Produces `LocalModelDeletionService.delete(installationID:)` with an intent/trash/commit protocol.
 - Deletion never mutates Agent bindings; later readiness reports the exact missing installation.
 
@@ -755,7 +817,7 @@ Reject deletion while loaded, session-active, verifying, or downloading. Require
 Reopen a database containing loaded/session leases and prepared local sessions from an old epoch and prove startup recovery atomically marks sessions closed plus leases `ended_epoch` before deletion/readiness checks. Inject a failure at each recovery stage and assert no successful recovery token is returned. Assert this exact order:
 
 ```text
-generate new Swift host epoch
+receive the exact HostProcessEpoch already injected into Rust by App composition
 open/migrate local-models.sqlite
 atomically end every active use lease from another epoch
 re-verify and accept persisted/bundled catalog state
@@ -772,13 +834,9 @@ swift test --package-path toolkit --filter LocalModelDeletionServiceTests
 
 - [ ] **Step 3: Implement leases and recoverable deletion**
 
-Use:
+Use Task 1's common `HostProcessEpoch` type; do not redeclare or generate it in the local module:
 
 ```swift
-public struct HostProcessEpoch: RawRepresentable, Codable, Equatable, Sendable {
-    public let rawValue: String
-}
-
 package struct LocalModelUseLease: Equatable, Sendable {
     enum Purpose: String, Sendable {
         case loaded
@@ -802,7 +860,7 @@ package struct LocalModelUseLease: Equatable, Sendable {
 
 Acquire/release through SQL CAS. `delete` transactionally checks zero leases, writes `delete_installation` intent, and changes `installed -> deleting`; filesystem code moves the directory to `.trash/<operationID>`; a final transaction removes artifact/installation rows and marks the operation complete. `LocalModelReconciler` finishes incomplete deletion intents.
 
-`HostProcessEpoch.generate()` obtains 32 bytes from `SecRandomCopyBytes`, encodes unpadded base64url, and is created once by App composition. `recoverLocalSessionsAndUseLeasesForNewEpoch` is one `BEGIN IMMEDIATE` transaction that closes old-epoch `prepared_local_sessions` and changes their active leases to `ended_epoch`; only active current-epoch rows block load/delete. App termination implies old C++ RAM resources no longer exist, so no C++ callback is attempted during old-epoch recovery.
+Task 1's `HostProcessEpoch.generate()` obtains 32 bytes from `SecRandomCopyBytes`, encodes unpadded base64url, and is created once by App composition before Rust or local/cloud LLM construction. `recoverLocalSessionsAndUseLeasesForNewEpoch` is one `BEGIN IMMEDIATE` transaction that closes old-epoch `prepared_local_sessions` and changes their active leases to `ended_epoch`; only active current-epoch rows block load/delete. App termination implies old C++ RAM resources no longer exist, so no C++ callback is attempted during old-epoch recovery.
 
 `LocalModelStartupRecovery` has one internal entry:
 
@@ -835,8 +893,7 @@ swift test --package-path toolkit --filter LocalModelStartupRecoveryTests
 - [ ] **Step 5: Commit**
 
 ```bash
-git add toolkit/Sources/LocalAgentLLMCore/HostProcessEpoch.swift \
-  toolkit/Sources/LocalAgentLLMLocal/LocalModelStartupRecovery.swift \
+git add toolkit/Sources/LocalAgentLLMLocal/LocalModelStartupRecovery.swift \
   toolkit/Sources/LocalAgentLLMLocal/LocalModelStore.swift \
   toolkit/Sources/LocalAgentLLMLocal/LocalModelDeletionService.swift \
   toolkit/Tests/LocalAgentLLMLocalTests/LocalModelDeletionServiceTests.swift \
@@ -856,11 +913,14 @@ git commit -m "feat: guard local model deletion with use leases"
 - Modify: `inference/core/model_config.cpp`
 - Modify: `inference/core/generation_request.h`
 - Modify: `inference/core/generation_request.cpp`
+- Create: `inference/core/cancel_arbiter.h`
+- Create: `inference/core/cancel_arbiter.cpp`
 - Modify: `inference/backends/llama_cpp/llama_cpp_prompt.h`
 - Modify: `inference/backends/llama_cpp/llama_cpp_prompt.cpp`
 - Modify: `inference/c_api/local_agent_inference.cpp`
 - Modify: `inference/tests/generation_request_contract.cpp`
 - Create: `inference/tests/validation_contract.cpp`
+- Create: `inference/tests/cancel_arbiter_contract.cpp`
 - Modify: `inference/tests/llama_cpp_prompt_contract.cpp`
 - Modify: `toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift`
 - Modify: `toolkit/Tests/LocalAgentLLMLocalTests/CppInferencePackagingTests.swift`
@@ -868,6 +928,7 @@ git commit -m "feat: guard local model deletion with use leases"
 
 **Interfaces:**
 - Adds non-allocating validation calls `local_agent_model_validate` and `local_agent_generation_validate`.
+- Adds one generation-scoped cancel arbiter so callback, external cancel, release, and terminal races execute backend cancel at most once and share one confirmation.
 - Engine descriptors report ABI version, exact engine build/version, supported model formats, backend option descriptors/ranges, modalities, streaming/cancellation/usage, and verified maximum context where known.
 - Generation request v2 carries canonical messages, optional canonical tool schema, manifest-approved template selector, codec ID, and concrete mapped sampling options.
 
@@ -892,6 +953,8 @@ Require this request shape:
 ```
 
 Tests reject unknown schema, role/content type, attachment/buffer mismatch, unsupported tool schema, unapproved template source/ID, unsupported parameter, out-of-range value, concurrent generation, unload during active generation, and validation that accidentally loads weights. Prove llama.cpp receives messages/tools/template and performs rendering immediately before tokenization; Swift-selected codec is not interpreted as Agent policy by C++. Assert every production engine reports `abi_version = "2"` and a non-empty reproducible `engine_version`; changing the compiled backend version changes the capability observation subject in Task 9.
+
+Add a counting fake generation and three cancellation races: callback blocked on the Swift channel claims `callback_owned`; backend read blocked before any callback lets explicit cancel claim `external_owned`; generation terminal racing cancel reaches one deterministic confirmed result. In all cases `GenerationSession::cancel()` is invoked zero or one time, never twice; losing callback/external/release callers wait for the same confirmation and return the same terminal classification.
 
 - [ ] **Step 2: Run RED**
 
@@ -923,6 +986,34 @@ LocalAgentStatus local_agent_engine_parameter_schema(
 Keep returned string ownership with `local_agent_string_free`. Model validation parses and checks config without creating a model handle. Generation validation uses an already loaded model's format/context/template constraints but does not create a generation handle. `local_agent_model_unload` remains the explicit RAM-release operation and returns a stable busy failure until the one active generation has unwound.
 
 Replace `PromptMessage.content: std::string` with typed content parts and add `CanonicalToolSchema`, `ChatTemplateSelector`, and optional codec ID. Preserve raw tool-call text in stream data; C++ does not parse or execute tools.
+
+Put cancellation ownership in `LocalAgentGenerationState`, not Swift heuristics:
+
+```cpp
+enum class CancelState {
+    not_requested,
+    callback_owned,
+    external_owned,
+    confirmed,
+    generation_terminal,
+};
+
+enum class CancelClaim { owner, wait, generation_terminal };
+
+class CancelArbiter {
+public:
+    void callback_entered();
+    CancelClaim callback_returned(LocalAgentStatus callback_status);
+    CancelClaim claim_from_external();
+    CancelClaim wait_for_ownership_or_confirmation();
+    void confirm(LocalAgentStatus status);
+    void mark_generation_terminal();
+};
+```
+
+The read path calls `callback_entered()` immediately before invoking Swift and `callback_returned(status)` immediately after it returns. The winner alone invokes `state->generation->cancel()` and confirms. If an external cancel/release arrives while a callback is in flight, `claim_from_external()` reserves `callback_owned` and waits: a non-OK callback return makes the read path owner; if the callback narrowly returns OK, ownership transfers to the waiting external caller. If no callback is in flight because backend read is blocked, external owns immediately. Losers never call the backend and wait for the same ownership/confirmation decision. If normal generation terminal wins first, later cancel observes terminal and does not call the backend. The arbiter retains the confirmed status so every waiter returns the same classification.
+
+Update `scripts/run-local-inference-cpp-contracts.sh` so `cancel_arbiter.cpp` and `cancel_arbiter_contract.cpp` are always compiled and run in the deterministic C++ contract suite; the three cancellation race tests cannot be optional or mock-only release smoke.
 
 Extend the Swift DTO in the same task, after the C++ JSON is available:
 
@@ -972,6 +1063,8 @@ git commit -m "feat: formalize local inference v2 contracts"
 **Files:**
 - Create: `toolkit/Sources/LocalAgentLLMContracts/LLMBackendEvent.swift`
 - Modify: `toolkit/Sources/LocalAgentLLMContracts/LLMFailure.swift`
+- Modify: `toolkit/Sources/LocalAgentLLMCore/AgentHostBindingSaga.swift`
+- Modify: `toolkit/Sources/LocalAgentLLMCore/LLMStore.swift`
 - Modify: `toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/LocalGenerationConfigurationResolver.swift`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/PreparedLocalSession.swift`
@@ -987,11 +1080,16 @@ git commit -m "feat: formalize local inference v2 contracts"
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/PreparedLocalSessionTests.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/CppEventChannelTests.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/LocalLLMSubsystemTests.swift`
+- Modify: `toolkit/Tests/LocalAgentLLMCoreTests/AgentHostBindingSagaTests.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/LocalToolCallCodecTests.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift`
 
 **Interfaces:**
 - Produces common backend payloads that Phase 3 adapters and Phase 4 event envelopes can reuse, without adding event sequence/session-handle logic now.
 - Produces immutable `PreparedLocalSession` pinned to installation/catalog/capability/parameter/template/codec revisions and both local use leases.
+- Produces active-binding resolution that validates the exact `AgentHostConfiguration` and exact `LLMTargetRevision`; callers cannot choose an installation or parameter layers separately.
 - Produces actor `LocalModelRuntime` with `idle/loading/ready/prepared/generating/awaitingToolResult/cancelling/sessionTerminal/unloading/quarantined` state and one loaded installation/session.
 - Produces one-shot `LocalLLMSubsystem.bootstrap` that exposes downloader/runtime only after Task 7 recovery.
 
@@ -999,13 +1097,19 @@ git commit -m "feat: formalize local inference v2 contracts"
 
 Using a fake C++ API, prove: selection does not load; first session preparation verifies installed state and loads; preparing the same installation reuses the one loaded model; preparing a different installation requires closing the prior session, unloads old RAM weights, then loads new; only one generation starts; cancellation is idempotent and waits for C++ stop/unwind; release occurs before another generation; critical memory warning unloads when idle; critical warning during generation requests cancellation then unloads; cloud route switch unloads RAM but preserves disk record; C error JSON maps to stable `local_engine.*` failures.
 
-Prove `PreparedLocalSession` uses a non-reused 256-bit random session ID and freezes installation `stateRevision`, model/catalog revision, exact capability snapshot and `capability-snapshot:v1` digest, exact resolved configuration and `resolved-parameters:v1` digest, chat-template selector, tool codec, host epoch, loaded-model lease ID, and active-session lease ID. Persist that sanitized immutable record and its active-session lease in one SQLite transaction; it contains no paths or C handles, and closed IDs remain tombstoned for the epoch. `startGeneration` and `resumeGeneration` accept only its session ID plus turn input/attachments/tool schema; neither accepts defaults, overrides, capabilities, template, codec, paths, or engine options. A `toolCallsReady` terminal moves to `awaitingToolResult`, retains both leases and the immutable snapshot, and only `resumeGeneration` may start the next turn. Final/cancel/failure makes the generation terminal but retains the active-session lease until explicit `closeSession` confirms all generation/session resources are released.
+Prove `prepareSession` rejects a host configuration whose target reference differs from the supplied immutable target, a local target whose installation/model revision does not match the store/catalog, and a configuration/binding tuple that is not active or whose recomputed hash differs. No public session API accepts a bare installation ID, target defaults, or host overrides.
+
+Prove App composition passes `AppContainer.hostProcessEpoch` unchanged to `LocalLLMSubsystem.bootstrap`, and that Rust preparation/session state plus Swift local store/session/lease rows all expose the same value. No local subsystem initializer may default, generate, or replace an epoch.
+
+Prove `PreparedLocalSession` uses a non-reused 256-bit random session ID and freezes target ID/revision, binding ID/revision/hash, requirements hash, installation `stateRevision`, model/catalog revision, exact capability snapshot and `capability-snapshot:v1` digest, exact resolved configuration and `resolved-parameters:v1` digest, chat-template selector, tool codec, host epoch, loaded-model lease ID, and active-session lease ID. Persist that sanitized immutable record and its active-session lease in one SQLite transaction; it contains no paths or C handles, and closed IDs remain tombstoned for the epoch. `startGeneration` and `resumeGeneration` accept only its session ID plus turn input/attachments/tool schema; neither accepts defaults, overrides, capabilities, template, codec, paths, or engine options. A `toolCallsReady` terminal moves to `awaitingToolResult`, retains both leases and the immutable snapshot, and only `resumeGeneration` may start the next turn. Final/cancel/failure makes the generation terminal but retains the active-session lease until explicit `closeSession` confirms all generation/session resources are released.
 
 Prove a catalog-revoked revision cannot prepare or generate, but remains installed and deletable; a catalog-superseded/missing revision resolves capabilities to unknown and also cannot run without an active signed manifest.
 
 After session preparation, accepting a non-revoking higher catalog revision does not mutate its pinned snapshot or digests. An explicit revocation of the pinned model never re-resolves/falls back: it rejects the next not-yet-started start/resume, moves the session terminal, and requires normal close; an already executing C++ turn is cancelled through the same confirmed cancellation path.
 
 Prove the adapter converts compiled-engine descriptors into authoritative `engineCanExecute` observations scoped to the exact engine/version/app build, intersects them with the signed manifest's exact `modelSupports` observations through `CapabilityResolutionPolicy.local`, uses the lowest verified context bound, and returns `unknown` when either dimension or subject match is missing.
+
+The capability subject must include the exact `LLMTargetID`/target revision from the validated host configuration, plus installation/model/catalog/engine identities. A snapshot scoped only to model or installation is rejected before session persistence.
 
 Test canonical parameter mapping:
 
@@ -1150,7 +1254,7 @@ Extend `LLMFailure` with defaulted `recoveryAction: LLMRecoveryAction?` and `red
 
 Every private C wrapper owns `LockedHandleState { open(pointer), closing(pointer), closed }`. Explicit close atomically changes `open -> closing`, calls C exactly once, then changes to `closed` and erases the pointer only on success; failure restores `open(pointer)`. Concurrent close waits for/observes the same result. `deinit` invokes the same close-once primitive only when state remains open, so it cannot release a nil/already-closed raw handle. Runtime explicitly releases generation before model and model before engine, and retains wrappers/leases after any uncertain failure.
 
-`CppEventChannel` is a condition-variable-backed bounded queue measured by event count and UTF-8 bytes. C reads run on a dedicated native thread; the synchronous C callback copies the JSON event and blocks when the queue is full until `CppTokenEventSequence.next()` drains capacity. Normal operation preserves every token and tool-argument delta. Cancellation first marks the channel stopping and wakes a blocked callback so it can return `LOCAL_AGENT_STATUS_CANCELLED`, then invokes C++ cancellation from a different thread; already queued events drain before one cancelled terminal. No `AsyncStream`/`AsyncThrowingStream` buffering policy sits between the callback and consumer. Callback code never calls Rust or the Swift runtime actor.
+`CppEventChannel` is a condition-variable-backed bounded queue measured by event count and UTF-8 bytes. C reads run on a dedicated native thread; the synchronous C callback copies the JSON event and blocks when the queue is full until `CppTokenEventSequence.next()` drains capacity. Normal operation preserves every token and tool-argument delta. Cancellation marks the channel stopping, wakes a blocked callback, and requests external cancellation from a different thread; Task 8's C++ `CancelArbiter` decides whether callback or external path owns the sole backend cancel while the loser waits for the same confirmation. Already queued events drain before one cancelled terminal. No `AsyncStream`/`AsyncThrowingStream` buffering policy sits between the callback and consumer. Callback code never calls Rust or the Swift runtime actor.
 
 Acquire a provisional durable loaded-use lease before C++ load, retain it through `ready`, and release it only after successful unload. Acquire the active-session lease while creating `PreparedLocalSession` and retain it across every `toolCallsReady -> awaitingToolResult -> resumeGeneration` turn and every generation-terminal state until `closeSession` succeeds. C++ load failure releases the provisional loaded lease. Cancel/release/close/unload failure never releases the corresponding lease merely because Swift requested cleanup.
 
@@ -1159,6 +1263,10 @@ Expose only installation identities and canonical contracts at the actor surface
 ```swift
 public struct PreparedLocalSession: Equatable, Sendable {
     public let sessionID: String
+    public let targetID: LLMTargetID
+    public let targetRevision: UInt64
+    public let binding: HostBindingTuple
+    public let requirementsHash: String
     public let installationID: String
     public let installationStateRevision: UInt64
     public let modelRevision: LocalModelRevisionID
@@ -1176,9 +1284,8 @@ public struct PreparedLocalSession: Equatable, Sendable {
 
 public actor LocalModelRuntime {
     public func prepareSession(
-        installationID: String,
-        targetDefaults: GenerationConfiguration,
-        hostOverrides: GenerationConfiguration
+        hostConfiguration: AgentHostConfiguration,
+        target: LLMTargetRevision
     ) async throws -> PreparedLocalSession
     public func startGeneration(
         sessionID: String,
@@ -1208,19 +1315,21 @@ public struct LLMBackendEventSequence: AsyncSequence, Sendable {
 }
 ```
 
-`prepareSession` resolves private paths and signed load template inside the module, composes exact model/engine capability observations, resolves parameters once, computes both registered digests from golden-tested schemas, and atomically inserts `prepared_local_sessions` plus the active-session lease before returning. `startGeneration`/`resumeGeneration` load only the immutable snapshot by session ID, match every attachment reference to exactly one supplied RGB buffer, and map its frozen semantic parameters to C++ names. Startup recovery marks every old-epoch prepared local session closed together with ending its leases; it never attempts generation continuation.
+`AgentHostBindingSaga.requireActive(configuration:target:)` verifies `configuration.selectedTarget == target.reference`, recomputes the binding hash, and returns the exact active `HostBindingTuple` from Core `LLMStore`. `prepareSession` then pattern-matches `target.kind` as `.local(installationID)`, resolves private paths/signed load template internally, verifies `target.modelID` against the installed catalog model, composes target-scoped model/engine capability observations, and resolves parameters exactly once as catalog defaults → `target.defaultParameters` → `hostConfiguration.parameterOverrides` → engine/device constraints. It computes both registered digests and atomically inserts `prepared_local_sessions` plus the active-session lease before returning. `startGeneration`/`resumeGeneration` load only the immutable snapshot by session ID. Startup recovery marks every old-epoch prepared local session closed together with ending its leases; it never attempts generation continuation.
 
-`LocalLLMSubsystem.bootstrap` generates the one Swift host epoch, opens the dedicated store, constructs the permanent download event subscription, calls Task 7 recovery, then creates `LocalModelRuntime` around the live C++ client. Its initializer and components remain private until all stages succeed. The public factory uses bundled resources/live adapters; a package-only overload injects fakes for tests:
+`LocalLLMSubsystem.bootstrap` requires the exact App-owned epoch already used to construct Rust, opens the dedicated store, constructs the permanent download event subscription, calls Task 7 recovery, then creates `LocalModelRuntime` around the live C++ client. It never generates/replaces an epoch. Its initializer and components remain private until all stages succeed. The public factory uses bundled resources/live adapters; a package-only overload injects fakes for tests:
 
 ```swift
 public struct LocalLLMSubsystem: Sendable {
     public static func bootstrap(
         appSupportRoot: URL,
+        hostProcessEpoch: HostProcessEpoch,
         remoteCatalog: Data?
     ) async throws -> LocalLLMSubsystem
 
     package static func bootstrap(
         appSupportRoot: URL,
+        hostProcessEpoch: HostProcessEpoch,
         bundledCatalog: Data,
         remoteCatalog: Data?,
         transport: any ModelDownloadTransport,
@@ -1228,6 +1337,8 @@ public struct LocalLLMSubsystem: Sendable {
     ) async throws -> LocalLLMSubsystem
 }
 ```
+
+`AppBootstrapper` passes `AppContainer.hostProcessEpoch` to the public factory and stores the resulting subsystem back in the same container. It never decodes or reconstitutes a second epoch string. Cloud bootstrap in Phase 3 must accept this same typed value.
 
 - [ ] **Step 4: Run GREEN and all Swift regressions**
 
@@ -1247,7 +1358,13 @@ swift test --package-path toolkit
 ```bash
 git add toolkit/Sources/LocalAgentLLMContracts/LLMBackendEvent.swift \
   toolkit/Sources/LocalAgentLLMContracts/LLMFailure.swift \
+  toolkit/Sources/LocalAgentLLMCore/AgentHostBindingSaga.swift \
+  toolkit/Sources/LocalAgentLLMCore/LLMStore.swift \
   toolkit/Sources/LocalAgentLLMLocal toolkit/Tests/LocalAgentLLMLocalTests \
+  toolkit/Tests/LocalAgentLLMCoreTests/AgentHostBindingSagaTests.swift \
+  apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift \
+  apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift \
+  apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift \
   contracts/canonical-digest-v1/fixtures
 git commit -m "feat: add the swift local model runtime"
 ```
@@ -1294,7 +1411,9 @@ outside the pre-existing legacy allowlist. It also proves `host_slot_v2` remains
 
 Add a Swift source lint that only `LocalAgentLLMLocal` imports the native inference module. Package-private paths may be used by `LocalModelPaths`, store, disk policy, downloader/transport, installer/reconciler, deletion service, runtime, and C++ adapter, but may not leave `LocalAgentLLMLocal`, enter a `public` DTO, Rust, UI, `AgentHostConfiguration`, logs, or diagnostics. C++ contains no URLSession/catalog/download/SQLite/API-key symbols, and no Model Center UI imports the local target yet.
 
-Add artifact-ownership lints: `rust-core/build.rs` has no C++ compiler/archive invocation; Rust uses `static:-bundle`; SwiftPM/App reference the same XCFramework path; `nm` finds no native inference definition inside the Rust staticlib and exactly one definition in each final App/test host.
+Add artifact-ownership lints: the binary target path is exactly `toolkit/Artifacts/LocalAgentInferenceNative.xcframework` and remains inside the package root; `rust-core/build.rs` has no C++ compiler/archive invocation; Rust uses `static:-bundle`; SwiftPM/App reference that same XCFramework; no final App/SwiftPM linker setting names a separate llama.cpp/LiteRT binary; `nm` finds no native inference definition inside the Rust staticlib, no unresolved allowlisted vendor symbol in Simulator/iPhoneOS final binaries, and exactly one definition of every C ABI export in each final App/test host. Parse `inference/release-engines.json`, the shipped registry, and accepted official catalog and require three-way non-empty set equality.
+
+Add target/epoch/cancellation architecture gates: the session-preparation API accepts only an exact `AgentHostConfiguration` plus exact `LLMTargetRevision`; its public surface contains none of `installationID`, `targetDefaults`, or `hostOverrides`; every prepared-session capability subject includes target ID/revision and active binding ID/revision/hash. Reject `next_host_process_epoch` and any epoch generator outside App composition, then prove the one App-owned value reaches Rust configuration, local bootstrap, persisted session, and lease records unchanged. Run the callback-blocked, backend-blocked, and terminal-race cancellation contracts and assert the fake backend cancel counter is never greater than one.
 
 - [ ] **Step 2: Run RED**
 
@@ -1358,12 +1477,12 @@ Phase 2 is complete only when all ten tasks are checked and the unified runner p
 
 The review closure gate additionally requires all of these to be mechanically proven:
 
-- one XCFramework is the only product/test-host definition site for the native C ABI; Rust never bundles a copy;
+- one package-contained XCFramework is the only product/test-host definition site for the native C ABI and every enabled static vendor runtime; Rust never bundles a copy, final hosts have no separate llama/LiteRT dependency, and release registry/catalog/manifest engine sets are equal and non-empty;
 - accepted catalog state includes signed revocations/key ID, uses lossless integer strings, is embedded in the App, and advances only through verified monotonic SQL CAS;
 - restored URLSession tasks and new tasks deliver through the same task-identified event channel;
-- old-epoch local sessions/use leases close before filesystem/download/runtime exposure;
-- every generation turn references one immutable persisted `PreparedLocalSession` and preserves it across tool continuation;
-- explicit C-handle close and `deinit` share one close-once state machine, while token/tool deltas use lossless bounded backpressure;
+- one App-generated host epoch is injected unchanged into Rust and all Swift LLM stores/sessions/leases; old-epoch local sessions/use leases close before filesystem/download/runtime exposure;
+- every generation turn references one immutable persisted `PreparedLocalSession` bound to the exact target revision, active binding tuple, requirements hash, capability subject, and parameter resolution, and preserves it across tool continuation;
+- explicit C-handle close and `deinit` share one close-once state machine, token/tool deltas use lossless bounded backpressure, and the C++ cancel arbiter invokes backend cancel at most once across callback/external/release/terminal races;
 - `local-models.sqlite` is a separate device-local database and every filesystem/SQLite boundary has a durable compensating intent;
 - C++ reports ABI/engine identity and backend options only; Swift owns canonical capability/parameter mapping; and
 - package-private model paths remain inside the local module and never enter public DTOs, Rust, UI, host configuration, logs, or diagnostics.
