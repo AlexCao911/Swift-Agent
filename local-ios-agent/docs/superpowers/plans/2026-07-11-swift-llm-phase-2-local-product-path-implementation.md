@@ -556,7 +556,7 @@ git commit -m "feat: persist local model lifecycle in sqlite"
 - Produces `LocalDiskPolicy.preflight(_:volume:) -> LocalDiskReservation`.
 - Produces injectable `LocalVolumeCapacity` so tests never depend on host free space.
 
-- [ ] **Step 1: Write failing path and capacity tests**
+- [x] **Step 1: Write failing path and capacity tests**
 
 Assert traversal and symlink escape are rejected, all final/staging renames stay on one volume, each directory gets `URLResourceKey.isExcludedFromBackupKey = true`, and the reserve is:
 
@@ -566,13 +566,13 @@ max(512 * 1_024 * 1_024, manifest.installedByteSize / 10)
 
 Required bytes are remaining artifact bytes plus installation/verification overhead plus the reserve. Simultaneous queued installations cannot reserve the same free bytes. Insufficient space returns `download.insufficient_disk` with display-safe `requiredBytes`/`availableBytes`, never an automatic deletion.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LocalDiskPolicyTests
 ```
 
-- [ ] **Step 3: Implement path confinement and centralized policy**
+- [x] **Step 3: Implement path confinement and centralized policy**
 
 Expose only opaque/public storage data:
 
@@ -607,13 +607,13 @@ package func preflight(
 ) async throws -> LocalDiskReservation
 ```
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 swift test --package-path toolkit --filter LocalDiskPolicyTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMLocal/LocalModelPaths.swift \

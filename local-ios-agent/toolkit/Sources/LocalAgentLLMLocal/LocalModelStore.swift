@@ -119,8 +119,8 @@ package protocol LocalBackupExclusionApplying: Sendable {
     func excludeFromBackup(_ urls: [URL]) throws
 }
 
-private struct SystemLocalBackupExclusion: LocalBackupExclusionApplying {
-    func excludeFromBackup(_ urls: [URL]) throws {
+package struct SystemLocalBackupExclusion: LocalBackupExclusionApplying {
+    package func excludeFromBackup(_ urls: [URL]) throws {
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         for url in urls {
@@ -451,6 +451,87 @@ public final class LocalModelStore: @unchecked Sendable {
                 installationID: installationID,
                 reservedBytes: reservedBytes
             )
+        }
+    }
+
+    package func reserveDiskCapacity(
+        reservationID: String,
+        installationID: String,
+        requiredBytes: UInt64,
+        availableBytes: UInt64
+    ) throws -> LocalDiskReservationRecord {
+        try lock.withLock {
+            try database.transaction {
+                _ = try requiredInstallationUnlocked(installationID)
+                let existing = try database.queryRows(
+                    "SELECT reservation_id, reserved_bytes FROM local_disk_reservations WHERE installation_id = ?1",
+                    bindings: [.text(installationID)]
+                ).first
+                let totalReserved = try database.queryRows(
+                    "SELECT reserved_bytes FROM local_disk_reservations"
+                ).reduce(UInt64(0)) { total, row in
+                    guard let text = row.text("reserved_bytes"), let value = UInt64(text) else {
+                        throw storeCorrupt()
+                    }
+                    let (sum, overflow) = total.addingReportingOverflow(value)
+                    guard !overflow else {
+                        throw storeFailure("download.reservation_overflow", "disk reservations overflow UInt64")
+                    }
+                    return sum
+                }
+                let existingBytes: UInt64
+                if let existing {
+                    guard let text = existing.text("reserved_bytes"), let value = UInt64(text) else {
+                        throw storeCorrupt()
+                    }
+                    existingBytes = value
+                } else {
+                    existingBytes = 0
+                }
+                guard existingBytes <= totalReserved else { throw storeCorrupt() }
+                let reservedByOthers = totalReserved - existingBytes
+                let effectiveAvailable = availableBytes > reservedByOthers
+                    ? availableBytes - reservedByOthers : 0
+                guard requiredBytes <= effectiveAvailable else {
+                    throw LLMFailure(
+                        code: "download.insufficient_disk",
+                        message: "requiredBytes=\(requiredBytes) availableBytes=\(effectiveAvailable)",
+                        retryable: false
+                    )
+                }
+                if let existing {
+                    guard let existingReservationID = existing.text("reservation_id") else {
+                        throw storeCorrupt()
+                    }
+                    try database.execute(
+                        "UPDATE local_disk_reservations SET reserved_bytes = ?1 WHERE reservation_id = ?2",
+                        bindings: [.text(String(requiredBytes)), .text(existingReservationID)]
+                    )
+                    return LocalDiskReservationRecord(
+                        reservationID: existingReservationID,
+                        installationID: installationID,
+                        reservedBytes: requiredBytes
+                    )
+                }
+                if try database.queryRows(
+                    "SELECT reservation_id FROM local_disk_reservations WHERE reservation_id = ?1",
+                    bindings: [.text(reservationID)]
+                ).first != nil {
+                    throw staleState()
+                }
+                try database.execute(
+                    "INSERT INTO local_disk_reservations(reservation_id, installation_id, reserved_bytes, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    bindings: [
+                        .text(reservationID), .text(installationID),
+                        .text(String(requiredBytes)), .text(Self.timestamp(Date())),
+                    ]
+                )
+                return LocalDiskReservationRecord(
+                    reservationID: reservationID,
+                    installationID: installationID,
+                    reservedBytes: requiredBytes
+                )
+            }
         }
     }
 
@@ -925,6 +1006,12 @@ public final class LocalModelStore: @unchecked Sendable {
                   reserved_bytes TEXT NOT NULL,
                   created_at TEXT NOT NULL
                 )
+                """
+            )
+            try database.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS local_disk_reservations_installation_idx
+                ON local_disk_reservations(installation_id)
                 """
             )
             try database.execute(
