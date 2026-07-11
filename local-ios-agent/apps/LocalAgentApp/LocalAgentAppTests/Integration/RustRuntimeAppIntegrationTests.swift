@@ -5,6 +5,28 @@ import Testing
 
 @Suite("Rust runtime App integration")
 struct RustRuntimeAppIntegrationTests {
+    @Test("app composition retains one canonical host process epoch")
+    func appCompositionRetainsHostProcessEpoch() throws {
+        let epoch = try HostProcessEpoch.generate()
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: epoch,
+            environment: [:],
+            store: .inMemory
+        )
+        let degraded = try AppBootstrapper.makeDegradedContainer(
+            error: RuntimeBridgeError(kind: "test", message: "test"),
+            hostProcessEpoch: epoch
+        )
+        let lastResort = AppBootstrapper.makeLastResortContainer(
+            error: RuntimeBridgeError(kind: "test", message: "test"),
+            hostProcessEpoch: epoch
+        )
+
+        #expect(container.hostProcessEpoch == epoch)
+        #expect(degraded.hostProcessEpoch == epoch)
+        #expect(lastResort.hostProcessEpoch == epoch)
+    }
+
     @Test("Xcode run path builds and links simulator llama runtime")
     func xcodeRunPathBuildsAndLinksSimulatorLlamaRuntime() throws {
         let schemeFile = try repositoryRoot()
@@ -74,7 +96,11 @@ struct RustRuntimeAppIntegrationTests {
             "LOCAL_AGENT_DEFAULT_PROVIDER_ID": "local_llm",
             "LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON": #"{"backend":"llama_cpp","model_path":"/missing/model.gguf"}"#,
         ]
-        let container = try AppBootstrapper.makeContainer(environment: environment, store: .inMemory)
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
+            environment: environment,
+            store: .inMemory
+        )
         let toolCenter = container.makeToolCenterViewModel()
         let modelCenter = container.makeModelCenterViewModel()
 
@@ -100,7 +126,10 @@ struct RustRuntimeAppIntegrationTests {
             return
         }
 
-        let container = try AppBootstrapper.makeContainer(store: .inMemory)
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
+            store: .inMemory
+        )
         let service = container.runtimeService
         var state = try await service.prepare()
         #expect(state.provider.active?.id == "local_llm.llama_cpp")
@@ -127,7 +156,10 @@ struct RustRuntimeAppIntegrationTests {
 
     @Test("App bootstrapper default store creates usable runtime")
     func appBootstrapperDefaultStoreCreatesUsableRuntime() async throws {
-        let container = try AppBootstrapper.makeContainer(environment: [:])
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
+            environment: [:]
+        )
         let service = container.runtimeService
 
         var state = try await service.prepare()
@@ -140,7 +172,10 @@ struct RustRuntimeAppIntegrationTests {
     @Test("App bootstrapper default container exposes visible native tools")
     @MainActor
     func appBootstrapperDefaultContainerExposesVisibleNativeTools() async throws {
-        let container = try AppBootstrapper.makeContainer(environment: [:])
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
+            environment: [:]
+        )
         let viewModel = container.makeToolCenterViewModel()
 
         await viewModel.reload()
@@ -162,6 +197,7 @@ struct RustRuntimeAppIntegrationTests {
         try Data("not a sqlite database".utf8).write(to: sqliteURL)
 
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: [:],
             store: .sqlite(path: sqliteURL.path)
         )
@@ -178,7 +214,8 @@ struct RustRuntimeAppIntegrationTests {
     @MainActor
     func degradedBootstrapContainerKeepsChatAndToolsUsable() async throws {
         let container = try AppBootstrapper.makeDegradedContainer(
-            error: RuntimeBridgeError(kind: "ffi", message: "failed to create runtime bridge")
+            error: RuntimeBridgeError(kind: "ffi", message: "failed to create runtime bridge"),
+            hostProcessEpoch: try testHostProcessEpoch()
         )
         let toolCenter = container.makeToolCenterViewModel()
 
@@ -194,7 +231,11 @@ struct RustRuntimeAppIntegrationTests {
 
     @Test("App bootstrapper keeps legacy streaming path by default")
     func appBootstrapperKeepsLegacyStreamingPathByDefault() async throws {
-        let container = try AppBootstrapper.makeContainer(environment: [:], store: .inMemory)
+        let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
+            environment: [:],
+            store: .inMemory
+        )
 
         let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
         #expect(!usesCoordinator)
@@ -203,6 +244,7 @@ struct RustRuntimeAppIntegrationTests {
     @Test("App bootstrapper can wire conversation execution coordinator behind feature flag")
     func appBootstrapperCanWireConversationExecutionCoordinatorBehindFeatureFlag() async throws {
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
             store: .inMemory
         )
@@ -214,6 +256,7 @@ struct RustRuntimeAppIntegrationTests {
     @Test("feature-flagged coordinator starts with seeded profile revision")
     func featureFlaggedCoordinatorStartsWithSeededProfileRevision() async throws {
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
             store: .inMemory
         )
@@ -230,6 +273,7 @@ struct RustRuntimeAppIntegrationTests {
     @MainActor
     func appContainerExposesRustBackedAgentBuilder() async throws {
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
             store: .inMemory
         )
@@ -249,6 +293,7 @@ struct RustRuntimeAppIntegrationTests {
     @MainActor
     func containerBuilderViewModelLoadsToolCards() async throws {
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
             store: .inMemory
         )
@@ -264,6 +309,7 @@ struct RustRuntimeAppIntegrationTests {
     @MainActor
     func containerExposesUserMediatedPickerTools() async throws {
         let container = try AppBootstrapper.makeContainer(
+            hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
             store: .inMemory
         )
@@ -309,12 +355,17 @@ struct RustRuntimeAppIntegrationTests {
             systemPrompt: "You are Local Agent.",
             runtimePolicy: "Use registered tools when helpful.",
             providerId: "mock",
+            hostProcessEpoch: try HostProcessEpoch.generate(),
             store: .inMemory
         ))
         return AgentRuntimeService(
             runtimeClient: client,
             toolDriver: MinimalHostToolDriver()
         )
+    }
+
+    private func testHostProcessEpoch() throws -> HostProcessEpoch {
+        try HostProcessEpoch.generate()
     }
 }
 

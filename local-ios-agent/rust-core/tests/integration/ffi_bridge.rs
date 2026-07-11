@@ -713,6 +713,7 @@ unsafe fn new_in_memory_c_bridge() -> *mut RuntimeJsonBridge {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "mock",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "store": {"kind": "in_memory"}
         }"#,
     )
@@ -726,6 +727,7 @@ unsafe fn new_seeded_agent_os_c_bridge() -> *mut RuntimeJsonBridge {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "mock",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "store": {"kind": "in_memory"},
           "agent_os": {"seed_development_profile": true}
         }"#,
@@ -2030,12 +2032,48 @@ fn c_abi_bridge_can_fork_selected_branch_into_new_session() {
 }
 
 #[test]
+fn bridge_config_rejects_missing_host_process_epoch() {
+    let error = match RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "mock",
+          "store": {"kind": "in_memory"}
+        }"#,
+    ) {
+        Ok(_) => panic!("expected missing host_process_epoch to fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("host_process_epoch"), "{error}");
+}
+
+#[test]
+fn bridge_config_rejects_invalid_host_process_epoch() {
+    let error = match RuntimeJsonBridge::from_config_json(
+        r#"{
+          "system_prompt": "configured system",
+          "runtime_policy": "configured policy",
+          "provider_id": "mock",
+          "host_process_epoch": "short-or-padded=",
+          "store": {"kind": "in_memory"}
+        }"#,
+    ) {
+        Ok(_) => panic!("expected invalid host_process_epoch to fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("host_process_epoch"), "{error}");
+}
+
+#[test]
 fn bridge_config_can_create_runtime_with_desktop_minicpm_provider() {
     let bridge = RuntimeJsonBridge::from_config_json(
         r#"{
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "desktop_minicpm",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "providers": [
             {
               "kind": "desktop_minicpm",
@@ -2069,6 +2107,7 @@ fn bridge_config_surfaces_unlinked_local_llm_provider() {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "local_llm",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "providers": [
             {
               "kind": "local_llm",
@@ -2099,6 +2138,7 @@ fn bridge_config_exposes_named_local_llm_profiles_without_building_them() {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "mock",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "providers": [
             {
               "kind": "local_llm",
@@ -2145,6 +2185,7 @@ fn bridge_config_can_create_runtime_with_local_llm_provider_when_linked() {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "local_llm",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "providers": [
             {
               "kind": "local_llm",
@@ -2486,6 +2527,7 @@ fn c_abi_constructor_uses_supplied_runtime_configuration() {
           "system_prompt": "configured system",
           "runtime_policy": "configured policy",
           "provider_id": "mock",
+          "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "store": {{"kind": "sqlite", "path": "{}"}}
         }}"#,
         db_path.display()

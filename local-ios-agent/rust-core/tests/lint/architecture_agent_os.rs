@@ -1036,3 +1036,22 @@ fn parse_legacy_llm_allowlist(source: &str) -> std::collections::BTreeMap<String
         })
         .collect()
 }
+#[test]
+fn ffi_bridge_does_not_generate_a_second_host_process_epoch() {
+    let ffi_source = include_str!("../../src/ffi_bridge.rs");
+
+    assert!(!ffi_source.contains("fn next_host_process_epoch"));
+    assert!(!ffi_source.contains("static NEXT_EPOCH"));
+    assert!(ffi_source.contains("host_process_epoch: String"));
+}
+
+#[test]
+fn rust_build_does_not_compile_or_bundle_local_inference_objects() {
+    let build_source = include_str!("../../build.rs");
+
+    assert!(!build_source.contains("Command::new(&cxx.compiler)"));
+    assert!(!build_source.contains("Command::new(\"ar\")"));
+    assert!(
+        build_source.contains("cargo:rustc-link-lib=static:-bundle=local_agent_inference_native")
+    );
+}

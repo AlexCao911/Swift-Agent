@@ -7,54 +7,25 @@ let packageDirectory = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .path
 let rustMacOSDebugLibraryPath = "\(packageDirectory)/../rust-core/target/debug"
-let rustIOSSimulatorDebugLibraryPath = "\(packageDirectory)/../rust-core/target/aarch64-apple-ios-sim/debug"
-let defaultLlamaCppXCFrameworkPath = URL(fileURLWithPath: packageDirectory)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("minicpmv-town/third_party/llama.cpp/build-apple/llama.xcframework")
-    .path
-let llamaCppXCFrameworkPath = ProcessInfo.processInfo.environment["LLAMA_CPP_XCFRAMEWORK"]
-    ?? (FileManager.default.fileExists(atPath: defaultLlamaCppXCFrameworkPath)
-        ? defaultLlamaCppXCFrameworkPath
-        : nil)
-let hasLlamaCppXCFramework = llamaCppXCFrameworkPath.map {
-    FileManager.default.fileExists(atPath: $0)
-} ?? false
+// Xcode's scheme pre-action atomically stages the Rust archive for the active
+// iOS SDK here. SwiftPM cannot distinguish iphoneos from iphonesimulator in a
+// platform condition, so it must never hard-code either target triple.
+let rustXcodeIOSLibraryPath = "\(packageDirectory)/../rust-core/target/xcode-ios"
 
-var localAgentBridgeLinkerSettings: [LinkerSetting] = [
+let localAgentBridgeLinkerSettings: [LinkerSetting] = [
     .linkedLibrary("local_ios_agent_runtime"),
     .linkedLibrary("c++"),
     .unsafeFlags(["-L\(rustMacOSDebugLibraryPath)"], .when(platforms: [.macOS])),
-    .unsafeFlags(["-L\(rustIOSSimulatorDebugLibraryPath)"], .when(platforms: [.iOS])),
+    .unsafeFlags(["-L\(rustXcodeIOSLibraryPath)"], .when(platforms: [.iOS])),
 ]
-if hasLlamaCppXCFramework {
-    let llamaCppXCFrameworkPath = llamaCppXCFrameworkPath!
-    let macOSFrameworkSearchPath = "\(llamaCppXCFrameworkPath)/macos-arm64_x86_64"
-    let iOSSimulatorFrameworkSearchPath = "\(llamaCppXCFrameworkPath)/ios-arm64_x86_64-simulator"
-    localAgentBridgeLinkerSettings.append(
-        .unsafeFlags([
-            "-F\(macOSFrameworkSearchPath)",
-            "-framework", "llama",
-            "-Xlinker", "-rpath",
-            "-Xlinker", macOSFrameworkSearchPath,
-        ], .when(platforms: [.macOS]))
-    )
-    localAgentBridgeLinkerSettings.append(
-        .unsafeFlags([
-            "-F\(iOSSimulatorFrameworkSearchPath)",
-            "-framework", "llama",
-            "-Xlinker", "-rpath",
-            "-Xlinker", iOSSimulatorFrameworkSearchPath,
-        ], .when(platforms: [.iOS]))
-    )
-}
 
 var packageTargets: [Target] = [
+    .binaryTarget(
+        name: "LocalAgentInferenceNative",
+        path: "Artifacts/LocalAgentInferenceNative.xcframework"
+    ),
     .systemLibrary(
-        name: "CSQLite",
-        pkgConfig: "sqlite3",
-        providers: [.brew(["sqlite3"])]
+        name: "CSQLite"
     ),
     .target(
         name: "CLocalAgentRuntime",
@@ -62,7 +33,7 @@ var packageTargets: [Target] = [
     ),
     .target(
         name: "LocalAgentBridge",
-        dependencies: ["CLocalAgentRuntime"],
+        dependencies: ["CLocalAgentRuntime", "LocalAgentLLMContracts"],
         linkerSettings: localAgentBridgeLinkerSettings
     ),
     .target(
@@ -71,6 +42,16 @@ var packageTargets: [Target] = [
     .target(
         name: "LocalAgentLLMCore",
         dependencies: ["LocalAgentLLMContracts", "CSQLite"]
+    ),
+    .target(
+        name: "LocalAgentLLMLocal",
+        dependencies: ["LocalAgentLLMContracts", "LocalAgentLLMCore", "CSQLite", "LocalAgentInferenceNative"],
+        linkerSettings: [
+            .linkedLibrary("c++"),
+            .linkedFramework("Accelerate"),
+            .linkedFramework("Metal"),
+            .linkedFramework("MetalKit"),
+        ]
     ),
     .target(
         name: "LocalNativeToolkit",
@@ -89,6 +70,10 @@ var packageTargets: [Target] = [
         dependencies: ["LocalAgentLLMCore", "LocalAgentLLMContracts"]
     ),
     .testTarget(
+        name: "LocalAgentLLMLocalTests",
+        dependencies: ["LocalAgentLLMLocal"]
+    ),
+    .testTarget(
         name: "LocalNativeToolkitTests",
         dependencies: ["LocalNativeToolkit"]
     ),
@@ -103,6 +88,7 @@ let package = Package(
     products: [
         .library(
             name: "LocalAgentBridge",
+            type: .static,
             targets: ["LocalAgentBridge"]
         ),
         .library(
@@ -112,6 +98,11 @@ let package = Package(
         .library(
             name: "LocalAgentLLMCore",
             targets: ["LocalAgentLLMCore"]
+        ),
+        .library(
+            name: "LocalAgentLLMLocal",
+            type: .static,
+            targets: ["LocalAgentLLMLocal"]
         ),
         .library(
             name: "LocalNativeToolkit",

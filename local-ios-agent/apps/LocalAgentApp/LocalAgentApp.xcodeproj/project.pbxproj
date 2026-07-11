@@ -24,7 +24,9 @@
 		0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */; };
 		0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000114 /* AgentViewModelTests.swift */; };
 		0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */; };
-		0A0000010000000000000012 /* LocalAgentBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000301 /* LocalAgentBridge */; };
+		0A00000100000000000000F5 /* LocalInferenceNativeLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */; };
+		0A00000100000000000000F1 /* LocalAgentLLMLocal in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000303 /* LocalAgentLLMLocal */; };
+		0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000304 /* LocalAgentLLMContracts */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -140,6 +142,7 @@
 		0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeServiceTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000114 /* AgentViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModelTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustRuntimeAppIntegrationTests.swift; sourceTree = "<group>"; };
+		0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceNativeLinkTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -225,6 +228,8 @@
 			files = (
 				0A000001000000000000000B /* LocalAgentBridge in Frameworks */,
 				0A000001000000000000000C /* LocalNativeToolkit in Frameworks */,
+				0A00000100000000000000F1 /* LocalAgentLLMLocal in Frameworks */,
+				0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -232,7 +237,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0A0000010000000000000012 /* LocalAgentBridge in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -618,6 +622,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
+				0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */,
 			);
 			path = Integration;
 			sourceTree = "<group>";
@@ -650,6 +655,8 @@
 			packageProductDependencies = (
 				0A0000010000000000000301 /* LocalAgentBridge */,
 				0A0000010000000000000302 /* LocalNativeToolkit */,
+				0A0000010000000000000303 /* LocalAgentLLMLocal */,
+				0A0000010000000000000304 /* LocalAgentLLMContracts */,
 			);
 			productName = LocalAgentApp;
 			productReference = 0A0000010000000000000022 /* LocalAgentApp.app */;
@@ -670,7 +677,6 @@
 			);
 			name = LocalAgentAppTests;
 			packageProductDependencies = (
-				0A0000010000000000000301 /* LocalAgentBridge */,
 			);
 			productName = LocalAgentAppTests;
 			productReference = 0A0000010000000000000023 /* LocalAgentAppTests.xctest */;
@@ -829,6 +835,7 @@
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
+				0A00000100000000000000F5 /* LocalInferenceNativeLinkTests.swift in Sources */,
 				0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */,
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 				0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */,
@@ -1097,6 +1104,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
 			productName = LocalNativeToolkit;
+		};
+		0A0000010000000000000303 /* LocalAgentLLMLocal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalAgentLLMLocal;
+		};
+		0A0000010000000000000304 /* LocalAgentLLMContracts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalAgentLLMContracts;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

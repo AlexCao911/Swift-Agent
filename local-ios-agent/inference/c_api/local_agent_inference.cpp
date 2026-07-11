@@ -301,6 +301,23 @@ struct LocalAgentGenerationHandle {
 
 extern "C" {
 
+uint32_t local_agent_link_anchor(void) {
+    volatile uintptr_t addresses = reinterpret_cast<uintptr_t>(&local_agent_string_free);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_list);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_create);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_capabilities);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_release);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_model_load);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_model_unload);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_start);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_read);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_cancel);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_release);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_last_error);
+    (void)addresses;
+    return 12;
+}
+
 void local_agent_string_free(char *value) {
     std::free(value);
 }

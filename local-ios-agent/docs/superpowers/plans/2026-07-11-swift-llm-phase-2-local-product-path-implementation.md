@@ -82,19 +82,23 @@ The C++ sources and statically mergeable vendor runtimes produce exactly one `to
 - Create: `scripts/test-local-inference-app-link.sh`
 - Create: `inference/release-engines.json`
 - Create: `inference/include/module.modulemap`
+- Modify: `inference/include/local_agent_inference.h`
+- Modify: `inference/c_api/local_agent_inference.cpp`
 - Create: `toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift`
 - Create: `toolkit/Tests/LocalAgentLLMLocalTests/CppInferencePackagingTests.swift`
 - Create: `apps/LocalAgentApp/LocalAgentAppTests/Integration/LocalInferenceNativeLinkTests.swift`
 - Modify: `.gitignore`
 - Modify: `toolkit/Package.swift`
 - Modify: `rust-core/build.rs`
-- Create: `toolkit/Sources/LocalAgentLLMCore/HostProcessEpoch.swift`
+- Create: `toolkit/Sources/LocalAgentLLMContracts/HostProcessEpoch.swift`
+- Create: `toolkit/Tests/LocalAgentLLMContractsTests/HostProcessEpochTests.swift`
 - Modify: `toolkit/Sources/LocalAgentBridge/RustRuntimeClient.swift`
 - Modify: `toolkit/Tests/LocalAgentBridgeTests/RustRuntimeClientContractTests.swift`
 - Modify: `rust-core/src/ffi_bridge.rs`
 - Modify: `rust-core/tests/integration/ffi_bridge.rs`
 - Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
 - Modify: `apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift`
+- Modify: `apps/LocalAgentApp/LocalAgentApp/App/LocalAgentApp.swift`
 - Modify: `apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift`
 - Modify: `scripts/build-local-inference-xcode.sh`
 - Modify: `scripts/run-local-inference-cpp-contracts.sh`
@@ -142,11 +146,13 @@ Expected: fail because Rust still compiles/bundles C++ objects and the App does 
 
 The artifact never defines `LOCAL_AGENT_ENABLE_TEST_ENGINES`; mock C++ is compiled only into standalone source-level contract executables, while Swift runtime tests inject a fake `CppInferenceAPI`. The output directory is `toolkit/Artifacts/LocalAgentInferenceNative.xcframework`, is gitignored, and is built by repository bootstrap/CI before Swift package resolution or Rust linking.
 
-In `toolkit/Package.swift`, add `.binaryTarget(name: "LocalAgentInferenceNative", path: "Artifacts/LocalAgentInferenceNative.xcframework")`, the `LocalAgentLLMLocal` library/target/test target, processed local resources, and only Apple system/libc++ linker settings. Remove the existing separate `llama.xcframework` final-link settings. Add `LocalAgentLLMLocal` to the App and App-test framework phases without routing any Agent run through it.
+The static C ABI exposes a side-effect-free `local_agent_link_anchor` that reads every exported function address. App composition calls it once so Release dead stripping cannot retain only the subset referenced by legacy Rust. Simulator and iPhoneOS gates still require exactly one final definition per export and no unresolved vendor symbol.
+
+In `toolkit/Package.swift`, add `.binaryTarget(name: "LocalAgentInferenceNative", path: "Artifacts/LocalAgentInferenceNative.xcframework")`, the static `LocalAgentLLMLocal` library/target/test target, processed local resources, and only Apple SDK system/libc++ linker settings. Remove the existing separate `llama.xcframework` final-link settings and host `pkgConfig` paths that could inject a macOS Homebrew SQLite dylib into iOS. Add `LocalAgentLLMLocal` to the App framework phase without routing any Agent run through it; hosted App tests resolve the same static products through the App rather than linking a duplicate copy.
 
 Replace the compile/archive loop in `rust-core/build.rs` with selection of the matching slice from `LOCAL_AGENT_INFERENCE_XCFRAMEWORK` and emit `cargo:rustc-link-lib=static:-bundle=local_agent_inference_native`. The default/`+bundle` behavior is forbidden because it would copy the archive into the Rust staticlib; the explicit `-bundle` modifier leaves final symbol resolution to the App/test host. `scripts/build-local-inference-xcode.sh` builds the XCFramework first, passes the same path to Cargo and SwiftPM, and never builds a second native archive.
 
-Move `HostProcessEpoch` to this foundation task. `AppBootstrapper` generates it once with `SecRandomCopyBytes`, inserts `host_process_epoch` into `RustRuntimeConfiguration`, and retains the typed value in `AppContainer`; Task 9 consumes that same value when the local subsystem exists. Rust removes `next_host_process_epoch`; its config DTO requires the supplied epoch, stores it immutably, and rejects any attempt to reinitialize/change it after bridge construction. Zero-config runtime construction remains test-only and architecture lint forbids App use.
+Add `HostProcessEpoch` to provider-neutral `LocalAgentLLMContracts`, not storage-bearing `LocalAgentLLMCore`: `LocalAgentBridge` must not transitively pull `CSQLite` into every iOS host merely to encode process identity. `AppBootstrapper` generates it once with `SecRandomCopyBytes`, inserts `host_process_epoch` into `RustRuntimeConfiguration`, and retains the typed value in `AppContainer`; Task 9 consumes that same value when the local subsystem exists. Rust removes `next_host_process_epoch`; its config DTO requires the supplied epoch, stores it immutably, and rejects any attempt to reinitialize/change it after bridge construction. Zero-config runtime construction remains test-only and architecture lint forbids App use.
 
 ```swift
 public struct HostProcessEpoch: RawRepresentable, Codable, Equatable, Sendable {

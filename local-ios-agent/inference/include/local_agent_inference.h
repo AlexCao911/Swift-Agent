@@ -34,6 +34,13 @@ typedef LocalAgentStatus (*local_agent_token_callback)(
     void *user_data
 );
 
+/*
+ * Returns the number of exported entry points retained by the final-link
+ * anchor. The App calls this once during composition so dead stripping cannot
+ * leave Swift and legacy Rust with different partial views of the C ABI.
+ */
+uint32_t local_agent_link_anchor(void);
+
 /* Frees strings returned through char ** out parameters. Passing null is allowed. */
 void local_agent_string_free(char *value);
 

@@ -1,10 +1,13 @@
 import Foundation
+import LocalAgentLLMContracts
 
 #if canImport(CLocalAgentRuntime)
 import CLocalAgentRuntime
 #endif
 
 internal let runtimeEventStreamBufferLimit = 512
+
+public typealias HostProcessEpoch = LocalAgentLLMContracts.HostProcessEpoch
 
 public struct RuntimeBridgeError: LocalizedError, Equatable, Sendable, CustomStringConvertible {
     public var kind: String
@@ -28,6 +31,7 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
     public var systemPrompt: String
     public var runtimePolicy: String
     public var providerId: String
+    public var hostProcessEpoch: HostProcessEpoch
     public var store: RustRuntimeStoreConfiguration
     public var providers: [RustRuntimeProviderConfiguration]
     public var agentOS: RustAgentOSConfiguration?
@@ -36,6 +40,7 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
         systemPrompt: String,
         runtimePolicy: String,
         providerId: String,
+        hostProcessEpoch: HostProcessEpoch,
         store: RustRuntimeStoreConfiguration,
         providers: [RustRuntimeProviderConfiguration] = [],
         agentOS: RustAgentOSConfiguration? = nil
@@ -43,6 +48,7 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
         self.systemPrompt = systemPrompt
         self.runtimePolicy = runtimePolicy
         self.providerId = providerId
+        self.hostProcessEpoch = hostProcessEpoch
         self.store = store
         self.providers = providers
         self.agentOS = agentOS
@@ -52,6 +58,7 @@ public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
         case systemPrompt = "system_prompt"
         case runtimePolicy = "runtime_policy"
         case providerId = "provider_id"
+        case hostProcessEpoch = "host_process_epoch"
         case store
         case providers
         case agentOS = "agent_os"

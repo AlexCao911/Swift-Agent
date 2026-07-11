@@ -1,0 +1,4 @@
+module LocalAgentInferenceNative {
+  header "local_agent_inference.h"
+  export *
+}

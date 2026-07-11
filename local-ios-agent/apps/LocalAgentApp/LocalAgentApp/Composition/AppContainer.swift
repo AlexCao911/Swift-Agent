@@ -2,6 +2,7 @@ import LocalAgentBridge
 import LocalNativeToolkit
 
 struct AppContainer {
+    let hostProcessEpoch: HostProcessEpoch
     let runtimeService: AgentRuntimeService
     let runDebugService: RunDebugService?
     let nativeToolkitClient: any NativeToolkitClientProtocol

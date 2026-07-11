@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMLocal
 import LocalNativeToolkit
 
 #if canImport(EventKit) && os(iOS)
@@ -8,9 +9,11 @@ import EventKit
 
 enum AppBootstrapper {
     static func makeContainer(
+        hostProcessEpoch: HostProcessEpoch,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         store: RustRuntimeStoreConfiguration? = nil
     ) throws -> AppContainer {
+        LocalInferenceNativeLinkProbe.requireAllExports()
         let providers = simulatorProviders(environment: environment)
         let runtimeStore: RustRuntimeStoreConfiguration
         if let store {
@@ -21,7 +24,8 @@ enum AppBootstrapper {
         let client = try makeRuntimeClient(
             environment: environment,
             providers: providers,
-            store: runtimeStore
+            store: runtimeStore,
+            hostProcessEpoch: hostProcessEpoch
         )
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let nativeBundle = try makeNativeToolkitBundle()
@@ -33,6 +37,7 @@ enum AppBootstrapper {
         )
 
         return AppContainer(
+            hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
                 runtimeClient: client,
                 toolDriver: nativeBundle.toolDriver,
@@ -52,7 +57,10 @@ enum AppBootstrapper {
         )
     }
 
-    static func makeDegradedContainer(error: Error) throws -> AppContainer {
+    static func makeDegradedContainer(
+        error: Error,
+        hostProcessEpoch: HostProcessEpoch
+    ) throws -> AppContainer {
         let nativeBundle = try makeNativeToolkitBundle()
         let client = MockRuntimeClient(
             sessionIds: [],
@@ -67,6 +75,7 @@ enum AppBootstrapper {
         )
 
         return AppContainer(
+            hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
                 runtimeClient: client,
                 toolDriver: nativeBundle.toolDriver
@@ -89,10 +98,14 @@ enum AppBootstrapper {
         )
     }
 
-    static func makeLastResortContainer(error: Error) -> AppContainer {
+    static func makeLastResortContainer(
+        error: Error,
+        hostProcessEpoch: HostProcessEpoch
+    ) -> AppContainer {
         let permissionStore = PermissionStore()
         let client = MockRuntimeClient(turnResult: degradedTurnResult())
         return AppContainer(
+            hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
                 runtimeClient: client,
                 toolDriver: MinimalHostToolDriver()
@@ -121,7 +134,8 @@ enum AppBootstrapper {
     private static func makeRuntimeClient(
         environment: [String: String],
         providers: [RustRuntimeProviderConfiguration],
-        store: RustRuntimeStoreConfiguration
+        store: RustRuntimeStoreConfiguration,
+        hostProcessEpoch: HostProcessEpoch
     ) throws -> RustRuntimeClient {
         let requestedProviderId = runtimeProviderId(environment: environment, providers: providers)
 
@@ -133,6 +147,7 @@ enum AppBootstrapper {
                 systemPrompt: AgentPromptDefaults.systemPrompt,
                 runtimePolicy: AgentPromptDefaults.runtimePolicy,
                 providerId: providerId,
+                hostProcessEpoch: hostProcessEpoch,
                 store: store,
                 providers: providers,
                 agentOS: agentOSConfiguration(environment: environment)

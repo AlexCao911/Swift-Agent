@@ -5,6 +5,30 @@ import Testing
 @Suite("Runtime clients")
 struct RustRuntimeClientContractTests {
     @Test
+    func rustRuntimeConfigurationEncodesRequiredHostProcessEpoch() throws {
+        let epoch = try #require(
+            HostProcessEpoch(
+                rawValue: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            )
+        )
+        let configuration = RustRuntimeConfiguration(
+            systemPrompt: "configured system",
+            runtimePolicy: "configured policy",
+            providerId: "mock",
+            hostProcessEpoch: epoch,
+            store: .inMemory
+        )
+
+        let data = try JSONEncoder().encode(configuration)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(
+            object["host_process_epoch"] as? String
+                == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        )
+    }
+
+    @Test
     func mockRuntimeClientRecordsCallsAndReturnsDeterministicValues() async throws {
         let turn = AgentTurnResultDTO(
             runId: "run_mock",
@@ -75,6 +99,7 @@ struct RustRuntimeClientContractTests {
             systemPrompt: "configured system",
             runtimePolicy: "configured policy",
             providerId: "desktop_minicpm",
+            hostProcessEpoch: try Self.testHostProcessEpoch(),
             store: .inMemory,
             providers: [
                 .desktopMiniCPM(
@@ -103,6 +128,7 @@ struct RustRuntimeClientContractTests {
             systemPrompt: "configured system",
             runtimePolicy: "configured policy",
             providerId: "local_llm",
+            hostProcessEpoch: try Self.testHostProcessEpoch(),
             store: .inMemory,
             providers: [
                 .localLLM(
@@ -633,6 +659,7 @@ struct RustRuntimeClientContractTests {
             systemPrompt: "configured system",
             runtimePolicy: "configured policy",
             providerId: "mock",
+            hostProcessEpoch: try Self.testHostProcessEpoch(),
             store: .sqlite(path: databaseURL.path),
             agentOS: RustAgentOSConfiguration(seedDevelopmentProfile: true)
         )
@@ -775,6 +802,14 @@ struct RustRuntimeClientContractTests {
             let object = try #require(JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: Any])
             assertProviderNeutralBridgeObject(object)
         }
+    }
+
+    private static func testHostProcessEpoch() throws -> HostProcessEpoch {
+        try #require(
+            HostProcessEpoch(
+                rawValue: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            )
+        )
     }
 }
 

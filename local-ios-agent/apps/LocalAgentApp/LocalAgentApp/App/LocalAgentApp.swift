@@ -9,17 +9,28 @@ struct LocalAgentApp: App {
 
     @MainActor
     init() {
+        guard let hostProcessEpoch = try? HostProcessEpoch.generate() else {
+            preconditionFailure("The app cannot establish a secure host process epoch")
+        }
         do {
-            let container = try AppBootstrapper.makeContainer()
+            let container = try AppBootstrapper.makeContainer(
+                hostProcessEpoch: hostProcessEpoch
+            )
             self.container = container
             _shellViewModel = State(initialValue: container.makeAppShellViewModel())
         } catch {
             let container: AppContainer
             let bootstrapError = error
             do {
-                container = try AppBootstrapper.makeDegradedContainer(error: bootstrapError)
+                container = try AppBootstrapper.makeDegradedContainer(
+                    error: bootstrapError,
+                    hostProcessEpoch: hostProcessEpoch
+                )
             } catch {
-                container = AppBootstrapper.makeLastResortContainer(error: bootstrapError)
+                container = AppBootstrapper.makeLastResortContainer(
+                    error: bootstrapError,
+                    hostProcessEpoch: hostProcessEpoch
+                )
             }
             self.container = container
             _shellViewModel = State(initialValue: container.makeAppShellViewModel())

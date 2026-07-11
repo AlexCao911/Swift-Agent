@@ -70,14 +70,25 @@ fn preparation_agent_error(error: crate::llm_contracts::PreparationError) -> Age
     AgentError::Storage(format!("{}: {error}", error.code()))
 }
 
-fn next_host_process_epoch() -> String {
-    use std::sync::atomic::AtomicU64;
-    static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
-    format!(
-        "host-{}-{}",
-        std::process::id(),
-        NEXT_EPOCH.fetch_add(1, Ordering::Relaxed)
-    )
+const TEST_HOST_PROCESS_EPOCH: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+fn validate_host_process_epoch(value: &str) -> Result<(), AgentError> {
+    const CANONICAL_LAST_CHARS: &str = "AEIMQUYcgkosw048";
+    let is_base64url = value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if value.len() != 43
+        || !is_base64url
+        || !value
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| CANONICAL_LAST_CHARS.as_bytes().contains(byte))
+    {
+        return Err(AgentError::Ffi(
+            "host_process_epoch must be canonical unpadded base64url for exactly 32 bytes".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -216,16 +227,21 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
 
 impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
-        Self::try_new(runtime, app_services, SharedAgentOSStateStore::in_memory())
-            .expect("in-memory Agent OS state initialization must succeed")
+        Self::try_new(
+            runtime,
+            app_services,
+            SharedAgentOSStateStore::in_memory(),
+            TEST_HOST_PROCESS_EPOCH.to_string(),
+        )
+        .expect("in-memory Agent OS state initialization must succeed")
     }
 
     fn try_new(
         runtime: AgentRuntime<S>,
         app_services: AgentOSApplicationService,
         agent_os_state: SharedAgentOSStateStore,
+        host_process_epoch: String,
     ) -> Result<Self, AgentError> {
-        let host_process_epoch = next_host_process_epoch();
         agent_os_state
             .with_preparation_mut(|store| {
                 store.recover_preparations_for_new_epoch(&host_process_epoch)
@@ -802,10 +818,12 @@ impl RuntimeJsonBridge {
 
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
         let config: RuntimeBridgeConfigJson = from_json(config_json)?;
+        validate_host_process_epoch(&config.host_process_epoch)?;
         let registry = config.provider_registry()?;
         let runtime_config = config.runtime_config(&registry)?;
         let app_services = AgentOSApplicationService::from_config(config.agent_os.into())
             .map_err(|error| AgentError::Storage(error.to_string()))?;
+        let host_process_epoch = config.host_process_epoch.clone();
         match config.store {
             StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::try_new(
                 AgentRuntime::with_store_and_registry(
@@ -815,6 +833,7 @@ impl RuntimeJsonBridge {
                 )?,
                 app_services,
                 SharedAgentOSStateStore::in_memory(),
+                host_process_epoch,
             )?)),
             StoreConfigJson::Sqlite { path, .. } => {
                 let agent_os_path = format!("{path}.agent-os");
@@ -828,6 +847,7 @@ impl RuntimeJsonBridge {
                     )?,
                     app_services,
                     SharedAgentOSStateStore::new(agent_os_store),
+                    host_process_epoch,
                 )?))
             }
         }
@@ -2194,6 +2214,7 @@ struct RuntimeBridgeConfigJson {
     system_prompt: String,
     runtime_policy: String,
     provider_id: String,
+    host_process_epoch: String,
     #[serde(default)]
     providers: Vec<RuntimeProviderConfigJson>,
     store: StoreConfigJson,
