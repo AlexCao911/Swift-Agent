@@ -77,6 +77,12 @@ func cleanupRequiresExactRegisteredSessionAndIsIdempotent() async throws {
         cleanupCommandDigest: "cleanup-digest-1"
     )
 
+    await #expect(throws: RunPreparationCoordinatorError.self) {
+        try await coordinator.closePreparedSession(cleanup)
+    }
+    let acknowledgement = try await coordinator.acknowledgePreparedSessionCleanup(cleanup)
+    #expect(acknowledgement == .from(cleanup))
+    #expect(try await coordinator.acknowledgePreparedSessionCleanup(cleanup) == acknowledgement)
     let receipt = try await coordinator.closePreparedSession(cleanup)
     #expect(receipt.closeDisposition == .closed)
     let replay = try await coordinator.closePreparedSession(cleanup)
@@ -104,7 +110,7 @@ func wrongCleanupIdentityDoesNotClosePreparedSession() async throws {
     )
 
     await #expect(throws: RunPreparationCoordinatorError.self) {
-        try await coordinator.closePreparedSession(wrong)
+        try await coordinator.acknowledgePreparedSessionCleanup(wrong)
     }
     #expect(await store.preparedSessionState(preparationID: prepared.preparationID) == .prepared)
 }
@@ -131,9 +137,49 @@ func preparedSessionAndCloseReceiptSurviveReopen() async throws {
         registrationDigest: prepared.registrationDigest,
         cleanupCommandDigest: "cleanup-digest-reopen"
     )
+    _ = try await coordinator.acknowledgePreparedSessionCleanup(cleanup)
     let receipt = try await coordinator.closePreparedSession(cleanup)
 
     let reopened = try LLMStore(fileURL: url)
     #expect(await reopened.preparedSessionState(preparationID: prepared.preparationID) == .closed)
     #expect(try await RunPreparationCoordinator(store: reopened).closePreparedSession(cleanup) == receipt)
+}
+
+@Test
+func closeReceiptDigestBindsRegistrationCommandAndDisposition() throws {
+    let base = SwiftPreparedSessionCleanupEnvelope(
+        cleanupCommandID: "cleanup-digest",
+        preparationID: "preparation-digest",
+        proposedRunID: "run-digest",
+        sessionHandle: "session-digest",
+        hostProcessEpoch: "epoch-digest",
+        cleanupSequence: 7,
+        registrationDigest: "registration-a",
+        cleanupCommandDigest: "command-a"
+    )
+    let registrationChanged = SwiftPreparedSessionCleanupEnvelope(
+        cleanupCommandID: base.cleanupCommandID,
+        preparationID: base.preparationID,
+        proposedRunID: base.proposedRunID,
+        sessionHandle: base.sessionHandle,
+        hostProcessEpoch: base.hostProcessEpoch,
+        cleanupSequence: base.cleanupSequence,
+        registrationDigest: "registration-b",
+        cleanupCommandDigest: base.cleanupCommandDigest
+    )
+    let commandChanged = SwiftPreparedSessionCleanupEnvelope(
+        cleanupCommandID: base.cleanupCommandID,
+        preparationID: base.preparationID,
+        proposedRunID: base.proposedRunID,
+        sessionHandle: base.sessionHandle,
+        hostProcessEpoch: base.hostProcessEpoch,
+        cleanupSequence: base.cleanupSequence,
+        registrationDigest: base.registrationDigest,
+        cleanupCommandDigest: "command-b"
+    )
+
+    let digest = try digestPreparedClose(base, disposition: .closed)
+    #expect(digest != (try digestPreparedClose(registrationChanged, disposition: .closed)))
+    #expect(digest != (try digestPreparedClose(commandChanged, disposition: .closed)))
+    #expect(digest != (try digestPreparedClose(base, disposition: .alreadyClosed)))
 }

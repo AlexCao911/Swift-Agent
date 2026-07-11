@@ -14,7 +14,8 @@ pub use host_binding::{
 };
 pub use preparation::{
     HostAttestation, PreparationAbortReason, PreparationBinding, PreparationError,
-    PreparedSessionCleanupEnvelope, PreparedSessionClosedReceipt, PreparedSessionRegistration,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
+    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
     RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationRequest,
     RunPreparationState,
 };

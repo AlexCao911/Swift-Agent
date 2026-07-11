@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::llm_contracts::{
-    HostAttestation, PreparationAbortReason, PreparationError, PreparedSessionCleanupEnvelope,
+    HostAttestation, PreparationAbortReason, PreparationError,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
     PreparedSessionClosedReceipt, PreparedSessionRegistration, RenewalReplay,
     RunPreparationPreview, RunPreparationRecord, RunPreparationRequest, RunPreparationState,
 };
@@ -532,11 +533,46 @@ impl RunPreparationService {
                 };
             }
             let cleanup = record.cleanup().ok_or_else(close_mismatch)?;
+            if record.cleanup_acknowledgement().is_none() {
+                return Err(PreparationError::new(
+                    "preparation.cleanup_not_acknowledged",
+                    "prepared-session cleanup command has not been acknowledged",
+                ));
+            }
             if !receipt.matches_cleanup(cleanup) {
+                return Err(close_mismatch());
+            }
+            let expected_digest =
+                prepared_close_receipt_digest(cleanup, receipt.close_disposition())?;
+            if !constant_time_text_eq(receipt.receipt_digest(), &expected_digest) {
                 return Err(close_mismatch());
             }
             record.close(receipt);
             store.close_run_preparation(record)
+        })
+    }
+
+    pub fn ack_prepared_session_cleanup(
+        &self,
+        acknowledgement: PreparedSessionCleanupAcknowledgement,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        self.state_store.with_preparation_mut(|store| {
+            let mut record = store
+                .run_preparation(acknowledgement.preparation_id())?
+                .ok_or_else(preparation_not_found)?;
+            let cleanup = record.cleanup().ok_or_else(close_mismatch)?;
+            if !acknowledgement.matches_cleanup(cleanup) {
+                return Err(close_mismatch());
+            }
+            if let Some(existing) = record.cleanup_acknowledgement() {
+                return if existing == &acknowledgement {
+                    Ok(record)
+                } else {
+                    Err(close_mismatch())
+                };
+            }
+            record.acknowledge_cleanup(acknowledgement.clone());
+            store.acknowledge_prepared_cleanup(record, &acknowledgement)
         })
     }
 
@@ -623,20 +659,11 @@ fn make_cleanup(
     registration: &PreparedSessionRegistration,
     reason: PreparationAbortReason,
 ) -> Result<PreparedSessionCleanupEnvelope, PreparationError> {
-    #[derive(serde::Serialize)]
-    struct CommandIdentity<'a> {
-        preparation_id: &'a str,
-        proposed_run_id: &'a str,
-        session_handle: &'a str,
-        registration_digest: &'a str,
-    }
-    let identity = CommandIdentity {
-        preparation_id: registration.preparation_id(),
-        proposed_run_id: registration.proposed_run_id(),
-        session_handle: registration.session_handle(),
-        registration_digest: registration.registration_digest(),
-    };
-    let command_id = digest("prepared-session-cleanup-command:v1", &identity)?;
+    let command_id = crate::llm_contracts::BearerTokenIssuer::system()
+        .issue("prepared-session-cleanup-command:v1")
+        .map_err(|error| PreparationError::new("preparation.cleanup_id_failed", error.to_string()))?
+        .raw()
+        .to_string();
     let draft = PreparedSessionCleanupEnvelope::new(
         command_id.clone(),
         registration,
@@ -650,6 +677,50 @@ fn make_cleanup(
         reason,
         command_digest,
     ))
+}
+
+fn prepared_close_receipt_digest(
+    cleanup: &PreparedSessionCleanupEnvelope,
+    close_disposition: &str,
+) -> Result<String, PreparationError> {
+    #[derive(serde::Serialize)]
+    struct Document<'a> {
+        cleanup_command_id: &'a str,
+        preparation_id: &'a str,
+        proposed_run_id: &'a str,
+        session_handle: &'a str,
+        host_process_epoch: &'a str,
+        cleanup_sequence: u64,
+        prepared_session_registration_digest: &'a str,
+        cleanup_command_digest: &'a str,
+        close_disposition: &'a str,
+    }
+    digest(
+        "prepared-session-closed-receipt:v1",
+        &Document {
+            cleanup_command_id: cleanup.cleanup_command_id(),
+            preparation_id: cleanup.preparation_id(),
+            proposed_run_id: cleanup.proposed_run_id(),
+            session_handle: cleanup.session_handle(),
+            host_process_epoch: cleanup.host_process_epoch(),
+            cleanup_sequence: cleanup.preparation_cleanup_sequence(),
+            prepared_session_registration_digest: cleanup.prepared_session_registration_digest(),
+            cleanup_command_digest: cleanup.cleanup_command_digest(),
+            close_disposition,
+        },
+    )
+}
+
+fn constant_time_text_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn expire_record(

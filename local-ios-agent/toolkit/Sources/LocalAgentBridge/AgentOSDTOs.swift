@@ -131,6 +131,25 @@ public struct PreparedSessionCleanupEnvelopeDTO: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case cleanupCommandId = "cleanup_command_id", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", hostProcessEpoch = "host_process_epoch", preparationCleanupSequence = "preparation_cleanup_sequence", reason, preparedSessionRegistrationDigest = "prepared_session_registration_digest", cleanupCommandDigest = "cleanup_command_digest" }
 }
 
+public struct PreparedSessionCleanupAcknowledgementDTO: Codable, Equatable, Sendable {
+    public let cleanupCommandId: String
+    public let preparationId: String
+    public let preparationCleanupSequence: UInt64
+    public let cleanupCommandDigest: String
+    public init(cleanupCommandId: String, preparationId: String, preparationCleanupSequence: UInt64, cleanupCommandDigest: String) {
+        self.cleanupCommandId = cleanupCommandId
+        self.preparationId = preparationId
+        self.preparationCleanupSequence = preparationCleanupSequence
+        self.cleanupCommandDigest = cleanupCommandDigest
+    }
+    private enum CodingKeys: String, CodingKey {
+        case cleanupCommandId = "cleanup_command_id"
+        case preparationId = "preparation_id"
+        case preparationCleanupSequence = "preparation_cleanup_sequence"
+        case cleanupCommandDigest = "cleanup_command_digest"
+    }
+}
+
 public struct PreparedSessionClosedReceiptDTO: Codable, Equatable, Sendable {
     public let cleanupCommandId: String; public let preparationId: String; public let proposedRunId: String
     public let sessionHandle: String; public let hostProcessEpoch: String; public let preparationCleanupSequence: UInt64

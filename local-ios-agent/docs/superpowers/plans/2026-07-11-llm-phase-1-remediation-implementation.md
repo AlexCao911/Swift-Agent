@@ -167,24 +167,24 @@ git commit -m "fix: make llm preparation lifecycle atomic"
 - External `CloseDisposition` is exactly `closed | already_closed`.
 - Produces canonical `prepared-session-close-receipt:v1` parity across Rust and Swift.
 
-- [ ] **Step 1: Add failing protocol tests**
+- [x] **Step 1: Add failing protocol tests**
 
 Test rejection before acknowledgement and for each independent mutation of command ID, sequence, registration digest, command digest, disposition, and receipt digest. Test exact acknowledgement/receipt replay. Test JSON decoding rejects `epoch_ended`. Add Swift/Rust golden digest parity including registration digest, command digest, and disposition.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation cleanup -- --nocapture
 swift test --package-path toolkit --filter RunPreparationCoordinatorTests
 ```
 
-- [ ] **Step 3: Implement outbox acknowledgement and receipt recomputation**
+- [x] **Step 3: Implement outbox acknowledgement and receipt recomputation**
 
 Create `preparation_cleanup_outbox` and receipt ledger tables. Persist `pending` in the same abort transaction, then CAS `pending -> acknowledged` using command ID/sequence/digest. Recompute the close receipt from the persisted registration and command using the registered digest domain and constant-time compare before the atomic close/release transaction. Remove external construction/decoding of `epoch_ended`; use only the internal recovery record from Task 2.
 
 Swift must first persist the cleanup command and return an acknowledgement. It computes close receipt digest only after the stored command matches the prepared session. Add the C ABI declaration and provider-neutral Swift gateway operation.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation -- --nocapture
@@ -194,7 +194,7 @@ swift test --package-path toolkit --filter RunPreparationCoordinatorTests
 swift test --package-path toolkit --filter RustRuntimeClientContractTests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core toolkit

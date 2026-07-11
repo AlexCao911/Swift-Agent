@@ -5,7 +5,8 @@ use crate::llm_contracts::{
     BearerTokenIssuer, GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
     HostBindingOperationState, LLMBindingSchema, PackageBindingPreparation, PreparationError,
-    ProfilePublishPreparation, RunPreparationRecord, RunPreparationState,
+    PreparedSessionCleanupAcknowledgement, ProfilePublishPreparation, RunPreparationRecord,
+    RunPreparationState,
 };
 
 use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
@@ -415,11 +416,40 @@ impl RunPreparationRepository for InMemoryAgentOSStateStore {
         Ok(record)
     }
 
+    fn acknowledge_prepared_cleanup(
+        &mut self,
+        record: RunPreparationRecord,
+        acknowledgement: &PreparedSessionCleanupAcknowledgement,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let existing = self
+            .run_preparations
+            .get(record.preview().preparation_id())
+            .ok_or_else(preparation_not_found)?;
+        if existing.state() != RunPreparationState::Aborting {
+            return Err(preparation_stale());
+        }
+        if let Some(current) = existing.cleanup_acknowledgement() {
+            return if current == acknowledgement {
+                Ok(existing.clone())
+            } else {
+                Err(preparation_stale())
+            };
+        }
+        self.run_preparations.insert(
+            record.preview().preparation_id().to_string(),
+            record.clone(),
+        );
+        Ok(record)
+    }
+
     fn close_run_preparation(
         &mut self,
         record: RunPreparationRecord,
     ) -> Result<RunPreparationRecord, PreparationError> {
         let preview = record.preview();
+        if record.cleanup_acknowledgement().is_none() {
+            return Err(preparation_stale());
+        }
         self.complete_release(preview.lease_generation(), preview.host_process_epoch())
             .map_err(preparation_lease_error)?;
         self.run_preparations

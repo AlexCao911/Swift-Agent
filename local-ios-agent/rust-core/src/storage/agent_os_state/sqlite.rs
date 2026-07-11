@@ -94,6 +94,24 @@ impl SqliteAgentOSStateStore {
                lease_generation text not null,
                state text not null,
                record_json text not null
+             );
+
+             create table if not exists preparation_cleanup_outbox (
+               cleanup_command_id text primary key,
+               preparation_id text not null unique references run_preparations(preparation_id),
+               cleanup_sequence text not null,
+               registration_digest text not null,
+               command_digest text not null,
+               state text not null,
+               record_json text not null
+             );
+
+             create table if not exists preparation_cleanup_receipts (
+               cleanup_command_id text primary key references preparation_cleanup_outbox(cleanup_command_id),
+               preparation_id text not null unique,
+               receipt_digest text not null,
+               close_disposition text not null,
+               record_json text not null
              );",
         )
         .map_err(sqlite_error)?;
@@ -617,6 +635,14 @@ impl RunPreparationRepository for SqliteAgentOSStateStore {
             recovered.push(id);
         }
         tx.execute(
+            "update preparation_cleanup_outbox set state = 'cancelled_epoch_end'
+             where state in ('pending', 'acknowledged') and preparation_id in (
+               select preparation_id from run_preparations where host_process_epoch != ?1
+             )",
+            params![current_host_epoch],
+        )
+        .map_err(preparation_sqlite_error)?;
+        tx.execute(
             "delete from global_run_lease where singleton_id = 1 and host_process_epoch != ?1",
             params![current_host_epoch],
         )
@@ -666,6 +692,24 @@ impl RunPreparationRepository for SqliteAgentOSStateStore {
         if updated != 1 {
             return Err(preparation_stale());
         }
+        if let Some(cleanup) = record.cleanup() {
+            let cleanup_json = serde_json::to_string(cleanup).map_err(preparation_serde_error)?;
+            tx.execute(
+                "insert into preparation_cleanup_outbox (
+                   cleanup_command_id, preparation_id, cleanup_sequence, registration_digest,
+                   command_digest, state, record_json
+                 ) values (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+                params![
+                    cleanup.cleanup_command_id(),
+                    cleanup.preparation_id(),
+                    cleanup.preparation_cleanup_sequence().to_string(),
+                    cleanup.prepared_session_registration_digest(),
+                    cleanup.cleanup_command_digest(),
+                    cleanup_json
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        }
         if !has_registered_session {
             let released = tx
                 .execute(
@@ -685,6 +729,46 @@ impl RunPreparationRepository for SqliteAgentOSStateStore {
         Ok(record)
     }
 
+    fn acknowledge_prepared_cleanup(
+        &mut self,
+        record: RunPreparationRecord,
+        acknowledgement: &crate::llm_contracts::PreparedSessionCleanupAcknowledgement,
+    ) -> Result<RunPreparationRecord, PreparationError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(preparation_sqlite_error)?;
+        let outbox_changed = tx
+            .execute(
+                "update preparation_cleanup_outbox set state = 'acknowledged'
+                 where cleanup_command_id = ?1 and preparation_id = ?2
+                   and cleanup_sequence = ?3 and command_digest = ?4 and state = 'pending'",
+                params![
+                    acknowledgement.cleanup_command_id(),
+                    acknowledgement.preparation_id(),
+                    acknowledgement.preparation_cleanup_sequence().to_string(),
+                    acknowledgement.cleanup_command_digest()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if outbox_changed != 1 {
+            return Err(preparation_stale());
+        }
+        let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        let preparation_changed = tx
+            .execute(
+                "update run_preparations set record_json = ?1
+                 where preparation_id = ?2 and state = 'aborting'",
+                params![json, acknowledgement.preparation_id()],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if preparation_changed != 1 {
+            return Err(preparation_stale());
+        }
+        tx.commit().map_err(preparation_sqlite_error)?;
+        Ok(record)
+    }
+
     fn close_run_preparation(
         &mut self,
         record: RunPreparationRecord,
@@ -694,7 +778,33 @@ impl RunPreparationRepository for SqliteAgentOSStateStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(preparation_sqlite_error)?;
         let preview = record.preview();
+        let cleanup = record.cleanup().ok_or_else(preparation_stale)?;
+        let receipt = record.closed_receipt().ok_or_else(preparation_stale)?;
         let json = serde_json::to_string(&record).map_err(preparation_serde_error)?;
+        let outbox_changed = tx
+            .execute(
+                "update preparation_cleanup_outbox set state = 'closed'
+                 where cleanup_command_id = ?1 and preparation_id = ?2 and state = 'acknowledged'",
+                params![cleanup.cleanup_command_id(), preview.preparation_id()],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if outbox_changed != 1 {
+            return Err(preparation_stale());
+        }
+        let receipt_json = serde_json::to_string(receipt).map_err(preparation_serde_error)?;
+        tx.execute(
+            "insert into preparation_cleanup_receipts (
+               cleanup_command_id, preparation_id, receipt_digest, close_disposition, record_json
+             ) values (?1, ?2, ?3, ?4, ?5)",
+            params![
+                cleanup.cleanup_command_id(),
+                preview.preparation_id(),
+                receipt.receipt_digest(),
+                receipt.close_disposition(),
+                receipt_json
+            ],
+        )
+        .map_err(preparation_sqlite_error)?;
         let updated = tx
             .execute(
                 "update run_preparations set state = 'closed', record_json = ?1

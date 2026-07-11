@@ -1,6 +1,9 @@
+use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
 use local_ios_agent_runtime::llm_contracts::{
-    HostAttestation, PreparationAbortReason, PreparationBinding, PreparedSessionClosedReceipt,
-    PreparedSessionRegistration, RunPreparationRequest, RunPreparationState,
+    HostAttestation, PreparationAbortReason, PreparationBinding,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionCloseDisposition,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, RunPreparationRequest,
+    RunPreparationState,
 };
 use local_ios_agent_runtime::run_snapshot::RunPreparationService;
 use local_ios_agent_runtime::storage::agent_os_state::{
@@ -211,10 +214,32 @@ fn exact_prepared_close_receipt_is_required_to_release() {
         .unwrap();
     let cleanup = aborted.cleanup().unwrap();
 
+    let premature = PreparedSessionClosedReceipt::from_cleanup(
+        cleanup,
+        cleanup.session_handle(),
+        PreparedSessionCloseDisposition::Closed,
+        close_receipt_digest(cleanup, "closed"),
+    );
+    assert_eq!(
+        service
+            .confirm_prepared_session_closed(premature)
+            .unwrap_err()
+            .code(),
+        "preparation.cleanup_not_acknowledged"
+    );
+
+    let acknowledgement = PreparedSessionCleanupAcknowledgement::from_cleanup(cleanup);
+    service
+        .ack_prepared_session_cleanup(acknowledgement.clone())
+        .unwrap();
+    service
+        .ack_prepared_session_cleanup(acknowledgement)
+        .unwrap();
+
     let wrong = PreparedSessionClosedReceipt::from_cleanup(
         cleanup,
         "different-handle",
-        "closed",
+        PreparedSessionCloseDisposition::Closed,
         "closed-receipt-digest-1",
     );
     assert_eq!(
@@ -232,8 +257,8 @@ fn exact_prepared_close_receipt_is_required_to_release() {
     let receipt = PreparedSessionClosedReceipt::from_cleanup(
         cleanup,
         cleanup.session_handle(),
-        "closed",
-        "closed-receipt-digest-1",
+        PreparedSessionCloseDisposition::Closed,
+        close_receipt_digest(cleanup, "closed"),
     );
     let closed = service
         .confirm_prepared_session_closed(receipt.clone())
@@ -247,6 +272,92 @@ fn exact_prepared_close_receipt_is_required_to_release() {
         .with(|store| store.current_global_run_lease())
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn external_close_receipt_rejects_epoch_ended_disposition() {
+    let json = r#"{
+      "cleanup_command_id":"cleanup-1",
+      "preparation_id":"preparation-1",
+      "proposed_run_id":"run-1",
+      "session_handle":"session-1",
+      "host_process_epoch":"epoch-1",
+      "preparation_cleanup_sequence":1,
+      "close_disposition":"epoch_ended",
+      "receipt_digest":"digest-1"
+    }"#;
+    assert!(serde_json::from_str::<PreparedSessionClosedReceipt>(json).is_err());
+}
+
+#[test]
+fn sqlite_cleanup_outbox_requires_ack_before_atomic_close_and_release() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent-os.sqlite");
+    let state = SharedAgentOSStateStore::new(SqliteAgentOSStateStore::open(&path).unwrap());
+    let service = RunPreparationService::new(state.clone(), "epoch-1");
+    let preview = service.preview_run(request(), 0).unwrap();
+    service
+        .register_prepared_session(preview.token(), registration(&preview), MINUTE)
+        .unwrap();
+    let aborted = service
+        .begin_abort_preparation(
+            preview.preparation_id(),
+            Some(preview.token()),
+            "sqlite-abort",
+            PreparationAbortReason::UserDenied,
+        )
+        .unwrap();
+    let cleanup = aborted.cleanup().unwrap();
+    service
+        .ack_prepared_session_cleanup(PreparedSessionCleanupAcknowledgement::from_cleanup(cleanup))
+        .unwrap();
+    let receipt = PreparedSessionClosedReceipt::from_cleanup(
+        cleanup,
+        cleanup.session_handle(),
+        PreparedSessionCloseDisposition::AlreadyClosed,
+        close_receipt_digest(cleanup, "already_closed"),
+    );
+    let closed = service.confirm_prepared_session_closed(receipt).unwrap();
+    assert_eq!(closed.state(), RunPreparationState::Closed);
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+
+fn close_receipt_digest(
+    cleanup: &local_ios_agent_runtime::llm_contracts::PreparedSessionCleanupEnvelope,
+    disposition: &str,
+) -> String {
+    #[derive(serde::Serialize)]
+    struct Document<'a> {
+        cleanup_command_id: &'a str,
+        preparation_id: &'a str,
+        proposed_run_id: &'a str,
+        session_handle: &'a str,
+        host_process_epoch: &'a str,
+        cleanup_sequence: u64,
+        prepared_session_registration_digest: &'a str,
+        cleanup_command_digest: &'a str,
+        close_disposition: &'a str,
+    }
+    CanonicalDigestV1::digest(
+        "prepared-session-closed-receipt:v1",
+        &Document {
+            cleanup_command_id: cleanup.cleanup_command_id(),
+            preparation_id: cleanup.preparation_id(),
+            proposed_run_id: cleanup.proposed_run_id(),
+            session_handle: cleanup.session_handle(),
+            host_process_epoch: cleanup.host_process_epoch(),
+            cleanup_sequence: cleanup.preparation_cleanup_sequence(),
+            prepared_session_registration_digest: cleanup.prepared_session_registration_digest(),
+            cleanup_command_digest: cleanup.cleanup_command_digest(),
+            close_disposition: disposition,
+        },
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
 }
 
 #[test]

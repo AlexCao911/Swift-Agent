@@ -622,6 +622,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_commit_prepared_start(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.beginAbortPreparation.rawValue:
                     return local_agent_runtime_bridge_begin_abort_preparation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.ackPreparedSessionCleanup.rawValue:
+                    return local_agent_runtime_bridge_ack_prepared_session_cleanup(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.confirmPreparedSessionClosed.rawValue:
                     return local_agent_runtime_bridge_confirm_prepared_session_closed(runtime.map { OpaquePointer($0) }, requestJson)
                 default:
@@ -713,7 +715,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
             case .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
                  .attachHostBinding, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .beginAbortPreparation,
-                 .confirmPreparedSessionClosed:
+                 .ackPreparedSessionCleanup, .confirmPreparedSessionClosed:
                 result = operation.rawValue.withCString { operationPointer in
                     functions.llmContractRequest(handle, operationPointer, pointer)
                 }

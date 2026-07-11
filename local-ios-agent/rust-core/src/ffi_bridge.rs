@@ -38,8 +38,8 @@ use crate::execution::{
 };
 use crate::llm_contracts::{
     HostAttestation, HostBindingCommit, PackageBindingPreparation, PreparationAbortReason,
-    PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
-    RunPreparationRequest,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
+    PreparedSessionRegistration, ProfilePublishPreparation, RunPreparationRequest,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::run_snapshot::RunPreparationService;
@@ -516,6 +516,15 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let record = self
             .run_preparation
             .confirm_prepared_session_closed(receipt)
+            .map_err(preparation_agent_error)?;
+        to_json(&record)
+    }
+
+    fn ack_prepared_session_cleanup_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let acknowledgement: PreparedSessionCleanupAcknowledgement = from_json(request_json)?;
+        let record = self
+            .run_preparation
+            .ack_prepared_session_cleanup(acknowledgement)
             .map_err(preparation_agent_error)?;
         to_json(&record)
     }
@@ -1176,6 +1185,15 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime.confirm_prepared_session_closed_json(request_json),
         }
     }
+    pub fn ack_prepared_session_cleanup_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.ack_prepared_session_cleanup_json(request_json),
+            Self::Sqlite(runtime) => runtime.ack_prepared_session_cleanup_json(request_json),
+        }
+    }
 
     pub fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
@@ -1601,6 +1619,10 @@ json_bridge_function!(
 json_bridge_function!(
     local_agent_runtime_bridge_begin_abort_preparation,
     begin_abort_preparation_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_ack_prepared_session_cleanup,
+    ack_prepared_session_cleanup_json
 );
 json_bridge_function!(
     local_agent_runtime_bridge_confirm_prepared_session_closed,

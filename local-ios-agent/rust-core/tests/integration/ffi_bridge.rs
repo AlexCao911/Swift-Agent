@@ -4,6 +4,7 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
+    local_agent_runtime_bridge_ack_prepared_session_cleanup,
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
     local_agent_runtime_bridge_begin_abort_preparation, local_agent_runtime_bridge_build_agent,
     local_agent_runtime_bridge_commit_assistant_result,
@@ -372,6 +373,26 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         let cleanup = &aborting["cleanup"];
         assert_eq!(aborting["state"], "aborting");
 
+        let acknowledgement = CString::new(
+            json!({
+                "cleanup_command_id":cleanup["cleanup_command_id"],
+                "preparation_id":cleanup["preparation_id"],
+                "preparation_cleanup_sequence":cleanup["preparation_cleanup_sequence"],
+                "cleanup_command_digest":cleanup["cleanup_command_digest"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let acknowledged = decode(&take_bridge_string(
+            local_agent_runtime_bridge_ack_prepared_session_cleanup(
+                runtime,
+                acknowledgement.as_ptr(),
+            ),
+        ));
+        assert_eq!(acknowledged["state"], "aborting");
+
+        let close_digest = cleanup_close_digest(cleanup, "closed");
+
         let closed = CString::new(
             json!({
                 "cleanup_command_id":cleanup["cleanup_command_id"],
@@ -381,7 +402,7 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
                 "host_process_epoch":cleanup["host_process_epoch"],
                 "preparation_cleanup_sequence":cleanup["preparation_cleanup_sequence"],
                 "close_disposition":"closed",
-                "receipt_digest":"close-receipt-ffi-1"
+                "receipt_digest":close_digest
             })
             .to_string(),
         )
@@ -394,6 +415,26 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
 
         local_agent_runtime_bridge_free(runtime);
     }
+}
+
+fn cleanup_close_digest(cleanup: &Value, disposition: &str) -> String {
+    local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
+        "prepared-session-closed-receipt:v1",
+        &json!({
+            "cleanup_command_id":cleanup["cleanup_command_id"],
+            "preparation_id":cleanup["preparation_id"],
+            "proposed_run_id":cleanup["proposed_run_id"],
+            "session_handle":cleanup["session_handle"],
+            "host_process_epoch":cleanup["host_process_epoch"],
+            "cleanup_sequence":cleanup["preparation_cleanup_sequence"],
+            "prepared_session_registration_digest":cleanup["prepared_session_registration_digest"],
+            "cleanup_command_digest":cleanup["cleanup_command_digest"],
+            "close_disposition":disposition
+        }),
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
 }
 
 fn assert_provider_neutral(value: &Value) {

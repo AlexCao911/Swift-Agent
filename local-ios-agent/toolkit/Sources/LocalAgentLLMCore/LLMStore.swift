@@ -21,6 +21,7 @@ struct StoredPreparedSessionRecord: Codable, Equatable, Sendable {
     let session: SwiftPreparedSession
     var state: StoredPreparedSessionState
     var cleanup: SwiftPreparedSessionCleanupEnvelope?
+    var cleanupAcknowledgement: SwiftPreparedSessionCleanupAcknowledgement?
     var closeReceipt: SwiftPreparedSessionClosedReceipt?
 }
 
@@ -147,6 +148,9 @@ public actor LLMStore {
             && cleanup.hostProcessEpoch == record.session.hostProcessEpoch
             && cleanup.registrationDigest == record.session.registrationDigest
         guard exact else { throw cleanupMismatch() }
+        guard record.cleanup == cleanup,
+              record.cleanupAcknowledgement == SwiftPreparedSessionCleanupAcknowledgement.from(cleanup)
+        else { throw cleanupNotAcknowledged() }
         if record.state == .closed {
             guard record.cleanup == cleanup, let receipt = record.closeReceipt else {
                 throw cleanupMismatch()
@@ -161,7 +165,7 @@ public actor LLMStore {
             hostProcessEpoch: cleanup.hostProcessEpoch,
             cleanupSequence: cleanup.cleanupSequence,
             closeDisposition: .closed,
-            receiptDigest: try digestPreparedClose(cleanup)
+            receiptDigest: try digestPreparedClose(cleanup, disposition: .closed)
         )
         let previous = document
         record.state = .closed
@@ -170,6 +174,32 @@ public actor LLMStore {
         document.preparedSessions[cleanup.preparationID] = record
         do { try persist() } catch { document = previous; throw error }
         return receipt
+    }
+
+    func acknowledgePreparedSessionCleanup(
+        _ cleanup: SwiftPreparedSessionCleanupEnvelope
+    ) throws -> SwiftPreparedSessionCleanupAcknowledgement {
+        guard var record = document.preparedSessions[cleanup.preparationID] else {
+            throw cleanupMismatch()
+        }
+        let exact = cleanup.proposedRunID == record.session.proposedRunID
+            && cleanup.sessionHandle == record.session.sessionHandle
+            && cleanup.hostProcessEpoch == record.session.hostProcessEpoch
+            && cleanup.registrationDigest == record.session.registrationDigest
+        guard exact, record.state == .prepared else { throw cleanupMismatch() }
+        let acknowledgement = SwiftPreparedSessionCleanupAcknowledgement.from(cleanup)
+        if let existing = record.cleanupAcknowledgement {
+            guard existing == acknowledgement, record.cleanup == cleanup else {
+                throw cleanupMismatch()
+            }
+            return existing
+        }
+        let previous = document
+        record.cleanup = cleanup
+        record.cleanupAcknowledgement = acknowledgement
+        document.preparedSessions[cleanup.preparationID] = record
+        do { try persist() } catch { document = previous; throw error }
+        return acknowledgement
     }
 
     public func preparedSessionState(preparationID: String) -> StoredPreparedSessionState? {
@@ -203,5 +233,12 @@ private func cleanupMismatch() -> RunPreparationCoordinatorError {
     RunPreparationCoordinatorError(
         code: "preparation.cleanup_mismatch",
         message: "cleanup envelope does not match the prepared session identity"
+    )
+}
+
+private func cleanupNotAcknowledged() -> RunPreparationCoordinatorError {
+    RunPreparationCoordinatorError(
+        code: "preparation.cleanup_not_acknowledged",
+        message: "cleanup must be durably acknowledged before closing the prepared session"
     )
 }

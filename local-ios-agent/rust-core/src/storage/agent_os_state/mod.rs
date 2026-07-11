@@ -6,8 +6,8 @@ pub use sqlite::SqliteAgentOSStateStore;
 
 use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, HostBindingCommit, HostBindingCrossLink, HostBindingError,
-    HostBindingOperation, PackageBindingPreparation, PreparationError, ProfilePublishPreparation,
-    RunPreparationRecord,
+    HostBindingOperation, PackageBindingPreparation, PreparationError,
+    PreparedSessionCleanupAcknowledgement, ProfilePublishPreparation, RunPreparationRecord,
 };
 use std::sync::{Arc, Mutex};
 
@@ -77,6 +77,11 @@ pub trait RunPreparationRepository {
         &mut self,
         record: RunPreparationRecord,
         has_registered_session: bool,
+    ) -> Result<RunPreparationRecord, PreparationError>;
+    fn acknowledge_prepared_cleanup(
+        &mut self,
+        record: RunPreparationRecord,
+        acknowledgement: &PreparedSessionCleanupAcknowledgement,
     ) -> Result<RunPreparationRecord, PreparationError>;
     fn close_run_preparation(
         &mut self,

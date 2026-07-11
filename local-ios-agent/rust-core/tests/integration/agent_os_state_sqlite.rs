@@ -125,6 +125,8 @@ fn schema_contains_all_phase_one_agent_os_tables() {
         "global_run_lease",
         "host_binding_operations",
         "host_binding_cross_links",
+        "preparation_cleanup_outbox",
+        "preparation_cleanup_receipts",
         "run_preparations",
     ] {
         assert!(

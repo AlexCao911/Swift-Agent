@@ -68,6 +68,24 @@ public struct SwiftPreparedSessionCleanupEnvelope: Codable, Equatable, Sendable 
     }
 }
 
+public struct SwiftPreparedSessionCleanupAcknowledgement: Codable, Equatable, Sendable {
+    public let cleanupCommandID: String
+    public let preparationID: String
+    public let cleanupSequence: UInt64
+    public let cleanupCommandDigest: String
+
+    public static func from(
+        _ cleanup: SwiftPreparedSessionCleanupEnvelope
+    ) -> SwiftPreparedSessionCleanupAcknowledgement {
+        SwiftPreparedSessionCleanupAcknowledgement(
+            cleanupCommandID: cleanup.cleanupCommandID,
+            preparationID: cleanup.preparationID,
+            cleanupSequence: cleanup.cleanupSequence,
+            cleanupCommandDigest: cleanup.cleanupCommandDigest
+        )
+    }
+}
+
 public enum PreparedSessionCloseDisposition: String, Codable, Equatable, Sendable {
     case closed
     case alreadyClosed = "already_closed"
@@ -120,6 +138,7 @@ public struct RunPreparationCoordinator: Sendable {
                 session: session,
                 state: .prepared,
                 cleanup: nil,
+                cleanupAcknowledgement: nil,
                 closeReceipt: nil
             )
         )
@@ -129,6 +148,12 @@ public struct RunPreparationCoordinator: Sendable {
         _ cleanup: SwiftPreparedSessionCleanupEnvelope
     ) async throws -> SwiftPreparedSessionClosedReceipt {
         try await store.closePreparedSession(cleanup)
+    }
+
+    public func acknowledgePreparedSessionCleanup(
+        _ cleanup: SwiftPreparedSessionCleanupEnvelope
+    ) async throws -> SwiftPreparedSessionCleanupAcknowledgement {
+        try await store.acknowledgePreparedSessionCleanup(cleanup)
     }
 }
 
@@ -152,14 +177,20 @@ private func digestRegistration(
     ).hex
 }
 
-func digestPreparedClose(_ cleanup: SwiftPreparedSessionCleanupEnvelope) throws -> String {
+func digestPreparedClose(
+    _ cleanup: SwiftPreparedSessionCleanupEnvelope,
+    disposition: PreparedSessionCloseDisposition
+) throws -> String {
     let document = try CanonicalJSONValue.object(entries: [
         .init(name: "cleanup_command_id", value: .string(cleanup.cleanupCommandID)),
         .init(name: "preparation_id", value: .string(cleanup.preparationID)),
         .init(name: "proposed_run_id", value: .string(cleanup.proposedRunID)),
         .init(name: "session_handle", value: .string(cleanup.sessionHandle)),
         .init(name: "host_process_epoch", value: .string(cleanup.hostProcessEpoch)),
-        .init(name: "cleanup_sequence", value: .string(String(cleanup.cleanupSequence))),
+        .init(name: "cleanup_sequence", value: .number(Double(cleanup.cleanupSequence))),
+        .init(name: "prepared_session_registration_digest", value: .string(cleanup.registrationDigest)),
+        .init(name: "cleanup_command_digest", value: .string(cleanup.cleanupCommandDigest)),
+        .init(name: "close_disposition", value: .string(disposition.rawValue)),
     ])
     return try CanonicalDigestV1.digest(
         domain: "prepared-session-closed-receipt:v1",

@@ -333,6 +333,49 @@ pub struct PreparedSessionCleanupEnvelope {
     cleanup_command_digest: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedSessionCleanupAcknowledgement {
+    cleanup_command_id: String,
+    preparation_id: String,
+    preparation_cleanup_sequence: u64,
+    cleanup_command_digest: String,
+}
+
+impl PreparedSessionCleanupAcknowledgement {
+    pub fn from_cleanup(cleanup: &PreparedSessionCleanupEnvelope) -> Self {
+        Self {
+            cleanup_command_id: cleanup.cleanup_command_id.clone(),
+            preparation_id: cleanup.preparation_id.clone(),
+            preparation_cleanup_sequence: cleanup.preparation_cleanup_sequence,
+            cleanup_command_digest: cleanup.cleanup_command_digest.clone(),
+        }
+    }
+
+    pub fn matches_cleanup(&self, cleanup: &PreparedSessionCleanupEnvelope) -> bool {
+        self.cleanup_command_id == cleanup.cleanup_command_id
+            && self.preparation_id == cleanup.preparation_id
+            && self.preparation_cleanup_sequence == cleanup.preparation_cleanup_sequence
+            && self.cleanup_command_digest == cleanup.cleanup_command_digest
+    }
+
+    pub fn cleanup_command_id(&self) -> &str {
+        &self.cleanup_command_id
+    }
+
+    pub fn preparation_id(&self) -> &str {
+        &self.preparation_id
+    }
+
+    pub fn preparation_cleanup_sequence(&self) -> u64 {
+        self.preparation_cleanup_sequence
+    }
+
+    pub fn cleanup_command_digest(&self) -> &str {
+        &self.cleanup_command_digest
+    }
+}
+
 impl PreparedSessionCleanupEnvelope {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -391,15 +434,31 @@ pub struct PreparedSessionClosedReceipt {
     session_handle: String,
     host_process_epoch: String,
     preparation_cleanup_sequence: u64,
-    close_disposition: String,
+    close_disposition: PreparedSessionCloseDisposition,
     receipt_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedSessionCloseDisposition {
+    Closed,
+    AlreadyClosed,
+}
+
+impl PreparedSessionCloseDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::AlreadyClosed => "already_closed",
+        }
+    }
 }
 
 impl PreparedSessionClosedReceipt {
     pub fn from_cleanup(
         cleanup: &PreparedSessionCleanupEnvelope,
         session_handle: impl Into<String>,
-        close_disposition: impl Into<String>,
+        close_disposition: PreparedSessionCloseDisposition,
         receipt_digest: impl Into<String>,
     ) -> Self {
         Self {
@@ -421,12 +480,19 @@ impl PreparedSessionClosedReceipt {
             && self.host_process_epoch == cleanup.host_process_epoch
             && self.preparation_cleanup_sequence == cleanup.preparation_cleanup_sequence
             && matches!(
-                self.close_disposition.as_str(),
-                "closed" | "already_closed" | "epoch_ended"
+                self.close_disposition,
+                PreparedSessionCloseDisposition::Closed
+                    | PreparedSessionCloseDisposition::AlreadyClosed
             )
     }
     pub fn preparation_id(&self) -> &str {
         &self.preparation_id
+    }
+    pub fn receipt_digest(&self) -> &str {
+        &self.receipt_digest
+    }
+    pub fn close_disposition(&self) -> &str {
+        self.close_disposition.as_str()
     }
 }
 
@@ -466,6 +532,8 @@ pub struct RunPreparationRecord {
     state: RunPreparationState,
     registration: Option<PreparedSessionRegistration>,
     cleanup: Option<PreparedSessionCleanupEnvelope>,
+    #[serde(default)]
+    cleanup_acknowledgement: Option<PreparedSessionCleanupAcknowledgement>,
     closed_receipt: Option<PreparedSessionClosedReceipt>,
     abort_idempotency_key: Option<String>,
     renewals: BTreeMap<String, RenewalReplay>,
@@ -479,6 +547,7 @@ impl RunPreparationRecord {
             state: RunPreparationState::Pending,
             registration: None,
             cleanup: None,
+            cleanup_acknowledgement: None,
             closed_receipt: None,
             abort_idempotency_key: None,
             renewals: BTreeMap::new(),
@@ -498,6 +567,9 @@ impl RunPreparationRecord {
     }
     pub fn cleanup(&self) -> Option<&PreparedSessionCleanupEnvelope> {
         self.cleanup.as_ref()
+    }
+    pub fn cleanup_acknowledgement(&self) -> Option<&PreparedSessionCleanupAcknowledgement> {
+        self.cleanup_acknowledgement.as_ref()
     }
     pub fn closed_receipt(&self) -> Option<&PreparedSessionClosedReceipt> {
         self.closed_receipt.as_ref()
@@ -526,6 +598,12 @@ impl RunPreparationRecord {
         } else {
             RunPreparationState::Closed
         };
+    }
+    pub(crate) fn acknowledge_cleanup(
+        &mut self,
+        acknowledgement: PreparedSessionCleanupAcknowledgement,
+    ) {
+        self.cleanup_acknowledgement = Some(acknowledgement);
     }
     pub(crate) fn close(&mut self, receipt: PreparedSessionClosedReceipt) {
         self.closed_receipt = Some(receipt);
