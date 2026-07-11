@@ -5,9 +5,11 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::llm_contracts::{
-    HostAttestation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
-    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
-    RunPreparationState,
+    HostAttestation, HostBindingCommit, HostBindingStagingReceipt, HostBindingTuple,
+    LLMInputModality, PreparationAbortReason, PreparedCapabilityAttestation,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionCloseDisposition,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, PreparedStartValidator,
+    ProfilePublishPreparation, RunPreparationState,
 };
 use local_ios_agent_runtime::run_snapshot::{
     RunPreparationService, RunSnapshotService, StartRunRequest,
@@ -136,8 +138,166 @@ fn registration(
         "swift-snapshot-1",
         "epoch-1",
         "binding-hash-1",
-        "registration-digest-1",
+        "",
     )
+    .with_binding_identity("binding-1", 1)
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn egress_attestation(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+    registration: PreparedSessionRegistration,
+) -> HostAttestation {
+    HostAttestation::from_registration(registration, preview.binding_digest(), "", 2 * MINUTE)
+        .with_egress_scope(
+            preview.binding().initial_disclosure_digest(),
+            "disclosure-grant-1",
+            ["text"],
+            "private",
+            "opaque-subject-1",
+        )
+        .with_computed_egress_digest()
+        .unwrap()
+}
+
+fn egress_with_scope(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+    registration: PreparedSessionRegistration,
+    grant: &str,
+    data_classes: &[&str],
+    sensitivity: &str,
+    subject: &str,
+) -> HostAttestation {
+    HostAttestation::from_registration(registration, preview.binding_digest(), "", 2 * MINUTE)
+        .with_egress_scope(
+            preview.binding().initial_disclosure_digest(),
+            grant,
+            data_classes.iter().copied(),
+            sensitivity,
+            subject,
+        )
+        .with_computed_egress_digest()
+        .unwrap()
+}
+
+fn valid_attestation(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+    registration: PreparedSessionRegistration,
+) -> HostAttestation {
+    let capability = PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_computed_digest()
+    .unwrap();
+    egress_attestation(preview, registration).with_capability_attestation(capability)
+}
+
+fn capability_with_bad_digest(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_attestation_digest("caller-invented-capability-digest")
+}
+
+fn capability_with_insufficient_context(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_context_length("0")
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn capability_without_required_modality(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_input_modalities(std::iter::empty::<LLMInputModality>())
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn capability_without_required_streaming(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_streaming(false)
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn capability_without_required_tools(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        2 * MINUTE,
+    )
+    .with_tool_calling(false)
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn expired_capability(
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+) -> PreparedCapabilityAttestation {
+    PreparedCapabilityAttestation::from_requirements(
+        preview.binding().requirements().unwrap(),
+        80_000,
+    )
+    .with_computed_digest()
+    .unwrap()
+}
+
+fn install_exact_host_binding(
+    state: &SharedAgentOSStateStore,
+    preview: &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+    registration: &PreparedSessionRegistration,
+) {
+    state
+        .with_host_binding_mut(|store| {
+            let requirements = preview.binding().requirements().unwrap();
+            let operation = store.prepare_profile_publish(ProfilePublishPreparation::new(
+                format!("publish:{}", preview.preparation_id()),
+                preview.binding().agent_profile_id(),
+                preview.binding().agent_profile_revision(),
+                requirements.slot_id(),
+                preview.binding().requirements_hash(),
+            ))?;
+            let binding = HostBindingTuple::new(
+                registration.binding_id(),
+                registration.binding_revision(),
+                registration.binding_hash(),
+            );
+            let receipt = HostBindingStagingReceipt::new(
+                operation.token_digest(),
+                operation.llm_slot_id(),
+                operation.requirements_hash(),
+                binding.clone(),
+                format!("receipt:{}", preview.preparation_id()),
+            );
+            store.commit_profile_publish(HostBindingCommit::new(
+                operation.token(),
+                binding,
+                receipt,
+            ))?;
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -225,6 +385,7 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
     let registered = service
         .register_prepared_session(preview.token(), registration(&preview), MINUTE)
         .unwrap();
+    install_exact_host_binding(&state, &preview, registered.registration().unwrap());
     assert_eq!(registered.state(), RunPreparationState::Registered);
     assert_eq!(
         service
@@ -251,12 +412,7 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
         "preparation.registration_conflict"
     );
 
-    let attestation = HostAttestation::from_registration(
-        registration(&preview),
-        preview.binding_digest(),
-        "egress-attestation-digest",
-        2 * MINUTE,
-    );
+    let attestation = valid_attestation(&preview, registration(&preview));
     assert_eq!(
         service
             .commit_start(preview.token(), attestation, 90_000)
@@ -287,6 +443,263 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
         .with(|store| store.current_global_run_lease())
         .unwrap()
         .is_some());
+}
+
+#[test]
+fn commit_validation_rejects_missing_capability_attestation() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let service = test_service(state, "epoch-1");
+    let preview = preview_fixture(&service, "missing-capability", 0);
+    let registration = registration(&preview);
+    service
+        .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .commit_start(
+                preview.token(),
+                egress_attestation(&preview, registration),
+                90_000,
+            )
+            .unwrap_err()
+            .code(),
+        "preparation.capability_attestation_missing"
+    );
+}
+
+#[test]
+fn commit_validation_rejects_capability_digest_and_claim_mutations() {
+    type Mutation = fn(
+        &local_ios_agent_runtime::llm_contracts::RunPreparationPreview,
+    ) -> PreparedCapabilityAttestation;
+    for (suffix, capability, expected) in [
+        (
+            "capability-digest",
+            capability_with_bad_digest as Mutation,
+            "preparation.capability_attestation_digest_mismatch",
+        ),
+        (
+            "capability-context",
+            capability_with_insufficient_context as Mutation,
+            "preparation.capability_attestation_mismatch",
+        ),
+        (
+            "capability-modality",
+            capability_without_required_modality as Mutation,
+            "preparation.capability_attestation_mismatch",
+        ),
+        (
+            "capability-streaming",
+            capability_without_required_streaming as Mutation,
+            "preparation.capability_attestation_mismatch",
+        ),
+        (
+            "capability-tools",
+            capability_without_required_tools as Mutation,
+            "preparation.capability_attestation_mismatch",
+        ),
+        (
+            "capability-expired",
+            expired_capability as Mutation,
+            "preparation.capability_attestation_mismatch",
+        ),
+    ] {
+        let state = SharedAgentOSStateStore::in_memory();
+        let service = test_service(state, "epoch-1");
+        let preview = preview_fixture(&service, suffix, 0);
+        let registration = registration(&preview);
+        service
+            .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+            .unwrap();
+        let attestation = egress_attestation(&preview, registration)
+            .with_capability_attestation(capability(&preview));
+        assert_eq!(
+            service
+                .commit_start(preview.token(), attestation, 90_000)
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn commit_validation_rehashes_frozen_source_and_model_input_bytes() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let service = test_service(state.clone(), "epoch-1");
+    let preview = preview_fixture(&service, "rehash-frozen", 0);
+    let registration = registration(&preview);
+    service
+        .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+        .unwrap();
+    install_exact_host_binding(&state, &preview, &registration);
+    let record = service
+        .preparation(preview.preparation_id())
+        .unwrap()
+        .unwrap();
+    let attestation = valid_attestation(&preview, registration.clone());
+
+    let mut tampered_json = serde_json::to_value(&record).unwrap();
+    tampered_json["preview"]["binding"]["source_revisions_digest"] =
+        serde_json::Value::String("tampered-source-revisions".to_string());
+    let tampered = serde_json::from_value(tampered_json).unwrap();
+    assert_eq!(
+        PreparedStartValidator::validate(&tampered, &attestation, None, None, 90_000)
+            .unwrap_err()
+            .code(),
+        "preparation.binding_digest_mismatch"
+    );
+
+    let requirements = preview.binding().requirements().unwrap();
+    let link = state
+        .with_host_binding(|store| {
+            store.matching_cross_link(
+                preview.binding().agent_profile_id(),
+                preview.binding().agent_profile_revision(),
+                requirements.slot_id(),
+                preview.binding().requirements_hash(),
+                registration.binding_id(),
+                registration.binding_revision(),
+                registration.binding_hash(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        PreparedStartValidator::validate(&record, &attestation, Some(&link), Some(b"{}"), 90_000,)
+            .unwrap_err()
+            .code(),
+        "preparation.frozen_model_input_digest_mismatch"
+    );
+}
+
+#[test]
+fn commit_validation_requires_exact_host_binding_cross_link() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let service = test_service(state, "epoch-1");
+    let preview = preview_fixture(&service, "missing-cross-link", 0);
+    let registration = registration(&preview);
+    service
+        .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .commit_start(
+                preview.token(),
+                valid_attestation(&preview, registration),
+                90_000,
+            )
+            .unwrap_err()
+            .code(),
+        "preparation.host_binding_cross_link_missing"
+    );
+}
+
+#[test]
+fn commit_rejects_unrecomputed_registration_and_egress_digests() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let service = test_service(state, "epoch-1");
+    let preview = preview_fixture(&service, "invalid-digest", 0);
+    let registration = PreparedSessionRegistration::new(
+        "invalid-register",
+        preview.preparation_id(),
+        preview.proposed_run_id(),
+        "session-invalid",
+        "snapshot-invalid",
+        "epoch-1",
+        "binding-hash-invalid",
+        "caller-invented-registration-digest",
+    );
+    service
+        .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+        .unwrap();
+    let attestation = HostAttestation::from_registration(
+        registration,
+        preview.binding_digest(),
+        "caller-invented-egress-digest",
+        2 * MINUTE,
+    );
+
+    assert_eq!(
+        service
+            .commit_start(preview.token(), attestation, 90_000)
+            .unwrap_err()
+            .code(),
+        "preparation.registration_digest_mismatch"
+    );
+}
+
+#[test]
+fn commit_rejects_unrecomputed_egress_digest() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let service = test_service(state, "epoch-1");
+    let preview = preview_fixture(&service, "invalid-egress", 0);
+    let registration = registration(&preview);
+    service
+        .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+        .unwrap();
+    let attestation = HostAttestation::from_registration(
+        registration,
+        preview.binding_digest(),
+        "caller-invented-egress-digest",
+        2 * MINUTE,
+    );
+
+    assert_eq!(
+        service
+            .commit_start(preview.token(), attestation, 90_000)
+            .unwrap_err()
+            .code(),
+        "preparation.egress_attestation_digest_mismatch"
+    );
+}
+
+#[test]
+fn commit_validation_rejects_egress_public_field_mutations() {
+    for (suffix, grant, classes, sensitivity, subject) in [
+        ("egress-grant", "", &["text"][..], "private", "subject"),
+        (
+            "egress-classes",
+            "grant",
+            &["attachment"][..],
+            "private",
+            "subject",
+        ),
+        (
+            "egress-sensitivity",
+            "grant",
+            &["text"][..],
+            "secret",
+            "subject",
+        ),
+        ("egress-subject", "grant", &["text"][..], "private", ""),
+    ] {
+        let state = SharedAgentOSStateStore::in_memory();
+        let service = test_service(state, "epoch-1");
+        let preview = preview_fixture(&service, suffix, 0);
+        let registration = registration(&preview);
+        service
+            .register_prepared_session(preview.token(), registration.clone(), MINUTE)
+            .unwrap();
+        let capability = PreparedCapabilityAttestation::from_requirements(
+            preview.binding().requirements().unwrap(),
+            2 * MINUTE,
+        )
+        .with_computed_digest()
+        .unwrap();
+        let attestation =
+            egress_with_scope(&preview, registration, grant, classes, sensitivity, subject)
+                .with_capability_attestation(capability);
+        assert_eq!(
+            service
+                .commit_start(preview.token(), attestation, 90_000)
+                .unwrap_err()
+                .code(),
+            "preparation.egress_attestation_digest_mismatch"
+        );
+    }
 }
 
 #[test]
@@ -496,8 +909,11 @@ fn registration_for(
         "swift-snapshot-2",
         "epoch-1",
         "binding-hash-2",
-        "registration-digest-2",
+        "",
     )
+    .with_binding_identity("binding-2", 1)
+    .with_computed_digest()
+    .unwrap()
 }
 
 #[test]

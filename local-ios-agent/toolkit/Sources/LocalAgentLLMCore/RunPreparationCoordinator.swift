@@ -39,6 +39,8 @@ public struct SwiftPreparedSession: Codable, Equatable, Sendable {
     public let sessionHandle: String
     public let swiftSnapshotID: String
     public let hostProcessEpoch: String
+    public let bindingID: String
+    public let bindingRevision: UInt64
     public let bindingHash: String
     public let registrationDigest: String
     public let resourceState: PreparedResourceState
@@ -120,6 +122,8 @@ public struct RunPreparationCoordinator: Sendable {
             preview: request.preview,
             sessionHandle: sessionHandle,
             snapshotID: snapshotID,
+            bindingID: request.configuration.bindingID,
+            bindingRevision: request.configuration.revision,
             bindingHash: bindingHash
         )
         let session = SwiftPreparedSession(
@@ -128,6 +132,8 @@ public struct RunPreparationCoordinator: Sendable {
             sessionHandle: sessionHandle,
             swiftSnapshotID: snapshotID,
             hostProcessEpoch: request.preview.hostProcessEpoch,
+            bindingID: request.configuration.bindingID,
+            bindingRevision: request.configuration.revision,
             bindingHash: bindingHash,
             registrationDigest: registrationDigest,
             resourceState: .allocatedNotOpened
@@ -161,6 +167,8 @@ private func digestRegistration(
     preview: SwiftRunPreparationPreview,
     sessionHandle: String,
     snapshotID: String,
+    bindingID: String,
+    bindingRevision: UInt64,
     bindingHash: String
 ) throws -> String {
     let document = try CanonicalJSONValue.object(entries: [
@@ -169,6 +177,8 @@ private func digestRegistration(
         .init(name: "session_handle", value: .string(sessionHandle)),
         .init(name: "swift_snapshot_id", value: .string(snapshotID)),
         .init(name: "host_process_epoch", value: .string(preview.hostProcessEpoch)),
+        .init(name: "binding_id", value: .string(bindingID)),
+        .init(name: "binding_revision", value: .number(Double(bindingRevision))),
         .init(name: "binding_hash", value: .string(bindingHash)),
     ])
     return try CanonicalDigestV1.digest(

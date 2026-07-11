@@ -158,6 +158,30 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
     fn cross_link(&self, token: &str) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
         Ok(self.cross_links.get(token).cloned())
     }
+    fn matching_cross_link(
+        &self,
+        agent_profile_id: &str,
+        agent_profile_revision: u64,
+        llm_slot_id: &str,
+        requirements_hash: &str,
+        binding_id: &str,
+        binding_revision: u64,
+        binding_hash: &str,
+    ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
+        Ok(self
+            .cross_links
+            .values()
+            .find(|link| {
+                link.agent_profile_id() == agent_profile_id
+                    && link.agent_profile_revision() == agent_profile_revision
+                    && link.llm_slot_id() == llm_slot_id
+                    && link.requirements_hash() == requirements_hash
+                    && link.binding().binding_id() == binding_id
+                    && link.binding().binding_revision() == binding_revision
+                    && link.binding().binding_hash() == binding_hash
+            })
+            .cloned())
+    }
 }
 
 impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {

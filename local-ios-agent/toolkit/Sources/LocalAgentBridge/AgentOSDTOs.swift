@@ -57,20 +57,39 @@ public struct HostBindingCrossLinkDTO: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case operationToken = "operation_token", tokenDigest = "token_digest", kind, llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", binding, stagingReceiptDigest = "staging_receipt_digest", state }
 }
 
+public struct AgentLLMRequirementsDTO: Codable, Equatable, Sendable {
+    public let slotId: String
+    public let capabilities: [String]
+    public let inputModalities: [String]
+    public let contextBudget: String
+    public let streamingRequired: Bool
+    public let toolCallingMode: String
+    private enum CodingKeys: String, CodingKey {
+        case slotId = "slot_id", capabilities, inputModalities = "input_modalities"
+        case contextBudget = "context_budget", streamingRequired = "streaming_required"
+        case toolCallingMode = "tool_calling_mode"
+    }
+}
+
 public struct PreparationBindingDTO: Codable, Equatable, Sendable {
     public let agentProfileId: String; public let agentProfileRevision: UInt64
     public let conversationFrameDigest: String; public let executionPlanDigest: String
     public let requirementsHash: String; public let toolSchemaDigest: String
     public let modelInputId: String; public let modelInputDigest: String
     public let sourceRevisionsDigest: String; public let initialDisclosureDigest: String
-    public init(agentProfileId: String, agentProfileRevision: UInt64, conversationFrameDigest: String, executionPlanDigest: String, requirementsHash: String, toolSchemaDigest: String, modelInputId: String, modelInputDigest: String, sourceRevisionsDigest: String, initialDisclosureDigest: String) {
+    public let requirements: AgentLLMRequirementsDTO?
+    public let initialDataClasses: [String]?
+    public let initialHighestSensitivity: String?
+    public init(agentProfileId: String, agentProfileRevision: UInt64, conversationFrameDigest: String, executionPlanDigest: String, requirementsHash: String, toolSchemaDigest: String, modelInputId: String, modelInputDigest: String, sourceRevisionsDigest: String, initialDisclosureDigest: String, requirements: AgentLLMRequirementsDTO? = nil, initialDataClasses: [String]? = nil, initialHighestSensitivity: String? = nil) {
         self.agentProfileId = agentProfileId; self.agentProfileRevision = agentProfileRevision
         self.conversationFrameDigest = conversationFrameDigest; self.executionPlanDigest = executionPlanDigest
         self.requirementsHash = requirementsHash; self.toolSchemaDigest = toolSchemaDigest
         self.modelInputId = modelInputId; self.modelInputDigest = modelInputDigest
         self.sourceRevisionsDigest = sourceRevisionsDigest; self.initialDisclosureDigest = initialDisclosureDigest
+        self.requirements = requirements; self.initialDataClasses = initialDataClasses
+        self.initialHighestSensitivity = initialHighestSensitivity
     }
-    private enum CodingKeys: String, CodingKey { case agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", conversationFrameDigest = "conversation_frame_digest", executionPlanDigest = "execution_plan_digest", requirementsHash = "requirements_hash", toolSchemaDigest = "tool_schema_digest", modelInputId = "model_input_id", modelInputDigest = "model_input_digest", sourceRevisionsDigest = "source_revisions_digest", initialDisclosureDigest = "initial_disclosure_digest" }
+    private enum CodingKeys: String, CodingKey { case agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", conversationFrameDigest = "conversation_frame_digest", executionPlanDigest = "execution_plan_digest", requirementsHash = "requirements_hash", toolSchemaDigest = "tool_schema_digest", modelInputId = "model_input_id", modelInputDigest = "model_input_digest", sourceRevisionsDigest = "source_revisions_digest", initialDisclosureDigest = "initial_disclosure_digest", requirements, initialDataClasses = "initial_data_classes", initialHighestSensitivity = "initial_highest_sensitivity" }
 }
 
 public struct AuthoritativePreparationStartRequestDTO: Codable, Equatable, Sendable {
@@ -130,13 +149,15 @@ public struct RenewRunPreparationRequestDTO: Codable, Equatable, Sendable {
 public struct PreparedSessionRegistrationDTO: Codable, Equatable, Sendable {
     public let idempotencyKey: String; public let preparationId: String; public let proposedRunId: String
     public let sessionHandle: String; public let swiftSnapshotId: String; public let hostProcessEpoch: String
+    public let bindingId: String; public let bindingRevision: UInt64
     public let bindingHash: String; public let registrationDigest: String
-    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, sessionHandle: String, swiftSnapshotId: String, hostProcessEpoch: String, bindingHash: String, registrationDigest: String) {
+    public init(idempotencyKey: String, preparationId: String, proposedRunId: String, sessionHandle: String, swiftSnapshotId: String, hostProcessEpoch: String, bindingId: String, bindingRevision: UInt64, bindingHash: String, registrationDigest: String) {
         self.idempotencyKey = idempotencyKey; self.preparationId = preparationId; self.proposedRunId = proposedRunId
         self.sessionHandle = sessionHandle; self.swiftSnapshotId = swiftSnapshotId; self.hostProcessEpoch = hostProcessEpoch
+        self.bindingId = bindingId; self.bindingRevision = bindingRevision
         self.bindingHash = bindingHash; self.registrationDigest = registrationDigest
     }
-    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", swiftSnapshotId = "swift_snapshot_id", hostProcessEpoch = "host_process_epoch", bindingHash = "binding_hash", registrationDigest = "registration_digest" }
+    private enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", preparationId = "preparation_id", proposedRunId = "proposed_run_id", sessionHandle = "session_handle", swiftSnapshotId = "swift_snapshot_id", hostProcessEpoch = "host_process_epoch", bindingId = "binding_id", bindingRevision = "binding_revision", bindingHash = "binding_hash", registrationDigest = "registration_digest" }
 }
 
 public struct RegisterPreparedSessionRequestDTO: Codable, Equatable, Sendable {
@@ -198,16 +219,40 @@ public struct RunPreparationRecordDTO: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case preview, state, registration, cleanup, closedReceipt = "closed_receipt" }
 }
 
+public struct PreparedCapabilityAttestationDTO: Codable, Equatable, Sendable {
+    public let supportedCapabilities: [String]
+    public let inputModalities: [String]
+    public let contextLength: String
+    public let streaming: Bool
+    public let toolCalling: Bool
+    public let expirationMillis: UInt64
+    public let attestationDigest: String
+    private enum CodingKeys: String, CodingKey {
+        case supportedCapabilities = "supported_capabilities", inputModalities = "input_modalities"
+        case contextLength = "context_length", streaming, toolCalling = "tool_calling"
+        case expirationMillis = "expiration_millis", attestationDigest = "attestation_digest"
+    }
+}
+
 public struct HostAttestationDTO: Codable, Equatable, Sendable {
     public let registration: PreparedSessionRegistrationDTO
     public let preparationBindingDigest: String
     public let egressAttestationDigest: String
+    public let disclosureDigest: String
+    public let disclosureGrantId: String
+    public let dataClasses: [String: Bool]
+    public let highestSensitivity: String
+    public let opaqueSubjectDigest: String
+    public let capabilityAttestation: PreparedCapabilityAttestationDTO
     public let expirationMillis: UInt64
-    public init(registration: PreparedSessionRegistrationDTO, preparationBindingDigest: String, egressAttestationDigest: String, expirationMillis: UInt64) {
+    public init(registration: PreparedSessionRegistrationDTO, preparationBindingDigest: String, egressAttestationDigest: String, disclosureDigest: String, disclosureGrantId: String, dataClasses: [String: Bool], highestSensitivity: String, opaqueSubjectDigest: String, capabilityAttestation: PreparedCapabilityAttestationDTO, expirationMillis: UInt64) {
         self.registration = registration; self.preparationBindingDigest = preparationBindingDigest
-        self.egressAttestationDigest = egressAttestationDigest; self.expirationMillis = expirationMillis
+        self.egressAttestationDigest = egressAttestationDigest; self.disclosureDigest = disclosureDigest
+        self.disclosureGrantId = disclosureGrantId; self.dataClasses = dataClasses
+        self.highestSensitivity = highestSensitivity; self.opaqueSubjectDigest = opaqueSubjectDigest
+        self.capabilityAttestation = capabilityAttestation; self.expirationMillis = expirationMillis
     }
-    private enum CodingKeys: String, CodingKey { case registration, preparationBindingDigest = "preparation_binding_digest", egressAttestationDigest = "egress_attestation_digest", expirationMillis = "expiration_millis" }
+    private enum CodingKeys: String, CodingKey { case registration, preparationBindingDigest = "preparation_binding_digest", egressAttestationDigest = "egress_attestation_digest", disclosureDigest = "disclosure_digest", disclosureGrantId = "disclosure_grant_id", dataClasses = "data_classes", highestSensitivity = "highest_sensitivity", opaqueSubjectDigest = "opaque_subject_digest", capabilityAttestation = "capability_attestation", expirationMillis = "expiration_millis" }
 }
 
 public struct CommitPreparedStartRequestDTO: Codable, Equatable, Sendable {

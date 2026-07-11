@@ -29,6 +29,51 @@ struct CanonicalDigestTests {
     }
 
     @Test
+    func preparedStartDigestsMatchRustGoldens() throws {
+        let registration = try CanonicalJSONValue.object(entries: [
+            .init(name: "preparation_id", value: .string("prep-1")),
+            .init(name: "proposed_run_id", value: .string("run-1")),
+            .init(name: "session_handle", value: .string("session-1")),
+            .init(name: "swift_snapshot_id", value: .string("snapshot-1")),
+            .init(name: "host_process_epoch", value: .string("epoch-1")),
+            .init(name: "binding_id", value: .string("binding-1")),
+            .init(name: "binding_revision", value: .number(1)),
+            .init(name: "binding_hash", value: .string("hash-1")),
+        ])
+        #expect(try CanonicalDigestV1.digest(
+            domain: "prepared-session-registration:v1",
+            document: registration
+        ).hex == "bf8781c344b00320a632381b2224bb4acb6b99e160baac2013a82691da1a5265")
+
+        let capability = try CanonicalJSONValue.object(entries: [
+            .init(name: "supported_capabilities", value: .array([.string("reasoning")])),
+            .init(name: "input_modalities", value: .array([.string("text")])),
+            .init(name: "context_length", value: .string("8192")),
+            .init(name: "streaming", value: .bool(true)),
+            .init(name: "tool_calling", value: .bool(true)),
+            .init(name: "expiration_millis", value: .number(120_000)),
+        ])
+        #expect(try CanonicalDigestV1.digest(
+            domain: "capability-attestation:v1",
+            document: capability
+        ).hex == "9673926303e128b9467da26d2a89a39f06f1b1f5c1b01a3eed185c27542cb862")
+
+        let egress = try CanonicalJSONValue.object(entries: [
+            .init(name: "preparation_binding_digest", value: .string("prep-binding-1")),
+            .init(name: "registration_digest", value: .string("registration-1")),
+            .init(name: "disclosure_digest", value: .string("disclosure-1")),
+            .init(name: "disclosure_grant_id", value: .string("grant-1")),
+            .init(name: "data_classes", value: .array([.string("text")])),
+            .init(name: "highest_sensitivity", value: .string("private")),
+            .init(name: "opaque_subject_digest", value: .string("subject-1")),
+        ])
+        #expect(try CanonicalDigestV1.digest(
+            domain: "egress-attestation:v1",
+            document: egress
+        ).hex == "a6dd8d2f51df170716e5cc538fd2c999a37ec240d6acd8799617f2e2bdb0525c")
+    }
+
+    @Test
     func registeredDomainsMatchSharedRegistry() throws {
         let registry = try DigestRegistry.load()
 

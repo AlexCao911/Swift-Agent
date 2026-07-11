@@ -282,21 +282,21 @@ git commit -m "fix: derive llm preparation input in rust"
 - Extends registration with opaque binding ID/revision/hash.
 - Extends host attestation with provider-neutral capability and egress public fields.
 
-- [ ] **Step 1: Add failing mutation tests**
+- [x] **Step 1: Add failing mutation tests**
 
 Start from one valid registration/attestation, mutate registration digest, binding tuple, cross-link, capability digest/claims, context length, modality, expiry, disclosure grant/data classes/sensitivity, opaque subject digest, egress digest, vault bytes, and source revisions one at a time. Assert every mutation is rejected before run state and enters exact commit-rejected cleanup. Assert the unmodified input reaches only the Phase 1 non-runnable error.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation commit_validation -- --nocapture
 ```
 
-- [ ] **Step 3: Implement complete pure validation**
+- [x] **Step 3: Implement complete pure validation**
 
 Register and use `prepared-session-registration:v1`, `capability-attestation:v1`, and `egress-attestation:v1`. Recompute each digest from a copy without its digest field. Query the cross-link by the exact Profile/revision/slot/binding tuple. Compare generic capability claims with frozen requirements, validate expirations and disclosure public fields, and rehash vault bytes. Return `ValidatedPreparedStart`; do not start a worker or persist a run.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract run_preparation -- --nocapture
@@ -304,7 +304,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 swift test --package-path toolkit --filter CanonicalDigestV1Tests
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core toolkit

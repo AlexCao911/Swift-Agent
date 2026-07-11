@@ -204,7 +204,7 @@ pub(crate) fn derive_authoritative_preparation(
         "generation-disclosure:v1",
         &DisclosureDocument {
             model_input_digest: &model_input_digest,
-            data_classes,
+            data_classes: data_classes.clone(),
             highest_sensitivity: "private",
         },
     )?;
@@ -220,7 +220,9 @@ pub(crate) fn derive_authoritative_preparation(
             model_input_digest,
             source_revisions_digest,
             initial_disclosure_digest,
-        ),
+        )
+        .with_requirements(sources.requirements.clone())
+        .with_disclosure_public_fields(data_classes, "private"),
         canonical_model_input,
     })
 }

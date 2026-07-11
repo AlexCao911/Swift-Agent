@@ -374,6 +374,40 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
         let digest = saga_token_digest(operation_token)?;
         load_cross_link(&self.conn, &digest)
     }
+    fn matching_cross_link(
+        &self,
+        agent_profile_id: &str,
+        agent_profile_revision: u64,
+        llm_slot_id: &str,
+        requirements_hash: &str,
+        binding_id: &str,
+        binding_revision: u64,
+        binding_hash: &str,
+    ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
+        let token: Option<String> = self
+            .conn
+            .query_row(
+                "select c.operation_token
+             from host_binding_cross_links c
+             join host_binding_operations o on o.operation_token = c.operation_token
+             where o.agent_profile_id = ?1 and o.agent_profile_revision = ?2
+               and c.llm_slot_id = ?3 and c.requirements_hash = ?4
+               and c.binding_id = ?5 and c.binding_revision = ?6 and c.binding_hash = ?7",
+                params![
+                    agent_profile_id,
+                    agent_profile_revision.to_string(),
+                    llm_slot_id,
+                    requirements_hash,
+                    binding_id,
+                    binding_revision.to_string(),
+                    binding_hash
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        token.map_or(Ok(None), |token| load_cross_link(&self.conn, &token))
+    }
 }
 
 impl RunPreparationRepository for SqliteAgentOSStateStore {
@@ -1207,9 +1241,13 @@ fn load_cross_link(
     token: &str,
 ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
     conn.query_row(
-        "select operation_token, token_digest, operation_kind, llm_slot_id, requirements_hash,
-                binding_id, binding_revision, binding_hash, staging_receipt_digest, state
-         from host_binding_cross_links where operation_token = ?1",
+        "select c.operation_token, c.token_digest, c.operation_kind, c.llm_slot_id,
+                c.requirements_hash, c.binding_id, c.binding_revision, c.binding_hash,
+                c.staging_receipt_digest, c.state, o.subject_id, o.agent_profile_id,
+                o.agent_profile_revision
+         from host_binding_cross_links c
+         join host_binding_operations o on o.operation_token = c.operation_token
+         where c.operation_token = ?1",
         params![token],
         |row| {
             let operation = HostBindingOperation::new(
@@ -1217,9 +1255,9 @@ fn load_cross_link(
                 String::new(),
                 row.get(0)?,
                 row.get(1)?,
-                String::new(),
-                String::new(),
-                0,
+                row.get(10)?,
+                row.get(11)?,
+                parse_u64(row.get(12)?)?,
                 row.get(3)?,
                 row.get(4)?,
                 HostBindingOperationState::Pending,

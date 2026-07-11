@@ -2,6 +2,7 @@ mod bearer_token;
 mod global_run_lease;
 mod host_binding;
 mod preparation;
+mod prepared_start_validator;
 mod requirements;
 mod slot;
 
@@ -15,10 +16,12 @@ pub use host_binding::{
 pub(crate) use preparation::RunPreparationRequest;
 pub use preparation::{
     HostAttestation, PreparationAbortReason, PreparationBinding, PreparationError,
-    PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
-    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
-    RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationState,
+    PreparedCapabilityAttestation, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionCleanupEnvelope, PreparedSessionCloseDisposition, PreparedSessionClosedReceipt,
+    PreparedSessionRegistration, RenewalReplay, RunPreparationPreview, RunPreparationRecord,
+    RunPreparationState,
 };
+pub use prepared_start_validator::{PreparedStartValidator, ValidatedPreparedStart};
 pub use requirements::{
     AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMToolCallingMode,
 };

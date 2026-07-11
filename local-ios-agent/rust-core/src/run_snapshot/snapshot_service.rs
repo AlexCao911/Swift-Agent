@@ -7,8 +7,9 @@ use crate::conversation::ConversationRunFrame;
 use crate::llm_contracts::{
     HostAttestation, PreparationAbortReason, PreparationError,
     PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
-    PreparedSessionClosedReceipt, PreparedSessionRegistration, RenewalReplay,
-    RunPreparationPreview, RunPreparationRecord, RunPreparationRequest, RunPreparationState,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, PreparedStartValidator,
+    RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationRequest,
+    RunPreparationState,
 };
 use crate::model::InMemoryModelBindingCatalog;
 use crate::run_snapshot::{
@@ -529,20 +530,44 @@ impl RunPreparationService {
                 "commit requires an exact prepared-session registration",
             )
         })?;
-        if attestation.registration() != registration
-            || attestation.preparation_binding_digest() != record.preview().binding_digest()
-            || attestation.expiration_millis() < now_millis
-        {
+        let binding = record.preview().binding();
+        let requirements = binding.requirements().ok_or_else(|| {
+            PreparationError::new(
+                "preparation.frozen_requirements_missing",
+                "preparation does not contain Rust-frozen LLM requirements",
+            )
+        })?;
+        let cross_link = self
+            .state_store
+            .with_host_binding(|store| {
+                store.matching_cross_link(
+                    binding.agent_profile_id(),
+                    binding.agent_profile_revision(),
+                    requirements.slot_id(),
+                    binding.requirements_hash(),
+                    registration.binding_id(),
+                    registration.binding_revision(),
+                    registration.binding_hash(),
+                )
+            })
+            .map_err(|error| {
+                PreparationError::new("preparation.host_binding_query_failed", error.to_string())
+            })?;
+        let frozen_input = self.frozen_model_input(binding.model_input_id())?;
+        if let Err(error) = PreparedStartValidator::validate(
+            &record,
+            &attestation,
+            cross_link.as_ref(),
+            frozen_input.as_deref(),
+            now_millis,
+        ) {
             self.begin_abort_preparation(
                 record.preview().preparation_id(),
                 Some(token),
                 &format!("commit-rejected:{}", record.preview().preparation_id()),
                 PreparationAbortReason::CommitRejected,
             )?;
-            return Err(PreparationError::new(
-                "preparation.host_attestation_mismatch",
-                "host attestation does not match the registered prepared session",
-            ));
+            return Err(error);
         }
         self.begin_abort_preparation(
             record.preview().preparation_id(),

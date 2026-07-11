@@ -343,6 +343,9 @@ pub struct HostBindingCrossLink {
     operation_token: String,
     token_digest: String,
     kind: HostBindingKind,
+    subject_id: String,
+    agent_profile_id: String,
+    agent_profile_revision: u64,
     llm_slot_id: String,
     requirements_hash: String,
     binding: HostBindingTuple,
@@ -356,6 +359,9 @@ impl HostBindingCrossLink {
             operation_token: operation.token_digest.clone(),
             token_digest: operation.token_digest.clone(),
             kind: operation.kind,
+            subject_id: operation.subject_id.clone(),
+            agent_profile_id: operation.agent_profile_id.clone(),
+            agent_profile_revision: operation.agent_profile_revision,
             llm_slot_id: operation.llm_slot_id.clone(),
             requirements_hash: operation.requirements_hash.clone(),
             binding: commit.binding.clone(),
@@ -371,6 +377,15 @@ impl HostBindingCrossLink {
     }
     pub fn kind(&self) -> HostBindingKind {
         self.kind
+    }
+    pub fn subject_id(&self) -> &str {
+        &self.subject_id
+    }
+    pub fn agent_profile_id(&self) -> &str {
+        &self.agent_profile_id
+    }
+    pub fn agent_profile_revision(&self) -> u64 {
+        self.agent_profile_revision
     }
     pub fn llm_slot_id(&self) -> &str {
         &self.llm_slot_id

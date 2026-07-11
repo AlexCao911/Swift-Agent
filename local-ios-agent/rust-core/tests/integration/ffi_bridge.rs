@@ -320,6 +320,43 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         assert!(preview.get("error").is_none(), "{preview}");
         assert_provider_neutral(&preview);
 
+        let exact_profile_request = CString::new(
+            json!({
+                "idempotency_key":"publish-ffi-exact",
+                "agent_profile_id":"profile_v2",
+                "agent_profile_revision":1,
+                "llm_slot_id":preview["binding"]["requirements"]["slot_id"],
+                "requirements_hash":preview["binding"]["requirements_hash"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let exact_pending = decode(&take_bridge_string(
+            local_agent_runtime_bridge_prepare_profile_publish(
+                runtime,
+                exact_profile_request.as_ptr(),
+            ),
+        ));
+        let exact_commit = CString::new(
+            json!({
+                "token":exact_pending["token"],
+                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                "receipt":{
+                    "token_digest":exact_pending["token_digest"],
+                    "llm_slot_id":exact_pending["llm_slot_id"],
+                    "requirements_hash":exact_pending["requirements_hash"],
+                    "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                    "receipt_digest":"receipt-ffi-exact"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let exact_cross_link = decode(&take_bridge_string(
+            local_agent_runtime_bridge_commit_profile_publish(runtime, exact_commit.as_ptr()),
+        ));
+        assert_eq!(exact_cross_link["state"], "host_unbound");
+
         let renew = CString::new(
             json!({
                 "token":preview["token"], "binding_digest":preview["binding_digest"],
@@ -333,16 +370,19 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         ));
         assert_ne!(renewed["token"], preview["token"]);
 
-        let registration = json!({
+        let mut registration = json!({
             "idempotency_key":"register-ffi-1",
             "preparation_id":renewed["preparation_id"],
             "proposed_run_id":renewed["proposed_run_id"],
             "session_handle":"session-ffi-1",
             "swift_snapshot_id":"swift-snapshot-ffi-1",
             "host_process_epoch":renewed["host_process_epoch"],
+            "binding_id":"binding-ffi-1",
+            "binding_revision":1,
             "binding_hash":"binding-hash-ffi-1",
-            "registration_digest":"registration-digest-ffi-1"
+            "registration_digest":""
         });
+        registration["registration_digest"] = Value::String(registration_digest(&registration));
         let register = CString::new(
             json!({
                 "token":renewed["token"], "registration":registration, "now_millis":90_000
@@ -356,13 +396,28 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         assert_eq!(registered["state"], "registered");
         assert_provider_neutral(&registered);
 
+        let capability = capability_attestation(&renewed, 120_000);
+        let disclosure_digest = renewed["binding"]["initial_disclosure_digest"]
+            .as_str()
+            .unwrap();
+        let egress_digest = egress_attestation_digest(
+            renewed["binding_digest"].as_str().unwrap(),
+            registration["registration_digest"].as_str().unwrap(),
+            disclosure_digest,
+        );
         let commit_start = CString::new(
             json!({
                 "token":renewed["token"],
                 "attestation":{
                     "registration":registration,
                     "preparation_binding_digest":renewed["binding_digest"],
-                    "egress_attestation_digest":"egress-attestation-ffi-1",
+                    "egress_attestation_digest":egress_digest,
+                    "disclosure_digest":disclosure_digest,
+                    "disclosure_grant_id":"grant-ffi-1",
+                    "data_classes":{"text":true},
+                    "highest_sensitivity":"private",
+                    "opaque_subject_digest":"opaque-subject-ffi-1",
+                    "capability_attestation":capability,
                     "expiration_millis":120_000
                 },
                 "now_millis":90_000
@@ -489,6 +544,70 @@ fn cleanup_close_digest(cleanup: &Value, disposition: &str) -> String {
             "prepared_session_registration_digest":cleanup["prepared_session_registration_digest"],
             "cleanup_command_digest":cleanup["cleanup_command_digest"],
             "close_disposition":disposition
+        }),
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
+}
+
+fn registration_digest(registration: &Value) -> String {
+    local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
+        "prepared-session-registration:v1",
+        &json!({
+            "preparation_id":registration["preparation_id"],
+            "proposed_run_id":registration["proposed_run_id"],
+            "session_handle":registration["session_handle"],
+            "swift_snapshot_id":registration["swift_snapshot_id"],
+            "host_process_epoch":registration["host_process_epoch"],
+            "binding_id":registration["binding_id"],
+            "binding_revision":registration["binding_revision"],
+            "binding_hash":registration["binding_hash"]
+        }),
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
+}
+
+fn capability_attestation(preview: &Value, expiration_millis: u64) -> Value {
+    let requirements = &preview["binding"]["requirements"];
+    let tool_calling = requirements["tool_calling_mode"] != "disabled";
+    let document = json!({
+        "supported_capabilities":requirements["capabilities"],
+        "input_modalities":requirements["input_modalities"],
+        "context_length":requirements["context_budget"],
+        "streaming":requirements["streaming_required"],
+        "tool_calling":tool_calling,
+        "expiration_millis":expiration_millis
+    });
+    let digest = local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
+        "capability-attestation:v1",
+        &document,
+    )
+    .unwrap()
+    .as_str()
+    .to_string();
+    let mut attestation = document;
+    attestation["attestation_digest"] = Value::String(digest);
+    attestation
+}
+
+fn egress_attestation_digest(
+    preparation_binding_digest: &str,
+    registration_digest: &str,
+    disclosure_digest: &str,
+) -> String {
+    local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
+        "egress-attestation:v1",
+        &json!({
+            "preparation_binding_digest":preparation_binding_digest,
+            "registration_digest":registration_digest,
+            "disclosure_digest":disclosure_digest,
+            "disclosure_grant_id":"grant-ffi-1",
+            "data_classes":["text"],
+            "highest_sensitivity":"private",
+            "opaque_subject_digest":"opaque-subject-ffi-1"
         }),
     )
     .unwrap()

@@ -118,6 +118,17 @@ pub trait AgentOSStateRepository:
         &self,
         operation_token: &str,
     ) -> Result<Option<HostBindingCrossLink>, HostBindingError>;
+    #[allow(clippy::too_many_arguments)]
+    fn matching_cross_link(
+        &self,
+        agent_profile_id: &str,
+        agent_profile_revision: u64,
+        llm_slot_id: &str,
+        requirements_hash: &str,
+        binding_id: &str,
+        binding_revision: u64,
+        binding_hash: &str,
+    ) -> Result<Option<HostBindingCrossLink>, HostBindingError>;
 }
 
 #[derive(Clone)]
