@@ -32,7 +32,7 @@ use crate::core::{
 };
 use crate::execution::{
     CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionModelClient,
-    ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionToolCall,
+    ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionStartError, ExecutionToolCall,
     ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
     ExecutionWorkerDependencies, RunHandle, RuntimeOptions, StartExecutionRequest,
 };
@@ -41,6 +41,7 @@ use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
 };
+use crate::storage::agent_os_state::{SharedAgentOSStateStore, SqliteAgentOSStateStore};
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
@@ -49,6 +50,20 @@ use crate::user_customization::{AgentProfile, AgentProfileVersion};
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
+
+fn execution_start_agent_error(error: ExecutionStartError) -> AgentError {
+    AgentError::Storage(format!("{}: {error}", error.code()))
+}
+
+fn next_host_process_epoch() -> String {
+    use std::sync::atomic::AtomicU64;
+    static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "host-{}-{}",
+        std::process::id(),
+        NEXT_EPOCH.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 #[derive(Clone, Debug)]
 struct BridgeWhitespaceTokenizer {
@@ -184,6 +199,19 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
 
 impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
+        Self::try_new(runtime, app_services, SharedAgentOSStateStore::in_memory())
+            .expect("in-memory Agent OS state initialization must succeed")
+    }
+
+    fn try_new(
+        runtime: AgentRuntime<S>,
+        app_services: AgentOSApplicationService,
+        agent_os_state: SharedAgentOSStateStore,
+    ) -> Result<Self, AgentError> {
+        let host_process_epoch = next_host_process_epoch();
+        agent_os_state
+            .with_mut(|store| store.recover_old_epoch(&host_process_epoch))
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         let frames = InMemoryConversationFrameRepository::default();
         let cancellations = runtime.provider_cancellation_registry();
         let runtime = Arc::new(Mutex::new(runtime));
@@ -195,17 +223,19 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
             Arc::new(BridgeExecutionToolExecutor::new(runtime.clone())),
         );
-        let execution = ExecutionService::with_runtime_parts(
+        let execution = ExecutionService::with_runtime_parts_and_agent_os_state(
             frames.clone(),
             snapshot_service,
             ExecutionPlanner,
             event_log,
             completed_runs.clone(),
             worker_dependencies,
+            agent_os_state,
+            host_process_epoch,
         );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
-        Self {
+        Ok(Self {
             runtime,
             cancellations,
             debug_archives: Mutex::new(BTreeMap::new()),
@@ -216,7 +246,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             app_services,
             conversation_commits,
             ffi_tainted: AtomicBool::new(false),
-        }
+        })
     }
 
     fn mark_ffi_tainted(&self) {
@@ -484,37 +514,49 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
                 reason: request.decision.reason,
             })?;
         if let Some(call_id) = resolved.approved_tool_call_id {
-            self.execution().record_external_event(
-                &resolved.run_id.0,
-                "tool_call_approved",
-                json!({ "call_id": call_id.clone() }).to_string(),
-            );
-            self.execution().record_external_event(
-                &resolved.run_id.0,
-                "run.waiting_tool",
-                json!({ "call_id": call_id }).to_string(),
-            );
+            self.execution()
+                .record_external_event(
+                    &resolved.run_id.0,
+                    "tool_call_approved",
+                    json!({ "call_id": call_id.clone() }).to_string(),
+                )
+                .map_err(execution_start_agent_error)?;
+            self.execution()
+                .record_external_event(
+                    &resolved.run_id.0,
+                    "run.waiting_tool",
+                    json!({ "call_id": call_id }).to_string(),
+                )
+                .map_err(execution_start_agent_error)?;
         } else if !resolved.approved {
-            self.execution().record_external_event(
-                &resolved.run_id.0,
-                "tool_call_rejected",
-                json!({ "message": resolved.message.clone() }).to_string(),
-            );
-            self.execution().record_external_event(
-                &resolved.run_id.0,
-                "run.failed",
-                json!({
-                    "message": format!("tool approval rejected: {}", resolved.message)
-                })
-                .to_string(),
-            );
+            self.execution()
+                .record_external_event(
+                    &resolved.run_id.0,
+                    "tool_call_rejected",
+                    json!({ "message": resolved.message.clone() }).to_string(),
+                )
+                .map_err(execution_start_agent_error)?;
+            self.execution()
+                .record_external_event(
+                    &resolved.run_id.0,
+                    "run.failed",
+                    json!({
+                        "message": format!("tool approval rejected: {}", resolved.message)
+                    })
+                    .to_string(),
+                )
+                .map_err(execution_start_agent_error)?;
         }
         to_json(&EmptyAgentOSResponseJson {})
     }
 
     fn cancel_run_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: CancelRunRequestJson = from_json(request_json)?;
-        let event = self.lock()?.cancel(request.run_id)?;
+        let run_id = request.run_id;
+        let event = self.lock()?.cancel(run_id.clone())?;
+        self.execution()
+            .record_external_event(&run_id, "run.cancelled", "{}")
+            .map_err(execution_start_agent_error)?;
         to_json(&RuntimeEventJson::from_event(&event))
     }
 
@@ -580,22 +622,29 @@ impl RuntimeJsonBridge {
         let app_services = AgentOSApplicationService::from_config(config.agent_os.into())
             .map_err(|error| AgentError::Storage(error.to_string()))?;
         match config.store {
-            StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::new(
+            StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::try_new(
                 AgentRuntime::with_store_and_registry(
                     runtime_config,
                     InMemoryEventStore::new(),
                     registry,
                 )?,
                 app_services,
-            ))),
-            StoreConfigJson::Sqlite { path, .. } => Ok(Self::Sqlite(BridgeRuntime::new(
-                AgentRuntime::with_store_and_registry(
-                    runtime_config,
-                    SqliteEventStore::open(path)?,
-                    registry,
-                )?,
-                app_services,
-            ))),
+                SharedAgentOSStateStore::in_memory(),
+            )?)),
+            StoreConfigJson::Sqlite { path, .. } => {
+                let agent_os_path = format!("{path}.agent-os");
+                let agent_os_store = SqliteAgentOSStateStore::open(agent_os_path)
+                    .map_err(|error| AgentError::Storage(error.to_string()))?;
+                Ok(Self::Sqlite(BridgeRuntime::try_new(
+                    AgentRuntime::with_store_and_registry(
+                        runtime_config,
+                        SqliteEventStore::open(path)?,
+                        registry,
+                    )?,
+                    app_services,
+                    SharedAgentOSStateStore::new(agent_os_store),
+                )?))
+            }
         }
     }
 

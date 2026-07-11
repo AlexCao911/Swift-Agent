@@ -610,19 +610,19 @@ git commit -m "feat: add durable host binding sagas"
 - Consumes: Task 6 `AgentOSStateStore`.
 - Produces: `acquire_legacy`, `acquire_preparation`, `promote_preparation`, `begin_release`, `complete_release`, and `recover_old_epoch`.
 
-- [ ] **Step 1: Write failing CAS and ordering tests**
+- [x] **Step 1: Write failing CAS and ordering tests**
 
 Tests prove the lease is acquired before the legacy resolver, a busy lease
 prevents snapshot creation, resolver/plan/worker-start failure compensates, and
 concurrent legacy/V2 acquisition has one winner.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test contract global_run_lease -- --nocapture
 ```
 
-- [ ] **Step 3: Implement lease state transitions**
+- [x] **Step 3: Implement lease state transitions**
 
 Use `preparing | active | releasing`, monotonically increasing generation,
 owner run/preparation IDs, schema tag, host epoch, and preparation expiration.
@@ -646,13 +646,13 @@ Empty acquisition inserts the singleton row with `singleton_id = 1`; a zero
 affected-row count returns `execution.global_run_busy` or a stale-generation
 error according to the current row.
 
-- [ ] **Step 4: Gate the legacy route and release terminal runs**
+- [x] **Step 4: Gate the legacy route and release terminal runs**
 
 Acquire before `resolve_and_persist`. Retain the lease for waiting-tool and
 approval states; release after final, failure, cancellation, and Rust-owned
 cleanup. Do not change the current model binding resolver or worker client.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 cargo test --test contract global_run_lease -- --nocapture

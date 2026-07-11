@@ -17,6 +17,8 @@ mod canonical_digest_v1;
 mod context_agent_os;
 #[path = "contract/conversation_execution_boundary.rs"]
 mod conversation_execution_boundary;
+#[path = "contract/global_run_lease.rs"]
+mod global_run_lease;
 #[path = "contract/host_binding_saga.rs"]
 mod host_binding_saga;
 #[path = "contract/inference_backend_agent_os.rs"]

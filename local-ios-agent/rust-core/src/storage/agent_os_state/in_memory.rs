@@ -4,18 +4,21 @@ use serde::Serialize;
 
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::llm_contracts::{
-    HostBindingCommit, HostBindingCrossLink, HostBindingError, HostBindingKind,
-    HostBindingOperation, HostBindingOperationState, PackageBindingPreparation,
+    GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
+    HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
+    HostBindingOperationState, LLMBindingSchema, PackageBindingPreparation,
     ProfilePublishPreparation,
 };
 
-use super::AgentOSStateRepository;
+use super::{AgentOSStateRepository, GlobalRunLeaseRepository};
 
 #[derive(Default)]
 pub struct InMemoryAgentOSStateStore {
     operations: HashMap<String, HostBindingOperation>,
     idempotency: HashMap<(HostBindingKindKey, String), String>,
     cross_links: HashMap<String, HostBindingCrossLink>,
+    global_run_lease: Option<GlobalRunLease>,
+    last_lease_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -148,6 +151,166 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
     fn cross_link(&self, token: &str) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
         Ok(self.cross_links.get(token).cloned())
     }
+}
+
+impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {
+    fn acquire_legacy(
+        &mut self,
+        run_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        self.acquire(
+            Some(run_id.to_string()),
+            None,
+            LLMBindingSchema::LegacyV1,
+            host_epoch,
+            GlobalRunLeaseState::Active,
+            None,
+        )
+    }
+
+    fn acquire_preparation(
+        &mut self,
+        preparation_id: &str,
+        host_epoch: &str,
+        expiration: u64,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        self.acquire(
+            None,
+            Some(preparation_id.to_string()),
+            LLMBindingSchema::HostSlotV2,
+            host_epoch,
+            GlobalRunLeaseState::Preparing,
+            Some(expiration),
+        )
+    }
+
+    fn promote_preparation(
+        &mut self,
+        generation: u64,
+        preparation_id: &str,
+        run_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let lease = self.exact_lease(generation, host_epoch)?;
+        if lease.state() != GlobalRunLeaseState::Preparing
+            || lease.preparation_id() != Some(preparation_id)
+        {
+            return Err(stale());
+        }
+        let promoted = lease.promoted(run_id.to_string());
+        self.global_run_lease = Some(promoted.clone());
+        Ok(promoted)
+    }
+
+    fn begin_release(
+        &mut self,
+        generation: u64,
+        owner_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let lease = self.exact_lease(generation, host_epoch)?;
+        if !lease.owner_matches(owner_id) {
+            return Err(stale());
+        }
+        if lease.state() == GlobalRunLeaseState::Releasing {
+            return Ok(lease);
+        }
+        let releasing = lease.releasing();
+        self.global_run_lease = Some(releasing.clone());
+        Ok(releasing)
+    }
+
+    fn complete_release(
+        &mut self,
+        generation: u64,
+        host_epoch: &str,
+    ) -> Result<(), GlobalRunLeaseError> {
+        let lease = self.exact_lease(generation, host_epoch)?;
+        if lease.state() != GlobalRunLeaseState::Releasing {
+            return Err(stale());
+        }
+        self.global_run_lease = None;
+        Ok(())
+    }
+
+    fn recover_old_epoch(
+        &mut self,
+        current_host_epoch: &str,
+    ) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
+        let Some(lease) = self.global_run_lease.clone() else {
+            return Ok(None);
+        };
+        if lease.host_process_epoch() == current_host_epoch {
+            return Ok(None);
+        }
+        self.global_run_lease = None;
+        Ok(Some(lease))
+    }
+
+    fn current_global_run_lease(&self) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
+        Ok(self.global_run_lease.clone())
+    }
+}
+
+impl InMemoryAgentOSStateStore {
+    fn acquire(
+        &mut self,
+        run_id: Option<String>,
+        preparation_id: Option<String>,
+        schema: LLMBindingSchema,
+        host_epoch: &str,
+        state: GlobalRunLeaseState,
+        expiration: Option<u64>,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        if self.global_run_lease.is_some() {
+            return Err(busy());
+        }
+        self.last_lease_generation =
+            self.last_lease_generation.checked_add(1).ok_or_else(|| {
+                GlobalRunLeaseError::new(
+                    "execution.global_run_lease_generation_exhausted",
+                    "global run lease generation exhausted",
+                )
+            })?;
+        let lease = GlobalRunLease::new(
+            self.last_lease_generation,
+            run_id,
+            preparation_id,
+            schema,
+            host_epoch.to_string(),
+            state,
+            expiration,
+        );
+        self.global_run_lease = Some(lease.clone());
+        Ok(lease)
+    }
+
+    fn exact_lease(
+        &self,
+        generation: u64,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let lease = self.global_run_lease.clone().ok_or_else(stale)?;
+        if lease.generation() != generation || lease.host_process_epoch() != host_epoch {
+            return Err(stale());
+        }
+        Ok(lease)
+    }
+}
+
+pub(super) fn busy() -> GlobalRunLeaseError {
+    GlobalRunLeaseError::new(
+        "execution.global_run_busy",
+        "another agent run owns the global run lease",
+    )
+}
+
+pub(super) fn stale() -> GlobalRunLeaseError {
+    GlobalRunLeaseError::new(
+        "execution.global_run_lease_stale",
+        "global run lease generation, owner, epoch, or state is stale",
+    )
 }
 
 pub(super) fn saga_token<T: Serialize>(

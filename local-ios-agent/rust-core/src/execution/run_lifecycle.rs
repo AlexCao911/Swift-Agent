@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use crate::conversation::ConversationRunFrameRef;
 use crate::execution::ExecutionEventLog;
+use crate::storage::agent_os_state::SharedAgentOSStateStore;
 use crate::user_customization::AgentProfileVersion;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,14 +28,46 @@ pub struct RunHandle {
     replay_from_sequence: Option<u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RunLifecycleService {
     event_log: ExecutionEventLog,
+    state_store: SharedAgentOSStateStore,
+    host_process_epoch: String,
+    owned_generations: Arc<Mutex<BTreeMap<String, u64>>>,
 }
 
 impl RunLifecycleService {
     pub fn new(event_log: ExecutionEventLog) -> Self {
-        Self { event_log }
+        Self::with_agent_os_state(
+            event_log,
+            SharedAgentOSStateStore::in_memory(),
+            default_host_process_epoch(),
+        )
+    }
+
+    pub fn with_agent_os_state(
+        event_log: ExecutionEventLog,
+        state_store: SharedAgentOSStateStore,
+        host_process_epoch: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_log,
+            state_store,
+            host_process_epoch: host_process_epoch.into(),
+            owned_generations: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn acquire_legacy(&self, run_id: &str) -> Result<(), ExecutionStartError> {
+        let lease = self
+            .state_store
+            .with_mut(|store| store.acquire_legacy(run_id, &self.host_process_epoch))
+            .map_err(lease_error)?;
+        self.owned_generations
+            .lock()
+            .map_err(|_| lifecycle_poisoned())?
+            .insert(run_id.to_string(), lease.generation());
+        Ok(())
     }
 
     pub fn start_run(&self, run_id: impl Into<String>) -> RunHandle {
@@ -40,6 +75,62 @@ impl RunLifecycleService {
         self.event_log.append(run_id.clone(), "run.started");
         RunHandle::new(run_id, Some(0))
     }
+
+    pub fn release_run(&self, run_id: &str) -> Result<(), ExecutionStartError> {
+        let generation = self
+            .owned_generations
+            .lock()
+            .map_err(|_| lifecycle_poisoned())?
+            .get(run_id)
+            .copied();
+        let Some(generation) = generation else {
+            return Ok(());
+        };
+        self.state_store
+            .with_mut(|store| {
+                store.begin_release(generation, run_id, &self.host_process_epoch)?;
+                store.complete_release(generation, &self.host_process_epoch)
+            })
+            .map_err(lease_error)?;
+        self.owned_generations
+            .lock()
+            .map_err(|_| lifecycle_poisoned())?
+            .remove(run_id);
+        Ok(())
+    }
+
+    pub fn release_if_terminal(
+        &self,
+        run_id: &str,
+        event_code: &str,
+    ) -> Result<bool, ExecutionStartError> {
+        if !matches!(event_code, "run.completed" | "run.failed" | "run.cancelled") {
+            return Ok(false);
+        }
+        self.release_run(run_id)?;
+        Ok(true)
+    }
+}
+
+fn lease_error(error: crate::llm_contracts::GlobalRunLeaseError) -> ExecutionStartError {
+    ExecutionStartError::new(error.code(), error.to_string())
+}
+
+fn lifecycle_poisoned() -> ExecutionStartError {
+    ExecutionStartError::new(
+        "execution.global_run_lease_registry_poisoned",
+        "global run lease ownership registry is poisoned",
+    )
+}
+
+fn default_host_process_epoch() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "process-{}-{}",
+        std::process::id(),
+        NEXT_EPOCH.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 impl RunHandle {

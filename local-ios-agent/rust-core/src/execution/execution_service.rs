@@ -14,6 +14,7 @@ use crate::execution::{
     StartExecutionRequest, ToolApprovalService, ToolLoopService, ToolLoopStartRequest,
 };
 use crate::run_snapshot::{RunSnapshotService, StartRunRequest};
+use crate::storage::agent_os_state::SharedAgentOSStateStore;
 
 pub struct ExecutionService<R: ConversationFrameRepository = InMemoryConversationFrameRepository> {
     parts: ExecutionServiceParts<R>,
@@ -73,11 +74,39 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
         completed_runs: CompletedRunRegistry,
         worker_dependencies: ExecutionWorkerDependencies,
     ) -> Self {
+        Self::with_runtime_parts_and_agent_os_state(
+            frames,
+            snapshot_service,
+            planner,
+            event_log,
+            completed_runs,
+            worker_dependencies,
+            SharedAgentOSStateStore::in_memory(),
+            default_execution_host_epoch(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_runtime_parts_and_agent_os_state(
+        frames: R,
+        snapshot_service: impl Into<Arc<RunSnapshotService>>,
+        planner: ExecutionPlanner,
+        event_log: ExecutionEventLog,
+        completed_runs: CompletedRunRegistry,
+        worker_dependencies: ExecutionWorkerDependencies,
+        state_store: SharedAgentOSStateStore,
+        host_process_epoch: impl Into<String>,
+    ) -> Self {
+        let run_lifecycle = RunLifecycleService::with_agent_os_state(
+            event_log.clone(),
+            state_store,
+            host_process_epoch,
+        );
         Self::new(ExecutionServiceParts {
             frames,
             snapshot_service: snapshot_service.into(),
             planner,
-            run_lifecycle: RunLifecycleService::new(event_log.clone()),
+            run_lifecycle,
             event_log,
             completed_runs,
             tool_approval: ToolApprovalService::default(),
@@ -107,7 +136,8 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
                     ),
                 )
             })?;
-        let snapshot = self
+        self.parts.run_lifecycle.acquire_legacy(request.run_id())?;
+        let snapshot = match self
             .parts
             .snapshot_service
             .resolve_and_persist(StartRunRequest::new(
@@ -115,13 +145,20 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
                 request.profile_revision_id(),
                 request.user_intent(),
                 request.conversation_run_frame_ref().clone(),
-            ))
-            .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
-        let plan = self
-            .parts
-            .planner
-            .plan(snapshot)
-            .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
+            )) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.parts.run_lifecycle.release_run(request.run_id())?;
+                return Err(ExecutionStartError::new(error.code(), error.to_string()));
+            }
+        };
+        let plan = match self.parts.planner.plan(snapshot) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.parts.run_lifecycle.release_run(request.run_id())?;
+                return Err(ExecutionStartError::new(error.code(), error.to_string()));
+            }
+        };
 
         let handle = self.parts.run_lifecycle.start_run(request.run_id());
         self.parts.active_runs.record(
@@ -129,7 +166,7 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             request.conversation_run_frame_ref().clone(),
             plan.clone(),
         );
-        match self.parts.worker_mode {
+        let worker_result = match self.parts.worker_mode {
             ExecutionWorkerMode::ReactWorker => {
                 let worker = ExecutionReactWorker::new(
                     self.parts.worker_dependencies.model.clone(),
@@ -149,22 +186,28 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
                     )
                     .map_err(|message| {
                         ExecutionStartError::new("execution.react_worker_failed", message)
-                    })?;
+                    })
             }
-            ExecutionWorkerMode::SyntheticAdapter => {
-                self.parts
-                    .tool_loop
-                    .start_synthetic_for_contract_tests(ToolLoopStartRequest::new(
-                        request.run_id().to_string(),
-                        frame,
-                        plan,
-                        self.parts.event_log.clone(),
-                        self.parts.completed_runs.clone(),
-                        request.conversation_run_frame_ref().clone(),
-                    ))
-                    .map_err(|error| ExecutionStartError::new(error.code(), error.to_string()))?;
-            }
+            ExecutionWorkerMode::SyntheticAdapter => self
+                .parts
+                .tool_loop
+                .start_synthetic_for_contract_tests(ToolLoopStartRequest::new(
+                    request.run_id().to_string(),
+                    frame,
+                    plan,
+                    self.parts.event_log.clone(),
+                    self.parts.completed_runs.clone(),
+                    request.conversation_run_frame_ref().clone(),
+                ))
+                .map_err(|error| ExecutionStartError::new(error.code(), error.to_string())),
+        };
+        if let Err(error) = worker_result {
+            self.parts.run_lifecycle.release_run(request.run_id())?;
+            self.parts.active_runs.remove(request.run_id());
+            return Err(error);
         }
+
+        self.release_if_run_terminal(request.run_id())?;
 
         Ok(handle)
     }
@@ -230,25 +273,39 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             .collect::<Vec<_>>();
         observations.push(observation);
         let worker = self.react_worker();
-        worker
-            .run_with_plan_and_observations(
-                run_id,
-                &frame,
-                &active_run.frame_ref,
-                &active_run.plan,
-                observations,
-            )
-            .map_err(|message| {
-                ExecutionStartError::new("execution.react_worker_failed", message)
-            })?;
+        if let Err(message) = worker.run_with_plan_and_observations(
+            run_id,
+            &frame,
+            &active_run.frame_ref,
+            &active_run.plan,
+            observations,
+        ) {
+            self.parts.run_lifecycle.release_run(run_id)?;
+            self.parts.active_runs.remove(run_id);
+            return Err(ExecutionStartError::new(
+                "execution.react_worker_failed",
+                message,
+            ));
+        }
+
+        self.release_if_run_terminal(run_id)?;
 
         Ok(self.parts.event_log.replay(run_id, Some(from_sequence)))
     }
 
-    pub fn record_external_event(&self, run_id: &str, code: &str, payload: impl Into<String>) {
+    pub fn record_external_event(
+        &self,
+        run_id: &str,
+        code: &str,
+        payload: impl Into<String>,
+    ) -> Result<(), ExecutionStartError> {
         self.parts
             .event_log
             .append_with_payload(run_id, code, payload);
+        if self.parts.run_lifecycle.release_if_terminal(run_id, code)? {
+            self.parts.active_runs.remove(run_id);
+        }
+        Ok(())
     }
 
     pub fn tool_loop(&self) -> &ToolLoopService {
@@ -295,6 +352,28 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
             self.parts.completed_runs.clone(),
         )
     }
+
+    fn release_if_run_terminal(&self, run_id: &str) -> Result<(), ExecutionStartError> {
+        let terminal = self
+            .parts
+            .event_log
+            .replay(run_id, Some(0))
+            .into_iter()
+            .rev()
+            .find(|event| {
+                matches!(
+                    event.code(),
+                    "run.completed" | "run.failed" | "run.cancelled"
+                )
+            });
+        if let Some(event) = terminal {
+            self.parts
+                .run_lifecycle
+                .release_if_terminal(run_id, event.code())?;
+            self.parts.active_runs.remove(run_id);
+        }
+        Ok(())
+    }
 }
 
 impl ExecutionWorkerDependencies {
@@ -321,6 +400,23 @@ impl ActiveExecutionRunRegistry {
             .get(run_id)
             .cloned()
     }
+
+    fn remove(&self, run_id: &str) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(run_id);
+    }
+}
+
+fn default_execution_host_epoch() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "execution-{}-{}",
+        std::process::id(),
+        NEXT_EPOCH.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn tool_observation_from_event(event: &ExecutionEvent) -> Option<ExecutionToolObservation> {

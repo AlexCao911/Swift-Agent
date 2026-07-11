@@ -9,6 +9,23 @@ pub enum LLMBindingSchema {
     HostSlotV2,
 }
 
+impl LLMBindingSchema {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyV1 => "legacy_v1",
+            Self::HostSlotV2 => "host_slot_v2",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "legacy_v1" => Some(Self::LegacyV1),
+            "host_slot_v2" => Some(Self::HostSlotV2),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LLMSlotV2 {

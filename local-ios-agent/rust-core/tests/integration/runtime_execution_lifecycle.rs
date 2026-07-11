@@ -1,11 +1,20 @@
 use local_ios_agent_runtime::context::MockTokenizer;
-use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use local_ios_agent_runtime::conversation::{
+    ConversationFrameId, ConversationFrameMessage, ConversationFrameRepository,
+    ConversationLineage, ConversationRunFrame, ConversationRunFrameRef,
+    InMemoryConversationFrameRepository,
+};
 use local_ios_agent_runtime::core::{
     AgentRuntime, AgentRuntimeConfig, EntryId, MockStreamingProvider, SendMessageInput, SessionId,
 };
-use local_ios_agent_runtime::execution::ExecutionPlanner;
+use local_ios_agent_runtime::execution::{
+    CompletedRunRegistry, ExecutionEventLog, ExecutionModelClient, ExecutionModelTurn,
+    ExecutionPlanner, ExecutionService, ExecutionToolCall, ExecutionToolExecutor,
+    ExecutionToolOutcome, ExecutionWorkerDependencies, StartExecutionRequest,
+};
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::runtime::{RecordingEffectDriver, RunMachine, RunState};
+use local_ios_agent_runtime::storage::agent_os_state::SharedAgentOSStateStore;
 use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 fn frame_ref_fixture() -> ConversationRunFrameRef {
@@ -132,3 +141,259 @@ fn assert_order(events: &[String], expected: &[&str]) {
         "events not ordered as expected: {events:?}"
     );
 }
+
+#[derive(Clone)]
+struct FinalModel;
+
+impl ExecutionModelClient for FinalModel {
+    fn next_turn(
+        &self,
+        _run_id: &str,
+        _input: &local_ios_agent_runtime::context::ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, String> {
+        Ok(ExecutionModelTurn::Final {
+            message_id: "final-1".into(),
+            text: "done".into(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct UnusedTools;
+
+impl ExecutionToolExecutor for UnusedTools {
+    fn execute_tool(
+        &self,
+        _run_id: &str,
+        _frame_ref: &ConversationRunFrameRef,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        Err(format!("unexpected tool: {}", call.name))
+    }
+}
+
+#[derive(Clone)]
+struct FailingModel;
+
+impl ExecutionModelClient for FailingModel {
+    fn next_turn(
+        &self,
+        _run_id: &str,
+        _input: &local_ios_agent_runtime::context::ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, String> {
+        Err("injected worker failure".into())
+    }
+}
+
+#[derive(Clone)]
+struct ToolCallingModel;
+
+impl ExecutionModelClient for ToolCallingModel {
+    fn next_turn(
+        &self,
+        _run_id: &str,
+        _input: &local_ios_agent_runtime::context::ModelInputMessages,
+    ) -> Result<ExecutionModelTurn, String> {
+        Ok(ExecutionModelTurn::ToolCall {
+            call_id: "call-1".into(),
+            name: "calendar.search".into(),
+            arguments_json: "{}".into(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct PendingHostTools;
+
+impl ExecutionToolExecutor for PendingHostTools {
+    fn execute_tool(
+        &self,
+        _run_id: &str,
+        _frame_ref: &ConversationRunFrameRef,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        Ok(ExecutionToolOutcome::PendingHostTool {
+            call_id: call.call_id.clone(),
+        })
+    }
+}
+
+fn lease_gated_service(
+    snapshot_service: RunSnapshotService,
+    state: SharedAgentOSStateStore,
+) -> (
+    ExecutionService<InMemoryConversationFrameRepository>,
+    ConversationRunFrameRef,
+) {
+    lease_gated_service_with_dependencies(
+        snapshot_service,
+        state,
+        Arc::new(FinalModel),
+        Arc::new(UnusedTools),
+    )
+}
+
+fn lease_gated_service_with_dependencies(
+    snapshot_service: RunSnapshotService,
+    state: SharedAgentOSStateStore,
+    model: Arc<dyn ExecutionModelClient>,
+    tools: Arc<dyn ExecutionToolExecutor>,
+) -> (
+    ExecutionService<InMemoryConversationFrameRepository>,
+    ConversationRunFrameRef,
+) {
+    let frames = InMemoryConversationFrameRepository::default();
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("lease-frame"),
+        SessionId("lease-session".into()),
+        EntryId("lease-user".into()),
+        EntryId("lease-user".into()),
+    );
+    frames.put(ConversationRunFrame::new(
+        frame_ref.clone(),
+        None,
+        vec![ConversationFrameMessage::user(
+            EntryId("lease-user".into()),
+            "hello",
+        )],
+        Vec::new(),
+        ConversationLineage::new(EntryId("lease-user".into()), None, None),
+    ));
+    let service = ExecutionService::with_runtime_parts_and_agent_os_state(
+        frames,
+        snapshot_service,
+        ExecutionPlanner::default(),
+        ExecutionEventLog::default(),
+        CompletedRunRegistry::default(),
+        ExecutionWorkerDependencies::new(model, tools),
+        state,
+        "test-host-epoch",
+    );
+    (service, frame_ref)
+}
+
+#[test]
+fn busy_global_lease_blocks_before_snapshot_persistence() {
+    let state = SharedAgentOSStateStore::in_memory();
+    state
+        .with_mut(|store| store.acquire_preparation("preparation-1", "test-host-epoch", 1_000))
+        .unwrap();
+    let snapshot_service = RunSnapshotService::fixture();
+    let repository = snapshot_service.repository();
+    let (service, frame_ref) = lease_gated_service(snapshot_service, state);
+
+    let error = service
+        .start_run(StartExecutionRequest::new(
+            "legacy-run-1",
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref,
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "execution.global_run_busy");
+    assert!(!repository.contains(local_ios_agent_runtime::run_snapshot::RunSnapshotId::new(1)));
+}
+
+#[test]
+fn resolver_failure_compensates_legacy_lease() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let (service, frame_ref) = lease_gated_service(
+        RunSnapshotService::fixture_without_credentials(),
+        state.clone(),
+    );
+
+    assert!(service
+        .start_run(StartExecutionRequest::new(
+            "legacy-run-failure",
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref,
+        ))
+        .is_err());
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn terminal_legacy_run_releases_lease_for_the_next_run() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let (service, frame_ref) = lease_gated_service(RunSnapshotService::fixture(), state.clone());
+
+    service
+        .start_run(StartExecutionRequest::new(
+            "legacy-run-complete",
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref,
+        ))
+        .unwrap();
+
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn worker_failure_compensates_legacy_lease() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let (service, frame_ref) = lease_gated_service_with_dependencies(
+        RunSnapshotService::fixture(),
+        state.clone(),
+        Arc::new(FailingModel),
+        Arc::new(UnusedTools),
+    );
+
+    assert!(service
+        .start_run(StartExecutionRequest::new(
+            "legacy-run-worker-failure",
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref,
+        ))
+        .is_err());
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn waiting_tool_retains_lease_until_terminal_event() {
+    let state = SharedAgentOSStateStore::in_memory();
+    let (service, frame_ref) = lease_gated_service_with_dependencies(
+        RunSnapshotService::fixture(),
+        state.clone(),
+        Arc::new(ToolCallingModel),
+        Arc::new(PendingHostTools),
+    );
+    service
+        .start_run(StartExecutionRequest::new(
+            "legacy-run-waiting",
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref,
+        ))
+        .unwrap();
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_some());
+
+    service
+        .record_external_event("legacy-run-waiting", "run.cancelled", "{}")
+        .unwrap();
+    assert!(state
+        .with(|store| store.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+use std::sync::Arc;

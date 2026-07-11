@@ -1,16 +1,18 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use crate::llm_contracts::{
-    HostBindingCommit, HostBindingCrossLink, HostBindingError, HostBindingKind,
-    HostBindingOperation, HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple,
+    GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
+    HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
+    HostBindingOperationState, HostBindingStagingReceipt, HostBindingTuple, LLMBindingSchema,
     PackageBindingPreparation, ProfilePublishPreparation,
 };
 
+use super::in_memory::{busy, stale};
 use super::in_memory::{conflict, not_found, saga_token, saga_token_digest, validate_commit};
-use super::AgentOSStateRepository;
+use super::{AgentOSStateRepository, GlobalRunLeaseRepository};
 
 pub struct SqliteAgentOSStateStore {
     conn: Connection,
@@ -34,9 +36,10 @@ impl SqliteAgentOSStateStore {
             "pragma foreign_keys = on;
              create table if not exists agent_os_schema_meta (
                singleton_id integer primary key check (singleton_id = 1),
-               schema_version integer not null
+               schema_version integer not null,
+               last_lease_generation integer not null default 0
              );
-             insert or ignore into agent_os_schema_meta(singleton_id, schema_version) values (1, 1);
+             insert or ignore into agent_os_schema_meta(singleton_id, schema_version, last_lease_generation) values (1, 1, 0);
 
              create table if not exists global_run_lease (
                singleton_id integer primary key check (singleton_id = 1),
@@ -86,6 +89,7 @@ impl SqliteAgentOSStateStore {
              );",
         )
         .map_err(sqlite_error)?;
+        ensure_lease_generation_counter(&conn)?;
         Ok(Self { conn })
     }
 
@@ -206,6 +210,30 @@ impl SqliteAgentOSStateStore {
     }
 }
 
+fn ensure_lease_generation_counter(conn: &Connection) -> Result<(), HostBindingError> {
+    let mut statement = conn
+        .prepare("pragma table_info(agent_os_schema_meta)")
+        .map_err(sqlite_error)?;
+    let mut rows = statement.query([]).map_err(sqlite_error)?;
+    let mut found = false;
+    while let Some(row) = rows.next().map_err(sqlite_error)? {
+        if row.get::<_, String>(1).map_err(sqlite_error)? == "last_lease_generation" {
+            found = true;
+            break;
+        }
+    }
+    drop(rows);
+    drop(statement);
+    if !found {
+        conn.execute(
+            "alter table agent_os_schema_meta add column last_lease_generation integer not null default 0",
+            [],
+        )
+        .map_err(sqlite_error)?;
+    }
+    Ok(())
+}
+
 impl AgentOSStateRepository for SqliteAgentOSStateStore {
     fn prepare_profile_publish(
         &mut self,
@@ -257,6 +285,247 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
     ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
         load_cross_link(&self.conn, operation_token)
     }
+}
+
+impl GlobalRunLeaseRepository for SqliteAgentOSStateStore {
+    fn acquire_legacy(
+        &mut self,
+        run_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        self.acquire_global_lease(
+            Some(run_id),
+            None,
+            LLMBindingSchema::LegacyV1,
+            host_epoch,
+            GlobalRunLeaseState::Active,
+            None,
+        )
+    }
+
+    fn acquire_preparation(
+        &mut self,
+        preparation_id: &str,
+        host_epoch: &str,
+        expiration: u64,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        self.acquire_global_lease(
+            None,
+            Some(preparation_id),
+            LLMBindingSchema::HostSlotV2,
+            host_epoch,
+            GlobalRunLeaseState::Preparing,
+            Some(expiration),
+        )
+    }
+
+    fn promote_preparation(
+        &mut self,
+        generation: u64,
+        preparation_id: &str,
+        run_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let changed = self
+            .conn
+            .execute(
+                "update global_run_lease
+             set owner_run_id = ?1, state = 'active', preparation_expiration = null
+             where singleton_id = 1 and lease_generation = ?2 and preparation_id = ?3
+               and host_process_epoch = ?4 and state = 'preparing'",
+                params![run_id, generation.to_string(), preparation_id, host_epoch],
+            )
+            .map_err(global_sqlite_error)?;
+        if changed != 1 {
+            return Err(stale());
+        }
+        self.current_global_run_lease()?.ok_or_else(stale)
+    }
+
+    fn begin_release(
+        &mut self,
+        generation: u64,
+        owner_id: &str,
+        host_epoch: &str,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let current = self.current_global_run_lease()?.ok_or_else(stale)?;
+        if current.generation() != generation
+            || current.host_process_epoch() != host_epoch
+            || !current.owner_matches(owner_id)
+        {
+            return Err(stale());
+        }
+        if current.state() == GlobalRunLeaseState::Releasing {
+            return Ok(current);
+        }
+        let changed = self
+            .conn
+            .execute(
+                "update global_run_lease set state = 'releasing'
+             where singleton_id = 1 and lease_generation = ?1 and host_process_epoch = ?2
+               and state in ('preparing', 'active')",
+                params![generation.to_string(), host_epoch],
+            )
+            .map_err(global_sqlite_error)?;
+        if changed != 1 {
+            return Err(stale());
+        }
+        self.current_global_run_lease()?.ok_or_else(stale)
+    }
+
+    fn complete_release(
+        &mut self,
+        generation: u64,
+        host_epoch: &str,
+    ) -> Result<(), GlobalRunLeaseError> {
+        let changed = self
+            .conn
+            .execute(
+                "delete from global_run_lease
+             where singleton_id = 1 and lease_generation = ?1 and host_process_epoch = ?2
+               and state = 'releasing'",
+                params![generation.to_string(), host_epoch],
+            )
+            .map_err(global_sqlite_error)?;
+        if changed != 1 {
+            return Err(stale());
+        }
+        Ok(())
+    }
+
+    fn recover_old_epoch(
+        &mut self,
+        current_host_epoch: &str,
+    ) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(global_sqlite_error)?;
+        let current = load_global_run_lease(&tx)?;
+        let Some(lease) = current else {
+            tx.commit().map_err(global_sqlite_error)?;
+            return Ok(None);
+        };
+        if lease.host_process_epoch() == current_host_epoch {
+            tx.commit().map_err(global_sqlite_error)?;
+            return Ok(None);
+        }
+        let changed = tx.execute(
+            "delete from global_run_lease where singleton_id = 1 and lease_generation = ?1 and host_process_epoch = ?2",
+            params![lease.generation().to_string(), lease.host_process_epoch()],
+        ).map_err(global_sqlite_error)?;
+        if changed != 1 {
+            return Err(stale());
+        }
+        tx.commit().map_err(global_sqlite_error)?;
+        Ok(Some(lease))
+    }
+
+    fn current_global_run_lease(&self) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
+        load_global_run_lease(&self.conn)
+    }
+}
+
+impl SqliteAgentOSStateStore {
+    #[allow(clippy::too_many_arguments)]
+    fn acquire_global_lease(
+        &mut self,
+        run_id: Option<&str>,
+        preparation_id: Option<&str>,
+        schema: LLMBindingSchema,
+        host_epoch: &str,
+        state: GlobalRunLeaseState,
+        expiration: Option<u64>,
+    ) -> Result<GlobalRunLease, GlobalRunLeaseError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(global_sqlite_error)?;
+        if load_global_run_lease(&tx)?.is_some() {
+            return Err(busy());
+        }
+        let last: String = tx.query_row(
+            "select cast(last_lease_generation as text) from agent_os_schema_meta where singleton_id = 1",
+            [], |row| row.get(0),
+        ).map_err(global_sqlite_error)?;
+        let generation = last
+            .parse::<u64>()
+            .map_err(|_| {
+                GlobalRunLeaseError::new(
+                    "execution.global_run_lease_invalid",
+                    "persisted lease generation is invalid",
+                )
+            })?
+            .checked_add(1)
+            .ok_or_else(|| {
+                GlobalRunLeaseError::new(
+                    "execution.global_run_lease_generation_exhausted",
+                    "global run lease generation exhausted",
+                )
+            })?;
+        tx.execute(
+            "update agent_os_schema_meta set last_lease_generation = ?1 where singleton_id = 1",
+            params![generation.to_string()],
+        )
+        .map_err(global_sqlite_error)?;
+        tx.execute(
+            "insert into global_run_lease (
+               singleton_id, lease_generation, owner_run_id, preparation_id, binding_schema,
+               host_process_epoch, state, preparation_expiration
+             ) values (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                generation.to_string(),
+                run_id,
+                preparation_id,
+                schema.as_str(),
+                host_epoch,
+                state.as_str(),
+                expiration.map(|value| value.to_string())
+            ],
+        )
+        .map_err(global_sqlite_error)?;
+        let lease = load_global_run_lease(&tx)?.ok_or_else(stale)?;
+        tx.commit().map_err(global_sqlite_error)?;
+        Ok(lease)
+    }
+}
+
+fn load_global_run_lease(conn: &Connection) -> Result<Option<GlobalRunLease>, GlobalRunLeaseError> {
+    conn.query_row(
+        "select cast(lease_generation as text), owner_run_id, preparation_id, binding_schema,
+                host_process_epoch, state, cast(preparation_expiration as text)
+         from global_run_lease where singleton_id = 1",
+        [],
+        |row| {
+            let generation: String = row.get(0)?;
+            let schema: String = row.get(3)?;
+            let state: String = row.get(5)?;
+            let expiration: Option<String> = row.get(6)?;
+            Ok(GlobalRunLease::new(
+                generation.parse().map_err(sql_conversion)?,
+                row.get(1)?,
+                row.get(2)?,
+                LLMBindingSchema::from_str(&schema).ok_or_else(|| {
+                    sql_conversion(std::io::Error::other("invalid binding schema"))
+                })?,
+                row.get(4)?,
+                GlobalRunLeaseState::from_str(&state).map_err(sql_conversion)?,
+                expiration
+                    .map(|value| value.parse().map_err(sql_conversion))
+                    .transpose()?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(global_sqlite_error)
+}
+
+fn sql_conversion(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+}
+
+fn global_sqlite_error(error: rusqlite::Error) -> GlobalRunLeaseError {
+    GlobalRunLeaseError::new("storage.agent_os_state_sqlite", error.to_string())
 }
 
 fn load_operation_by_key(
