@@ -795,3 +795,122 @@ fn legacy_streaming_path_is_marked_as_compatibility() {
         "legacy send_message_streaming path must be explicitly marked while it bypasses snapshot/execution planning"
     );
 }
+
+#[test]
+fn legacy_llm_architecture_allowlist_never_grows() {
+    let allowed = parse_legacy_llm_allowlist(include_str!(
+        "../fixtures/architecture/legacy_llm_allowlist.txt"
+    ));
+    let actual = legacy_llm_occurrences();
+    let growth = actual
+        .iter()
+        .filter(|(key, count)| allowed.get(*key).copied().unwrap_or(0) < **count)
+        .map(|(key, count)| format!("{key}\t{count}"))
+        .collect::<Vec<_>>();
+
+    assert!(
+        growth.is_empty(),
+        "legacy provider/model/router occurrences may shrink but never grow; add no new allowlist entries:\n{}",
+        growth.join("\n")
+    );
+}
+
+#[test]
+fn v2_llm_contracts_do_not_gain_concrete_host_fields() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let files = [
+        "src/llm_contracts/host_binding.rs",
+        "src/llm_contracts/preparation.rs",
+        "src/llm_contracts/global_run_lease.rs",
+        "src/storage/agent_os_state/mod.rs",
+        "src/storage/agent_os_state/in_memory.rs",
+        "src/storage/agent_os_state/sqlite.rs",
+    ];
+    let forbidden = [
+        "provider_profile",
+        "credential_ref",
+        "api_key",
+        "base_url",
+        "model_path",
+        "local_path",
+        "llm_target",
+    ];
+    let mut findings = Vec::new();
+    for relative in files {
+        let source = fs::read_to_string(root.join(relative)).unwrap();
+        let stripped = strip_comments_and_strings(&source).to_ascii_lowercase();
+        for needle in forbidden {
+            if stripped.contains(needle) {
+                findings.push(format!("{relative}: {needle}"));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "Rust V2 contracts may retain only opaque host bindings and digests:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn legacy_llm_scanner_counts_identifiers_not_comments_or_strings() {
+    let source = r#"
+        // ModelProvider ProviderRegistry
+        const NOTE: &str = "InferenceRouter";
+        fn use_it(value: ModelProvider, registry: ProviderRegistry) {}
+        fn again(value: ModelProvider) {}
+    "#;
+    assert_eq!(count_identifier(source, "ModelProvider"), 2);
+    assert_eq!(count_identifier(source, "ProviderRegistry"), 1);
+    assert_eq!(count_identifier(source, "InferenceRouter"), 0);
+}
+
+fn legacy_llm_occurrences() -> std::collections::BTreeMap<String, usize> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut result = std::collections::BTreeMap::new();
+    for directory in ["src/core", "src/model", "src/inference"] {
+        for (file, source) in rust_sources_under(root.join(directory)) {
+            for symbol in [
+                "ProviderRegistry",
+                "ModelProvider",
+                "InferenceRouter",
+                "InferenceBackend",
+                "ModelBinding",
+            ] {
+                let count = count_identifier(source, symbol);
+                if count > 0 {
+                    result.insert(format!("{directory}/{file}\t{symbol}"), count);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn count_identifier(source: &str, symbol: &str) -> usize {
+    let stripped = strip_comments_and_strings(source);
+    stripped
+        .match_indices(symbol)
+        .filter(|(index, _)| {
+            let before = stripped[..*index].chars().next_back();
+            let after = stripped[*index + symbol.len()..].chars().next();
+            !is_identifier_char(before) && !is_identifier_char(after)
+        })
+        .count()
+}
+
+fn parse_legacy_llm_allowlist(source: &str) -> std::collections::BTreeMap<String, usize> {
+    source
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let (key, count) = line
+                .rsplit_once('\t')
+                .unwrap_or_else(|| panic!("invalid legacy LLM allowlist row: {line}"));
+            let count = count
+                .parse::<usize>()
+                .unwrap_or_else(|_| panic!("invalid legacy LLM allowlist count: {line}"));
+            (key.to_string(), count)
+        })
+        .collect()
+}

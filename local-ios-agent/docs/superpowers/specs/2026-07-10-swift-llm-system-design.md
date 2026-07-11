@@ -2864,6 +2864,28 @@ verifiable implementation plans:
 The plans are sequential. Later plans must not redefine the ownership boundary
 established here.
 
+## Phase 1 Foundation Evidence (2026-07-11)
+
+Phase 1 foundation is implemented on `codex/llm-runtime-provider-design` as
+provider-neutral contracts only. The implemented boundary includes canonical
+digests, tagged portable LLM slots, Swift target/capability/parameter types,
+V1-to-V2 package translation, durable host-binding sagas, the route-neutral
+global run lease, non-runnable prepared-session cleanup, and JSON/C ABI DTOs.
+
+Evidence is the repository-local `scripts/run-llm-phase-1-contracts.sh`, which
+runs all Rust tests, rebuilds the Rust static library, runs all Swift tests, and
+checks the Rust/Swift FFI panic strategy without provider smoke tests or network
+operations. Architecture lint freezes the temporary legacy Rust LLM surface in
+`rust-core/tests/fixtures/architecture/legacy_llm_allowlist.txt` and rejects
+concrete provider, credential, URL, model-path, local-path, and host-target
+fields in the new Rust V2 state contracts.
+
+This status does not enable cloud credentials, egress, local model loading,
+provider adapters, Swift host callbacks, or host-backed V2 generation. The
+Phase 1 `commit_prepared_start` entry validates the public bindings, enters the
+prepared-session cleanup path, and returns
+`execution.host_slot_v2_not_runnable` by design.
+
 ## Acceptance Criteria
 
 Unless explicitly labeled as a migration invariant, these criteria describe

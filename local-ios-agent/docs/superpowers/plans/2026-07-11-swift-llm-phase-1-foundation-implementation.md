@@ -773,19 +773,19 @@ git commit -m "feat: expose llm phase one bridge contracts"
 **Interfaces:**
 - Produces one repeatable Phase 1 verification entry point.
 
-- [ ] **Step 1: Write failing architecture lint tests**
+- [x] **Step 1: Write failing architecture lint tests**
 
 The lint records every pre-existing legacy provider/model/router occurrence by
 path and symbol, rejects new occurrences, rejects V2 concrete Provider/model
 fields in Rust, and asserts the allowlist count never grows.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 cargo test --test lint architecture_agent_os -- --nocapture
 ```
 
-- [ ] **Step 3: Add the contract runner**
+- [x] **Step 3: Add the contract runner**
 
 The script runs:
 
@@ -798,7 +798,7 @@ local-ios-agent/scripts/test-check-rust-ffi-panic-strategy.sh
 It exits non-zero on the first failure and does not run provider smoke tests or
 network operations.
 
-- [ ] **Step 4: Run full Phase 1 verification**
+- [x] **Step 4: Run full Phase 1 verification**
 
 ```bash
 local-ios-agent/scripts/run-llm-phase-1-contracts.sh
@@ -809,7 +809,7 @@ git status --short
 Expected: Rust and Swift suites pass, FFI panic strategy passes, architecture
 allowlist does not grow, and only intentional Phase 1 files are modified.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add local-ios-agent
