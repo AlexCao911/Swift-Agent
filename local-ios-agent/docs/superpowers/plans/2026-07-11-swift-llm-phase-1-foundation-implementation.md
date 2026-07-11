@@ -274,9 +274,9 @@ git commit -m "feat: add rust canonical digest foundation"
 
 **Interfaces:**
 - Consumes: the same shared fixture files as Task 1.
-- Produces: `CanonicalJSONValue`, `CanonicalDigestV1.canonicalize(_:)`, and `CanonicalDigestV1.digest(domain:document:)`.
+- Produces: `CanonicalJSONValue`, `CanonicalDigestV1.canonicalize(_:)`, `CanonicalDigestV1.digest(domain:document:)`, and `CanonicalDigestV1.registeredDomains`.
 
-- [ ] **Step 1: Add the Swift target and failing parity tests**
+- [x] **Step 1: Add the Swift target and failing parity tests**
 
 Add `LocalAgentLLMContracts` and `LocalAgentLLMContractsTests` to `Package.swift`.
 The tests must load fixtures relative to `#filePath`, assert byte-for-byte
@@ -294,7 +294,7 @@ func requirementsDigestMatchesRustGolden() throws {
 }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path local-ios-agent/toolkit --filter CanonicalDigestTests
@@ -302,7 +302,7 @@ swift test --package-path local-ios-agent/toolkit --filter CanonicalDigestTests
 
 Expected: FAIL because the target and canonical APIs do not exist.
 
-- [ ] **Step 3: Implement canonical values and UTF-16 key ordering**
+- [x] **Step 3: Implement canonical values and UTF-16 key ordering**
 
 Use an enum that cannot contain invalid JSON values:
 
@@ -328,7 +328,7 @@ code units, maps negative zero to `0`, rejects non-finite numbers, and formats
 the shortest `Double.description` digits using ECMAScript fixed/scientific
 thresholds `-6 <= exponent < 21`.
 
-- [ ] **Step 4: Implement domain separation and SHA-256**
+- [x] **Step 4: Implement domain separation and SHA-256**
 
 Use CryptoKit:
 
@@ -346,7 +346,7 @@ public enum CanonicalDigestV1 {
 }
 ```
 
-- [ ] **Step 5: Run GREEN and Swift suite**
+- [x] **Step 5: Run GREEN and Swift suite**
 
 ```bash
 swift test --package-path local-ios-agent/toolkit --filter CanonicalDigestTests
@@ -355,7 +355,7 @@ swift test --package-path local-ios-agent/toolkit
 
 Expected: fixture parity passes and all Swift tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add local-ios-agent/toolkit

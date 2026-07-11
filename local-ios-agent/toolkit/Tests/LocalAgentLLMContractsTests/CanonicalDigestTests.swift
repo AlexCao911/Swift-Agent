@@ -1,0 +1,184 @@
+import CoreFoundation
+import Foundation
+import Testing
+@testable import LocalAgentLLMContracts
+
+@Suite("CanonicalDigestV1")
+struct CanonicalDigestTests {
+    @Test
+    func canonicalizesRFC8785NumberSample() throws {
+        let fixture = try DigestFixture.load("jcs-number-samples.json")
+
+        let bytes = try CanonicalDigestV1.canonicalize(fixture.document)
+
+        #expect(String(decoding: bytes, as: UTF8.self) == fixture.expectedCanonicalUTF8)
+    }
+
+    @Test
+    func requirementsDigestMatchesRustGolden() throws {
+        let fixture = try DigestFixture.load("agent-requirements-v1.json")
+
+        let digest = try CanonicalDigestV1.digest(
+            domain: try #require(fixture.domain),
+            document: fixture.document
+        )
+
+        let expectedSHA256 = try #require(fixture.expectedSHA256)
+        #expect(digest.hex == expectedSHA256)
+        #expect(digest.hex == "df309a1f80fb005d51e9aa7f249939f9480d106d5d5ea43d102935bdd1baee30")
+    }
+
+    @Test
+    func registeredDomainsMatchSharedRegistry() throws {
+        let registry = try DigestRegistry.load()
+
+        #expect(CanonicalDigestV1.registeredDomains == registry.domains)
+        #expect(registry.domains.count == 32)
+    }
+
+    @Test
+    func duplicateObjectNamesAreRejected() {
+        #expect(throws: CanonicalDigestError.self) {
+            try CanonicalJSONValue.object(entries: [
+                CanonicalJSONObjectEntry(name: "same", value: .bool(true)),
+                CanonicalJSONObjectEntry(name: "same", value: .bool(false)),
+            ])
+        }
+    }
+
+    @Test
+    func malformedAndUnregisteredDomainsAreRejected() throws {
+        let document = try CanonicalJSONValue.object(entries: [
+            CanonicalJSONObjectEntry(name: "schema_version", value: .string("1")),
+        ])
+
+        assertDigestError("canonical_digest.domain_unregistered") {
+            try CanonicalDigestV1.digest(domain: "not-registered:v1", document: document)
+        }
+        assertDigestError("canonical_digest.domain_invalid") {
+            try CanonicalDigestV1.digest(domain: "Agent-requirements:v1", document: document)
+        }
+        assertDigestError("canonical_digest.domain_invalid") {
+            try CanonicalDigestV1.digest(domain: "agent-requirements:v1\0x", document: document)
+        }
+    }
+
+    @Test
+    func numberAndStringEdgeCasesFollowJCS() throws {
+        #expect(try canonicalString(.number(-0.0)) == "0")
+        #expect(try canonicalString(.number(1e20)) == "100000000000000000000")
+        #expect(try canonicalString(.number(1e21)) == "1e+21")
+        #expect(try canonicalString(.number(1e-6)) == "0.000001")
+        #expect(try canonicalString(.number(1e-7)) == "1e-7")
+        #expect(try canonicalString(.string("\u{000f}\n\"\\/")) == "\"\\u000f\\n\\\"\\\\/\"")
+        assertDigestError("canonical_digest.number_non_finite") {
+            try CanonicalDigestV1.canonicalize(.number(.infinity))
+        }
+    }
+
+    @Test
+    func objectKeysUseUnsignedUTF16Ordering() throws {
+        let document = try CanonicalJSONValue.object(entries: [
+            CanonicalJSONObjectEntry(name: "😀", value: .number(6)),
+            CanonicalJSONObjectEntry(name: "€", value: .number(5)),
+            CanonicalJSONObjectEntry(name: "ö", value: .number(4)),
+            CanonicalJSONObjectEntry(name: "\u{0080}", value: .number(3)),
+            CanonicalJSONObjectEntry(name: "1", value: .number(2)),
+            CanonicalJSONObjectEntry(name: "\r", value: .number(1)),
+        ])
+
+        #expect(
+            try canonicalString(document)
+                == "{\"\\r\":1,\"1\":2,\"\u{0080}\":3,\"ö\":4,\"€\":5,\"😀\":6}"
+        )
+    }
+}
+
+private struct DigestFixture {
+    let domain: String?
+    let document: CanonicalJSONValue
+    let expectedCanonicalUTF8: String
+    let expectedSHA256: String?
+
+    static func load(_ name: String) throws -> Self {
+        let object = try JSONObject.load(contractsRoot.appendingPathComponent("fixtures/\(name)"))
+        return Self(
+            domain: object["domain"] as? String,
+            document: try canonicalValue(try #require(object["document"])),
+            expectedCanonicalUTF8: try #require(object["expected_canonical_utf8"] as? String),
+            expectedSHA256: object["expected_sha256"] as? String
+        )
+    }
+}
+
+private struct DigestRegistry {
+    let domains: Set<String>
+
+    static func load() throws -> Self {
+        let object = try JSONObject.load(contractsRoot.appendingPathComponent("registry.json"))
+        let rows = try #require(object["domains"] as? [[String: Any]])
+        return Self(domains: Set(try rows.map { try #require($0["domain"] as? String) }))
+    }
+}
+
+private enum JSONObject {
+    static func load(_ url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+private var contractsRoot: URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("contracts/canonical-digest-v1")
+}
+
+private func canonicalValue(_ value: Any) throws -> CanonicalJSONValue {
+    if value is NSNull {
+        return .null
+    }
+    if let number = value as? NSNumber {
+        if CFGetTypeID(number) == CFBooleanGetTypeID() {
+            return .bool(number.boolValue)
+        }
+        return .number(number.doubleValue)
+    }
+    if let string = value as? String {
+        return .string(string)
+    }
+    if let array = value as? [Any] {
+        return .array(try array.map(canonicalValue))
+    }
+    if let object = value as? [String: Any] {
+        return try .object(entries: object.map {
+            CanonicalJSONObjectEntry(name: $0.key, value: try canonicalValue($0.value))
+        })
+    }
+    throw FixtureError.unsupportedValue(String(describing: type(of: value)))
+}
+
+private func canonicalString(_ value: CanonicalJSONValue) throws -> String {
+    String(decoding: try CanonicalDigestV1.canonicalize(value), as: UTF8.self)
+}
+
+private func assertDigestError<T>(
+    _ expectedCode: String,
+    operation: () throws -> T
+) {
+    do {
+        _ = try operation()
+        Issue.record("expected CanonicalDigestError with code \(expectedCode)")
+    } catch let error as CanonicalDigestError {
+        #expect(error.code == expectedCode)
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+}
+
+private enum FixtureError: Error {
+    case unsupportedValue(String)
+}

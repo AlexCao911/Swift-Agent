@@ -61,12 +61,19 @@ var packageTargets: [Target] = [
         linkerSettings: localAgentBridgeLinkerSettings
     ),
     .target(
+        name: "LocalAgentLLMContracts"
+    ),
+    .target(
         name: "LocalNativeToolkit",
         dependencies: ["LocalAgentBridge"]
     ),
     .testTarget(
         name: "LocalAgentBridgeTests",
         dependencies: ["LocalAgentBridge"]
+    ),
+    .testTarget(
+        name: "LocalAgentLLMContractsTests",
+        dependencies: ["LocalAgentLLMContracts"]
     ),
     .testTarget(
         name: "LocalNativeToolkitTests",
@@ -84,6 +91,10 @@ let package = Package(
         .library(
             name: "LocalAgentBridge",
             targets: ["LocalAgentBridge"]
+        ),
+        .library(
+            name: "LocalAgentLLMContracts",
+            targets: ["LocalAgentLLMContracts"]
         ),
         .library(
             name: "LocalNativeToolkit",
