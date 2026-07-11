@@ -1,7 +1,7 @@
 # LLM Phase 1 Trust and Durability Remediation Design
 
 **Date:** 2026-07-11  
-**Status:** Approved direction; implementation pending  
+**Status:** Approved; implementation in progress  
 **Scope:** Correct the Phase 1 foundation before any Provider adapter, local
 inference backend, generation callback, credential, or egress implementation is
 added.
