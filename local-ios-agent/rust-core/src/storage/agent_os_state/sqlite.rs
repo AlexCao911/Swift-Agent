@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,11 +13,12 @@ use crate::llm_contracts::{
 };
 
 use super::in_memory::{busy, stale};
-use super::in_memory::{conflict, not_found, saga_token, saga_token_digest, validate_commit};
+use super::in_memory::{conflict, not_found, saga_token_digest, validate_commit};
 use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
 
 pub struct SqliteAgentOSStateStore {
     conn: Connection,
+    bearer_tokens: HashMap<String, String>,
 }
 
 impl SqliteAgentOSStateStore {
@@ -96,7 +98,10 @@ impl SqliteAgentOSStateStore {
         .map_err(sqlite_error)?;
         ensure_lease_generation_counter(&conn)?;
         ensure_preparation_columns(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            bearer_tokens: HashMap::new(),
+        })
     }
 
     pub fn table_names(&self) -> Result<Vec<String>, HostBindingError> {
@@ -128,8 +133,24 @@ impl SqliteAgentOSStateStore {
         let tx = self.conn.transaction().map_err(sqlite_error)?;
         if let Some(existing) = load_operation_by_key(&tx, kind, idempotency_key)? {
             tx.commit().map_err(sqlite_error)?;
-            if existing.token() == token {
-                return Ok(existing);
+            if existing.kind() == kind
+                && existing.subject_id() == subject_id
+                && existing.agent_profile_id() == profile_id
+                && existing.agent_profile_revision() == profile_revision
+                && existing.llm_slot_id() == slot_id
+                && existing.requirements_hash() == requirements_hash
+            {
+                let raw = self
+                    .bearer_tokens
+                    .get(existing.token_digest())
+                    .cloned()
+                    .ok_or_else(|| {
+                        HostBindingError::new(
+                            "host_binding.token_unavailable",
+                            "host-binding bearer is unavailable after restart; resume rotation is required",
+                        )
+                    })?;
+                return Ok(existing.with_token(raw));
             }
             return Err(conflict());
         }
@@ -139,7 +160,7 @@ impl SqliteAgentOSStateStore {
                agent_profile_id, agent_profile_revision, llm_slot_id, requirements_hash, state
              ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending')",
             params![
-                token,
+                token_digest,
                 token_digest,
                 kind.as_str(),
                 idempotency_key,
@@ -157,8 +178,11 @@ impl SqliteAgentOSStateStore {
                 sqlite_error(error)
             }
         })?;
-        let operation = load_operation(&tx, &token)?.ok_or_else(not_found)?;
+        let operation = load_operation(&tx, &token_digest)?
+            .ok_or_else(not_found)?
+            .with_token(token.clone());
         tx.commit().map_err(sqlite_error)?;
+        self.bearer_tokens.insert(token_digest, token);
         Ok(operation)
     }
 
@@ -168,10 +192,13 @@ impl SqliteAgentOSStateStore {
         request: HostBindingCommit,
     ) -> Result<HostBindingCrossLink, HostBindingError> {
         let tx = self.conn.transaction().map_err(sqlite_error)?;
-        let operation = load_operation(&tx, request.token())?.ok_or_else(not_found)?;
+        let presented_digest = saga_token_digest(request.token())?;
+        let operation = load_operation(&tx, &presented_digest)?
+            .ok_or_else(not_found)?
+            .with_token(request.token().to_string());
         validate_commit(expected_kind, &operation, &request)?;
         let expected = HostBindingCrossLink::new(&operation, &request);
-        if let Some(existing) = load_cross_link(&tx, request.token())? {
+        if let Some(existing) = load_cross_link(&tx, &presented_digest)? {
             tx.commit().map_err(sqlite_error)?;
             return if existing == expected {
                 Ok(existing)
@@ -186,7 +213,7 @@ impl SqliteAgentOSStateStore {
                binding_id, binding_revision, binding_hash, staging_receipt_digest, state
              ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'host_unbound')",
             params![
-                operation.token(),
+                operation.token_digest(),
                 operation.token_digest(),
                 operation.kind().as_str(),
                 operation.llm_slot_id(),
@@ -202,7 +229,7 @@ impl SqliteAgentOSStateStore {
             .execute(
                 "update host_binding_operations set state = 'host_unbound'
              where operation_token = ?1 and state = 'pending'",
-                params![operation.token()],
+                params![operation.token_digest()],
             )
             .map_err(sqlite_error)?;
         if changed != 1 {
@@ -272,7 +299,11 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
         &mut self,
         request: ProfilePublishPreparation,
     ) -> Result<HostBindingOperation, HostBindingError> {
-        let token = saga_token(HostBindingKind::ProfilePublish, &request)?;
+        let token = crate::llm_contracts::BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| HostBindingError::new("host_binding.token_failed", error.to_string()))?
+            .raw()
+            .to_string();
         self.prepare_operation(
             HostBindingKind::ProfilePublish,
             request.idempotency_key(),
@@ -294,7 +325,11 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
         &mut self,
         request: PackageBindingPreparation,
     ) -> Result<HostBindingOperation, HostBindingError> {
-        let token = saga_token(HostBindingKind::PackageBinding, &request)?;
+        let token = crate::llm_contracts::BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| HostBindingError::new("host_binding.token_failed", error.to_string()))?
+            .raw()
+            .to_string();
         self.prepare_operation(
             HostBindingKind::PackageBinding,
             request.idempotency_key(),
@@ -316,7 +351,8 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
         &self,
         operation_token: &str,
     ) -> Result<Option<HostBindingCrossLink>, HostBindingError> {
-        load_cross_link(&self.conn, operation_token)
+        let digest = saga_token_digest(operation_token)?;
+        load_cross_link(&self.conn, &digest)
     }
 }
 

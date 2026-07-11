@@ -19,6 +19,7 @@ link-llama-cpp-mtmd-local-inference = ["link-llama-cpp-local-inference"]
 link-litert-local-inference = []
 
 [dependencies]
+getrandom = "0.4.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

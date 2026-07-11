@@ -429,6 +429,10 @@ impl PreparedSessionClosedReceipt {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RenewalReplay {
     pub(crate) idempotency_key: String,
+    #[serde(
+        serialize_with = "serialize_persisted_preview",
+        deserialize_with = "deserialize_persisted_preview"
+    )]
     pub(crate) preview: RunPreparationPreview,
 }
 impl RenewalReplay {
@@ -450,6 +454,10 @@ impl RenewalReplay {
 #[serde(deny_unknown_fields)]
 pub struct RunPreparationRecord {
     idempotency_key: String,
+    #[serde(
+        serialize_with = "serialize_persisted_preview",
+        deserialize_with = "deserialize_persisted_preview"
+    )]
     preview: RunPreparationPreview,
     state: RunPreparationState,
     registration: Option<PreparedSessionRegistration>,
@@ -543,3 +551,24 @@ impl fmt::Display for PreparationError {
     }
 }
 impl std::error::Error for PreparationError {}
+
+fn serialize_persisted_preview<S>(
+    preview: &RunPreparationPreview,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let mut persisted = preview.clone();
+    persisted.token.clear();
+    persisted.serialize(serializer)
+}
+
+fn deserialize_persisted_preview<'de, D>(deserializer: D) -> Result<RunPreparationPreview, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut preview = RunPreparationPreview::deserialize(deserializer)?;
+    preview.token.clear();
+    Ok(preview)
+}

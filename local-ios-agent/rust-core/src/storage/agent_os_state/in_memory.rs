@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
-
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::llm_contracts::{
-    GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
+    BearerTokenIssuer, GlobalRunLease, GlobalRunLeaseError, GlobalRunLeaseState, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingKind, HostBindingOperation,
     HostBindingOperationState, LLMBindingSchema, PackageBindingPreparation, PreparationError,
     ProfilePublishPreparation, RunPreparationRecord, RunPreparationState,
@@ -33,7 +31,7 @@ impl InMemoryAgentOSStateStore {
         Self::default()
     }
 
-    fn prepare<T: Serialize>(
+    fn prepare(
         &mut self,
         key_kind: HostBindingKindKey,
         kind: HostBindingKind,
@@ -43,26 +41,35 @@ impl InMemoryAgentOSStateStore {
         profile_revision: u64,
         slot_id: &str,
         requirements_hash: &str,
-        request: &T,
     ) -> Result<HostBindingOperation, HostBindingError> {
-        let token = saga_token(kind, request)?;
-        let token_digest = saga_token_digest(&token)?;
         let index = (key_kind, idempotency_key.to_string());
         if let Some(existing_token) = self.idempotency.get(&index) {
             let existing = self
                 .operations
                 .get(existing_token)
                 .expect("idempotency index must reference operation");
-            if existing.token() == token {
+            if existing.kind() == kind
+                && existing.subject_id() == subject_id
+                && existing.agent_profile_id() == profile_id
+                && existing.agent_profile_revision() == profile_revision
+                && existing.llm_slot_id() == slot_id
+                && existing.requirements_hash() == requirements_hash
+            {
                 return Ok(existing.clone());
             }
             return Err(conflict());
         }
+        let issued = BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| {
+                HostBindingError::new("host_binding.token_failed", error.to_string())
+            })?;
+        let (token, authority) = issued.into_parts();
         let operation = HostBindingOperation::new(
             kind,
             idempotency_key.to_string(),
             token.clone(),
-            token_digest,
+            authority.token_digest().to_string(),
             subject_id.to_string(),
             profile_id.to_string(),
             profile_revision,
@@ -118,7 +125,6 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
             request.agent_profile_revision(),
             request.llm_slot_id(),
             request.requirements_hash(),
-            &request,
         )
     }
     fn commit_profile_publish(
@@ -140,7 +146,6 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
             request.agent_profile_revision(),
             request.llm_slot_id(),
             request.requirements_hash(),
-            &request,
         )
     }
     fn attach_host_binding(
@@ -434,26 +439,6 @@ pub(super) fn stale() -> GlobalRunLeaseError {
         "execution.global_run_lease_stale",
         "global run lease generation, owner, epoch, or state is stale",
     )
-}
-
-pub(super) fn saga_token<T: Serialize>(
-    kind: HostBindingKind,
-    request: &T,
-) -> Result<String, HostBindingError> {
-    #[derive(Serialize)]
-    struct TokenDocument<'a, T> {
-        kind: &'a str,
-        request: &'a T,
-    }
-    let document = TokenDocument {
-        kind: kind.as_str(),
-        request,
-    };
-    CanonicalDigestV1::digest("saga-token:v1", &document)
-        .map(|digest| digest.as_str().to_string())
-        .map_err(|error| {
-            HostBindingError::new("host_binding.token_digest_failed", error.to_string())
-        })
 }
 
 pub(super) fn saga_token_digest(token: &str) -> Result<String, HostBindingError> {

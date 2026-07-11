@@ -226,6 +226,10 @@ impl HostBindingOperation {
     pub(crate) fn set_state(&mut self, state: HostBindingOperationState) {
         self.state = state;
     }
+    pub(crate) fn with_token(mut self, token: String) -> Self {
+        self.token = token;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -349,7 +353,7 @@ pub struct HostBindingCrossLink {
 impl HostBindingCrossLink {
     pub(crate) fn new(operation: &HostBindingOperation, commit: &HostBindingCommit) -> Self {
         Self {
-            operation_token: operation.token.clone(),
+            operation_token: operation.token_digest.clone(),
             token_digest: operation.token_digest.clone(),
             kind: operation.kind,
             llm_slot_id: operation.llm_slot_id.clone(),

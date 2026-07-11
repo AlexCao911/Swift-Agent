@@ -3,7 +3,11 @@ use local_ios_agent_runtime::llm_contracts::{
     PackageBindingPreparation, ProfilePublishPreparation,
 };
 use local_ios_agent_runtime::storage::agent_os_state::{
-    AgentOSStateRepository, SqliteAgentOSStateStore,
+    AgentOSStateRepository, SharedAgentOSStateStore, SqliteAgentOSStateStore,
+};
+use local_ios_agent_runtime::{
+    llm_contracts::{PreparationBinding, RunPreparationRequest},
+    run_snapshot::RunPreparationService,
 };
 
 fn profile_request(key: &str) -> ProfilePublishPreparation {
@@ -128,4 +132,77 @@ fn schema_contains_all_phase_one_agent_os_tables() {
             "missing {required}"
         );
     }
+}
+
+#[test]
+fn host_binding_bearer_is_random_and_never_persisted() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent-os.sqlite");
+    let raw = {
+        let mut store = SqliteAgentOSStateStore::open(&path).unwrap();
+        let pending = store
+            .prepare_profile_publish(profile_request("random-publish-op"))
+            .unwrap();
+        assert_eq!(pending.token().len(), 43);
+        assert!(pending
+            .token()
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'));
+        pending.token().to_string()
+    };
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let occurrences: i64 = connection
+        .query_row(
+            "select count(*) from host_binding_operations where operation_token = ?1 or token_digest = ?1",
+            [&raw],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(occurrences, 0);
+}
+
+#[test]
+fn preparation_bearer_is_not_serialized_into_sqlite_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent-os.sqlite");
+    let raw = {
+        let store = SqliteAgentOSStateStore::open(&path).unwrap();
+        let state = SharedAgentOSStateStore::new(store);
+        let service = RunPreparationService::new(state, "epoch-random");
+        let preview = service
+            .preview_run(
+                RunPreparationRequest::new(
+                    "random-preview-op",
+                    "random-preparation",
+                    "random-proposed-run",
+                    PreparationBinding::new(
+                        "profile-1",
+                        1,
+                        "frame",
+                        "plan",
+                        "requirements",
+                        "tools",
+                        "input",
+                        "input-digest",
+                        "sources",
+                        "disclosure",
+                    ),
+                ),
+                0,
+            )
+            .unwrap();
+        assert_eq!(preview.token().len(), 43);
+        preview.token().to_string()
+    };
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let occurrences: i64 = connection
+        .query_row(
+            "select count(*) from run_preparations where record_json like '%' || ?1 || '%' or token_digest = ?1",
+            [&raw],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(occurrences, 0);
 }

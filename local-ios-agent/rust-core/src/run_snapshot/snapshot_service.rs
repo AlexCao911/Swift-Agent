@@ -328,8 +328,9 @@ impl RunPreparationService {
             let mut record = store
                 .active_run_preparation()?
                 .ok_or_else(preparation_not_found)?;
-            if token != record.preview().token() {
-                if let Some(replay) = record.renewals().get(token) {
+            let presented_digest = preparation_token_digest(token)?;
+            if !preparation_token_matches(token, record.preview().token_digest())? {
+                if let Some(replay) = record.renewals().get(&presented_digest) {
                     if replay.idempotency_key() == idempotency_key
                         && replay.preview().binding_digest() == binding_digest
                     {
@@ -372,7 +373,7 @@ impl RunPreparationService {
                 .renewed(next_token, next_digest, expiration);
             let expected_state = record.state();
             record.renewals_mut().insert(
-                token.to_string(),
+                presented_digest,
                 RenewalReplay::new(idempotency_key.to_string(), renewed.clone()),
             );
             *record.preview_mut() = renewed.clone();
@@ -508,7 +509,10 @@ impl RunPreparationService {
                 return Ok(record);
             }
             if reason != PreparationAbortReason::TokenExpired
-                && token != Some(record.preview().token())
+                && !token
+                    .map(|token| preparation_token_matches(token, record.preview().token_digest()))
+                    .transpose()?
+                    .unwrap_or(false)
             {
                 return Err(PreparationError::new(
                     "preparation.token_stale",
@@ -591,7 +595,7 @@ fn validate_token(
     host_epoch: &str,
     now_millis: u64,
 ) -> Result<(), PreparationError> {
-    if token != record.preview().token() {
+    if !preparation_token_matches(token, record.preview().token_digest())? {
         return Err(PreparationError::new(
             "preparation.token_stale",
             "preparation token is not current",
@@ -617,26 +621,32 @@ fn new_token(
     generation: u64,
     now_millis: u64,
 ) -> Result<(String, String), PreparationError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    #[derive(serde::Serialize)]
-    struct TokenDocument<'a> {
-        preparation_id: &'a str,
-        proposed_run_id: &'a str,
-        generation: u64,
-        now_millis: u64,
-        nonce: u64,
-    }
-    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
-    let document = TokenDocument {
-        preparation_id,
-        proposed_run_id,
-        generation,
-        now_millis,
-        nonce: NEXT_NONCE.fetch_add(1, Ordering::Relaxed),
-    };
-    let token = digest("preparation-token:v1", &document)?;
-    let token_digest = digest("preparation-token:v1", &token)?;
-    Ok((token, token_digest))
+    let _ = (preparation_id, proposed_run_id, now_millis);
+    crate::llm_contracts::BearerTokenIssuer::system()
+        .issue_at_generation("preparation-token:v1", generation)
+        .map(|issued| {
+            let (raw, authority) = issued.into_parts();
+            (raw, authority.token_digest().to_string())
+        })
+        .map_err(|error| {
+            PreparationError::new("preparation.token_generation_failed", error.to_string())
+        })
+}
+
+fn preparation_token_digest(token: &str) -> Result<String, PreparationError> {
+    crate::llm_contracts::BearerTokenIssuer::system()
+        .digest("preparation-token:v1", token)
+        .map_err(|error| {
+            PreparationError::new("preparation.token_digest_failed", error.to_string())
+        })
+}
+
+fn preparation_token_matches(token: &str, digest: &str) -> Result<bool, PreparationError> {
+    crate::llm_contracts::BearerTokenIssuer::system()
+        .matches_digest("preparation-token:v1", token, digest)
+        .map_err(|error| {
+            PreparationError::new("preparation.token_digest_failed", error.to_string())
+        })
 }
 
 fn make_cleanup(

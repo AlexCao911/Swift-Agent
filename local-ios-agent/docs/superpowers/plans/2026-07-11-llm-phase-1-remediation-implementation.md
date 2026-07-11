@@ -40,11 +40,11 @@
 - Produces persisted `BearerAuthority { token_generation, token_digest }` and response-only `IssuedBearerToken { raw, authority }`.
 - Produces stable host-binding `operation_id` and `operation_request_digest`; staging receipt v2 binds those fields rather than the rotating bearer digest.
 
-- [ ] **Step 1: Add failing randomness and persistence tests**
+- [x] **Step 1: Add failing randomness and persistence tests**
 
 Add tests that issue 256 tokens, decode unpadded base64url to exactly 32 bytes, assert uniqueness, and serialize every persisted host-binding/preparation record to prove none contains the raw bearer. Add an SQLite inspection test that searches all text columns for the raw bearer and finds none. Add a restart/resume test proving a host-binding bearer rotates while the stable staging receipt remains valid.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract bearer -- --nocapture
@@ -53,7 +53,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 
 Expected: fail because tokens are deterministic and persisted response records still contain `token`.
 
-- [ ] **Step 3: Implement token issuer and split records/responses**
+- [x] **Step 3: Implement token issuer and split records/responses**
 
 Add direct dependency `getrandom = "0.4.2"`. `BearerTokenIssuer` calls `getrandom::fill(&mut [u8; 32])`, encodes with an internal unpadded base64url encoder, and hashes the raw encoded token through the registered domain. Persist only:
 
@@ -71,7 +71,7 @@ pub struct IssuedBearerToken {
 
 Use constant-time byte comparison for token digests. Add a process-scoped token vault keyed by preparation ID or host-binding operation ID. Change `HostBindingOperation` and `RunPreparationRecord` to persisted digest-only values and construct separate FFI response types containing the raw token. Generate cleanup command IDs with the same CSPRNG but treat them as persisted correlation IDs.
 
-- [ ] **Step 4: Run GREEN and regressions**
+- [x] **Step 4: Run GREEN and regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_binding_saga -- --nocapture
@@ -79,7 +79,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test co
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration agent_os_state_sqlite -- --nocapture
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core
@@ -493,4 +493,3 @@ git status --short
 ```
 
 Expected: exit code 0 and empty worktree status.
-

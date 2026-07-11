@@ -295,7 +295,7 @@ fn registration_for(
 }
 
 #[test]
-fn sqlite_preparation_record_survives_reopen() {
+fn sqlite_preparation_record_survives_reopen_without_bearer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent-os.sqlite");
     let service = RunPreparationService::new(
@@ -313,7 +313,14 @@ fn sqlite_preparation_record_survives_reopen() {
         .preparation(preview.preparation_id())
         .unwrap()
         .unwrap();
-    assert_eq!(record.preview(), &preview);
+    assert!(record.preview().token().is_empty());
+    assert_eq!(record.preview().token_digest(), preview.token_digest());
+    assert_eq!(record.preview().binding(), preview.binding());
+    assert_eq!(record.preview().binding_digest(), preview.binding_digest());
+    assert_eq!(
+        record.preview().lease_generation(),
+        preview.lease_generation()
+    );
 }
 
 #[test]
