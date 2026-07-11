@@ -64,6 +64,10 @@ var packageTargets: [Target] = [
         name: "LocalAgentLLMContracts"
     ),
     .target(
+        name: "LocalAgentLLMCore",
+        dependencies: ["LocalAgentLLMContracts"]
+    ),
+    .target(
         name: "LocalNativeToolkit",
         dependencies: ["LocalAgentBridge"]
     ),
@@ -74,6 +78,10 @@ var packageTargets: [Target] = [
     .testTarget(
         name: "LocalAgentLLMContractsTests",
         dependencies: ["LocalAgentLLMContracts"]
+    ),
+    .testTarget(
+        name: "LocalAgentLLMCoreTests",
+        dependencies: ["LocalAgentLLMCore", "LocalAgentLLMContracts"]
     ),
     .testTarget(
         name: "LocalNativeToolkitTests",
@@ -95,6 +103,10 @@ let package = Package(
         .library(
             name: "LocalAgentLLMContracts",
             targets: ["LocalAgentLLMContracts"]
+        ),
+        .library(
+            name: "LocalAgentLLMCore",
+            targets: ["LocalAgentLLMCore"]
         ),
         .library(
             name: "LocalNativeToolkit",

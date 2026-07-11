@@ -436,19 +436,19 @@ git commit -m "feat: add portable llm slot v2 contracts"
 **Interfaces:**
 - Produces immutable `LLMTargetRevision`, `AgentHostConfiguration`, generic capability observations/snapshots, and resolved semantic parameters.
 
-- [ ] **Step 1: Write failing revision and capability tests**
+- [x] **Step 1: Write failing revision and capability tests**
 
 Tests assert target/config revisions are immutable, one Agent profile revision
 selects exactly one target revision, unknown capability never satisfies a
 requirement, and the lowest verified numeric limit wins.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path local-ios-agent/toolkit --filter LocalAgentLLMCoreTests
 ```
 
-- [ ] **Step 3: Implement contract value types**
+- [x] **Step 3: Implement contract value types**
 
 Use provider-neutral public types:
 
@@ -476,14 +476,14 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
 }
 ```
 
-- [ ] **Step 4: Implement capability and parameter resolution**
+- [x] **Step 4: Implement capability and parameter resolution**
 
 Support canonical semantic IDs including `sampling.temperature`,
 `sampling.top_p`, `sampling.top_k`, and `reasoning.effort`. Reject unsupported,
 out-of-range, mutually exclusive, or conditionally disabled values rather than
 silently dropping them.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 swift test --package-path local-ios-agent/toolkit --filter LocalAgentLLMCoreTests
