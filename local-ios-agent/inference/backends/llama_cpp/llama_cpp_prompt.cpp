@@ -1,163 +1,122 @@
 #include "llama_cpp_prompt.h"
 
+#include "json_value.h"
+
+#include <sstream>
 #include <stdexcept>
 
 namespace local_agent {
 namespace {
 
-void skip_ws(const std::string &json, std::size_t &pos) {
-    while (pos < json.size()) {
-        char c = json[pos];
-        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
-            break;
+std::string json_escape(const std::string &value) {
+    std::ostringstream out;
+    for (char c : value) {
+        switch (c) {
+        case '"': out << "\\\""; break;
+        case '\\': out << "\\\\"; break;
+        case '\n': out << "\\n"; break;
+        case '\r': out << "\\r"; break;
+        case '\t': out << "\\t"; break;
+        default: out << c; break;
         }
-        pos += 1;
     }
+    return out.str();
 }
 
-std::string parse_json_string_at(const std::string &json, std::size_t &pos) {
-    if (pos >= json.size() || json[pos] != '"') {
-        throw std::invalid_argument("expected JSON string");
+std::string serialize_json(const json::Value &value) {
+    std::ostringstream out;
+    switch (value.type()) {
+    case json::Value::Type::null_value: out << "null"; break;
+    case json::Value::Type::bool_value: out << (value.as_bool() ? "true" : "false"); break;
+    case json::Value::Type::number_value: out << value.as_number(); break;
+    case json::Value::Type::string_value: out << '"' << json_escape(value.as_string()) << '"'; break;
+    case json::Value::Type::array_value: {
+        out << '[';
+        bool first = true;
+        for (const auto &item : value.as_array()) {
+            if (!first) out << ',';
+            first = false;
+            out << serialize_json(item);
+        }
+        out << ']';
+        break;
     }
-    pos += 1;
-    std::string value;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '"') {
-            return value;
+    case json::Value::Type::object_value: {
+        out << '{';
+        bool first = true;
+        for (const auto &entry : value.as_object()) {
+            if (!first) out << ',';
+            first = false;
+            out << '"' << json_escape(entry.first) << "\":" << serialize_json(entry.second);
         }
-        if (c != '\\') {
-            value.push_back(c);
-            continue;
-        }
-        if (pos >= json.size()) {
-            throw std::invalid_argument("unterminated JSON string escape");
-        }
-        char escaped = json[pos++];
-        switch (escaped) {
-        case '"':
-        case '\\':
-        case '/':
-            value.push_back(escaped);
-            break;
-        case 'b':
-            value.push_back('\b');
-            break;
-        case 'f':
-            value.push_back('\f');
-            break;
-        case 'n':
-            value.push_back('\n');
-            break;
-        case 'r':
-            value.push_back('\r');
-            break;
-        case 't':
-            value.push_back('\t');
-            break;
-        default:
-            throw std::invalid_argument("unsupported JSON string escape");
-        }
+        out << '}';
+        break;
     }
-    throw std::invalid_argument("unterminated JSON string");
-}
-
-std::size_t find_matching(
-    const std::string &json,
-    std::size_t start,
-    char open_char,
-    char close_char
-) {
-    int depth = 0;
-    bool in_string = false;
-    bool escaped = false;
-    for (std::size_t pos = start; pos < json.size(); pos += 1) {
-        char c = json[pos];
-        if (in_string) {
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == '"') {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if (c == '"') {
-            in_string = true;
-        } else if (c == open_char) {
-            depth += 1;
-        } else if (c == close_char) {
-            depth -= 1;
-            if (depth == 0) {
-                return pos;
-            }
-        }
     }
-    throw std::invalid_argument("unterminated JSON container");
-}
-
-std::string extract_string_field(const std::string &object_json, const std::string &key) {
-    const std::string needle = "\"" + key + "\"";
-    std::size_t pos = object_json.find(needle);
-    if (pos == std::string::npos) {
-        return "";
-    }
-    pos = object_json.find(':', pos + needle.size());
-    if (pos == std::string::npos) {
-        return "";
-    }
-    pos += 1;
-    skip_ws(object_json, pos);
-    return parse_json_string_at(object_json, pos);
+    return out.str();
 }
 
 } // namespace
 
-std::vector<LlamaPromptMessage> parse_llama_prompt_messages(const std::string &prompt_json) {
-    const std::string messages_key = "\"messages\"";
-    std::size_t messages_pos = prompt_json.find(messages_key);
-    if (messages_pos == std::string::npos) {
-        throw std::invalid_argument("prompt JSON must contain messages");
+LlamaPromptInput parse_llama_prompt_input(const std::string &prompt_json) {
+    const json::Value root = json::parse(prompt_json.c_str());
+    if (!root.is_object()) {
+        throw std::invalid_argument("prompt JSON must be an object");
+    }
+    const json::Value *messages = root.get("messages");
+    if (messages == nullptr || !messages->is_array() || messages->as_array().empty()) {
+        throw std::invalid_argument("prompt JSON messages must be a non-empty array");
     }
 
-    std::size_t array_start = prompt_json.find('[', messages_pos + messages_key.size());
-    if (array_start == std::string::npos) {
-        throw std::invalid_argument("prompt JSON messages must be an array");
-    }
-    std::size_t array_end = find_matching(prompt_json, array_start, '[', ']');
-
-    std::vector<LlamaPromptMessage> messages;
-    std::size_t pos = array_start + 1;
-    while (pos < array_end) {
-        skip_ws(prompt_json, pos);
-        if (pos >= array_end) {
-            break;
-        }
-        if (prompt_json[pos] == ',') {
-            pos += 1;
-            continue;
-        }
-        if (prompt_json[pos] != '{') {
+    LlamaPromptInput input;
+    for (const auto &message_value : messages->as_array()) {
+        if (!message_value.is_object()) {
             throw std::invalid_argument("prompt JSON message must be an object");
         }
-
-        std::size_t object_end = find_matching(prompt_json, pos, '{', '}');
-        std::string object_json = prompt_json.substr(pos, object_end - pos + 1);
-        std::string role = extract_string_field(object_json, "role");
-        std::string content = extract_string_field(object_json, "content");
-        if (role.empty()) {
-            throw std::invalid_argument("prompt JSON message missing role");
+        LlamaPromptMessage message;
+        message.role = json::require_string(message_value, "role");
+        const json::Value *content = message_value.get("content");
+        if (content == nullptr || !content->is_array()) {
+            throw std::invalid_argument("prompt JSON message content must be an array");
         }
-        messages.push_back(LlamaPromptMessage{role, content});
-        pos = object_end + 1;
+        for (const auto &part : content->as_array()) {
+            if (!part.is_object() || json::require_string(part, "type") != "text") {
+                throw std::invalid_argument("llama.cpp prompt only accepts text content parts");
+            }
+            message.content += json::require_string(part, "text");
+        }
+        input.messages.push_back(std::move(message));
     }
 
-    if (messages.empty()) {
-        throw std::invalid_argument("prompt JSON messages must not be empty");
+    if (const json::Value *tools = root.get("tool_schema")) {
+        input.tool_schema_json = serialize_json(*tools);
+    }
+    const json::Value *chat_template = root.get("template");
+    if (chat_template == nullptr || !chat_template->is_object()) {
+        throw std::invalid_argument("prompt JSON template selector is required");
+    }
+    input.template_source = json::require_string(*chat_template, "source");
+    input.template_id = json::require_string(*chat_template, "id");
+    return input;
+}
+
+std::vector<LlamaPromptMessage> parse_llama_prompt_messages(const std::string &prompt_json) {
+    return parse_llama_prompt_input(prompt_json).messages;
+}
+
+std::vector<LlamaPromptMessage> llama_messages_for_rendering(const LlamaPromptInput &input) {
+    std::vector<LlamaPromptMessage> messages = input.messages;
+    if (!input.tool_schema_json.empty()) {
+        messages.insert(messages.begin(), LlamaPromptMessage{
+            "system",
+            "Available tools (canonical JSON): " + input.tool_schema_json,
+        });
     }
     return messages;
+}
+
+std::string render_fallback_chat_prompt(const LlamaPromptInput &input) {
+    return render_fallback_chat_prompt(llama_messages_for_rendering(input));
 }
 
 std::string render_fallback_chat_prompt(const std::vector<LlamaPromptMessage> &messages) {

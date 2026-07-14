@@ -8,12 +8,16 @@ package protocol CppInferenceRegistryAPI: Sendable {
 
 package struct CppEngineDescriptor: Decodable, Equatable, Sendable {
     package let engineID: String
+    package let abiVersion: String
+    package let engineVersion: String
     package let displayName: String
     package let testOnly: Bool
     package let capabilities: CppEngineCapabilities
 
     private enum CodingKeys: String, CodingKey {
         case engineID = "engine_id"
+        case abiVersion = "abi_version"
+        case engineVersion = "engine_version"
         case displayName = "display_name"
         case testOnly = "test_only"
         case capabilities
@@ -27,6 +31,7 @@ package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
     package let supportsCancellation: Bool
     package let supportsTokenUsage: Bool
     package let maxContextTokens: UInt64?
+    package let backendParameters: [CppParameterDescriptor]
 
     private enum CodingKeys: String, CodingKey {
         case supportedModelFormats = "supported_model_formats"
@@ -35,6 +40,20 @@ package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
         case supportsCancellation = "supports_cancellation"
         case supportsTokenUsage = "supports_token_usage"
         case maxContextTokens = "max_context_tokens"
+        case backendParameters = "backend_parameters"
+    }
+}
+
+package struct CppParameterDescriptor: Decodable, Equatable, Sendable {
+    package let backendOption: String
+    package let valueType: String
+    package let minimum: Double?
+    package let maximum: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case backendOption = "backend_option"
+        case valueType = "value_type"
+        case minimum, maximum
     }
 }
 
@@ -112,7 +131,7 @@ public enum LocalInferenceNativeLinkProbe {
     @inline(never)
     public static func requireAllExports() {
         precondition(
-            local_agent_link_anchor() == 12,
+            local_agent_link_anchor() == 15,
             "Local inference C ABI final-link anchor is incomplete"
         )
     }

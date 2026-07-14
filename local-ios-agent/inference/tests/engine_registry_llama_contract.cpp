@@ -11,6 +11,8 @@ int main() {
     });
 
     assert(llama != descriptors.end());
+    assert(llama->abi_version == "2");
+    assert(llama->engine_version == "llama-test-commit+local-adapter-v2");
     assert(!llama->capabilities.supports_token_usage);
     assert(local_agent::engine_capabilities_json(*llama).find("\"supports_token_usage\":false") != std::string::npos);
 

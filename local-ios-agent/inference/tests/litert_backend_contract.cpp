@@ -22,14 +22,14 @@ public:
         const local_agent::LiteRTTokenEmit &emit
     ) override {
         assert(loaded);
-        prompts.push_back(request.messages.back().content);
+        prompts.push_back(local_agent::prompt_message_text(request.messages.back()));
         local_agent::LiteRTGenerationOutput output;
-        output.text = "LiteRT response: " + request.messages.back().content;
+        output.text = "LiteRT response: " + local_agent::prompt_message_text(request.messages.back());
         output.usage = local_agent::UsageReport{3, 4, 7, true};
         if (!emit("LiteRT ")) {
             return output;
         }
-        if (!emit("response: " + request.messages.back().content)) {
+        if (!emit("response: " + local_agent::prompt_message_text(request.messages.back()))) {
             return output;
         }
         return output;
@@ -73,7 +73,7 @@ int main() {
     assert(model->runtime_info().model_id == "edge.local");
 
     auto request = local_agent::parse_generation_request(
-        R"({"messages":[{"role":"user","content":"hello"}],"sampling":{"max_new_tokens":8}})"
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"template":{"source":"catalog_artifact","id":"litert"},"sampling":{"max_new_tokens":8}})"
     );
     auto generation = model->start_generation(request, {});
     std::vector<std::string> events;
@@ -103,7 +103,7 @@ int main() {
     assert(raw_session->prompts.size() == 2);
 
     auto image_request = local_agent::parse_generation_request(
-        R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})"
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"describe"}]}],"template":{"source":"catalog_artifact","id":"litert"},"images":[{"format":"rgb8","width":1,"height":1}]})"
     );
     bool rejected_image = false;
     try {

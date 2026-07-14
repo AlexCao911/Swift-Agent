@@ -1,6 +1,7 @@
 #include "mock_inference_engine.h"
 
 #include <chrono>
+#include <atomic>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -47,6 +48,9 @@ public:
     }
 
     void cancel() override {
+        if (cancel_count_.fetch_add(1) != 0) {
+            throw std::runtime_error("mock generation backend cancel called more than once");
+        }
         stream_.cancel();
     }
 
@@ -59,6 +63,7 @@ private:
     UsageReport usage_;
     std::vector<ImageInput> images_;
     bool block_until_cancel_ = false;
+    std::atomic<int> cancel_count_{0};
 };
 
 class MockLoadedModel final : public LoadedModel {
@@ -84,8 +89,10 @@ public:
         }
         bool block_until_cancel = false;
         for (const auto &message : request.messages) {
-            if (message.content == "block_until_cancel") {
-                block_until_cancel = true;
+            for (const auto &part : message.content) {
+                if (part.type == "text" && part.text == "block_until_cancel") {
+                    block_until_cancel = true;
+                }
             }
         }
         return std::make_unique<MockGenerationSession>(images, block_until_cancel);
@@ -99,6 +106,7 @@ private:
 
 EngineCapabilities MockInferenceEngine::capabilities() const {
     EngineCapabilities capabilities;
+    capabilities.supports_vision = true;
     capabilities.supports_streaming = true;
     capabilities.supports_cancellation = true;
     capabilities.supports_token_usage = true;
@@ -113,6 +121,9 @@ std::unique_ptr<LoadedModel> MockInferenceEngine::load_model(const ModelLoadConf
     }
     if (config.model_path.empty()) {
         throw std::invalid_argument("mock model_path must not be empty");
+    }
+    if (config.model_path == "fail_if_loaded") {
+        throw std::runtime_error("mock load sentinel proves validation did not load weights");
     }
     return std::make_unique<MockLoadedModel>(config);
 }

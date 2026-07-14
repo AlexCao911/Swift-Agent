@@ -66,14 +66,15 @@ std::string model_config_json(const std::string &model_path) {
         + R"("engine":"litert",)"
         + R"("model_id":"litert_lm.vendor.smoke",)"
         + R"("model_format":"litert_lm",)"
-        + R"("model_path":")" + json_escape(model_path) + R"(")"
+        + R"("model_path":")" + json_escape(model_path) + R"(",)"
+        + R"("chat_template_source":"catalog_artifact","chat_template_id":"litert")"
         + "}";
 }
 
 std::string generation_request_json(const char *prompt) {
     std::string text = prompt == nullptr ? "Reply with one short sentence." : prompt;
     return std::string("{")
-        + R"("messages":[{"role":"user","content":")" + json_escape(text) + R"("}],)"
+        + R"("schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":")" + json_escape(text) + R"("}]}],"template":{"source":"catalog_artifact","id":"litert"},)"
         + R"("sampling":{"max_new_tokens":16,"temperature":0.2,"top_p":0.9,"top_k":40,"seed":7})"
         + "}";
 }

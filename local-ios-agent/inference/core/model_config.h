@@ -17,6 +17,9 @@ struct ModelLoadConfig {
     std::string model_path;
     std::string mmproj_path;
     std::string chat_template;
+    std::string chat_template_source;
+    std::string chat_template_id;
+    std::string tool_call_codec_id;
     int context_tokens = 2048;
     RuntimeOptions runtime;
 };
@@ -24,6 +27,9 @@ struct ModelLoadConfig {
 struct GenerationConfig {
     float temperature = 0.2f;
     float top_p = 0.9f;
+    int top_k = 40;
+    float min_p = 0.05f;
+    float repeat_penalty = 1.1f;
     int max_new_tokens = 128;
     int seed = 42;
 };

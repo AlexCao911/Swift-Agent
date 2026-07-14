@@ -62,10 +62,13 @@ assert_complete_native_abi() {
     local_agent_engine_list \
     local_agent_engine_create \
     local_agent_engine_capabilities \
+    local_agent_engine_parameter_schema \
     local_agent_engine_release \
+    local_agent_model_validate \
     local_agent_model_load \
     local_agent_model_unload \
     local_agent_generation_start \
+    local_agent_generation_validate \
     local_agent_generation_read \
     local_agent_generation_cancel \
     local_agent_generation_release \
@@ -122,6 +125,8 @@ require_text 'dependencies: ["LocalAgentLLMContracts", "LocalAgentLLMCore", "CSQ
 require_text 'import LocalAgentInferenceNative' \
   "$ROOT/toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift"
 require_text 'local_agent_engine_capabilities(engine, &output)' \
+  "$ROOT/toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift"
+require_text 'local_agent_link_anchor() == 15' \
   "$ROOT/toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift"
 require_text 'LocalInferenceNativeLinkProbe.requireAllExports()' \
   "$ROOT/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift"

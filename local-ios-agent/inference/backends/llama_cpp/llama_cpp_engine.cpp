@@ -18,6 +18,9 @@ ModelConfig to_llama_model_config(
     config.max_context_tokens = load_config.context_tokens;
     config.generation.temperature = sampling.temperature;
     config.generation.top_p = sampling.top_p;
+    config.generation.top_k = sampling.top_k;
+    config.generation.min_p = sampling.min_p;
+    config.generation.repeat_penalty = sampling.repeat_penalty;
     config.generation.max_new_tokens = sampling.max_new_tokens;
     config.generation.seed = sampling.seed;
     config.llama_cpp.n_gpu_layers = load_config.runtime.n_gpu_layers;
@@ -136,7 +139,11 @@ LlamaCppEngine::LlamaCppEngine(std::unique_ptr<LlamaCppSession> session)
 
 EngineCapabilities LlamaCppEngine::capabilities() const {
     EngineCapabilities capabilities;
+#ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD
     capabilities.supports_vision = true;
+#else
+    capabilities.supports_vision = false;
+#endif
     capabilities.supports_streaming = true;
     capabilities.supports_cancellation = true;
     capabilities.supports_token_usage = false;

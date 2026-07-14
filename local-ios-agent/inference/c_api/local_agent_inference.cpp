@@ -1,5 +1,6 @@
 #include "local_agent_inference.h"
 
+#include "cancel_arbiter.h"
 #include "engine_registry.h"
 #include "generation_request.h"
 #include "inference_engine.h"
@@ -8,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -24,6 +26,7 @@ enum class LocalAgentErrorCode {
     unsupported_model_format,
     model_file_missing,
     model_load_failed,
+    model_busy,
     context_too_large,
     vision_not_supported,
     generation_cancelled,
@@ -44,6 +47,7 @@ struct LocalAgentEngineState {
     std::string engine_id;
     local_agent::EngineDescriptor descriptor;
     std::unique_ptr<local_agent::InferenceEngine> engine;
+    std::mutex error_mutex;
     LocalAgentError last_error;
 };
 
@@ -51,6 +55,7 @@ struct LocalAgentModelState {
     std::shared_ptr<LocalAgentEngineState> engine_state;
     std::unique_ptr<local_agent::LoadedModel> model;
     local_agent::ModelRuntimeInfo runtime_info;
+    local_agent::ModelLoadConfig load_config;
     std::mutex generation_mutex;
     bool generation_active = false;
 };
@@ -58,6 +63,7 @@ struct LocalAgentModelState {
 struct LocalAgentGenerationState {
     std::shared_ptr<LocalAgentModelState> model_state;
     std::unique_ptr<local_agent::GenerationSession> generation;
+    local_agent::CancelArbiter cancel_arbiter;
     std::mutex lifecycle_mutex;
     bool reading = false;
     bool terminal = false;
@@ -79,6 +85,8 @@ const char *error_code_string(LocalAgentErrorCode code) {
         return "model_file_missing";
     case LocalAgentErrorCode::model_load_failed:
         return "model_load_failed";
+    case LocalAgentErrorCode::model_busy:
+        return "model_busy";
     case LocalAgentErrorCode::context_too_large:
         return "context_too_large";
     case LocalAgentErrorCode::vision_not_supported:
@@ -171,6 +179,7 @@ void set_engine_error(
     std::string engine_id;
     if (engine_state) {
         engine_id = engine_state->engine_id;
+        std::lock_guard<std::mutex> lock(engine_state->error_mutex);
         set_error(engine_state->last_error, code, message, engine_id, recoverable);
     }
     set_thread_error(code, std::move(message), std::move(engine_id), recoverable);
@@ -285,6 +294,115 @@ void validate_image_metadata_matches_buffers(
     }
 }
 
+bool supports_model_format(
+    const local_agent::EngineDescriptor &descriptor,
+    const std::string &format
+) {
+    const auto &formats = descriptor.capabilities.supported_model_formats;
+    return std::find(formats.begin(), formats.end(), format) != formats.end();
+}
+
+bool supports_backend_parameter(
+    const local_agent::EngineDescriptor &descriptor,
+    const std::string &name
+) {
+    const auto &parameters = descriptor.capabilities.backend_parameters;
+    return std::any_of(parameters.begin(), parameters.end(), [&](const auto &parameter) {
+        return parameter.backend_option == name;
+    });
+}
+
+void validate_model_config(
+    const std::shared_ptr<LocalAgentEngineState> &engine_state,
+    const local_agent::ModelLoadConfig &config
+) {
+    if (config.engine != engine_state->engine_id) {
+        throw std::invalid_argument("model config engine does not match engine handle");
+    }
+    if (!supports_model_format(engine_state->descriptor, config.model_format)) {
+        throw std::invalid_argument("model format is not supported by engine");
+    }
+    if (config.runtime.n_threads <= 0 || config.runtime.n_gpu_layers < 0) {
+        throw std::invalid_argument("model runtime options are out of range");
+    }
+    const int maximum = engine_state->descriptor.capabilities.max_context_tokens;
+    if (maximum > 0 && config.context_tokens > maximum) {
+        throw std::invalid_argument("model context exceeds verified engine maximum");
+    }
+    if ((config.chat_template_source != "gguf" &&
+         config.chat_template_source != "catalog_artifact") ||
+        config.chat_template_id.empty()) {
+        throw std::invalid_argument("model config requires an approved chat template selector");
+    }
+}
+
+void validate_generation_request(
+    const std::shared_ptr<LocalAgentModelState> &model_state,
+    const local_agent::GenerationRequest &request
+) {
+    if (request.chat_template.source != model_state->load_config.chat_template_source ||
+        request.chat_template.id != model_state->load_config.chat_template_id) {
+        throw std::invalid_argument("generation template does not match loaded model selector");
+    }
+    if (request.sampling.max_new_tokens > model_state->runtime_info.context_tokens) {
+        throw std::invalid_argument("generation output exceeds loaded model context");
+    }
+    for (const auto &option : request.sampling.provided_options) {
+        if (!supports_backend_parameter(model_state->engine_state->descriptor, option)) {
+            throw std::invalid_argument("generation parameter is not supported by engine: " + option);
+        }
+    }
+    if (!request.images.empty() &&
+        !model_state->engine_state->descriptor.capabilities.supports_vision) {
+        throw std::invalid_argument("loaded engine does not support image input");
+    }
+    if (request.images.size() > 1) {
+        throw std::invalid_argument("local generation supports at most one image");
+    }
+    if (request.tool_call_codec_id &&
+        (model_state->load_config.tool_call_codec_id.empty() ||
+         *request.tool_call_codec_id != model_state->load_config.tool_call_codec_id)) {
+        throw std::invalid_argument("tool-call codec does not match loaded model");
+    }
+}
+
+LocalAgentStatus cancel_generation(
+    const std::shared_ptr<LocalAgentGenerationState> &state,
+    local_agent::CancelClaim claim
+) {
+    if (claim == local_agent::CancelClaim::wait) {
+        claim = state->cancel_arbiter.wait_for_ownership_or_confirmation();
+    }
+    if (claim == local_agent::CancelClaim::generation_terminal) {
+        return LOCAL_AGENT_STATUS_OK;
+    }
+    if (claim == local_agent::CancelClaim::wait) {
+        return state->cancel_arbiter.confirmed_status();
+    }
+    try {
+        state->generation->cancel();
+        state->cancel_arbiter.confirm(LOCAL_AGENT_STATUS_CANCELLED);
+        return LOCAL_AGENT_STATUS_CANCELLED;
+    } catch (...) {
+        state->cancel_arbiter.confirm(LOCAL_AGENT_STATUS_ERROR);
+        return status_from_exception(
+            state->model_state->engine_state,
+            LocalAgentErrorCode::generation_failed
+        );
+    }
+}
+
+LocalAgentStatus resolved_generation_status(
+    const std::shared_ptr<LocalAgentGenerationState> &state
+) {
+    const local_agent::CancelClaim resolution =
+        state->cancel_arbiter.wait_for_ownership_or_confirmation();
+    if (resolution == local_agent::CancelClaim::generation_terminal) {
+        return LOCAL_AGENT_STATUS_OK;
+    }
+    return state->cancel_arbiter.confirmed_status();
+}
+
 } // namespace
 
 struct LocalAgentEngineHandle {
@@ -306,16 +424,19 @@ uint32_t local_agent_link_anchor(void) {
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_list);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_create);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_capabilities);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_parameter_schema);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_engine_release);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_model_load);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_model_validate);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_model_unload);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_start);
+    addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_validate);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_read);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_cancel);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_generation_release);
     addresses ^= reinterpret_cast<uintptr_t>(&local_agent_last_error);
     (void)addresses;
-    return 12;
+    return 15;
 }
 
 void local_agent_string_free(char *value) {
@@ -406,6 +527,27 @@ LocalAgentStatus local_agent_engine_capabilities(
     }
 }
 
+LocalAgentStatus local_agent_engine_parameter_schema(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+) {
+    if (out_json == nullptr) {
+        set_thread_error(LocalAgentErrorCode::invalid_argument, "out_json must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    *out_json = nullptr;
+    if (engine == nullptr || !engine->state) {
+        set_thread_error(LocalAgentErrorCode::invalid_argument, "engine handle must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        *out_json = copy_c_string(local_agent::engine_parameter_schema_json(engine->state->descriptor));
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(engine->state, LocalAgentErrorCode::internal_error);
+    }
+}
+
 LocalAgentStatus local_agent_engine_release(LocalAgentEngineHandle *engine) {
     if (engine == nullptr) {
         return LOCAL_AGENT_STATUS_OK;
@@ -430,9 +572,7 @@ LocalAgentStatus local_agent_model_load(
     }
     try {
         local_agent::ModelLoadConfig config = local_agent::parse_model_load_config(model_config_json);
-        if (config.engine != engine->state->engine_id) {
-            throw std::invalid_argument("model config engine does not match engine handle");
-        }
+        validate_model_config(engine->state, config);
         auto model = engine->state->engine->load_model(config);
         if (!model) {
             throw std::runtime_error("engine returned null loaded model");
@@ -442,6 +582,7 @@ LocalAgentStatus local_agent_model_load(
         state->engine_state = engine->state;
         state->model = std::move(model);
         state->runtime_info = state->model->runtime_info();
+        state->load_config = std::move(config);
 
         auto *handle = new LocalAgentModelHandle();
         handle->state = std::move(state);
@@ -452,9 +593,45 @@ LocalAgentStatus local_agent_model_load(
     }
 }
 
+LocalAgentStatus local_agent_model_validate(
+    LocalAgentEngineHandle *engine,
+    const char *model_config_json
+) {
+    if (engine == nullptr || !engine->state || model_config_json == nullptr) {
+        set_thread_error(LocalAgentErrorCode::invalid_argument, "engine and model_config_json are required");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        const local_agent::ModelLoadConfig config =
+            local_agent::parse_model_load_config(model_config_json);
+        validate_model_config(engine->state, config);
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(engine->state, LocalAgentErrorCode::invalid_argument);
+    }
+}
+
 LocalAgentStatus local_agent_model_unload(LocalAgentModelHandle *model) {
     if (model == nullptr) {
         return LOCAL_AGENT_STATUS_OK;
+    }
+    if (!model->state) {
+        set_thread_error(LocalAgentErrorCode::invalid_argument, "model handle state must not be null");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    bool busy = false;
+    {
+        std::lock_guard<std::mutex> lock(model->state->generation_mutex);
+        busy = model->state->generation_active;
+    }
+    if (busy) {
+        set_engine_error(
+            model->state->engine_state,
+            LocalAgentErrorCode::model_busy,
+            "model has an active generation",
+            true
+        );
+        return LOCAL_AGENT_STATUS_ERROR;
     }
     delete model;
     return LOCAL_AGENT_STATUS_OK;
@@ -479,6 +656,7 @@ LocalAgentStatus local_agent_generation_start(
     try {
         local_agent::GenerationRequest request =
             local_agent::parse_generation_request(generation_request_json);
+        validate_generation_request(model->state, request);
         validate_image_metadata_matches_buffers(request.images, images, image_count);
         std::vector<local_agent::ImageInput> image_inputs = copy_image_inputs(images, image_count);
         if (!reserve_active_generation(model->state)) {
@@ -520,6 +698,24 @@ LocalAgentStatus local_agent_generation_start(
     }
 }
 
+LocalAgentStatus local_agent_generation_validate(
+    LocalAgentModelHandle *model,
+    const char *generation_request_json
+) {
+    if (model == nullptr || !model->state || generation_request_json == nullptr) {
+        set_thread_error(LocalAgentErrorCode::invalid_argument, "model and generation_request_json are required");
+        return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        const local_agent::GenerationRequest request =
+            local_agent::parse_generation_request(generation_request_json);
+        validate_generation_request(model->state, request);
+        return LOCAL_AGENT_STATUS_OK;
+    } catch (...) {
+        return status_from_exception(model->state->engine_state, LocalAgentErrorCode::invalid_argument);
+    }
+}
+
 LocalAgentStatus local_agent_generation_read(
     LocalAgentGenerationHandle *generation,
     local_agent_token_callback callback,
@@ -555,6 +751,7 @@ LocalAgentStatus local_agent_generation_read(
     }
 
     auto mark_terminal = [&]() {
+        state->cancel_arbiter.mark_generation_terminal();
         {
             std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
             state->reading = false;
@@ -564,10 +761,17 @@ LocalAgentStatus local_agent_generation_read(
     };
 
     LocalAgentStatus callback_status = LOCAL_AGENT_STATUS_OK;
+    LocalAgentStatus cancel_status = LOCAL_AGENT_STATUS_OK;
     auto emit = [&](const std::string &token_json) -> bool {
+        state->cancel_arbiter.callback_entered();
         callback_status = callback(token_json.c_str(), user_data);
-        if (callback_status != LOCAL_AGENT_STATUS_OK) {
-            state->generation->cancel();
+        const local_agent::CancelClaim claim =
+            state->cancel_arbiter.callback_returned(callback_status);
+        if (claim == local_agent::CancelClaim::owner) {
+            cancel_status = cancel_generation(state, claim);
+        }
+        if (callback_status != LOCAL_AGENT_STATUS_OK ||
+            cancel_status != LOCAL_AGENT_STATUS_OK) {
             return false;
         }
         return true;
@@ -576,6 +780,17 @@ LocalAgentStatus local_agent_generation_read(
     try {
         state->generation->read(emit);
         mark_terminal();
+        const LocalAgentStatus terminal_status = resolved_generation_status(state);
+        if (terminal_status != LOCAL_AGENT_STATUS_OK) {
+            set_engine_error(
+                state->model_state->engine_state,
+                terminal_status == LOCAL_AGENT_STATUS_CANCELLED
+                    ? LocalAgentErrorCode::generation_cancelled
+                    : LocalAgentErrorCode::generation_failed,
+                "generation terminated by cancellation"
+            );
+            return terminal_status;
+        }
         if (callback_status != LOCAL_AGENT_STATUS_OK) {
             set_engine_error(
                 state->model_state->engine_state,
@@ -587,6 +802,10 @@ LocalAgentStatus local_agent_generation_read(
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {
         mark_terminal();
+        const LocalAgentStatus terminal_status = resolved_generation_status(state);
+        if (terminal_status != LOCAL_AGENT_STATUS_OK) {
+            return terminal_status;
+        }
         return status_from_exception(
             state->model_state->engine_state,
             LocalAgentErrorCode::generation_failed
@@ -600,6 +819,13 @@ LocalAgentStatus local_agent_generation_cancel(LocalAgentGenerationHandle *gener
         return LOCAL_AGENT_STATUS_INVALID_ARGUMENT;
     }
     auto state = generation->state;
+    const LocalAgentStatus cancel_status = cancel_generation(
+        state,
+        state->cancel_arbiter.claim_from_external()
+    );
+    if (cancel_status == LOCAL_AGENT_STATUS_ERROR) {
+        return cancel_status;
+    }
     bool clear_active = false;
     {
         std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
@@ -611,11 +837,12 @@ LocalAgentStatus local_agent_generation_cancel(LocalAgentGenerationHandle *gener
         LocalAgentErrorCode::generation_cancelled,
         "generation cancelled"
     );
-    state->generation->cancel();
     if (clear_active) {
         clear_active_generation(state->model_state);
     }
-    return LOCAL_AGENT_STATUS_CANCELLED;
+    return cancel_status == LOCAL_AGENT_STATUS_OK
+        ? LOCAL_AGENT_STATUS_OK
+        : LOCAL_AGENT_STATUS_CANCELLED;
 }
 
 LocalAgentStatus local_agent_generation_release(LocalAgentGenerationHandle *generation) {
@@ -624,16 +851,18 @@ LocalAgentStatus local_agent_generation_release(LocalAgentGenerationHandle *gene
     }
     auto state = generation->state;
     if (state) {
+        const LocalAgentStatus cancel_status = cancel_generation(
+            state,
+            state->cancel_arbiter.claim_from_external()
+        );
+        if (cancel_status == LOCAL_AGENT_STATUS_ERROR) {
+            return cancel_status;
+        }
         bool clear_active = false;
-        bool cancel_reading = false;
         {
             std::lock_guard<std::mutex> lock(state->lifecycle_mutex);
             state->terminal = true;
             clear_active = !state->reading;
-            cancel_reading = state->reading;
-        }
-        if (cancel_reading) {
-            state->generation->cancel();
         }
         if (clear_active) {
             clear_active_generation(state->model_state);
@@ -653,9 +882,11 @@ LocalAgentStatus local_agent_last_error(
     }
     *out_json = nullptr;
     try {
-        const LocalAgentError &error = (engine != nullptr && engine->state)
-            ? engine->state->last_error
-            : thread_last_error;
+        LocalAgentError error = thread_last_error;
+        if (engine != nullptr && engine->state) {
+            std::lock_guard<std::mutex> lock(engine->state->error_mutex);
+            error = engine->state->last_error;
+        }
         *out_json = copy_c_string(error_json(error));
         return LOCAL_AGENT_STATUS_OK;
     } catch (...) {

@@ -2,6 +2,8 @@
 #define LOCAL_AGENT_GENERATION_REQUEST_H
 
 #include <cstdint>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -16,11 +18,26 @@ struct SamplingConfig {
     int seed = 42;
     int max_new_tokens = 128;
     std::vector<std::string> stop_sequences;
+    std::set<std::string> provided_options;
+};
+
+struct PromptContentPart {
+    std::string type;
+    std::string text;
 };
 
 struct PromptMessage {
     std::string role;
-    std::string content;
+    std::vector<PromptContentPart> content;
+};
+
+struct CanonicalToolSchema {
+    std::string json;
+};
+
+struct ChatTemplateSelector {
+    std::string source;
+    std::string id;
 };
 
 struct ImageMetadata {
@@ -30,12 +47,17 @@ struct ImageMetadata {
 };
 
 struct GenerationRequest {
+    std::string schema_version;
     std::vector<PromptMessage> messages;
     std::vector<ImageMetadata> images;
+    std::optional<CanonicalToolSchema> tool_schema;
+    ChatTemplateSelector chat_template;
+    std::optional<std::string> tool_call_codec_id;
     SamplingConfig sampling;
 };
 
 GenerationRequest parse_generation_request(const char *generation_request_json);
+std::string prompt_message_text(const PromptMessage &message);
 std::string prompt_json_from_generation_request(const GenerationRequest &request);
 
 } // namespace local_agent

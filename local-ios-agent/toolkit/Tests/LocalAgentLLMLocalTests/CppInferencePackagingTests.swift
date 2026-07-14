@@ -15,11 +15,15 @@ struct CppInferencePackagingTests {
         #expect(!engines.isEmpty)
         #expect(Set(engines.map(\.engineID)) == Set(releaseManifest.engineIDs))
         #expect(engines.allSatisfy { !$0.testOnly && $0.engineID != "mock" })
+        #expect(engines.allSatisfy { $0.abiVersion == "2" && !$0.engineVersion.isEmpty })
 
         let capabilities = try CppInferenceRegistry.live.capabilities(engineID: "llama_cpp")
         #expect(capabilities.supportedModelFormats.contains("gguf"))
         #expect(capabilities.supportsStreaming)
         #expect(capabilities.supportsCancellation)
+        #expect(!capabilities.supportsVision)
+        #expect(capabilities.backendParameters.contains { $0.backendOption == "top_p" })
+        #expect(capabilities.backendParameters.contains { $0.backendOption == "repeat_penalty" })
     }
 }
 

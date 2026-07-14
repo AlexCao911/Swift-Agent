@@ -43,6 +43,8 @@ int main(int argc, char **argv) {
 
     const auto *mock = test_registry.find("mock");
     assert(mock != nullptr);
+    assert(mock->abi_version == "2");
+    assert(mock->engine_version == "mock-v2");
     assert(mock->capabilities.supports_streaming);
     assert(!mock->capabilities.supported_model_formats.empty());
 
@@ -50,6 +52,7 @@ int main(int argc, char **argv) {
     assert(mock_engine != nullptr);
     assert(local_agent::engine_descriptor_list_json(test_descriptors).find("\"mock\"") != std::string::npos);
     assert(local_agent::engine_capabilities_json(*mock).find("supports_streaming") != std::string::npos);
+    assert(local_agent::engine_parameter_schema_json(*mock).find("\"backend_option\":\"top_p\"") != std::string::npos);
 
     return 0;
 }

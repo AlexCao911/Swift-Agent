@@ -22,6 +22,22 @@ struct AsyncEvents {
     bool saw_blocking_event = false;
 };
 
+struct BlockingCallbackState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool may_return = false;
+};
+
+static LocalAgentStatus block_then_cancel_callback(const char *, void *user_data) {
+    auto *state = static_cast<BlockingCallbackState *>(user_data);
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->condition.notify_all();
+    state->condition.wait(lock, [&] { return state->may_return; });
+    return LOCAL_AGENT_STATUS_CANCELLED;
+}
+
 static LocalAgentStatus collect_async_token(const char *token_json, void *user_data) {
     auto *async_events = static_cast<AsyncEvents *>(user_data);
     {
@@ -52,6 +68,8 @@ int main() {
     assert(engine_list_json != nullptr);
     std::string engine_list(engine_list_json);
     assert(engine_list.find("\"engine_id\":\"mock\"") != std::string::npos);
+    assert(engine_list.find("\"abi_version\":\"2\"") != std::string::npos);
+    assert(engine_list.find("\"engine_version\":\"mock-v2\"") != std::string::npos);
     local_agent_string_free(engine_list_json);
 
     LocalAgentEngineHandle *engine = nullptr;
@@ -61,29 +79,58 @@ int main() {
     char *capabilities_json = nullptr;
     assert(local_agent_engine_capabilities(engine, &capabilities_json) == LOCAL_AGENT_STATUS_OK);
     assert(std::string(capabilities_json).find("\"supports_streaming\":true") != std::string::npos);
+    assert(std::string(capabilities_json).find("\"backend_parameters\"") != std::string::npos);
     local_agent_string_free(capabilities_json);
+
+    char *parameter_schema_json = nullptr;
+    assert(local_agent_engine_parameter_schema(engine, &parameter_schema_json) == LOCAL_AGENT_STATUS_OK);
+    assert(std::string(parameter_schema_json).find("\"backend_option\":\"top_p\"") != std::string::npos);
+    local_agent_string_free(parameter_schema_json);
+
+    const char *model_config =
+        R"({"engine":"mock","model_id":"mock.local","model_path":"fail_if_loaded","model_format":"mock","chat_template_source":"catalog_artifact","chat_template_id":"mock"})";
+    assert(local_agent_model_validate(engine, model_config) == LOCAL_AGENT_STATUS_OK);
+
+    LocalAgentModelHandle *must_not_load = nullptr;
+    assert(local_agent_model_load(engine, model_config, &must_not_load) == LOCAL_AGENT_STATUS_ERROR);
+    assert(must_not_load == nullptr);
 
     LocalAgentModelHandle *model = nullptr;
     assert(local_agent_model_load(
         engine,
-        R"({"engine":"mock","model_id":"mock.local","model_path":"/tmp/mock.gguf","model_format":"mock"})",
+        R"({"engine":"mock","model_id":"mock.local","model_path":"/tmp/mock.gguf","model_format":"mock","chat_template_source":"catalog_artifact","chat_template_id":"mock","tool_call_codec_id":"json_tool_calls_v1"})",
         &model
     ) == LOCAL_AGENT_STATUS_OK);
+
+    assert(local_agent_generation_validate(
+        model,
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"tool_schema":{"tools":[{"name":"search","input_schema":{"type":"object"}}]},"template":{"source":"catalog_artifact","id":"mock"},"tool_call_codec_id":"json_tool_calls_v1","sampling":{"max_new_tokens":8}})"
+    ) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_generation_validate(
+        model,
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"template":{"source":"catalog_artifact","id":"not-approved"}})"
+    ) == LOCAL_AGENT_STATUS_INVALID_ARGUMENT);
 
     LocalAgentGenerationHandle *generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"hello"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &generation
     ) == LOCAL_AGENT_STATUS_OK);
     assert(generation != nullptr);
 
+    assert(local_agent_model_unload(model) == LOCAL_AGENT_STATUS_ERROR);
+    char *busy_error_json = nullptr;
+    assert(local_agent_last_error(engine, &busy_error_json) == LOCAL_AGENT_STATUS_OK);
+    assert(std::string(busy_error_json).find("\"code\":\"model_busy\"") != std::string::npos);
+    local_agent_string_free(busy_error_json);
+
     LocalAgentGenerationHandle *concurrent_generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"second"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"second"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &concurrent_generation
@@ -107,17 +154,56 @@ int main() {
     LocalAgentGenerationHandle *next_generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"after terminal"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"after terminal"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &next_generation
     ) == LOCAL_AGENT_STATUS_OK);
     assert(local_agent_generation_release(next_generation) == LOCAL_AGENT_STATUS_OK);
 
+    LocalAgentGenerationHandle *callback_blocked_generation = nullptr;
+    assert(local_agent_generation_start(
+        model,
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"callback blocked"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
+        nullptr,
+        0,
+        &callback_blocked_generation
+    ) == LOCAL_AGENT_STATUS_OK);
+
+    BlockingCallbackState callback_blocked;
+    LocalAgentStatus callback_blocked_read_status = LOCAL_AGENT_STATUS_ERROR;
+    LocalAgentStatus callback_blocked_cancel_status = LOCAL_AGENT_STATUS_ERROR;
+    std::thread callback_blocked_read([&] {
+        callback_blocked_read_status = local_agent_generation_read(
+            callback_blocked_generation,
+            block_then_cancel_callback,
+            &callback_blocked
+        );
+    });
+    {
+        std::unique_lock<std::mutex> lock(callback_blocked.mutex);
+        assert(callback_blocked.condition.wait_for(lock, std::chrono::seconds(2), [&] {
+            return callback_blocked.entered;
+        }));
+    }
+    std::thread callback_blocked_cancel([&] {
+        callback_blocked_cancel_status = local_agent_generation_cancel(callback_blocked_generation);
+    });
+    {
+        std::lock_guard<std::mutex> lock(callback_blocked.mutex);
+        callback_blocked.may_return = true;
+    }
+    callback_blocked.condition.notify_all();
+    callback_blocked_read.join();
+    callback_blocked_cancel.join();
+    assert(callback_blocked_read_status == LOCAL_AGENT_STATUS_CANCELLED);
+    assert(callback_blocked_cancel_status == LOCAL_AGENT_STATUS_CANCELLED);
+    assert(local_agent_generation_release(callback_blocked_generation) == LOCAL_AGENT_STATUS_OK);
+
     LocalAgentGenerationHandle *blocking_generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"block_until_cancel"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"block_until_cancel"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &blocking_generation
@@ -145,7 +231,7 @@ int main() {
     LocalAgentGenerationHandle *after_cancel_before_unwind = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"must wait for read unwind"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"must wait for read unwind"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &after_cancel_before_unwind
@@ -153,13 +239,13 @@ int main() {
     assert(after_cancel_before_unwind == nullptr);
 
     blocking_read.join();
-    assert(blocking_read_status == LOCAL_AGENT_STATUS_OK);
+    assert(blocking_read_status == LOCAL_AGENT_STATUS_CANCELLED);
     assert(local_agent_generation_release(blocking_generation) == LOCAL_AGENT_STATUS_OK);
 
     LocalAgentGenerationHandle *after_cancel_unwound = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"after cancel unwind"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"after cancel unwind"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &after_cancel_unwound
@@ -169,7 +255,7 @@ int main() {
     LocalAgentGenerationHandle *release_blocking_generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"block_until_cancel"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"block_until_cancel"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &release_blocking_generation
@@ -197,7 +283,7 @@ int main() {
     LocalAgentGenerationHandle *after_release_before_unwind = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"must wait for released read unwind"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"must wait for released read unwind"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &after_release_before_unwind
@@ -205,12 +291,12 @@ int main() {
     assert(after_release_before_unwind == nullptr);
 
     release_blocking_read.join();
-    assert(release_blocking_read_status == LOCAL_AGENT_STATUS_OK);
+    assert(release_blocking_read_status == LOCAL_AGENT_STATUS_CANCELLED);
 
     LocalAgentGenerationHandle *after_release_unwound = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"after release unwind"}],"sampling":{"max_new_tokens":8}})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"after release unwind"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})",
         nullptr,
         0,
         &after_release_unwound
@@ -229,7 +315,7 @@ int main() {
     LocalAgentGenerationHandle *image_generation = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"describe"}]}],"template":{"source":"catalog_artifact","id":"mock"},"images":[{"format":"rgb8","width":1,"height":1}]})",
         &image,
         1,
         &image_generation
@@ -246,7 +332,7 @@ int main() {
     LocalAgentGenerationHandle *metadata_without_buffer = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"describe"}],"images":[{"format":"rgb8","width":1,"height":1}]})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"describe"}]}],"template":{"source":"catalog_artifact","id":"mock"},"images":[{"format":"rgb8","width":1,"height":1}]})",
         nullptr,
         0,
         &metadata_without_buffer
@@ -256,7 +342,7 @@ int main() {
     LocalAgentGenerationHandle *buffer_without_metadata = nullptr;
     assert(local_agent_generation_start(
         model,
-        R"({"messages":[{"role":"user","content":"describe"}]})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"describe"}]}],"template":{"source":"catalog_artifact","id":"mock"}})",
         &image,
         1,
         &buffer_without_metadata
@@ -275,21 +361,21 @@ int main() {
     LocalAgentModelHandle *child_model = nullptr;
     assert(local_agent_model_load(
         parent_engine,
-        R"({"engine":"mock","model_id":"mock.parent","model_path":"/tmp/mock.gguf","model_format":"mock"})",
+        R"({"engine":"mock","model_id":"mock.parent","model_path":"/tmp/mock.gguf","model_format":"mock","chat_template_source":"catalog_artifact","chat_template_id":"mock"})",
         &child_model
     ) == LOCAL_AGENT_STATUS_OK);
 
     LocalAgentGenerationHandle *child_generation = nullptr;
     assert(local_agent_generation_start(
         child_model,
-        R"({"messages":[{"role":"user","content":"release order"}]})",
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"release order"}]}],"template":{"source":"catalog_artifact","id":"mock"}})",
         nullptr,
         0,
         &child_generation
     ) == LOCAL_AGENT_STATUS_OK);
 
     assert(local_agent_engine_release(parent_engine) == LOCAL_AGENT_STATUS_OK);
-    assert(local_agent_model_unload(child_model) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_model_unload(child_model) == LOCAL_AGENT_STATUS_ERROR);
 
     std::vector<std::string> out_of_order_events;
     assert(local_agent_generation_read(
@@ -299,6 +385,7 @@ int main() {
     ) == LOCAL_AGENT_STATUS_OK);
     assert(!out_of_order_events.empty());
     assert(local_agent_generation_release(child_generation) == LOCAL_AGENT_STATUS_OK);
+    assert(local_agent_model_unload(child_model) == LOCAL_AGENT_STATUS_OK);
 
     return 0;
 }

@@ -63,10 +63,16 @@ std::string normalized_litert_role(const std::string &role) {
 
 litert::lm::Message to_litert_message(const GenerationRequest &request) {
     nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+    if (request.tool_schema) {
+        messages.push_back({
+            {"role", "system"},
+            {"content", "Available tools (canonical JSON): " + request.tool_schema->json},
+        });
+    }
     for (const auto &message : request.messages) {
         messages.push_back({
             {"role", normalized_litert_role(message.role)},
-            {"content", message.content},
+            {"content", prompt_message_text(message)},
         });
     }
     return messages;

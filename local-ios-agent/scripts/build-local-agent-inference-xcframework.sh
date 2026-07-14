@@ -22,6 +22,13 @@ if [[ ! -f "$LLAMA_CPP_ROOT/include/llama.h" ]]; then
   exit 1
 fi
 
+LLAMA_CPP_COMMIT="${LOCAL_AGENT_LLAMA_CPP_COMMIT:-$(git -C "$LLAMA_CPP_ROOT" rev-parse HEAD)}"
+if [[ ! "$LLAMA_CPP_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "LOCAL_AGENT_LLAMA_CPP_COMMIT must be a pinned 40-character commit" >&2
+  exit 1
+fi
+LLAMA_CPP_ENGINE_VERSION="${LLAMA_CPP_COMMIT}+local-adapter-v2"
+
 release_engine_count="$(/usr/bin/plutil -extract engine_ids raw -o - "$RELEASE_ENGINES")"
 release_engine_id="$(/usr/bin/plutil -extract engine_ids.0 raw -o - "$RELEASE_ENGINES")"
 if [[ "$release_engine_count" != "1" || "$release_engine_id" != "llama_cpp" ]]; then
@@ -34,6 +41,7 @@ COMMON_SOURCES=(
   inference/core/json_value.cpp
   inference/core/model_config.cpp
   inference/core/generation_request.cpp
+  inference/core/cancel_arbiter.cpp
   inference/core/engine_registry.cpp
   inference/core/token_stream.cpp
   inference/backends/llama_cpp/llama_cpp_api.cpp
@@ -83,6 +91,7 @@ build_slice() {
     "$CXX" -std=c++17 -O2 -fvisibility=hidden \
       -target "$target" -isysroot "$sdk_path" \
       -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
+      "-DLOCAL_AGENT_LLAMA_CPP_VERSION=\"$LLAMA_CPP_ENGINE_VERSION\"" \
       -I "$ROOT/inference/include" \
       -I "$ROOT/inference/core" \
       -I "$ROOT/inference/backends/llama_cpp" \

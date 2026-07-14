@@ -59,6 +59,11 @@ LocalAgentStatus local_agent_engine_capabilities(
     char **out_json
 );
 
+LocalAgentStatus local_agent_engine_parameter_schema(
+    LocalAgentEngineHandle *engine,
+    char **out_json
+);
+
 /* Release functions accept null. Passing an already released non-null raw handle is invalid. */
 LocalAgentStatus local_agent_engine_release(
     LocalAgentEngineHandle *engine
@@ -68,6 +73,11 @@ LocalAgentStatus local_agent_model_load(
     LocalAgentEngineHandle *engine,
     const char *model_config_json,
     LocalAgentModelHandle **out_model
+);
+
+LocalAgentStatus local_agent_model_validate(
+    LocalAgentEngineHandle *engine,
+    const char *model_config_json
 );
 
 LocalAgentStatus local_agent_model_unload(
@@ -80,6 +90,11 @@ LocalAgentStatus local_agent_generation_start(
     const LocalAgentImageInput *images,
     uint64_t image_count,
     LocalAgentGenerationHandle **out_generation
+);
+
+LocalAgentStatus local_agent_generation_validate(
+    LocalAgentModelHandle *model,
+    const char *generation_request_json
 );
 
 LocalAgentStatus local_agent_generation_read(

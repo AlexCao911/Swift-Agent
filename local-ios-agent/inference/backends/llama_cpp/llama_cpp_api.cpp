@@ -71,7 +71,8 @@ std::string render_prompt_for_llama_cpp(
     ,
     const char *media_marker
 ) {
-    std::vector<LlamaPromptMessage> parsed_messages = parse_llama_prompt_messages(prompt_json);
+    const LlamaPromptInput prompt_input = parse_llama_prompt_input(prompt_json);
+    std::vector<LlamaPromptMessage> parsed_messages = llama_messages_for_rendering(prompt_input);
     if (media_marker != nullptr && media_marker[0] != '\0') {
         bool injected = false;
         for (auto message = parsed_messages.rbegin(); message != parsed_messages.rend(); ++message) {
@@ -324,7 +325,13 @@ private:
         }
 
         llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(
+            sampler,
+            llama_sampler_init_penalties(-1, config.generation.repeat_penalty, 0.0f, 0.0f)
+        );
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(config.generation.top_k));
         llama_sampler_chain_add(sampler, llama_sampler_init_top_p(config.generation.top_p, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_min_p(config.generation.min_p, 1));
         llama_sampler_chain_add(sampler, llama_sampler_init_temp(config.generation.temperature));
         llama_sampler_chain_add(
             sampler,

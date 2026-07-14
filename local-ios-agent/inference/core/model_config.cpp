@@ -77,6 +77,9 @@ ModelLoadConfig parse_model_load_config(const char *model_config_json) {
     config.model_format = json::optional_string(root, "model_format", default_model_format(config.engine));
     config.mmproj_path = json::optional_string(root, "mmproj_path", "");
     config.chat_template = json::optional_string(root, "chat_template", "gguf");
+    config.chat_template_source = json::optional_string(root, "chat_template_source", "");
+    config.chat_template_id = json::optional_string(root, "chat_template_id", "");
+    config.tool_call_codec_id = json::optional_string(root, "tool_call_codec_id", "");
     config.context_tokens = json::optional_int(root, "context_tokens", 2048);
     const json::Value *runtime = root.get("runtime");
     if (runtime != nullptr) {
@@ -105,6 +108,13 @@ ModelConfig parse_model_config(const char *model_config_json) {
     if (generation != nullptr) {
         config.generation.temperature = json::optional_float(*generation, "temperature", config.generation.temperature);
         config.generation.top_p = json::optional_float(*generation, "top_p", config.generation.top_p);
+        config.generation.top_k = json::optional_int(*generation, "top_k", config.generation.top_k);
+        config.generation.min_p = json::optional_float(*generation, "min_p", config.generation.min_p);
+        config.generation.repeat_penalty = json::optional_float(
+            *generation,
+            "repeat_penalty",
+            config.generation.repeat_penalty
+        );
         config.generation.max_new_tokens = json::optional_int(*generation, "max_new_tokens", config.generation.max_new_tokens);
         config.generation.seed = json::optional_int(*generation, "seed", config.generation.seed);
     }

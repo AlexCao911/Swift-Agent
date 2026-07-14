@@ -52,16 +52,49 @@ std::string bool_json(bool value) {
     return value ? "true" : "false";
 }
 
+ParameterDescriptor parameter(
+    std::string name,
+    std::string type,
+    std::optional<double> minimum = std::nullopt,
+    std::optional<double> maximum = std::nullopt
+) {
+    return ParameterDescriptor{
+        std::move(name),
+        std::move(type),
+        minimum,
+        maximum,
+    };
+}
+
+std::vector<ParameterDescriptor> common_sampling_parameters(bool stop_sequences) {
+    std::vector<ParameterDescriptor> parameters{
+        parameter("temperature", "number", 0.0, 2.0),
+        parameter("top_p", "number", 0.0, 1.0),
+        parameter("top_k", "integer", 0.0, 10000.0),
+        parameter("min_p", "number", 0.0, 1.0),
+        parameter("repeat_penalty", "number", 0.0, 2.0),
+        parameter("max_new_tokens", "integer", 1.0),
+        parameter("seed", "integer"),
+    };
+    if (stop_sequences) {
+        parameters.push_back(parameter("stop_sequences", "string_array"));
+    }
+    return parameters;
+}
+
 EngineDescriptor mock_descriptor() {
     EngineDescriptor descriptor;
     descriptor.engine_id = "mock";
+    descriptor.abi_version = "2";
+    descriptor.engine_version = "mock-v2";
     descriptor.display_name = "Mock Test Engine";
-    descriptor.capabilities.supports_vision = false;
+    descriptor.capabilities.supports_vision = true;
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
     descriptor.capabilities.supports_token_usage = true;
     descriptor.capabilities.max_context_tokens = 2048;
     descriptor.capabilities.supported_model_formats = {"mock"};
+    descriptor.capabilities.backend_parameters = common_sampling_parameters(false);
     descriptor.test_only = true;
     return descriptor;
 }
@@ -69,31 +102,63 @@ EngineDescriptor mock_descriptor() {
 EngineDescriptor llama_cpp_descriptor() {
     EngineDescriptor descriptor;
     descriptor.engine_id = "llama_cpp";
+    descriptor.abi_version = "2";
+#ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP
+#ifndef LOCAL_AGENT_LLAMA_CPP_VERSION
+#error "LOCAL_AGENT_LLAMA_CPP_VERSION is required when llama.cpp is enabled"
+#endif
+    descriptor.engine_version = LOCAL_AGENT_LLAMA_CPP_VERSION;
+#else
+    descriptor.engine_version = "unavailable";
+#endif
     descriptor.display_name = "llama.cpp";
+#ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD
     descriptor.capabilities.supports_vision = true;
+#else
+    descriptor.capabilities.supports_vision = false;
+#endif
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
     descriptor.capabilities.supports_token_usage = false;
     descriptor.capabilities.max_context_tokens = 0;
     descriptor.capabilities.supported_model_formats = {"gguf"};
+    descriptor.capabilities.backend_parameters = common_sampling_parameters(false);
     return descriptor;
 }
 
 EngineDescriptor litert_descriptor() {
     EngineDescriptor descriptor;
     descriptor.engine_id = "litert";
+    descriptor.abi_version = "2";
+#ifdef LOCAL_AGENT_HAS_LITERT
+#ifndef LOCAL_AGENT_LITERT_VERSION
+#error "LOCAL_AGENT_LITERT_VERSION is required when LiteRT is enabled"
+#endif
+    descriptor.engine_version = LOCAL_AGENT_LITERT_VERSION;
+#else
+    descriptor.engine_version = "unavailable";
+#endif
     descriptor.display_name = "LiteRT";
     descriptor.capabilities.supports_vision = false;
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
     descriptor.capabilities.supports_token_usage = false;
     descriptor.capabilities.supported_model_formats = {"litert_lm", "litertlm", "task", "tflite"};
+    descriptor.capabilities.backend_parameters = {
+        parameter("temperature", "number", 0.0, 2.0),
+        parameter("top_p", "number", 0.0, 1.0),
+        parameter("top_k", "integer", 0.0, 10000.0),
+        parameter("max_new_tokens", "integer", 1.0),
+        parameter("seed", "integer"),
+    };
     return descriptor;
 }
 
 void append_descriptor_json(std::ostringstream &out, const EngineDescriptor &descriptor) {
     out << "{"
         << "\"engine_id\":\"" << json_escape(descriptor.engine_id) << "\","
+        << "\"abi_version\":\"" << json_escape(descriptor.abi_version) << "\","
+        << "\"engine_version\":\"" << json_escape(descriptor.engine_version) << "\","
         << "\"display_name\":\"" << json_escape(descriptor.display_name) << "\","
         << "\"test_only\":" << bool_json(descriptor.test_only) << ","
         << "\"capabilities\":" << engine_capabilities_json(descriptor)
@@ -123,7 +188,13 @@ std::string engine_capabilities_json(const EngineDescriptor &descriptor) {
         << "\"supports_streaming\":" << bool_json(capabilities.supports_streaming) << ","
         << "\"supports_cancellation\":" << bool_json(capabilities.supports_cancellation) << ","
         << "\"supports_token_usage\":" << bool_json(capabilities.supports_token_usage) << ","
-        << "\"max_context_tokens\":" << capabilities.max_context_tokens << ","
+        << "\"max_context_tokens\":";
+    if (capabilities.max_context_tokens > 0) {
+        out << capabilities.max_context_tokens;
+    } else {
+        out << "null";
+    }
+    out << ","
         << "\"supported_model_formats\":[";
     for (size_t i = 0; i < capabilities.supported_model_formats.size(); ++i) {
         if (i > 0) {
@@ -131,8 +202,30 @@ std::string engine_capabilities_json(const EngineDescriptor &descriptor) {
         }
         out << "\"" << json_escape(capabilities.supported_model_formats[i]) << "\"";
     }
+    out << "],\"backend_parameters\":[";
+    for (size_t i = 0; i < capabilities.backend_parameters.size(); ++i) {
+        if (i > 0) out << ',';
+        const auto &parameter = capabilities.backend_parameters[i];
+        out << "{\"backend_option\":\"" << json_escape(parameter.backend_option)
+            << "\",\"value_type\":\"" << json_escape(parameter.value_type) << "\","
+            << "\"minimum\":";
+        if (parameter.minimum) out << *parameter.minimum; else out << "null";
+        out << ",\"maximum\":";
+        if (parameter.maximum) out << *parameter.maximum; else out << "null";
+        out << '}';
+    }
     out << "]}";
     return out.str();
+}
+
+std::string engine_parameter_schema_json(const EngineDescriptor &descriptor) {
+    const std::string capabilities = engine_capabilities_json(descriptor);
+    const std::string marker = "\"backend_parameters\":";
+    const size_t start = capabilities.find(marker);
+    if (start == std::string::npos) {
+        return "{\"backend_parameters\":[]}";
+    }
+    return "{" + capabilities.substr(start);
 }
 
 EngineRegistry EngineRegistry::production() {

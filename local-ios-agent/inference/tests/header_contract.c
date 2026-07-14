@@ -20,10 +20,20 @@ int main(void) {
     status = local_agent_engine_create("mock", &engine);
     status = local_agent_engine_capabilities(engine, &json);
     local_agent_string_free(json);
+    status = local_agent_engine_parameter_schema(engine, &json);
+    local_agent_string_free(json);
+    status = local_agent_model_validate(
+        engine,
+        "{\"engine\":\"mock\",\"model_path\":\"/tmp/mock.gguf\"}"
+    );
     status = local_agent_model_load(
         engine,
         "{\"engine\":\"mock\",\"model_path\":\"/tmp/mock.gguf\"}",
         &model
+    );
+    status = local_agent_generation_validate(
+        model,
+        "{\"schema_version\":\"2\",\"messages\":[] }"
     );
     status = local_agent_generation_start(
         model,

@@ -19,7 +19,7 @@ int main() {
     assert(model->runtime_info().engine_id == "mock");
 
     auto request = local_agent::parse_generation_request(
-        R"({"messages":[{"role":"user","content":"hello"}],"sampling":{"max_new_tokens":8}})"
+        R"({"schema_version":"2","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"template":{"source":"catalog_artifact","id":"mock"},"sampling":{"max_new_tokens":8}})"
     );
     auto generation = model->start_generation(request, {});
 

@@ -923,6 +923,10 @@ git commit -m "feat: guard local model deletion with use leases"
 - Create: `inference/core/cancel_arbiter.cpp`
 - Modify: `inference/backends/llama_cpp/llama_cpp_prompt.h`
 - Modify: `inference/backends/llama_cpp/llama_cpp_prompt.cpp`
+- Modify: `inference/backends/llama_cpp/llama_cpp_api.cpp`
+- Modify: `inference/backends/llama_cpp/llama_cpp_engine.cpp`
+- Modify: `inference/backends/litert/litert_lm_api.cpp`
+- Modify: `inference/backends/mock/mock_inference_engine.cpp`
 - Modify: `inference/c_api/local_agent_inference.cpp`
 - Modify: `inference/tests/generation_request_contract.cpp`
 - Create: `inference/tests/validation_contract.cpp`
@@ -931,6 +935,8 @@ git commit -m "feat: guard local model deletion with use leases"
 - Modify: `toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift`
 - Modify: `toolkit/Tests/LocalAgentLLMLocalTests/CppInferencePackagingTests.swift`
 - Modify: `scripts/run-local-inference-cpp-contracts.sh`
+- Modify: `scripts/build-local-agent-inference-xcframework.sh`
+- Modify: `scripts/test-local-inference-app-link.sh`
 
 **Interfaces:**
 - Adds non-allocating validation calls `local_agent_model_validate` and `local_agent_generation_validate`.
@@ -938,7 +944,7 @@ git commit -m "feat: guard local model deletion with use leases"
 - Engine descriptors report ABI version, exact engine build/version, supported model formats, backend option descriptors/ranges, modalities, streaming/cancellation/usage, and verified maximum context where known.
 - Generation request v2 carries canonical messages, optional canonical tool schema, manifest-approved template selector, codec ID, and concrete mapped sampling options.
 
-- [ ] **Step 1: Write failing C/C++ contract tests**
+- [x] **Step 1: Write failing C/C++ contract tests**
 
 Require this request shape:
 
@@ -962,7 +968,7 @@ Tests reject unknown schema, role/content type, attachment/buffer mismatch, unsu
 
 Add a counting fake generation and three cancellation races: callback blocked on the Swift channel claims `callback_owned`; backend read blocked before any callback lets explicit cancel claim `external_owned`; generation terminal racing cancel reaches one deterministic confirmed result. In all cases `GenerationSession::cancel()` is invoked zero or one time, never twice; losing callback/external/release callers wait for the same confirmation and return the same terminal classification.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 scripts/run-local-inference-cpp-contracts.sh
@@ -970,7 +976,7 @@ scripts/run-local-inference-cpp-contracts.sh
 
 Expected: fail at generation/validation/template tests because v2 currently accepts flat string messages and exposes no validation/parameter-schema calls.
 
-- [ ] **Step 3: Extend the ABI and core structures**
+- [x] **Step 3: Extend the ABI and core structures**
 
 Add:
 
@@ -1045,7 +1051,7 @@ package struct CppParameterDescriptor: Decodable, Equatable, Sendable {
 
 Engine identity is reproducible rather than a runtime timestamp: mock reports `mock-v2`; llama.cpp reports `<pinned upstream commit>+local-adapter-v2` from a compile definition supplied by the XCFramework build; a vendor-enabled LiteRT build reports its vendor build ID plus `local-adapter-v2`. The release artifact build fails when an enabled production backend lacks its version input.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 scripts/run-local-inference-cpp-contracts.sh
@@ -1053,7 +1059,7 @@ scripts/run-local-inference-cpp-contracts.sh
 
 Expected final line: `local inference C++ contracts passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add inference toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift \

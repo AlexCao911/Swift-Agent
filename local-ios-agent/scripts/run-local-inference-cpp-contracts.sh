@@ -12,6 +12,8 @@ cd "$ROOT"
 CXXFLAGS=(
   -std=c++17
   -DLOCAL_AGENT_ENABLE_TEST_ENGINES
+  '-DLOCAL_AGENT_LLAMA_CPP_VERSION="llama-test-commit+local-adapter-v2"'
+  '-DLOCAL_AGENT_LITERT_VERSION="litert-test-build+local-adapter-v2"'
   -I inference/include
   -I inference/core
   -I inference/backends/mock
@@ -21,6 +23,8 @@ CXXFLAGS=(
 
 RELEASE_CXXFLAGS=(
   -std=c++17
+  '-DLOCAL_AGENT_LLAMA_CPP_VERSION="llama-test-commit+local-adapter-v2"'
+  '-DLOCAL_AGENT_LITERT_VERSION="litert-test-build+local-adapter-v2"'
   -I inference/include
   -I inference/core
   -I inference/backends/mock
@@ -43,6 +47,7 @@ COMMON_SOURCES=(
   inference/core/json_value.cpp
   inference/core/model_config.cpp
   inference/core/generation_request.cpp
+  inference/core/cancel_arbiter.cpp
   inference/core/engine_registry.cpp
   inference/core/token_stream.cpp
   inference/backends/mock/mock_inference_engine.cpp
@@ -82,12 +87,34 @@ COMMON_SOURCES=(
 "$BUILD_DIR/generation_request_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/llama_cpp_prompt_contract.cpp \
+  inference/core/json_value.cpp \
+  inference/backends/llama_cpp/llama_cpp_prompt.cpp \
+  -o "$BUILD_DIR/llama_cpp_prompt_contract"
+"$BUILD_DIR/llama_cpp_prompt_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/cancel_arbiter_contract.cpp \
+  inference/core/cancel_arbiter.cpp \
+  -o "$BUILD_DIR/cancel_arbiter_contract"
+"$BUILD_DIR/cancel_arbiter_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/engine_registry_contract.cpp \
   inference/core/engine_registry.cpp \
   inference/core/token_stream.cpp \
   inference/backends/mock/mock_inference_engine.cpp \
   -o "$BUILD_DIR/engine_registry_contract"
 "$BUILD_DIR/engine_registry_contract"
+
+if "$CXX_BIN" -std=c++17 -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
+  -I inference/include -I inference/core -I inference/backends/llama_cpp \
+  -c inference/core/engine_registry.cpp \
+  -o "$BUILD_DIR/engine_registry_missing_version.o" \
+  >"$BUILD_DIR/engine_registry_missing_version.log" 2>&1; then
+  echo "enabled llama.cpp build unexpectedly accepted a missing engine version" >&2
+  exit 1
+fi
 
 "$CXX_BIN" "${RELEASE_CXXFLAGS[@]}" -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
   -c inference/core/engine_registry.cpp \
@@ -179,6 +206,7 @@ if [[ -n "${LOCAL_AGENT_LITERT_LM_INCLUDE_DIR:-}" ]]; then
       inference/core/json_value.cpp \
       inference/core/model_config.cpp \
       inference/core/generation_request.cpp \
+      inference/core/cancel_arbiter.cpp \
       inference/core/engine_registry.cpp \
       inference/core/token_stream.cpp \
       inference/backends/litert/litert_active_generation.cpp \
@@ -209,6 +237,12 @@ fi
   "${COMMON_SOURCES[@]}" \
   -o "$BUILD_DIR/c_api_v2_contract"
 "$BUILD_DIR/c_api_v2_contract"
+
+"$CXX_BIN" "${CXXFLAGS[@]}" \
+  inference/tests/validation_contract.cpp \
+  "${COMMON_SOURCES[@]}" \
+  -o "$BUILD_DIR/validation_contract"
+"$BUILD_DIR/validation_contract"
 
 "$CXX_BIN" "${CXXFLAGS[@]}" \
   inference/tests/llama_cpp_backend_contract.cpp \
