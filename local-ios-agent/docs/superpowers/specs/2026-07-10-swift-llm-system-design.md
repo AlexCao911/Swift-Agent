@@ -347,7 +347,7 @@ Registered V1 domains and coverage are:
 | `execution-plan:v1` | Ordered Agent plan steps and policy-relevant metadata | Runtime timestamps |
 | `tool-schema:v1` | Ordered tool identities plus complete input/output/data-label schemas | Tool implementation pointers |
 | `source-revisions:v1` | Ordered frame, memory, context, and attachment identity/revision tuples | Source content |
-| `agent-input:v1` | Ordered canonical messages, tool schemas, attachment references/revisions, memory/context revisions | Provider encoding and diagnostics |
+| `agent-input:v1` | Complete canonical semantic generation request: ordered messages/history, complete canonical tool schema, full normalized tool-result batch, provider-required semantic continuation history, attachment identities/revisions, and memory/context revisions | Provider wire encoding, credential, and diagnostics |
 | `generation-disclosure:v1` | Turn ID, content/source digests, sorted data classes, sensitivity, and grant-neutral safe source summary | Raw source content and grant identity |
 | `capability-attestation:v1` | Generic Agent capability values plus contributing observation digests/expiry | Provider-specific claims and evidence body |
 | `resolved-parameters:v1` | Sorted canonical semantic parameter IDs and resolved non-secret values | Provider/C++ field names |
@@ -365,11 +365,12 @@ Registered V1 domains and coverage are:
 | `llm-event-receipt:v1` | Session/epoch/run, event sequence, event ID/digest, and accepted or terminally ignored disposition | Raw payload and local arrival time |
 | `capability-evidence:v1` | Evidence schema/source/version plus the complete redacted typed evidence used by policy | Raw provider response, credential, and diagnostics |
 | `capability-observation:v1` | Complete dimension/value/source/authority/subject/version/time/scope/invalidation fields plus evidence digest | Raw evidence body |
-| `capability-snapshot:v1` | Exact route subject, resolved generic capabilities, sorted contributing observation digests, and nearest expiry | Provider-specific evidence body |
+| `capability-snapshot:v1` | Exact route subject including Provider retention mode/approval revision/digest when cloud, resolved generic capabilities, sorted contributing observation digests, and nearest expiry | Provider-specific evidence body |
+| `provider-retention-approval:v1` | Provider/Profile revision, exact origin, retention mode, disclosed provider storage behavior/window class, decision, approval revision, and issue time | Raw user data, credential, and provider payload |
 | `egress-approval-summary:v1` | Swift-only disclosure digest, prior scope-grant digest, grant-neutral source summary, and newly added data classes | Raw source content |
-| `egress-scope-grant:v1` | Grant/profile-revision/origin/credential-generation identities, approved scope, decision, revision, issue time, and revocation/expiry | Credential value and raw source content |
-| `egress-generation-authorization:v1` | Authorization/turn/disclosure/approval-summary/scope-grant identities, decision, issue time, and expiry | Credential value and raw source content |
-| `egress-subject:v1` | Swift-only tagged local `not_applicable` decision or cloud Provider Profile revision, exact origin, credential generation, scope grant, approval-summary digest, and per-turn authorization | Credential value |
+| `egress-scope-grant:v1` | Grant/profile-revision/origin/credential-generation/retention-mode/retention-approval identities, approved scope, decision, revision, issue time, and revocation/expiry | Credential value and raw source content |
+| `egress-generation-authorization:v1` | Authorization/turn/disclosure/approval-summary/scope-grant/retention identities, decision, issue time, and expiry | Credential value and raw source content |
+| `egress-subject:v1` | Swift-only tagged local `not_applicable` decision or cloud Provider Profile revision, exact origin, credential generation, Provider retention mode/approval revision/digest, scope grant, approval-summary digest, and per-turn authorization | Credential value |
 | `egress-attestation:v1` | Preparation/run/session/snapshot identities, prepared-session-registration, binding/requirements/disclosure/capability/parameter digests, host epoch, expiry, and opaque egress-subject digest | Parsed provider fields |
 | `egress-audit-chain:v1` | Previous chain head, generation turn, disclosure/grant/authorization audit digests, decision, and timestamp | Raw source content, credential, and provider payload |
 | `host-tool-effect-result:v1` | Effect/run/turn/call/tool identities, normalized safe result/failure, replay classification, and completion metadata | Raw device API object and private diagnostics |
@@ -842,12 +843,22 @@ transaction, then returns without waiting for Swift.
 Outbound commands are:
 
 ```text
-start_generation(session_handle, agent_llm_input, generation_disclosure)
-resume_generation(session_handle, normalized_tool_results, generation_disclosure)
+start_generation(session_handle, generation_semantic_payload, generation_disclosure)
+resume_generation(session_handle, generation_semantic_payload, generation_disclosure)
 cancel_generation(session_handle)
 close_session(session_handle)
 capacity_available(session_handle)
 ```
+
+The complete `generation_semantic_payload` contains the exact ordered
+`AgentLLMInput`, canonical tool-schema document, source-revision document,
+attachment identity/revision references, complete normalized tool-result batch
+(empty on start), and provider-required normalized semantic history that Rust
+expects Swift to resend. It contains no provider-encoded request, opaque
+thinking/signature bytes, response ID, or credential. Swift resolves the
+referenced attachment identities and combines the payload with its private
+opaque continuation items; only the normalized semantic history participates
+in `agent-input:v1`.
 
 Rust computes a fresh `GenerationDisclosure` for every generation turn. The
 start disclosure is bound to the frozen initial input. A resume disclosure is
@@ -856,6 +867,35 @@ content the adapter will resend, the full tool-result batch, and every context,
 memory, or attachment revision newly included. Swift must validate the
 disclosure before it lets an adapter encode or transmit the corresponding
 remote request.
+
+Swift performs that check through one non-forgeable semantic boundary:
+
+```text
+CloudGenerationTurnCandidate
+  AgentLLMInput
+  complete canonical tool-schema document
+  complete source-revision document
+  resolved attachment identity/revision/content-digest metadata
+  complete normalized tool-result batch
+  provider-required semantic continuation history
+  resolved semantic parameters
+  GenerationDisclosure supplied by Rust
+
+CloudSemanticTurnValidator.validate(candidate)
+  -> recompute agent-input:v1 from the complete semantic request
+  -> recompute source-revisions:v1 from the exact source document
+  -> compare both values with GenerationDisclosure
+  -> return sealed ValidatedCloudGenerationTurn
+```
+
+`ValidatedCloudGenerationTurn` has no public or package initializer; only the
+validator can create it. The adapter may accept only that sealed value or a
+later egress-authorized wrapper around it. The validator does not trust a
+caller-supplied `contentDigest`, `sourceRevisionDigest`, attachment digest, or
+provider continuation digest. Phase 3 fixture tests use a package-private
+fixture authority that executes the same validator; Phase 4 supplies the Rust
+command disclosure and complete canonical documents without weakening the
+factory.
 
 ### Durable Host Command Outbox
 
@@ -1379,6 +1419,12 @@ struct ProviderProfileRevision: Codable, Sendable {
     let displayName: String
     let baseURL: URL
     let credentialRef: String
+    let retentionMode: ProviderRetentionMode
+}
+
+enum ProviderRetentionMode: String, Codable, Sendable {
+    case statelessRequired
+    case providerStateApproved
 }
 
 struct ProviderProfileState: Codable, Sendable {
@@ -1386,6 +1432,8 @@ struct ProviderProfileState: Codable, Sendable {
     let profileRevision: UInt64
     var validationState: ProviderValidationState
     var approvedEgressOrigin: EgressOrigin?
+    var retentionApprovalRevision: UInt64?
+    var retentionApprovalDigest: String?
     var catalogRevision: UInt64?
 }
 ```
@@ -1399,6 +1447,21 @@ non-secret `credentialGeneration` and invalidates generation-scoped readiness.
 joins through its `credentialRef` to the one credential-slot row.
 `validationState` is only a readiness projection derived from generation-keyed
 validation evidence; it cannot supply or override a credential generation.
+
+`retentionMode` is immutable by Provider Profile revision and defaults to
+`statelessRequired`. Selecting `providerStateApproved` requires a separate,
+explicit approval that discloses the preset's provider-side storage behavior;
+the resulting non-secret approval revision is stored in `ProviderProfileState`.
+Changing the mode creates a new Profile revision and invalidates origin/scope
+grants, validation, capability snapshots, and prepared sessions. A
+provider-state approval is bound into the egress scope grant and capability
+snapshot; origin approval alone never opts into provider retention.
+
+`statelessRequired` means the app does not request provider-managed
+conversation/response resources and sends an explicit no-storage flag where
+the API supports one. It does not claim that a provider has zero operational,
+abuse-monitoring, or account-log retention outside that API control; Provider
+Profile disclosure must not make that broader promise.
 
 Provider presets supply a display name, default Base URL, authentication scheme,
 wire codec, model-list strategy, validation strategy, and provider-semantic
@@ -1446,6 +1509,29 @@ Provider-specific semantics cover parameter availability, tool-call
 continuation, reasoning-state preservation, model discovery, usage mapping,
 error mapping, and stream completion rules.
 
+Every adapter is retention-aware. Under `statelessRequired`, it must encode the
+provider's no-storage control when one exists (`store: false` for Responses and
+Gemini Interactions), must not use server-side response/interaction IDs for a
+later turn, and must resend the complete validated semantic history plus any
+provider-required encrypted continuation item. If the selected provider/model
+cannot continue statelessly, the capability is unsupported for that Profile
+revision. Only `providerStateApproved` may use server-side continuation IDs;
+those IDs remain in memory and are still discarded on close or epoch change.
+
+Protocol fixtures follow provider event semantics rather than inferred SDK
+shapes:
+
+- Claude summarized thinking is authorized by the request's exact
+  `thinking.display = summarized` configuration. The response still uses
+  ordinary thinking blocks and `thinking_delta`; the adapter may expose those
+  deltas as a user-displayable summary only because the sealed request selected
+  summarized display. It never waits for a nonexistent summary marker in the
+  response.
+- Gemini Interactions uses `error` as the streaming failure event.
+  `failed`, `cancelled`, `incomplete`, and `budget_exceeded` are interaction
+  status values, not substitute SSE event names. A terminal
+  `interaction.completed` must be interpreted together with its status.
+
 ### Model Discovery
 
 Cloud model selection combines three sources:
@@ -1476,6 +1562,48 @@ invalidates the relevant validation state. Validation evidence is keyed by
 Provider Profile revision, model ID, exact origin, and credential generation. A
 successful probe is evidence of current availability, not a permanent
 capability override.
+
+### Authorized Cloud Request Pipeline
+
+No raw `CloudWireRequest` can reach transport. Generation and non-generation
+traffic use separate policy entry points and one tagged sealed envelope:
+
+```text
+generation:
+  validate complete semantic candidate
+    -> ValidatedCloudGenerationTurn
+  authorize disclosure/scope/retention
+    -> AuthorizedCloudGenerationTurn
+  adapter.encode(authorized turn)
+    -> CloudWireRequest
+  ProviderEgressPolicy.sealGenerationRequest(wire, turn authorization)
+    -> AuthorizedCloudHTTPRequest(.generation)
+
+discovery/validation:
+  codec encodes a preset-declared no-user-data request class
+    -> CloudWireRequest
+  ProviderEgressPolicy.sealValidationRequest(
+      wire,
+      exact origin-approval revision,
+      validation CredentialUseLease,
+      request class: discovery | account_validation | model_validation)
+    -> AuthorizedCloudHTTPRequest(.validation or .discovery)
+
+transport.send(AuthorizedCloudHTTPRequest)
+```
+
+The policy revalidates the exact Profile revision, origin/path prefix,
+credential generation/use lease, retention mode, request class, and relevant
+authorization digest when sealing. Generation sealing rejects a wire request
+whose turn/adapter/request digest does not match the authorization. Validation
+and discovery sealing accept only preset-owned encoders and fixed synthetic or
+metadata-only bodies; they never fabricate a `GenerationDisclosure` for a
+request that contains no Agent/user data. Discovery and validation always use
+the provider's no-storage option when available, even if the Profile allows
+stateful generation, because probes never require continuation. `AuthorizedCloudHTTPRequest` has no
+public or package initializer outside `ProviderEgressPolicy`, carries a tagged
+`generation | validation | discovery` authorization, and is the only input to
+`CloudHTTPTransport`.
 
 ### Keychain
 
@@ -1511,6 +1639,7 @@ struct CredentialSlotState: Codable, Sendable {
 }
 
 enum CredentialSlotLifecycle: Codable, Sendable {
+    case creating(operationID: String, generation: UInt64)
     case active
     case rotating(
         operationID: String,
@@ -1561,6 +1690,24 @@ session handle, and successful `commit_start` promotes the row to
 reconciliation releases it only after the provider task/session is gone. A
 validation lease is short-lived and is released after its request has
 completed.
+
+Initial credential publication is itself an idempotent cross-Keychain/SQLite
+saga; startup never scans Keychain and guesses whether an item is orphaned:
+
+```text
+1. persist CredentialCreationOperation(credentialRef, operationID, generation 1)
+2. write a generation-1 staged Keychain item named by that operation
+3. insert CredentialSlotState(generation 1, creating(operationID, 1))
+4. promote the staged item to the final generation-specific account
+5. in one transaction CAS the same slot to active and complete the operation
+```
+
+`creating` rejects profile publication, lease acquisition, validation, and
+credential resolution. Before step 3, reconciliation deletes only the staged
+item named by the recorded operation. From step 3 onward it finishes promotion
+and activation; it never deletes or adopts an untracked Keychain item. Replays
+with the same operation and input are idempotent, while an operation/input
+mismatch is a conflict.
 
 The pinned generation feeds provider validation, the scope grant, per-turn
 authorization, private egress subject, `LLMSessionHandle` registry entry,
@@ -1625,18 +1772,22 @@ cancel
 close
 ```
 
-The session retains provider-private response IDs, reasoning content needed for
-continuation, thinking blocks, and signatures. When Rust returns a normalized
-tool result, Swift reconstructs the correct provider-specific request. This
-state is memory-only and is dropped when the session closes.
+The session retains provider-private response IDs only when the exact Profile
+revision is `providerStateApproved`. It may always retain reasoning content,
+thinking blocks, encrypted items, and signatures needed for a stateless
+continuation. When Rust returns a normalized tool result, Swift constructs the
+complete semantic continuation history first, passes it through
+`CloudSemanticTurnValidator`, and only then reconstructs the provider-specific
+wire request. This state is memory-only and is dropped when the session closes.
 
 Cloud inference uses process-bound, non-background URLSession tasks. Only model
 downloads use background URLSession; a generation cannot outlive the host epoch
 as a resumable app operation.
 
-Reasoning summaries may cross the LLM client port only when the provider
-explicitly returns a user-displayable summary. Raw private reasoning and opaque
-continuation state do not cross the port.
+Reasoning summaries may cross the LLM client port only when the sealed request
+selected a provider-documented summary mode and the matching response content
+is defined as user-displayable under that mode. Raw private reasoning and
+opaque continuation state do not cross the port.
 
 ## Egress and Approval
 
@@ -1734,13 +1885,15 @@ Swift moves the session to `awaiting_incremental_egress_approval` and does not
 encode, credential, or create the affected network request until the new grant
 is recorded. A user-approved scope grant is bound to run ID, allowed data
 classes, maximum sensitivity, Provider Profile revision, and exact origin. For
-cloud routes it is also bound to the pinned credential generation. For every
-turn, Swift creates a derived `GenerationEgressAuthorization` bound to that
-grant ID, credential generation, generation turn ID, content/source digests,
-and exact request scope. Changed content within the approved scope receives a
-new derived authorization without another prompt; a scope expansion requires a
-new user grant. No authorization can be reused for a later changed payload or
-credential generation.
+cloud routes it is also bound to the pinned credential generation, immutable
+Provider retention mode, and retention-approval revision/digest when stateful. For
+every turn, Swift creates a derived `GenerationEgressAuthorization` bound to
+that grant ID, credential generation, generation turn ID, content/source
+digests, retention mode, and exact request scope. Changed content within the
+approved scope receives a new derived authorization without another prompt; a
+scope expansion or retention-mode change requires a new user grant. No
+authorization can be reused for a later changed payload, credential generation,
+or retention decision.
 
 The scope-grant digest is
 `CanonicalDigestV1(egress-scope-grant:v1, complete grant document)` and every
@@ -1767,9 +1920,18 @@ Local inference does not create a remote egress decision.
 - HTTPS only.
 - Exact-origin allowlist.
 - No embedded URL credentials.
-- No private, loopback, link-local, or reserved targets.
+- Literal private, loopback, link-local, documentation, benchmark, multicast,
+  and otherwise reserved addresses are rejected.
+- Hostname resolution is checked during Profile validation and immediately
+  before task creation; empty, mixed public/private, or changed-to-forbidden
+  answers are rejected before the request body is handed to URLSession.
 - Redirects may not change origin.
-- DNS rebinding protections are applied by the transport policy.
+- The process-bound URLSession transport uses normal hostname/SNI/certificate
+  trust. Its preflight DNS classification reduces rebinding exposure but cannot
+  prove that URLSession's actual peer IP equals a preflight answer. Phase 3 does
+  not claim peer-IP pinning or complete DNS-rebinding prevention. Adding that
+  guarantee would require a separately designed pinned-peer HTTP/TLS transport,
+  not a server-trust challenge re-query.
 - Audit records contain only redacted origin and disclosure identifiers.
 
 ## Capability Matrix
@@ -1833,6 +1995,9 @@ struct CapabilitySubject: Codable, Sendable {
     let providerProfileID: String?
     let providerProfileRevision: UInt64?
     let credentialGeneration: UInt64?
+    let providerRetentionMode: ProviderRetentionMode?
+    let retentionApprovalRevision: UInt64?
+    let retentionApprovalDigest: String?
     let llmTargetID: LLMTargetID?
     let llmTargetRevision: UInt64?
     let modelID: String?
@@ -1867,7 +2032,8 @@ availability has an exact Provider Profile revision and Model ID but may precede
 creation of an LLM target. An observation can contribute to a run attestation
 only when its populated subject fields match the selected route exactly.
 Authenticated availability/validation observations must include the exact
-credential generation; static catalog or adapter observations leave it absent.
+credential generation and Profile retention mode/approval revision; static
+catalog or adapter observations leave those fields absent.
 
 The dimensions have distinct meanings:
 
@@ -1933,6 +2099,17 @@ validation, or compatible observation is missing.
 Unknown never means supported. In particular, an unknown model is not assumed
 to support tool calling, multimodal input, structured output, or reasoning
 controls.
+
+Phase 3 publishes only text input/output, streaming, cancellation, usage, and
+tool-calling capability observations. `imageInput`, `audioInput`, `videoInput`,
+and `documentInput` remain `unknown` even when provider marketing or a model
+list claims support, because Phase 3 has no attachment byte resolver, upload or
+inline encoder, lifetime cleanup, or data-label enforcement path. A cloud turn
+that contains an attachment identity is digest-validated but rejected with
+`capability.cloud_attachment_path_unavailable` before egress authorization.
+Multimodal support requires a later design for resolved bytes/streams,
+hash/size/media-type verification, disclosure labels, upload/inline lifecycle,
+and cleanup tests; catalog data alone cannot enable it.
 
 ## Parameter System
 
@@ -2104,10 +2281,43 @@ Invariants:
 
 Swift owns a versioned `LLMStore` abstraction with a SQLite implementation.
 
+Phase 3 performs one transactionally complete `user_version = 2` migration
+before any cloud behavior is enabled. Version 2 creates the final Phase 3 table
+set up front, including currently empty tables whose behavior lands in later
+tasks:
+
+```text
+provider_profile_revisions, provider_profile_state, llm_target_revisions
+provider_origin_approvals, provider_retention_approvals
+credential_creation_operations, credential_slots, credential_use_leases
+credential_operation_tombstones, credential_key_tombstones
+egress_scope_grants, egress_generation_authorizations, egress_audit_records
+cloud_catalog_state, cloud_capability_observations, provider_validation_records
+prepared_cloud_sessions, cloud_session_tombstones, sanitized_llm_snapshots
+```
+
+The migration preserves the existing host-binding/prepared-session tables,
+runs under `BEGIN IMMEDIATE`, updates `PRAGMA user_version` only after all DDL
+and indexes succeed, rolls back completely on injection at every statement,
+and refuses to open a version newer than the runtime supports. Every table is
+present in Task 2; later Phase 3 tasks add behavior and rows, not schema.
+
+Every persisted JSON envelope has an indexed integer
+`record_schema_version` column and the same required version inside
+`record_json`. Security/policy enums use explicit tagged manual encoding;
+synthesized Codable evolution is forbidden. Version-2 decoders accept only the
+complete version-2 shape, except for fields explicitly documented as
+non-authoritative optional metadata. An unknown record version or enum tag
+fails closed. Any later DDL or authoritative payload-shape change requires
+`user_version = 3`, a transactional migration, rollback tests, and reopen
+fixtures for every older supported version; it cannot be smuggled into a later
+Phase 3 task.
+
 SQLite stores:
 
 ```text
 Provider Profile metadata
+Provider retention mode and non-secret approval revision/evidence digest
 LLM Target revisions
 AgentHostConfiguration revisions
 capability catalog revision and provenance
@@ -2118,6 +2328,7 @@ egress grants and validation state
 private non-secret egress subjects and attestation digests
 append-only generation disclosure/grant audit rows
 CredentialSlotState, rotation/deletion operation intents and tombstones
+credential creation operation intents and staged/finalized state
 normalized CredentialUseLease rows
 sanitized LLM run snapshots
 ```
@@ -2289,8 +2500,8 @@ agent profile ID and revision
 LLM slot ID
 host binding ID, revision, and hash
 host process epoch
-private egress subject, credential generation plus CredentialUseLease ID/digest
-when remote, and
+private egress subject, credential generation plus CredentialUseLease ID/digest,
+Provider retention mode plus approval revision/digest when remote, and
 EgressAttestationDigest
 stable preparation ID and final consumed token digest
 LLM target and sanitized runtime configuration
@@ -2359,6 +2570,7 @@ LLM target ID and revision
 route class: local or cloud
 model ID
 credential generation plus CredentialUseLease ID/digest when remote
+Provider retention mode and approval revision/digest when remote
 capability snapshot hash
 resolved non-secret generation parameters
 initial modelInputDigest and source revision digest
@@ -2573,6 +2785,10 @@ effect.
 - Global single-run state-machine invariants.
 - Generation disclosures are bound to exact content/source digests; unknown
   tool-result labels conservatively require approval.
+- `CloudSemanticTurnValidator` recomputes `agent-input:v1` and
+  `source-revisions:v1` from messages, complete tool schema, source document,
+  attachment identities, complete tool-result batch, and semantic continuation;
+  no adapter accepts an unvalidated turn.
 - Grant-neutral source summaries and Swift-only grant-delta summaries contain
   only manifest-controlled enums/keys, counts/buckets, and new classes; raw
   values cannot enter approval UI/logs.
@@ -2581,11 +2797,27 @@ effect.
 - Credential slot state is the only generation authority; a transactional use
   lease closes the preparation/rotation TOCTOU, and `rotating`/`deleting`
   reject every new key user.
+- Credential creation is a persisted staged-item saga; crashes before and after
+  slot publication reconcile by operation identity without scanning or guessing
+  about orphan Keychain items.
 - Rotation is blocked by validation/preparation/live/closing use leases;
   successful rotation increments generation and invalidates old
   validation/grants for every profile sharing the slot.
 - Archiving one Provider Profile revision retains a CredentialRef still used by
   another revision; logical-profile deletion reconciles Keychain tombstones.
+- The complete Phase 3 SQLite schema is created atomically at user version 2;
+  all older-version reopen, rollback, future-version rejection, record-version,
+  and unknown-tag fixtures pass before later cloud tasks add rows.
+- Stateless retention is the default and adapter requests prove no-storage
+  encoding; provider-side state requires a Profile revision plus retention
+  approval bound into egress and capability state.
+- Only tagged generation/validation/discovery requests can reach transport;
+  bare wire requests and forged cross-class authorizations are rejected.
+- Phase 3 cloud capabilities keep every attachment modality unknown and reject
+  attachment-bearing turns before egress because no byte/upload path exists.
+- URLSession tests prove exact origin/redirect rules and preflight rejection of
+  literal, reserved, mixed, or changed-to-forbidden DNS answers; they do not
+  claim peer-IP pinning.
 - Sanitized snapshots and error redaction.
 
 ### Provider Adapter Fixture Tests
@@ -2599,6 +2831,8 @@ Each provider adapter has recorded, secret-free fixtures covering:
 - mixed text/tool-call turns and ordered multi-call terminal batches;
 - tool-result continuation;
 - provider-private thinking/signature preservation;
+- retention/no-storage request mapping and forbidden server-side continuation
+  under `statelessRequired`;
 - usage normalization;
 - unknown event forward compatibility;
 - rate-limit and authentication errors;
@@ -2606,6 +2840,11 @@ Each provider adapter has recorded, secret-free fixtures covering:
 - command-acknowledged versus generation-started/cancelled/session-closed
   lifecycle signals; and
 - terminal event enforcement.
+
+Claude fixtures determine whether thinking deltas are displayable from the
+sealed request's `thinking.display`, not a response-only marker. Gemini
+fixtures use the `error` SSE event and treat failed/cancelled/incomplete/budget
+outcomes as interaction status values.
 
 CI must not require live provider credentials. Optional manual smoke tests may
 use real credentials outside CI and must never record responses containing user
@@ -2792,10 +3031,21 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 
 - Add Provider Profiles, Keychain storage, egress, validation, and provider
   adapters.
+- Create the complete cloud `LLMStore` schema in one atomic v1-to-v2 migration;
+  later Phase 3 tasks populate the fixed schema without changing it.
+- Validate every complete semantic start/resume request into a sealed
+  `ValidatedCloudGenerationTurn` before approval or provider encoding.
+- Route adapter output through a tagged generation/validation/discovery policy
+  seal; transport never accepts a bare wire request.
 - Add digest-bound initial and incremental `GenerationDisclosure` grants,
   safe display summaries, opaque egress attestations, conservative tool-result
   labeling, authoritative credential slot state, generation use leases,
-  rotation sagas, and tombstones.
+  creation/rotation sagas, and tombstones.
+- Default every Provider Profile to stateless/no-storage requests. Provider-side
+  retention is an explicit Profile-revision approval bound to egress and
+  capability state.
+- Publish text/tool cloud capabilities only; attachment modalities remain
+  unknown until a separate byte/upload/cleanup design is implemented.
 - Complete fixture coverage before exposing a provider preset in release UI.
 
 ### Phase 4: Host LLM Session Bridge
@@ -2956,6 +3206,8 @@ lint rules above without pretending the legacy route is already gone.
       launch reconciliation.
 - [ ] Local catalog manifests are signed and arbitrary imports are absent in v1.
 - [ ] API keys exist only in Keychain and never cross into Rust.
+- [ ] Initial credential publication is a persisted creation saga; recovery
+      never scans and guesses whether a staged/final Keychain item is orphaned.
 - [ ] `CredentialSlotState` is the sole credential-generation authority;
       Provider Profile revisions keep only `credentialRef` and no generation
       copy.
@@ -2967,15 +3219,27 @@ lint rules above without pretending the legacy route is already gone.
       used by another revision, host-binding operation, or credential-use
       lease.
 - [ ] Egress approval is bound to exact provider origin.
+- [ ] Provider retention defaults to stateless/no-storage; provider-side state
+      requires an immutable Profile-revision choice and an explicit approval
+      revision bound into scope grants and capability snapshots.
 - [ ] Every remote start/resume request carries a disclosure bound to its exact
       content and source revisions; expanded sensitive tool data requires
       incremental approval before the affected request.
+- [ ] Swift recomputes those digests from the complete semantic request,
+      canonical tool schema, source revisions, attachment identities, tool
+      results, and provider-required semantic history before an adapter can
+      encode the turn.
+- [ ] Cloud transport accepts only policy-sealed tagged generation,
+      validation, or discovery requests; bare adapter wire output cannot send.
 - [ ] Every approval uses a digest-bound grant-neutral source summary plus a
       Swift-only grant-delta summary of source enums, counts, size bucket,
       manifest tool keys, and new classes, with no raw user data.
 - [ ] OpenAI, Claude, Gemini, Grok, DeepSeek, MiniMax, and GLM have explicit
       Swift adapter semantics.
 - [ ] Capability unknowns fail conservatively.
+- [ ] Phase 3 reports cloud image/audio/video/document input as unknown and
+      rejects attachment-bearing cloud turns until an attachment data lifecycle
+      exists.
 - [ ] Capability observations record dimension, authority, model revision,
       observed/expiry time, validation scope, and invalidation triggers.
 - [ ] Parameter controls are capability-driven and adapter-validated.
@@ -2992,6 +3256,12 @@ lint rules above without pretending the legacy route is already gone.
       outcome-unknown effect.
 - [ ] No automatic model fallback occurs.
 - [ ] Provider adapter CI uses secret-free fixtures rather than live keys.
+- [ ] The Phase 3 SQLite v2 migration creates its complete final table/payload
+      shape atomically and passes rollback, old-version reopen, future-version,
+      and unknown-record/tag rejection tests.
+- [ ] URLSession origin policy rejects literal/reserved/mixed or
+      changed-to-forbidden preflight DNS answers without claiming actual peer-IP
+      pinning or complete DNS-rebinding prevention.
 - [ ] Migration keeps tagged `legacy_v1` and `host_slot_v2` records separate,
       preserves the legacy resolver until Phase 4, and forbids growth of the
       temporary architecture-lint allowlist.
@@ -3037,7 +3307,7 @@ The following work remains intentionally outside Phase 2:
 ## Official API References
 
 The adapter design was checked against official provider documentation on
-2026-07-10. Provider presets and capability catalogs must be versioned because
+2026-07-15. Provider presets and capability catalogs must be versioned because
 these APIs and model-level constraints evolve.
 
 - RFC 8785 JSON Canonicalization Scheme:
@@ -3049,7 +3319,11 @@ these APIs and model-level constraints evolve.
 - Claude streaming:
   <https://platform.claude.com/docs/en/build-with-claude/streaming>
 - Claude extended thinking:
-  <https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking>
+  <https://platform.claude.com/docs/en/build-with-claude/extended-thinking>
+- Gemini Interactions and retention:
+  <https://ai.google.dev/gemini-api/docs/interactions-overview>
+- Gemini Interactions streaming:
+  <https://ai.google.dev/gemini-api/docs/streaming>
 - Gemini thinking:
   <https://ai.google.dev/gemini-api/docs/thinking>
 - Gemini function calling:
@@ -3058,6 +3332,8 @@ these APIs and model-level constraints evolve.
   <https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures>
 - xAI reasoning:
   <https://docs.x.ai/developers/model-capabilities/text/reasoning>
+- xAI Responses storage and continuation:
+  <https://docs.x.ai/developers/model-capabilities/text/generate-text>
 - DeepSeek API introduction:
   <https://api-docs.deepseek.com/>
 - DeepSeek thinking mode:
