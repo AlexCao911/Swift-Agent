@@ -171,3 +171,45 @@ func persistenceFailuresRollBackStageAndActivation() async throws {
     }
     #expect(await store.bindingState(token: request.operationToken) == .staged)
 }
+
+@Test
+func activeResolutionRequiresExactTargetConfigurationAndStoredHash() async throws {
+    let store = LLMStore.inMemory()
+    let saga = AgentHostBindingSaga(store: store)
+    let activeConfiguration = configuration(bindingID: "binding-active")
+    let request = HostBindingStageRequest(
+        operationToken: "publish-token-active",
+        tokenDigest: "token-digest-active",
+        llmSlotID: activeConfiguration.llmSlotID,
+        requirementsHash: activeConfiguration.requirementsHash,
+        configuration: activeConfiguration
+    )
+    let receipt = try await saga.stageHostBinding(request)
+    try await saga.activateHostBinding(operationToken: request.operationToken, binding: receipt.binding)
+    let target = LLMTargetRevision(
+        targetID: activeConfiguration.llmTargetID,
+        revision: activeConfiguration.llmTargetRevision,
+        kind: .local(installationID: "installation-1"),
+        modelID: "model-1",
+        defaultParameters: GenerationConfiguration()
+    )
+
+    #expect(try await saga.requireActive(configuration: activeConfiguration, target: target) == receipt.binding)
+
+    let wrongTarget = LLMTargetRevision(
+        targetID: LLMTargetID(rawValue: "target-other"),
+        revision: target.revision,
+        kind: target.kind,
+        modelID: target.modelID,
+        defaultParameters: target.defaultParameters
+    )
+    await #expect(throws: HostBindingSagaError.self) {
+        try await saga.requireActive(configuration: activeConfiguration, target: wrongTarget)
+    }
+    await #expect(throws: HostBindingSagaError.self) {
+        try await saga.requireActive(
+            configuration: configuration(bindingID: activeConfiguration.bindingID, revision: 2),
+            target: target
+        )
+    }
+}

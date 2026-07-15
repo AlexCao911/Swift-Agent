@@ -33,6 +33,8 @@ struct CanonicalDigestTests {
         for name in [
             "capability-evidence-local-catalog-v1.json",
             "capability-observation-local-catalog-v1.json",
+            "capability-snapshot-local-v1.json",
+            "resolved-parameters-local-v1.json",
         ] {
             let fixture = try DigestFixture.load(name)
             let canonical = try CanonicalDigestV1.canonicalize(fixture.document)

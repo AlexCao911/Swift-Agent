@@ -1,4 +1,5 @@
 import LocalAgentBridge
+import LocalAgentLLMLocal
 import LocalNativeToolkit
 
 struct AppContainer {
@@ -12,6 +13,23 @@ struct AppContainer {
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
     let runInlineCardActionHandler: RunInlineCardActionHandler
     let modelRoutingClient: (any ModelRoutingClient)?
+    let localLLMSubsystem: LocalLLMSubsystem?
+
+    func attaching(localLLMSubsystem: LocalLLMSubsystem) -> AppContainer {
+        AppContainer(
+            hostProcessEpoch: hostProcessEpoch,
+            runtimeService: runtimeService,
+            runDebugService: runDebugService,
+            nativeToolkitClient: nativeToolkitClient,
+            nativePermissionGateway: nativePermissionGateway,
+            agentBuilderClient: agentBuilderClient,
+            permissionClient: permissionClient,
+            agentBuilderToolCatalogClient: agentBuilderToolCatalogClient,
+            runInlineCardActionHandler: runInlineCardActionHandler,
+            modelRoutingClient: modelRoutingClient,
+            localLLMSubsystem: localLLMSubsystem
+        )
+    }
 
     @MainActor
     func makeAgentViewModel() -> AgentViewModel {

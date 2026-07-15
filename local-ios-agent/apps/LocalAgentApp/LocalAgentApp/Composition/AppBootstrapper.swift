@@ -8,6 +8,32 @@ import EventKit
 #endif
 
 enum AppBootstrapper {
+    static func makeReadyContainer(
+        hostProcessEpoch: HostProcessEpoch,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        store: RustRuntimeStoreConfiguration? = nil,
+        localAppSupportRoot: URL? = nil,
+        remoteCatalog: Data? = nil
+    ) async throws -> AppContainer {
+        let container = try makeContainer(
+            hostProcessEpoch: hostProcessEpoch,
+            environment: environment,
+            store: store
+        )
+        let appSupportRoot = try localAppSupportRoot ?? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let subsystem = try await LocalLLMSubsystem.bootstrap(
+            appSupportRoot: appSupportRoot,
+            hostProcessEpoch: hostProcessEpoch,
+            remoteCatalog: remoteCatalog
+        )
+        return container.attaching(localLLMSubsystem: subsystem)
+    }
+
     static func makeContainer(
         hostProcessEpoch: HostProcessEpoch,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -53,7 +79,8 @@ enum AppBootstrapper {
                 broker: nativeBundle.interactionBroker,
                 approvalResponder: ExecutionBridgeToolApprovalResponder(bridge: executionBridge)
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            localLLMSubsystem: nil
         )
     }
 
@@ -94,7 +121,8 @@ enum AppBootstrapper {
             runInlineCardActionHandler: RunInlineCardActionHandler(
                 broker: nativeBundle.interactionBroker
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            localLLMSubsystem: nil
         )
     }
 
@@ -127,7 +155,8 @@ enum AppBootstrapper {
                     presenter: UnavailableNativeInteractionPresenter()
                 )
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client)
+            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            localLLMSubsystem: nil
         )
     }
 

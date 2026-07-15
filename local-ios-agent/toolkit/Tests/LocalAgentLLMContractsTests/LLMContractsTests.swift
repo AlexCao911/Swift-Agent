@@ -31,6 +31,17 @@ struct LLMContractsTests {
     }
 
     @Test
+    func failureDecodesRecordsWrittenBeforeRecoveryMetadataExisted() throws {
+        let legacyJSON = Data(#"{"code":"transport.offline","message":"offline","retryable":true}"#.utf8)
+
+        let failure = try JSONDecoder().decode(LLMFailure.self, from: legacyJSON)
+
+        #expect(failure.code == "transport.offline")
+        #expect(failure.recoveryAction == nil)
+        #expect(failure.redactedDiagnostics.isEmpty)
+    }
+
+    @Test
     func agentInputRoundTripsTextAndOpaqueMultimodalReferences() throws {
         let input = AgentLLMInput(
             inputID: "input.turn.1",

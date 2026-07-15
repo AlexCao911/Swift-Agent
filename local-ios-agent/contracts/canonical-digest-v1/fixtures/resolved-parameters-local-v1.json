@@ -1,0 +1,19 @@
+{
+  "name": "resolved-parameters-local-v1",
+  "domain": "resolved-parameters:v1",
+  "document": {
+    "schema_version": "1",
+    "semantic": {
+      "sampling.temperature": { "type": "decimal", "value": 0.2 },
+      "generation.max_output_tokens": { "type": "integer", "value": "64" }
+    },
+    "concrete": {
+      "temperature": 0.2,
+      "max_new_tokens": 64
+    },
+    "engine_id": "llama_cpp",
+    "engine_version": "llama.cpp@0123456789abcdef+local-adapter-v2"
+  },
+  "expected_canonical_utf8": "{\"concrete\":{\"max_new_tokens\":64,\"temperature\":0.2},\"engine_id\":\"llama_cpp\",\"engine_version\":\"llama.cpp@0123456789abcdef+local-adapter-v2\",\"schema_version\":\"1\",\"semantic\":{\"generation.max_output_tokens\":{\"type\":\"integer\",\"value\":\"64\"},\"sampling.temperature\":{\"type\":\"decimal\",\"value\":0.2}}}",
+  "expected_sha256": "63366031e7dcaaba3ab55743f1bf09f2aada9fd3b4fe78efc1a5c8b927cbcfdc"
+}

@@ -7,7 +7,7 @@ package enum ModelDownloadCancellationCrashPoint: String, CaseIterable, Sendable
     case afterStagingCleanup = "after-staging-cleanup"
 }
 
-package actor ModelDownloadCoordinator {
+public actor ModelDownloadCoordinator {
     private struct ActiveTransfer: Equatable, Sendable {
         let taskIdentifier: Int
         let installationID: String
@@ -39,7 +39,7 @@ package actor ModelDownloadCoordinator {
         }
     }
 
-    package func enqueue(
+    public func enqueue(
         installationID: String,
         manifest: LocalModelRevisionManifest
     ) async throws {
@@ -104,7 +104,7 @@ package actor ModelDownloadCoordinator {
         try await pump()
     }
 
-    package func pause(installationID: String) async throws {
+    public func pause(installationID: String) async throws {
         guard let active, active.installationID == installationID else {
             throw downloadFailure("download.not_active", "installation has no active artifact transfer")
         }
@@ -134,7 +134,7 @@ package actor ModelDownloadCoordinator {
         self.active = nil
     }
 
-    package func resume(installationID: String) async throws {
+    public func resume(installationID: String) async throws {
         guard let installation = try store.installationSummary(installationID: installationID),
               installation.state == .paused
         else { throw downloadFailure("download.not_paused", "installation is not paused") }
@@ -146,7 +146,7 @@ package actor ModelDownloadCoordinator {
         try await pump()
     }
 
-    package func cancel(installationID: String) async throws {
+    public func cancel(installationID: String) async throws {
         guard let active, active.installationID == installationID else {
             throw downloadFailure("download.not_active", "installation has no active artifact transfer")
         }

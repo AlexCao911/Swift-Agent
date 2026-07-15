@@ -1,0 +1,27 @@
+{
+  "name": "capability-snapshot-local-v1",
+  "domain": "capability-snapshot:v1",
+  "document": {
+    "schema_version": "1",
+    "subject": {
+      "adapter_id": null,
+      "engine_id": "llama_cpp",
+      "provider_profile_id": null,
+      "provider_profile_revision": null,
+      "credential_generation": null,
+      "llm_target_id": "target-local",
+      "llm_target_revision": "3",
+      "model_id": "gemma-3-1b-it-q4",
+      "model_revision": "1",
+      "catalog_revision": "1"
+    },
+    "capabilities": {
+      "streaming": { "support": "supported", "verified_upper_bound": null },
+      "context_window_tokens": { "support": "supported", "verified_upper_bound": "32768" }
+    },
+    "contributing_observation_digests": ["catalog-observation", "engine-observation"],
+    "nearest_expiry": null
+  },
+  "expected_canonical_utf8": "{\"capabilities\":{\"context_window_tokens\":{\"support\":\"supported\",\"verified_upper_bound\":\"32768\"},\"streaming\":{\"support\":\"supported\",\"verified_upper_bound\":null}},\"contributing_observation_digests\":[\"catalog-observation\",\"engine-observation\"],\"nearest_expiry\":null,\"schema_version\":\"1\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"1\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":\"target-local\",\"llm_target_revision\":\"3\",\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null}}",
+  "expected_sha256": "35e9cbce617e3c0e8d9b00d2f7deb98b3425baf10936945ee3d6f344e0023fdb"
+}

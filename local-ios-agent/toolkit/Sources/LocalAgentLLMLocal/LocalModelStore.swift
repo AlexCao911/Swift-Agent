@@ -1032,6 +1032,193 @@ public final class LocalModelStore: @unchecked Sendable {
         try lock.withLock { try modelUseLeaseUnlocked(leaseID: leaseID) }
     }
 
+    package func persistPreparedLocalSession(
+        _ session: PreparedLocalSession,
+        activeSessionLease: LocalModelUseLease
+    ) throws {
+        try lock.withLock {
+            do {
+                try database.transaction {
+                    guard !session.sessionID.isEmpty,
+                          activeSessionLease.leaseID == session.activeSessionLeaseID,
+                          activeSessionLease.installationID == session.installationID,
+                          activeSessionLease.purpose == .activeSession,
+                          activeSessionLease.hostProcessEpoch == session.hostProcessEpoch,
+                          activeSessionLease.state == .active,
+                          activeSessionLease.leaseRevision == 1
+                    else {
+                        throw storeFailure(
+                            "runtime.local_session_lease_invalid",
+                            "prepared local session does not match its active-session lease"
+                        )
+                    }
+                    guard try database.queryRows(
+                        "SELECT preparation_id FROM prepared_local_sessions WHERE preparation_id = ?1",
+                        bindings: [.text(session.sessionID)]
+                    ).isEmpty else {
+                        throw storeFailure(
+                            "runtime.local_session_id_reused",
+                            "prepared local session IDs remain tombstoned for the process epoch"
+                        )
+                    }
+                    let installation = try requiredInstallationUnlocked(session.installationID)
+                    guard installation.state == .installed,
+                          installation.stateRevision == session.installationStateRevision,
+                          installation.modelRevision == session.modelRevision
+                    else {
+                        throw storeFailure(
+                            "runtime.local_session_installation_mismatch",
+                            "prepared local session is not pinned to the installed state revision"
+                        )
+                    }
+                    guard let loadedLease = try modelUseLeaseUnlocked(
+                        leaseID: session.loadedModelLeaseID
+                    ),
+                        loadedLease.installationID == session.installationID,
+                        loadedLease.purpose == .loaded,
+                        loadedLease.hostProcessEpoch == session.hostProcessEpoch,
+                        loadedLease.state == .active
+                    else {
+                        throw storeFailure(
+                            "runtime.local_loaded_lease_missing",
+                            "prepared local session requires the exact active loaded-model lease"
+                        )
+                    }
+                    guard try modelUseLeaseUnlocked(leaseID: activeSessionLease.leaseID) == nil else {
+                        throw storeFailure(
+                            "runtime.local_session_lease_reused",
+                            "active-session lease identity was already used"
+                        )
+                    }
+                    let activeRows = try database.queryRows(
+                        "SELECT installation_id, purpose FROM local_model_use_leases WHERE state = 'active'"
+                    )
+                    guard !activeRows.contains(where: { row in
+                        row.text("installation_id") != session.installationID
+                            || row.text("purpose") == LocalModelUseLease.Purpose.activeSession.rawValue
+                    }) else {
+                        throw storeFailure(
+                            "runtime.local_model_busy",
+                            "another local model session is active"
+                        )
+                    }
+
+                    try database.execute(
+                        """
+                        INSERT INTO local_model_use_leases(
+                          lease_id, installation_id, host_process_epoch, session_handle,
+                          purpose, state, lease_revision, created_at
+                        ) VALUES (?1, ?2, ?3, ?4, 'active_session', 'active', 1, ?5)
+                        """,
+                        bindings: [
+                            .text(activeSessionLease.leaseID), .text(session.installationID),
+                            .text(session.hostProcessEpoch.rawValue), .text(session.sessionID),
+                            .text(Self.timestamp(Date())),
+                        ]
+                    )
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys]
+                    let snapshot = try encoder.encode(session)
+                    try database.execute(
+                        """
+                        INSERT INTO prepared_local_sessions(
+                          preparation_id, installation_id, target_id, target_revision,
+                          binding_id, binding_revision, binding_hash, requirements_hash,
+                          host_process_epoch, state, snapshot_blob
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'prepared', ?10)
+                        """,
+                        bindings: [
+                            .text(session.sessionID), .text(session.installationID),
+                            .text(session.targetID.rawValue), .text(String(session.targetRevision)),
+                            .text(session.binding.bindingID), .text(String(session.binding.bindingRevision)),
+                            .text(session.binding.bindingHash), .text(session.requirementsHash),
+                            .text(session.hostProcessEpoch.rawValue), .blob(snapshot),
+                        ]
+                    )
+                }
+            } catch let failure as LLMFailure {
+                throw failure
+            } catch {
+                throw storeFailure(
+                    "runtime.local_session_persistence_failed",
+                    "could not atomically persist the prepared local session"
+                )
+            }
+        }
+    }
+
+    package func preparedLocalSession(
+        sessionID: String
+    ) throws -> StoredPreparedLocalSession? {
+        try lock.withLock {
+            guard let row = try database.queryRows(
+                "SELECT state, snapshot_blob FROM prepared_local_sessions WHERE preparation_id = ?1",
+                bindings: [.text(sessionID)]
+            ).first else { return nil }
+            guard let stateText = row.text("state"),
+                  let state = PreparedLocalSessionState(rawValue: stateText),
+                  let snapshot = row.blob("snapshot_blob")
+            else { throw storeCorrupt() }
+            do {
+                return StoredPreparedLocalSession(
+                    session: try JSONDecoder().decode(PreparedLocalSession.self, from: snapshot),
+                    state: state
+                )
+            } catch {
+                throw storeCorrupt()
+            }
+        }
+    }
+
+    package func transitionPreparedLocalSession(
+        sessionID: String,
+        from expected: PreparedLocalSessionState,
+        to next: PreparedLocalSessionState
+    ) throws {
+        try lock.withLock {
+            let changed = try database.executeChanges(
+                "UPDATE prepared_local_sessions SET state = ?1 WHERE preparation_id = ?2 AND state = ?3",
+                bindings: [.text(next.rawValue), .text(sessionID), .text(expected.rawValue)]
+            )
+            guard changed == 1 else { throw staleState() }
+        }
+    }
+
+    package func closePreparedLocalSession(sessionID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                guard let row = try database.queryRows(
+                    "SELECT state, snapshot_blob FROM prepared_local_sessions WHERE preparation_id = ?1",
+                    bindings: [.text(sessionID)]
+                ).first,
+                    let stateText = row.text("state"),
+                    let snapshot = row.blob("snapshot_blob")
+                else { throw staleState() }
+                if stateText == PreparedLocalSessionState.closed.rawValue { return }
+                let session: PreparedLocalSession
+                do {
+                    session = try JSONDecoder().decode(PreparedLocalSession.self, from: snapshot)
+                } catch {
+                    throw storeCorrupt()
+                }
+                let leaseChanged = try database.executeChanges(
+                    """
+                    UPDATE local_model_use_leases
+                    SET state = 'released', lease_revision = lease_revision + 1
+                    WHERE lease_id = ?1 AND state = 'active' AND purpose = 'active_session'
+                    """,
+                    bindings: [.text(session.activeSessionLeaseID)]
+                )
+                guard leaseChanged == 1 else { throw staleState() }
+                let sessionChanged = try database.executeChanges(
+                    "UPDATE prepared_local_sessions SET state = 'closed' WHERE preparation_id = ?1 AND state = ?2",
+                    bindings: [.text(sessionID), .text(stateText)]
+                )
+                guard sessionChanged == 1 else { throw staleState() }
+            }
+        }
+    }
+
     package func recoverLocalSessionsAndUseLeasesForNewEpoch(
         _ epoch: HostProcessEpoch
     ) throws {

@@ -138,6 +138,19 @@ public actor LLMStore {
         hostBindingKey(token).flatMap { document.hostBindings[$0]?.state }
     }
 
+    func activeBinding(
+        configuration: AgentHostConfiguration,
+        bindingHash: String
+    ) -> HostBindingTuple? {
+        document.hostBindings.values.first { record in
+            record.state == .active
+                && record.request.configuration == configuration
+                && record.receipt.binding.bindingID == configuration.bindingID
+                && record.receipt.binding.bindingRevision == configuration.revision
+                && record.receipt.binding.bindingHash == bindingHash
+        }?.receipt.binding
+    }
+
     func prepareSession(_ record: StoredPreparedSessionRecord) throws -> SwiftPreparedSession {
         let id = record.session.preparationID
         if let existing = document.preparedSessions[id] {

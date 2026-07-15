@@ -126,6 +126,29 @@ public struct AgentHostBindingSaga: Sendable {
         try await store.activate(token: operationToken, binding: binding)
     }
 
+    public func requireActive(
+        configuration: AgentHostConfiguration,
+        target: LLMTargetRevision
+    ) async throws -> HostBindingTuple {
+        guard configuration.selectedTarget == target.reference else {
+            throw HostBindingSagaError(
+                code: "host_binding.target_mismatch",
+                message: "host configuration does not select the supplied immutable target revision"
+            )
+        }
+        let bindingHash = try agentHostConfigurationDigest(configuration)
+        guard let binding = await store.activeBinding(
+            configuration: configuration,
+            bindingHash: bindingHash
+        ) else {
+            throw HostBindingSagaError(
+                code: "host_binding.not_active",
+                message: "no active host binding matches the exact configuration and digest"
+            )
+        }
+        return binding
+    }
+
     public func reconcileHostBindings(
         _ rustCrossLinks: [RustHostBindingCrossLink]
     ) async throws -> HostBindingReconciliationOutcome {

@@ -7,7 +7,9 @@ public enum LocalCapabilityObservationFactory {
         in catalog: VerifiedLocalModelCatalog,
         engineVersion: String,
         appBuild: String,
-        observedAt: Date
+        observedAt: Date,
+        targetID: LLMTargetID? = nil,
+        targetRevision: UInt64? = nil
     ) throws -> [CapabilityObservation] {
         guard catalog.disposition(for: id) == .available,
               let manifest = catalog.models[id]
@@ -15,6 +17,8 @@ public enum LocalCapabilityObservationFactory {
 
         let subject = CapabilitySubject(
             engineID: manifest.engineID,
+            llmTargetID: targetID,
+            llmTargetRevision: targetRevision,
             modelID: id.modelID,
             modelRevision: String(id.revision),
             catalogRevision: catalog.catalogRevision
@@ -42,6 +46,74 @@ public enum LocalCapabilityObservationFactory {
                 validationScope: .signedDeclaration,
                 invalidationTriggers: triggers,
                 evidenceDigest: evidenceDigest
+            )
+            return CapabilityObservation(
+                capabilityID: provisional.capabilityID,
+                dimension: provisional.dimension,
+                value: provisional.value,
+                authority: provisional.authority,
+                source: provisional.source,
+                subject: provisional.subject,
+                adapterOrEngineVersion: provisional.adapterOrEngineVersion,
+                observedAt: provisional.observedAt,
+                expiresAt: provisional.expiresAt,
+                validationScope: provisional.validationScope,
+                invalidationTriggers: provisional.invalidationTriggers,
+                evidenceDigest: provisional.evidenceDigest,
+                observationDigest: try observationDigest(provisional)
+            )
+        }
+    }
+
+    package static func engineObservations(
+        descriptor: CppEngineDescriptor,
+        manifest: LocalModelRevisionManifest,
+        subject: CapabilitySubject,
+        appBuild: String,
+        observedAt: Date
+    ) throws -> [CapabilityObservation] {
+        try manifest.declaredCapabilities.map { declaration in
+            let value: CapabilityValue
+            switch declaration.capabilityID {
+            case "streaming":
+                value = .support(descriptor.capabilities.supportsStreaming ? .supported : .unsupported)
+            case "vision":
+                value = .support(descriptor.capabilities.supportsVision ? .supported : .unsupported)
+            case "cancellation":
+                value = .support(descriptor.capabilities.supportsCancellation ? .supported : .unsupported)
+            case "token_usage":
+                value = .support(descriptor.capabilities.supportsTokenUsage ? .supported : .unsupported)
+            case "context_window_tokens":
+                value = descriptor.capabilities.maxContextTokens
+                    .map(CapabilityValue.verifiedUpperBound) ?? .support(.unknown)
+            default:
+                value = .support(.unknown)
+            }
+            let evidence = try CanonicalDigestV1.digest(
+                domain: "capability-evidence:v1",
+                document: .object(entries: [
+                    .init(name: "schema_version", value: .string("1")),
+                    .init(name: "source", value: .string(CapabilitySource.compiledLocalEngine.rawValue)),
+                    .init(name: "capability_id", value: .string(declaration.capabilityID)),
+                    .init(name: "value", value: try capabilityValue(value)),
+                    .init(name: "subject", value: try subjectDocument(subject)),
+                    .init(name: "engine_version", value: .string(descriptor.engineVersion)),
+                    .init(name: "app_build", value: .string(appBuild)),
+                ])
+            ).hex
+            let provisional = CapabilityObservation(
+                capabilityID: declaration.capabilityID,
+                dimension: .engineCanExecute,
+                value: value,
+                authority: .authoritative,
+                source: .compiledLocalEngine,
+                subject: subject,
+                adapterOrEngineVersion: descriptor.engineVersion,
+                observedAt: observedAt,
+                expiresAt: nil,
+                validationScope: .compiledDescriptor,
+                invalidationTriggers: [.engineVersion, .appBuild, .osCapabilities],
+                evidenceDigest: evidence
             )
             return CapabilityObservation(
                 capabilityID: provisional.capabilityID,

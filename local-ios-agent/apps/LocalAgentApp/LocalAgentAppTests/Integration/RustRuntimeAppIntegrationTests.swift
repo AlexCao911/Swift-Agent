@@ -27,6 +27,24 @@ struct RustRuntimeAppIntegrationTests {
         #expect(lastResort.hostProcessEpoch == epoch)
     }
 
+    @Test("ready composition passes the exact Rust epoch into the local subsystem")
+    func readyCompositionSharesHostProcessEpoch() async throws {
+        let epoch = try HostProcessEpoch.generate()
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try await AppBootstrapper.makeReadyContainer(
+            hostProcessEpoch: epoch,
+            environment: [:],
+            store: .inMemory,
+            localAppSupportRoot: root
+        )
+
+        #expect(container.hostProcessEpoch == epoch)
+        #expect(container.localLLMSubsystem?.hostProcessEpoch == epoch)
+    }
+
     @Test("Xcode run path builds and links simulator llama runtime")
     func xcodeRunPathBuildsAndLinksSimulatorLlamaRuntime() throws {
         let schemeFile = try repositoryRoot()
