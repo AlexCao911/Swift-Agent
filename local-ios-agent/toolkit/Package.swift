@@ -72,7 +72,11 @@ var packageTargets: [Target] = [
     ),
     .testTarget(
         name: "LocalAgentLLMLocalTests",
-        dependencies: ["LocalAgentLLMLocal"],
+        dependencies: [
+            "LocalAgentLLMContracts",
+            "LocalAgentLLMCore",
+            "LocalAgentLLMLocal",
+        ],
         resources: [.process("Fixtures")]
     ),
     .testTarget(

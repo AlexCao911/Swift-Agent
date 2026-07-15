@@ -99,6 +99,32 @@ assert_catalog_resources() {
   fi
 }
 
+assert_release_catalog_engine_sets() {
+  local release_manifest="$ROOT/inference/release-engines.json"
+  local catalog="$ROOT/toolkit/Sources/LocalAgentLLMLocal/Resources/OfficialLocalModelCatalog.v1.json"
+  local release_count
+  local catalog_count
+  local release_ids=""
+  local catalog_ids=""
+  local index
+  release_count="$(/usr/bin/plutil -extract engine_ids raw -o - "$release_manifest")"
+  catalog_count="$(/usr/bin/plutil -extract signed.models raw -o - "$catalog")"
+  if [[ "$release_count" -lt 1 || "$catalog_count" -lt 1 ]]; then
+    fail "release engine manifest and official catalog must both be non-empty"
+  fi
+  for ((index = 0; index < release_count; index += 1)); do
+    release_ids+="$(/usr/bin/plutil -extract "engine_ids.$index" raw -o - "$release_manifest")"$'\n'
+  done
+  for ((index = 0; index < catalog_count; index += 1)); do
+    catalog_ids+="$(/usr/bin/plutil -extract "signed.models.$index.engine_id" raw -o - "$catalog")"$'\n'
+  done
+  release_ids="$(printf '%s' "$release_ids" | sort -u)"
+  catalog_ids="$(printf '%s' "$catalog_ids" | sort -u)"
+  if [[ "$release_ids" != "$catalog_ids" ]]; then
+    fail "release engine IDs and official catalog engine IDs differ: release=[$release_ids] catalog=[$catalog_ids]"
+  fi
+}
+
 require_text '.binaryTarget(' "$ROOT/toolkit/Package.swift"
 require_text 'name: "LocalAgentInferenceNative"' "$ROOT/toolkit/Package.swift"
 require_text 'path: "Artifacts/LocalAgentInferenceNative.xcframework"' "$ROOT/toolkit/Package.swift"
@@ -130,6 +156,9 @@ require_text 'local_agent_link_anchor() == 15' \
   "$ROOT/toolkit/Sources/LocalAgentLLMLocal/CppInferenceClient.swift"
 require_text 'LocalInferenceNativeLinkProbe.requireAllExports()' \
   "$ROOT/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift"
+if [[ "$REQUIRE_CATALOG_RESOURCES" == "1" ]]; then
+  assert_release_catalog_engine_sets
+fi
 
 native_imports="$(grep -RIl '^import LocalAgentInferenceNative$' \
   "$ROOT/toolkit/Sources" || true)"

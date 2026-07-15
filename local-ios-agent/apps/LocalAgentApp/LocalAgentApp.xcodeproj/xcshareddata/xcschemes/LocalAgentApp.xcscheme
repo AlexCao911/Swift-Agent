@@ -45,8 +45,17 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
+      shouldUseLaunchSchemeArgsEnv = "NO"
       shouldAutocreateTestPlan = "YES">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "0A0000010000000000000021"
+            BuildableName = "LocalAgentApp.app"
+            BlueprintName = "LocalAgentApp"
+            ReferencedContainer = "container:LocalAgentApp.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
       <Testables>
          <TestableReference
             skipped = "NO"
@@ -60,6 +69,33 @@
             </BuildableReference>
          </TestableReference>
       </Testables>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "LOCAL_AGENT_RUN_PHASE2_RELEASE_SMOKE"
+            value = "$(LOCAL_AGENT_RUN_PHASE2_RELEASE_SMOKE)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "LOCAL_AGENT_PHASE2_RELEASE_CATALOG_PATH"
+            value = "$(LOCAL_AGENT_PHASE2_RELEASE_CATALOG_PATH)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "LOCAL_AGENT_PHASE2_RELEASE_INSTALLATION_ROOT"
+            value = "$(LOCAL_AGENT_PHASE2_RELEASE_INSTALLATION_ROOT)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "LOCAL_AGENT_PHASE2_RELEASE_ENGINE_ID"
+            value = "$(LOCAL_AGENT_PHASE2_RELEASE_ENGINE_ID)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "LOCAL_AGENT_PHASE2_RELEASE_MODEL_ID"
+            value = "$(LOCAL_AGENT_PHASE2_RELEASE_MODEL_ID)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

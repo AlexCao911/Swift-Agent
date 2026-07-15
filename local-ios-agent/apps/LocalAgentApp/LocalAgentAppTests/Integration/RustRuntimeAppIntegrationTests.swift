@@ -45,7 +45,7 @@ struct RustRuntimeAppIntegrationTests {
         #expect(container.localLLMSubsystem?.hostProcessEpoch == epoch)
     }
 
-    @Test("Xcode run path builds and links simulator llama runtime")
+    @Test("Xcode run path builds and links the package-owned native runtime")
     func xcodeRunPathBuildsAndLinksSimulatorLlamaRuntime() throws {
         let schemeFile = try repositoryRoot()
             .appendingPathComponent("local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj/xcshareddata/xcschemes/LocalAgentApp.xcscheme")
@@ -60,10 +60,13 @@ struct RustRuntimeAppIntegrationTests {
         #expect(schemeFile.contains("Build Rust local inference runtime"))
         #expect(schemeFile.contains("build-local-inference-xcode.sh"))
         #expect(xcodeBuildScript.contains("link-llama-cpp-local-inference"))
-        #expect(xcodeBuildScript.contains("LLAMA_CPP_HEADERS"))
-        #expect(xcodeBuildScript.contains("LLAMA_CPP_XCFRAMEWORK"))
-        #expect(packageManifest.contains("defaultLlamaCppXCFrameworkPath"))
-        #expect(packageManifest.contains("minicpmv-town/third_party/llama.cpp/build-apple/llama.xcframework"))
+        #expect(xcodeBuildScript.contains("build-local-agent-inference-xcframework.sh"))
+        #expect(xcodeBuildScript.contains("LOCAL_AGENT_INFERENCE_XCFRAMEWORK"))
+        #expect(!xcodeBuildScript.contains("LLAMA_CPP_HEADERS"))
+        #expect(!xcodeBuildScript.contains("LLAMA_CPP_XCFRAMEWORK"))
+        #expect(packageManifest.contains("name: \"LocalAgentInferenceNative\""))
+        #expect(packageManifest.contains("path: \"Artifacts/LocalAgentInferenceNative.xcframework\""))
+        #expect(!packageManifest.contains("minicpmv-town/third_party/llama.cpp"))
     }
 
     @Test("App bootstrapper defaults to local LLM when simulator config is present")

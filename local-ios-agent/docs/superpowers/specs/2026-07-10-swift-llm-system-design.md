@@ -2997,6 +2997,43 @@ lint rules above without pretending the legacy route is already gone.
       temporary architecture-lint allowlist.
 - [ ] The legacy Rust provider product path is removed after migration parity.
 
+## Phase 2 implementation evidence (2026-07-15)
+
+Phase 2 now has a directly testable Swift-owned local product path. One signed
+official catalog feeds one-at-a-time background download, pause/resume,
+streaming SHA-256 verification, atomic installation, startup reconciliation,
+guarded deletion, exact target/binding resolution, and a single-model RAM
+runtime. `PreparedLocalSession` freezes the target revision, active binding
+tuple, installation/catalog revisions, capability snapshot, resolved
+parameters, template/codec, leases, and the App-owned host epoch. The Swift C++
+adapter owns semantic parameter mapping, bounded lossless callback
+backpressure, tool-call decoding, cancel/release ordering, and close-once native
+handle borrows.
+
+The native product is one package-contained
+`LocalAgentInferenceNative.xcframework`. It is the only owner of the C ABI and
+enabled vendor runtime objects; Rust links it only as a non-bundling legacy
+consumer. Deterministic evidence is provided by
+`scripts/run-llm-phase-2-contracts.sh`: Phase 1 regressions, C++ lifecycle and
+cancel-arbiter contracts, Rust architecture lints, the complete Swift suite,
+and Simulator/iPhoneOS final-link and catalog-resource checks. A separate
+environment-gated release smoke runs an already verified real installation on
+both iPhone and iPad Simulator before an engine is selectable.
+
+The following work remains intentionally outside Phase 2:
+
+- Phase 3 adds cloud Provider Profiles, Keychain credential slots, egress and
+  incremental approval, provider adapters, and connectivity/capability probes
+  while reusing the same normalized capabilities, parameters, and backend
+  events.
+- Phase 4 connects Rust's provider-neutral Agent worker to an opaque Swift host
+  session with durable command acknowledgements, event sequencing, watchdogs,
+  and preparation/egress validation. `host_slot_v2` remains non-runnable until
+  that bridge exists.
+- Phase 5 adds Model Center UI and migration, switches production Agent
+  profiles to exact host targets, and removes the legacy Rust provider/local
+  inference path only after parity is proven.
+
 ## Official API References
 
 The adapter design was checked against official provider documentation on

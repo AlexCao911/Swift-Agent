@@ -1,11 +1,29 @@
 # On-Device MiniCPM Boundary
 
-The on-device MiniCPM path is the phone runtime provider boundary for future
-llama.cpp, GGUF, and Metal integration. It sits behind the Plan 10
-`ModelProvider` contract and keeps runtime state out of the native inference
-backend.
+This document records both the temporary legacy Rust provider path and the
+Phase 2 Swift-owned on-device product boundary. New product work follows the
+Phase 2 boundary; the legacy path remains only until the Phase 4 host session
+bridge reaches parity.
 
-## Ownership
+## Phase 2 Product Ownership (2026-07-15)
+
+Swift owns model catalog trust, model directories, download/pause/resume,
+verification, install/reconcile/delete, exact `LLMTargetRevision` selection,
+capabilities, parameters, prepared sessions, RAM routing, and normalized LLM
+events. Swift loads model weights only when that exact local target is prepared.
+
+Rust owns the provider-neutral Agent state machine, context and tool policy,
+durable run/preparation state, and—starting in Phase 4—opaque host commands and
+event receipts. Rust does not own model paths, engine IDs, catalog manifests,
+downloads, or native model handles. `host_slot_v2` is intentionally
+non-runnable before the Phase 4 bridge.
+
+C++ owns only validated local inference: engine/model/generation handles,
+backend-specific template rendering/tokenization, token/usage/terminal facts,
+and one cancel arbiter. It has no Agent, Provider Profile, download, storage,
+Keychain, egress, or UI concepts.
+
+## Legacy Compatibility Ownership
 
 Rust owns:
 
@@ -26,9 +44,11 @@ C++ owns:
 C++ must not know about session IDs, run IDs, tools, memory stores, approval
 policy, SwiftUI, or provider registry state.
 
-## C ABI
+## Legacy Compatibility C ABI
 
-The ABI is intentionally narrow:
+The following old backend/stream ABI is retained only for the Rust legacy
+compatibility route. The Phase 2 Swift product path uses the versioned
+engine/model/generation ABI in `inference/include/local_agent_inference.h`.
 
 ```c
 LocalAgentStatus local_agent_backend_init(LocalAgentBackend **out_backend);
