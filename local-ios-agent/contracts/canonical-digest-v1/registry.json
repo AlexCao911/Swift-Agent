@@ -152,6 +152,12 @@
       "excluded": "provider-specific evidence body"
     },
     {
+      "domain": "provider-retention-approval:v1",
+      "computing_authority": "swift",
+      "required_coverage": "provider/profile revision, exact origin, retention mode, storage behavior/window, decision revision, issue time",
+      "excluded": "raw user data, credential, provider payload"
+    },
+    {
       "domain": "egress-approval-summary:v1",
       "computing_authority": "swift",
       "required_coverage": "disclosure, prior grant, safe source summary, new data classes",

@@ -49,6 +49,31 @@ struct CanonicalDigestTests {
     }
 
     @Test
+    func cloudPolicyDigestsMatchSharedFixtures() throws {
+        for name in [
+            "generation-disclosure-cloud-v1.json",
+            "provider-retention-approval-cloud-v1.json",
+            "credential-use-lease-cloud-v1.json",
+            "egress-approval-summary-cloud-v1.json",
+            "egress-scope-grant-cloud-v1.json",
+            "egress-generation-authorization-cloud-v1.json",
+            "egress-subject-cloud-v1.json",
+            "egress-attestation-cloud-v1.json",
+            "egress-audit-chain-cloud-v1.json",
+        ] {
+            let fixture = try DigestFixture.load(name)
+            let canonical = try CanonicalDigestV1.canonicalize(fixture.document)
+            #expect(String(decoding: canonical, as: UTF8.self) == fixture.expectedCanonicalUTF8)
+            let digest = try CanonicalDigestV1.digest(
+                domain: try #require(fixture.domain),
+                document: fixture.document
+            )
+            let expected = try #require(fixture.expectedSHA256)
+            #expect(digest.hex == expected)
+        }
+    }
+
+    @Test
     func preparedStartDigestsMatchRustGoldens() throws {
         let registration = try CanonicalJSONValue.object(entries: [
             .init(name: "preparation_id", value: .string("prep-1")),
@@ -98,7 +123,7 @@ struct CanonicalDigestTests {
         let registry = try DigestRegistry.load()
 
         #expect(CanonicalDigestV1.registeredDomains == registry.domains)
-        #expect(registry.domains.count == 32)
+        #expect(registry.domains.count == 33)
     }
 
     @Test

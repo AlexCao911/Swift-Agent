@@ -1,0 +1,22 @@
+{
+  "name": "egress-subject-cloud-v1",
+  "domain": "egress-subject:v1",
+  "document": {
+    "schema_version": "1",
+    "kind": "cloud",
+    "provider_profile_id": "profile-main",
+    "provider_profile_revision": "3",
+    "origin": {"scheme": "https", "host": "api.example.com", "port": "443"},
+    "credential_generation": "7",
+    "retention_mode": "provider_state_approved",
+    "retention_approval_revision": "2",
+    "retention_approval_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "scope_grant_id": "grant-1",
+    "scope_grant_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "approval_summary_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "generation_authorization_id": "authorization-1",
+    "generation_authorization_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected_canonical_utf8": "{\"approval_summary_digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"credential_generation\":\"7\",\"generation_authorization_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"generation_authorization_id\":\"authorization-1\",\"kind\":\"cloud\",\"origin\":{\"host\":\"api.example.com\",\"port\":\"443\",\"scheme\":\"https\"},\"provider_profile_id\":\"profile-main\",\"provider_profile_revision\":\"3\",\"retention_approval_digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"retention_approval_revision\":\"2\",\"retention_mode\":\"provider_state_approved\",\"schema_version\":\"1\",\"scope_grant_digest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"scope_grant_id\":\"grant-1\"}",
+  "expected_sha256": "76b0b3fceb333c00e51234a462b17e8899f909288c6285b808d36d0b3ee92351"
+}

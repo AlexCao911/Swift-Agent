@@ -10,6 +10,8 @@ public struct NormalizedToolCall: Equatable, Sendable {
     }
 }
 
+public typealias LLMBackendEventStream = AsyncThrowingStream<LLMBackendEvent, Error>
+
 public struct LLMUsage: Equatable, Sendable {
     public let inputTokens: UInt64?
     public let outputTokens: UInt64?
@@ -51,6 +53,7 @@ public struct LLMBackendCompletion: Equatable, Sendable {
 
 public enum LLMBackendEvent: Equatable, Sendable {
     case textDelta(String)
+    case reasoningSummaryDelta(String)
     case toolCallStarted(callID: String, name: String)
     case toolCallArgumentsDelta(callID: String, delta: String)
     case toolCallCompleted(NormalizedToolCall)

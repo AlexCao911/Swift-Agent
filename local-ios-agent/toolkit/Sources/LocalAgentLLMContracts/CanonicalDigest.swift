@@ -49,6 +49,7 @@ public enum CanonicalDigestV1 {
         "prepared-session-cleanup-command:v1",
         "prepared-session-closed-receipt:v1",
         "prepared-session-registration:v1",
+        "provider-retention-approval:v1",
         "resolved-parameters:v1",
         "saga-token:v1",
         "source-revisions:v1",

@@ -1,0 +1,18 @@
+{
+  "name": "provider-retention-approval-cloud-v1",
+  "domain": "provider-retention-approval:v1",
+  "document": {
+    "schema_version": "1",
+    "provider_profile_id": "profile-main",
+    "provider_profile_revision": "3",
+    "origin": {"scheme": "https", "host": "api.example.com", "port": "443"},
+    "retention_mode": "provider_state_approved",
+    "behavior": "server_side_conversation_state",
+    "window_class": "thirty_one_to_sixty_days",
+    "decision": "allow",
+    "approval_revision": "2",
+    "issued_at": "2027-01-15T08:00:00.000Z"
+  },
+  "expected_canonical_utf8": "{\"approval_revision\":\"2\",\"behavior\":\"server_side_conversation_state\",\"decision\":\"allow\",\"issued_at\":\"2027-01-15T08:00:00.000Z\",\"origin\":{\"host\":\"api.example.com\",\"port\":\"443\",\"scheme\":\"https\"},\"provider_profile_id\":\"profile-main\",\"provider_profile_revision\":\"3\",\"retention_mode\":\"provider_state_approved\",\"schema_version\":\"1\",\"window_class\":\"thirty_one_to_sixty_days\"}",
+  "expected_sha256": "2bfb2bc5d25ff1d4f566ca9b74ce330da298ac30b5864e0d66b44be806a457ff"
+}

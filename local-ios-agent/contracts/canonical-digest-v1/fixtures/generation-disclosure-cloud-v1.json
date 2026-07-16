@@ -1,0 +1,22 @@
+{
+  "name": "generation-disclosure-cloud-v1",
+  "domain": "generation-disclosure:v1",
+  "document": {
+    "schema_version": "1",
+    "generation_turn_id": "turn-2",
+    "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_revision_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "data_classes": ["contacts", "text"],
+    "highest_sensitivity": "sensitive",
+    "safe_display_summary": {
+      "source_kinds": ["conversation", "tool_result"],
+      "added_item_counts": [
+        {"data_class": "contacts", "count": "2"}
+      ],
+      "approximate_added_size": "less_than_1_kib",
+      "triggering_tool_display_keys": ["contacts.search"]
+    }
+  },
+  "expected_canonical_utf8": "{\"content_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"data_classes\":[\"contacts\",\"text\"],\"generation_turn_id\":\"turn-2\",\"highest_sensitivity\":\"sensitive\",\"safe_display_summary\":{\"added_item_counts\":[{\"count\":\"2\",\"data_class\":\"contacts\"}],\"approximate_added_size\":\"less_than_1_kib\",\"source_kinds\":[\"conversation\",\"tool_result\"],\"triggering_tool_display_keys\":[\"contacts.search\"]},\"schema_version\":\"1\",\"source_revision_digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+  "expected_sha256": "87186059ad4ed9e8a2e02a18dc17ab406bc3a0d9a9de838d74e5c42ff0348f68"
+}

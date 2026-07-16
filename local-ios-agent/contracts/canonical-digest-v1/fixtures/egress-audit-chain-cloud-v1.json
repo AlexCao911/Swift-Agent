@@ -1,0 +1,18 @@
+{
+  "name": "egress-audit-chain-cloud-v1",
+  "domain": "egress-audit-chain:v1",
+  "document": {
+    "schema_version": "1",
+    "audit_id": "audit-1",
+    "run_id": "run-1",
+    "previous_chain_digest": null,
+    "generation_turn_id": "turn-2",
+    "disclosure_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "scope_grant_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "generation_authorization_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "decision": "allow",
+    "recorded_at": "2027-01-15T08:01:00.000Z"
+  },
+  "expected_canonical_utf8": "{\"audit_id\":\"audit-1\",\"decision\":\"allow\",\"disclosure_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"generation_authorization_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"generation_turn_id\":\"turn-2\",\"previous_chain_digest\":null,\"recorded_at\":\"2027-01-15T08:01:00.000Z\",\"run_id\":\"run-1\",\"schema_version\":\"1\",\"scope_grant_digest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}",
+  "expected_sha256": "80eb05d3e32fb1c8e3d51592a6d5272b48e8457121c1601f7d663d31535ae344"
+}

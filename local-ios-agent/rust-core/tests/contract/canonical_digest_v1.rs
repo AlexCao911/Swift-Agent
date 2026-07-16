@@ -86,6 +86,39 @@ fn local_runtime_digests_match_shared_fixtures() {
 }
 
 #[test]
+fn cloud_policy_digests_match_shared_fixtures_without_parsing_provider_semantics() {
+    for name in [
+        "generation-disclosure-cloud-v1.json",
+        "provider-retention-approval-cloud-v1.json",
+        "credential-use-lease-cloud-v1.json",
+        "egress-approval-summary-cloud-v1.json",
+        "egress-scope-grant-cloud-v1.json",
+        "egress-generation-authorization-cloud-v1.json",
+        "egress-subject-cloud-v1.json",
+        "egress-attestation-cloud-v1.json",
+        "egress-audit-chain-cloud-v1.json",
+    ] {
+        let fixture = fixture(name);
+        let canonical = CanonicalDigestV1::canonicalize(&fixture.document).unwrap();
+        assert_eq!(
+            String::from_utf8(canonical).unwrap(),
+            fixture.expected_canonical_utf8,
+            "canonical bytes differ for {name}"
+        );
+        let digest = CanonicalDigestV1::digest(
+            fixture.domain.as_deref().unwrap(),
+            &fixture.document,
+        )
+        .unwrap();
+        assert_eq!(
+            digest.as_str(),
+            fixture.expected_sha256.as_deref().unwrap(),
+            "digest differs for {name}"
+        );
+    }
+}
+
+#[test]
 fn rejects_unregistered_or_malformed_domains() {
     let document = json!({"schema_version": "1"});
 

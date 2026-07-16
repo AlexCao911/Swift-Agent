@@ -1,0 +1,24 @@
+{
+  "name": "egress-attestation-cloud-v1",
+  "domain": "egress-attestation:v1",
+  "document": {
+    "schema_version": "1",
+    "preparation_id": "prep-1",
+    "proposed_run_id": "run-1",
+    "session_id": "session-1",
+    "swift_snapshot_id": "snapshot-1",
+    "prepared_session_registration_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "binding_id": "binding-1",
+    "binding_revision": "5",
+    "binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requirements_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "disclosure_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "capability_snapshot_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "resolved_parameters_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "expires_at": "2027-01-15T08:06:00.000Z",
+    "opaque_egress_subject_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "expected_canonical_utf8": "{\"binding_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"binding_id\":\"binding-1\",\"binding_revision\":\"5\",\"capability_snapshot_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"disclosure_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"expires_at\":\"2027-01-15T08:06:00.000Z\",\"host_process_epoch\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"opaque_egress_subject_digest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"preparation_id\":\"prep-1\",\"prepared_session_registration_digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"proposed_run_id\":\"run-1\",\"requirements_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"resolved_parameters_digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"schema_version\":\"1\",\"session_id\":\"session-1\",\"swift_snapshot_id\":\"snapshot-1\"}",
+  "expected_sha256": "9de220bd518ebd4ee705a14b26737fc5b7cea4f1a1b378a112e013c12d404822"
+}
