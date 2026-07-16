@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"reasoning_content":"private thought","content":"GLM answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}
+
+data: [DONE]

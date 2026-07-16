@@ -1,0 +1,5 @@
+data: {"choices":[{"delta":{"reasoning_content":"Plan A. ","content":"Working. ","tool_calls":[{"index":0,"id":"glm_call_1","type":"function","function":{"name":"search.one","arguments":"{"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"Plan B.","tool_calls":[{"index":0,"function":{"arguments":"}"}},{"index":1,"id":"glm_call_2","type":"function","function":{"name":"search.two","arguments":"{\"q\":\"two\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":7}}
+
+data: [DONE]

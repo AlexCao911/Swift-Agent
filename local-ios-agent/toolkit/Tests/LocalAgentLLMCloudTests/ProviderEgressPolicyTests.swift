@@ -706,7 +706,8 @@ func makeAuthorizedTransportFixture(
     modelID: String = "model-main",
     providerHistory: CanonicalJSONValue = .array([]),
     parameters: GenerationConfiguration = GenerationConfiguration(),
-    includeToolResult: Bool = false
+    includeToolResult: Bool = false,
+    toolResults: [NormalizedToolResult]? = nil
 ) async throws -> AuthorizedTransportFixture {
     let harness = try await EgressHarness.make(retentionMode: retentionMode)
     if retentionMode == .providerStateApproved {
@@ -724,6 +725,7 @@ func makeAuthorizedTransportFixture(
             turnID: "transport-turn",
             text: "private prompt sentinel",
             includeToolResult: includeToolResult,
+            toolResultsOverride: toolResults,
             providerHistory: providerHistory,
             resolvedParameters: parameters
         ),
@@ -899,10 +901,11 @@ private func validatedTurn(
     toolResultValue: String = "two contacts",
     toolResultClasses: Set<EgressDataClass> = [.contacts, .toolResult],
     toolResultSensitivity: DataSensitivity = .sensitive,
+    toolResultsOverride: [NormalizedToolResult]? = nil,
     providerHistory: CanonicalJSONValue = .array([]),
     resolvedParameters: GenerationConfiguration = GenerationConfiguration()
 ) throws -> ValidatedCloudGenerationTurn {
-    let toolResults = includeToolResult ? [NormalizedToolResult(
+    let defaultToolResults = includeToolResult ? [NormalizedToolResult(
         callID: "call-1",
         toolName: "contacts.search",
         result: .string(toolResultValue),
@@ -910,6 +913,8 @@ private func validatedTurn(
         dataClasses: toolResultClasses,
         highestSensitivity: toolResultSensitivity
     )] : []
+    let toolResults = toolResultsOverride ?? defaultToolResults
+    let hasToolResults = !toolResults.isEmpty
     let placeholder = GenerationDisclosure(
         schemaVersion: "1",
         generationTurnID: turnID,
@@ -918,8 +923,8 @@ private func validatedTurn(
         dataClasses: classes,
         highestSensitivity: sensitivity,
         safeDisplaySummary: SafeDisplaySummary(
-            sourceKinds: includeToolResult ? [.conversation, .toolResult] : [.conversation],
-            addedItemCounts: includeToolResult
+            sourceKinds: hasToolResults ? [.conversation, .toolResult] : [.conversation],
+            addedItemCounts: hasToolResults
                 ? [.init(dataClass: .contacts, count: 2)]
                 : [],
             approximateAddedSize: .lessThanOneKiB,

@@ -1,0 +1,5 @@
+data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":" DeepSeek"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}
+
+data: [DONE]

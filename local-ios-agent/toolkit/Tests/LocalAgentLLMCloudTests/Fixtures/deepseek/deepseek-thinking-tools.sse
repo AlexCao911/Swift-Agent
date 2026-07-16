@@ -1,0 +1,7 @@
+data: {"choices":[{"delta":{"reasoning_content":"We need ","content":"Checking. ","tool_calls":[{"index":0,"id":"ds_call_weather","type":"function","function":{"name":"weather.get","arguments":"{\"city\":"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"weather.","tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}},{"index":1,"id":"ds_call_calendar","type":"function","function":{"name":"calendar.search","arguments":"{\"day\":"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"tomorrow\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":12}}
+
+data: [DONE]
