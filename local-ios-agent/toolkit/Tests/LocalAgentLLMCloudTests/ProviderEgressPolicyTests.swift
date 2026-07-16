@@ -7,6 +7,164 @@ import Testing
 @Suite("Cloud egress authorization")
 struct ProviderEgressPolicyTests {
     @Test
+    func generationRequestSealBindsTheExactAuthorizedTurnAndWire() async throws {
+        let harness = try await EgressHarness.make()
+        defer { harness.cleanup() }
+        let authorized = try await harness.policy.authorizeTurn(
+            try validatedTurn(turnID: "turn-seal", text: "hello"),
+            session: harness.session,
+            priorGrant: nil
+        )
+        let wire = try CloudWireRequest(
+            method: "POST",
+            path: "/responses",
+            queryItems: [],
+            headers: ["content-type": "application/json"],
+            body: Data("{\"stream\":true}".utf8)
+        )
+
+        let sealed = try await harness.policy.sealGenerationRequest(
+            wire,
+            authorizedTurn: authorized
+        )
+
+        #expect(sealed.wire == wire)
+        #expect(sealed.profileID == authorized.profileID)
+        #expect(sealed.profileRevision == authorized.profileRevision)
+        #expect(sealed.origin == authorized.origin)
+        #expect(sealed.credentialUseLeaseID == authorized.credentialUseLeaseID)
+        #expect(sealed.credentialUseLeaseDigest == authorized.credentialUseLeaseDigest)
+        #expect(sealed.credentialGeneration == authorized.credentialGeneration)
+        #expect(sealed.retentionMode == authorized.retentionMode)
+        #expect(sealed.baseURL == URL(string: "https://api.example.com/v1")!)
+        #expect(sealed.authorization == .generation(GenerationRequestSeal(
+            generationAuthorizationID: authorized.authorization.authorizationID,
+            generationAuthorizationDigest: authorized.authorization.authorizationDigest,
+            disclosureDigest: authorized.authorization.disclosureDigest
+        )))
+    }
+
+    @Test
+    func validationSealRequiresNoUserDataProvenanceAndAValidationLease() async throws {
+        let harness = try await EgressHarness.make()
+        defer { harness.cleanup() }
+        let authorized = try await harness.policy.authorizeTurn(
+            try validatedTurn(turnID: "turn-origin", text: "hello"),
+            session: harness.session,
+            priorGrant: nil
+        )
+        let validationLease = try await harness.credentials.acquireUseLease(
+            credentialRef: harness.session.credentialRef,
+            purpose: .validation,
+            preparationID: nil,
+            hostProcessEpoch: harness.epoch
+        )
+        let originApprovalRevision = try await harness.policy.approveOrigin(
+            profileID: harness.session.profileID,
+            profileRevision: harness.session.profileRevision
+        )
+        let discovery = try CloudWireRequest(
+            method: "GET",
+            path: "/models",
+            queryItems: [],
+            headers: [:],
+            body: nil,
+            dataProvenance: .noUserData(
+                presetEncoderID: "openai_responses",
+                requestClass: .discovery
+            )
+        )
+
+        let sealed = try await harness.policy.sealValidationRequest(
+            discovery,
+            profileID: authorized.profileID,
+            profileRevision: authorized.profileRevision,
+            originApprovalRevision: originApprovalRevision,
+            lease: validationLease,
+            requestClass: .discovery
+        )
+        #expect(sealed.authorization == .discovery(NonGenerationRequestSeal(
+            originApprovalRevision: originApprovalRevision,
+            presetEncoderID: "openai_responses",
+            requestClass: .discovery
+        )))
+
+        let userDerived = try CloudWireRequest(
+            method: "POST",
+            path: "/responses",
+            queryItems: [],
+            headers: [:],
+            body: Data("{\"input\":\"private user text\"}".utf8)
+        )
+        await expectEgressFailure("egress.request_class_mismatch") {
+            try await harness.policy.sealValidationRequest(
+                userDerived,
+                profileID: authorized.profileID,
+                profileRevision: authorized.profileRevision,
+                originApprovalRevision: originApprovalRevision,
+                lease: validationLease,
+                requestClass: .accountValidation
+            )
+        }
+    }
+
+    @Test
+    func requestSealRejectsWrongClassEscapingPathAndClosedLease() async throws {
+        let harness = try await EgressHarness.make()
+        defer { harness.cleanup() }
+        let authorized = try await harness.policy.authorizeTurn(
+            try validatedTurn(turnID: "turn-seal", text: "hello"),
+            session: harness.session,
+            priorGrant: nil
+        )
+        let discoveryWire = try CloudWireRequest(
+            method: "GET",
+            path: "/models",
+            queryItems: [],
+            headers: [:],
+            body: nil,
+            dataProvenance: .noUserData(
+                presetEncoderID: "openai_responses",
+                requestClass: .discovery
+            )
+        )
+        await expectEgressFailure("egress.request_class_mismatch") {
+            try await harness.policy.sealGenerationRequest(
+                discoveryWire,
+                authorizedTurn: authorized
+            )
+        }
+
+        let escaping = try CloudWireRequest(
+            method: "POST",
+            path: "/../outside",
+            queryItems: [],
+            headers: [:],
+            body: Data()
+        )
+        await expectEgressFailure("egress.request_path_forbidden") {
+            try await harness.policy.sealGenerationRequest(
+                escaping,
+                authorizedTurn: authorized
+            )
+        }
+
+        try await harness.closePreparationLease()
+        await expectEgressFailure("credential.lease_not_found") {
+            try await harness.policy.sealGenerationRequest(
+                try CloudWireRequest(
+                    method: "POST",
+                    path: "/responses",
+                    queryItems: [],
+                    headers: [:],
+                    body: Data()
+                ),
+                authorizedTurn: authorized
+            )
+        }
+    }
+
+    @Test
     func statelessOriginAndScopePromptOnceWhileEveryTurnGetsAuthorization() async throws {
         let harness = try await EgressHarness.make()
         defer { harness.cleanup() }
@@ -530,6 +688,40 @@ private struct EgressHarness: Sendable {
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: directory) }
+}
+
+struct AuthorizedTransportFixture: Sendable {
+    let directory: URL
+    let credentials: ProviderCredentialStore
+    let request: AuthorizedCloudHTTPRequest
+    let credentialLoadCount: @Sendable () async -> Int
+
+    func cleanup() { try? FileManager.default.removeItem(at: directory) }
+}
+
+func makeAuthorizedTransportFixture() async throws -> AuthorizedTransportFixture {
+    let harness = try await EgressHarness.make()
+    let authorized = try await harness.policy.authorizeTurn(
+        try validatedTurn(turnID: "transport-turn", text: "private prompt sentinel"),
+        session: harness.session,
+        priorGrant: nil
+    )
+    let request = try await harness.policy.sealGenerationRequest(
+        try CloudWireRequest(
+            method: "POST",
+            path: "/responses",
+            queryItems: [URLQueryItem(name: "mode", value: "stream")],
+            headers: ["content-type": "application/json"],
+            body: Data("{\"stream\":true}".utf8)
+        ),
+        authorizedTurn: authorized
+    )
+    return AuthorizedTransportFixture(
+        directory: harness.directory,
+        credentials: harness.credentials,
+        request: request,
+        credentialLoadCount: { await harness.vault.loadCount }
+    )
 }
 
 private actor EgressPromptRecorder: EgressApprovalPrompting, ProviderRetentionApprovalPrompting {

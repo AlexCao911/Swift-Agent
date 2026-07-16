@@ -78,13 +78,15 @@ package struct CloudWireRequest: Equatable, Sendable {
     package let queryItems: [URLQueryItem]
     package let headers: [String: String]
     package let body: Data?
+    package let dataProvenance: CloudWireDataProvenance
 
     package init(
         method: String,
         path: String,
         queryItems: [URLQueryItem],
         headers: [String: String],
-        body: Data?
+        body: Data?,
+        dataProvenance: CloudWireDataProvenance = .generation
     ) throws {
         guard !method.isEmpty, method == method.uppercased() else {
             throw CloudWireRequestFailure(
@@ -132,6 +134,7 @@ package struct CloudWireRequest: Equatable, Sendable {
         self.queryItems = queryItems
         self.headers = headers
         self.body = body
+        self.dataProvenance = dataProvenance
     }
 }
 

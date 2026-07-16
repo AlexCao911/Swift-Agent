@@ -468,8 +468,22 @@ public actor ProviderCredentialStore {
         credentialRef: String,
         generation: UInt64
     ) throws -> CredentialUseLease {
+        try revalidateLease(
+            leaseID,
+            credentialRef: credentialRef,
+            generation: generation,
+            purpose: .preparation
+        )
+    }
+
+    package func revalidateLease(
+        _ leaseID: String,
+        credentialRef: String,
+        generation: UInt64,
+        purpose: CredentialUsePurpose
+    ) throws -> CredentialUseLease {
         let lease = try authorizedLease(leaseID)
-        guard lease.purpose == .preparation,
+        guard lease.purpose == purpose,
               lease.credentialRef == credentialRef,
               lease.generation == generation
         else {

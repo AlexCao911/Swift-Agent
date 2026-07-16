@@ -92,7 +92,8 @@ var packageTargets: [Target] = [
             "LocalAgentLLMContracts",
             "LocalAgentLLMCore",
             "LocalAgentLLMCloud",
-        ]
+        ],
+        resources: [.process("Fixtures")]
     ),
     .testTarget(
         name: "LocalNativeToolkitTests",

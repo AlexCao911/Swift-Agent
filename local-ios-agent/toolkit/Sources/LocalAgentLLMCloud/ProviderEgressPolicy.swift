@@ -70,6 +70,7 @@ package struct AuthorizedCloudGenerationTurn: Equatable, Sendable {
     package let retentionMode: ProviderRetentionMode
     package let retentionApprovalRevision: UInt64?
     package let retentionApprovalDigest: String?
+    package let runID: String
 
     fileprivate init(
         validated: ValidatedCloudGenerationTurn,
@@ -98,6 +99,60 @@ package struct AuthorizedCloudGenerationTurn: Equatable, Sendable {
         retentionMode = scopeGrant.retentionMode
         retentionApprovalRevision = retentionApproval?.decisionRevision
         retentionApprovalDigest = retentionApproval?.approvalDigest
+        runID = session.runID
+    }
+}
+
+package struct AuthorizedCloudHTTPRequest: Equatable, Sendable {
+    package let wire: CloudWireRequest
+    package let authorization: CloudRequestAuthorization
+    package let profileID: String
+    package let profileRevision: UInt64
+    package let origin: EgressOrigin
+    package let baseURL: URL
+    package let presetID: ProviderPresetID
+    package let authentication: ProviderAuthentication
+    package let semanticAdapterID: String
+    package let credentialRef: String
+    package let credentialUseLeaseID: String
+    package let credentialUseLeaseDigest: String
+    package let credentialGeneration: UInt64
+    package let retentionMode: ProviderRetentionMode
+    package let retentionApprovalRevision: UInt64?
+    package let retentionApprovalDigest: String?
+
+    fileprivate init(
+        wire: CloudWireRequest,
+        authorization: CloudRequestAuthorization,
+        profileID: String,
+        profileRevision: UInt64,
+        origin: EgressOrigin,
+        baseURL: URL,
+        preset: ProviderPreset,
+        credentialRef: String,
+        credentialUseLeaseID: String,
+        credentialUseLeaseDigest: String,
+        credentialGeneration: UInt64,
+        retentionMode: ProviderRetentionMode,
+        retentionApprovalRevision: UInt64?,
+        retentionApprovalDigest: String?
+    ) {
+        self.wire = wire
+        self.authorization = authorization
+        self.profileID = profileID
+        self.profileRevision = profileRevision
+        self.origin = origin
+        self.baseURL = baseURL
+        presetID = preset.id
+        authentication = preset.authentication
+        semanticAdapterID = preset.semanticAdapterID
+        self.credentialRef = credentialRef
+        self.credentialUseLeaseID = credentialUseLeaseID
+        self.credentialUseLeaseDigest = credentialUseLeaseDigest
+        self.credentialGeneration = credentialGeneration
+        self.retentionMode = retentionMode
+        self.retentionApprovalRevision = retentionApprovalRevision
+        self.retentionApprovalDigest = retentionApprovalDigest
     }
 }
 
@@ -242,6 +297,208 @@ public actor ProviderEgressPolicy {
         )
     }
 
+    package func approveOrigin(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws -> UInt64 {
+        let profile = try readActiveProfile(profileID: profileID, revision: profileRevision)
+        if let current = try currentOriginApproval(
+            profileID: profileID,
+            profileRevision: profileRevision,
+            origin: profile.origin
+        ) {
+            return current.approvalRevision
+        }
+        guard await prompt.requestOriginApproval(
+            profile.origin,
+            profileName: profile.revision.displayName
+        ) == .allow else {
+            throw egressFailure("egress.denied", "provider origin approval was denied")
+        }
+        return try database.transaction {
+            let live = try readActiveProfile(profileID: profileID, revision: profileRevision)
+            guard live == profile else {
+                throw egressFailure("egress.route_changed", "cloud route changed during origin approval")
+            }
+            if let current = try currentOriginApproval(
+                profileID: profileID,
+                profileRevision: profileRevision,
+                origin: profile.origin
+            ) {
+                return current.approvalRevision
+            }
+            let revision = try nextApprovalRevision(
+                table: "provider_origin_approvals",
+                profileID: profileID,
+                profileRevision: profileRevision,
+                database: database
+            )
+            let approval = ProviderOriginApproval(
+                profileID: profileID,
+                profileRevision: profileRevision,
+                approvalRevision: revision,
+                origin: profile.origin,
+                issuedAt: millisecondDate(clock())
+            )
+            try insertOriginApproval(approval)
+            return revision
+        }
+    }
+
+    package func sealGenerationRequest(
+        _ wire: CloudWireRequest,
+        authorizedTurn: AuthorizedCloudGenerationTurn
+    ) async throws -> AuthorizedCloudHTTPRequest {
+        guard wire.dataProvenance == .generation else {
+            throw egressFailure("egress.request_class_mismatch", "generation request provenance is invalid")
+        }
+        try validateSealedWirePath(wire.path)
+        let session = CloudEgressSessionContext(
+            runID: authorizedTurn.runID,
+            targetID: authorizedTurn.targetID,
+            targetRevision: authorizedTurn.targetRevision,
+            profileID: authorizedTurn.profileID,
+            profileRevision: authorizedTurn.profileRevision,
+            origin: authorizedTurn.origin,
+            credentialRef: authorizedTurn.credentialRef,
+            credentialGeneration: authorizedTurn.credentialGeneration,
+            credentialUseLeaseID: authorizedTurn.credentialUseLeaseID,
+            signedToolDisplayKeys: []
+        )
+        let route = try readRoute(session)
+        let authorization = authorizedTurn.authorization
+        let disclosureDigest = try authorizedTurn.validated.semantic.disclosure.computedDigest().hex
+        guard disclosureDigest == authorization.disclosureDigest,
+              authorization.generationTurnID
+                == authorizedTurn.validated.semantic.disclosure.generationTurnID,
+              authorization.credentialGeneration == authorizedTurn.credentialGeneration,
+              authorization.retentionMode == authorizedTurn.retentionMode,
+              authorization.retentionApprovalRevision == authorizedTurn.retentionApprovalRevision,
+              authorization.retentionApprovalDigest == authorizedTurn.retentionApprovalDigest,
+              authorization.scopeGrantID == authorizedTurn.scopeGrant.grantID,
+              authorization.scopeGrantDigest == authorizedTurn.scopeGrant.grantDigest,
+              try egressGenerationAuthorizationDigest(authorization).hex
+                == authorization.authorizationDigest,
+              authorization.expiresAt > clock()
+        else {
+            throw egressFailure("egress.authorization_invalid", "generation authorization is stale or inconsistent")
+        }
+        let retentionApproval = try await retentionPolicy.requireApproval(
+            profileID: authorizedTurn.profileID,
+            profileRevision: authorizedTurn.profileRevision,
+            origin: authorizedTurn.origin,
+            retentionMode: authorizedTurn.retentionMode
+        )
+        guard retentionApproval?.decisionRevision == authorizedTurn.retentionApprovalRevision,
+              retentionApproval?.approvalDigest == authorizedTurn.retentionApprovalDigest
+        else {
+            throw egressFailure("retention.approval_invalid", "retention approval changed after authorization")
+        }
+        try validateRetentionBinding(session: session, retentionApproval: retentionApproval)
+        let lease = try await revalidateCredentialLease(
+            authorizedTurn.credentialUseLeaseID,
+            credentialRef: authorizedTurn.credentialRef,
+            generation: authorizedTurn.credentialGeneration,
+            purpose: .preparation
+        )
+        guard try credentialUseLeaseDigest(lease).hex == authorizedTurn.credentialUseLeaseDigest else {
+            throw egressFailure("egress.credential_lease_changed", "credential lease changed after authorization")
+        }
+        guard try currentOriginApproval(
+            profileID: authorizedTurn.profileID,
+            profileRevision: authorizedTurn.profileRevision,
+            origin: authorizedTurn.origin
+        ) != nil,
+              let preset = providerPreset(route.profile.revision.presetID)
+        else {
+            throw egressFailure("egress.route_invalid", "authorized provider route is unavailable")
+        }
+        return AuthorizedCloudHTTPRequest(
+            wire: wire,
+            authorization: .generation(GenerationRequestSeal(
+                generationAuthorizationID: authorization.authorizationID,
+                generationAuthorizationDigest: authorization.authorizationDigest,
+                disclosureDigest: authorization.disclosureDigest
+            )),
+            profileID: authorizedTurn.profileID,
+            profileRevision: authorizedTurn.profileRevision,
+            origin: authorizedTurn.origin,
+            baseURL: route.profile.revision.baseURL,
+            preset: preset,
+            credentialRef: authorizedTurn.credentialRef,
+            credentialUseLeaseID: authorizedTurn.credentialUseLeaseID,
+            credentialUseLeaseDigest: authorizedTurn.credentialUseLeaseDigest,
+            credentialGeneration: authorizedTurn.credentialGeneration,
+            retentionMode: authorizedTurn.retentionMode,
+            retentionApprovalRevision: authorizedTurn.retentionApprovalRevision,
+            retentionApprovalDigest: authorizedTurn.retentionApprovalDigest
+        )
+    }
+
+    package func sealValidationRequest(
+        _ wire: CloudWireRequest,
+        profileID: String,
+        profileRevision: UInt64,
+        originApprovalRevision: UInt64,
+        lease: CredentialUseLease,
+        requestClass: CloudRequestClass
+    ) async throws -> AuthorizedCloudHTTPRequest {
+        guard requestClass == .discovery
+                || requestClass == .accountValidation
+                || requestClass == .modelValidation,
+              case let .noUserData(presetEncoderID, provenanceClass) = wire.dataProvenance,
+              provenanceClass == requestClass
+        else {
+            throw egressFailure("egress.request_class_mismatch", "validation request contains unapproved data provenance")
+        }
+        try validateSealedWirePath(wire.path)
+        let profile = try readActiveProfile(profileID: profileID, revision: profileRevision)
+        guard let preset = providerPreset(profile.revision.presetID),
+              preset.codecID == presetEncoderID,
+              let originApproval = try currentOriginApproval(
+                  profileID: profileID,
+                  profileRevision: profileRevision,
+                  origin: profile.origin
+              ),
+              originApproval.approvalRevision == originApprovalRevision,
+              lease.credentialRef == profile.revision.credentialRef,
+              lease.purpose == .validation
+        else {
+            throw egressFailure("egress.validation_route_invalid", "validation route authorization is invalid")
+        }
+        let liveLease = try await revalidateCredentialLease(
+            lease.leaseID,
+            credentialRef: lease.credentialRef,
+            generation: lease.generation,
+            purpose: .validation
+        )
+        guard liveLease == lease else {
+            throw egressFailure("egress.credential_lease_changed", "validation credential lease changed")
+        }
+        let retention = try readRetentionIdentity(profile: profile)
+        let seal = NonGenerationRequestSeal(
+            originApprovalRevision: originApprovalRevision,
+            presetEncoderID: presetEncoderID,
+            requestClass: requestClass
+        )
+        return AuthorizedCloudHTTPRequest(
+            wire: wire,
+            authorization: requestClass == .discovery ? .discovery(seal) : .validation(seal),
+            profileID: profileID,
+            profileRevision: profileRevision,
+            origin: profile.origin,
+            baseURL: profile.revision.baseURL,
+            preset: preset,
+            credentialRef: lease.credentialRef,
+            credentialUseLeaseID: lease.leaseID,
+            credentialUseLeaseDigest: try credentialUseLeaseDigest(lease).hex,
+            credentialGeneration: lease.generation,
+            retentionMode: profile.revision.retentionMode,
+            retentionApprovalRevision: retention.revision,
+            retentionApprovalDigest: retention.digest
+        )
+    }
+
     package func authorizationCount() throws -> Int {
         Int(try database.queryRows(
             "SELECT COUNT(*) AS value FROM egress_generation_authorizations"
@@ -275,50 +532,25 @@ public actor ProviderEgressPolicy {
     private func requireOriginApproval(
         _ route: EgressRoute
     ) async throws -> ProviderOriginApproval {
-        if let current = try currentOriginApproval(route) { return current }
-        guard await prompt.requestOriginApproval(
-            route.profile.origin,
-            profileName: route.profile.revision.displayName
-        ) == .allow else {
-            throw egressFailure("egress.denied", "provider origin approval was denied")
+        let revision = try await approveOrigin(
+            profileID: route.session.profileID,
+            profileRevision: route.session.profileRevision
+        )
+        guard let approval = try currentOriginApproval(
+            profileID: route.session.profileID,
+            profileRevision: route.session.profileRevision,
+            origin: route.profile.origin
+        ), approval.approvalRevision == revision else {
+            throw egressFailure("egress.origin_approval_invalid", "origin approval disappeared")
         }
-        return try database.transaction {
-            let live = try readRoute(route.session)
-            guard live == route else {
-                throw egressFailure("egress.route_changed", "cloud route changed during origin approval")
-            }
-            if let current = try currentOriginApproval(route) { return current }
-            let revision = try nextApprovalRevision(
-                table: "provider_origin_approvals",
-                profileID: route.session.profileID,
-                profileRevision: route.session.profileRevision,
-                database: database
-            )
-            let approval = ProviderOriginApproval(
-                profileID: route.session.profileID,
-                profileRevision: route.session.profileRevision,
-                approvalRevision: revision,
-                origin: route.profile.origin,
-                issuedAt: millisecondDate(clock())
-            )
-            try database.execute(
-                """
-                INSERT INTO provider_origin_approvals(
-                  profile_id, profile_revision, approval_revision, origin,
-                  record_schema_version, record_json
-                ) VALUES (?1, ?2, ?3, ?4, 2, ?5)
-                """,
-                bindings: [
-                    .text(approval.profileID), .text(String(approval.profileRevision)),
-                    .text(String(approval.approvalRevision)), .text(approval.origin.serialized),
-                    .text(try encodeEgressRecord(VersionedEgressRecord(approval))),
-                ]
-            )
-            return approval
-        }
+        return approval
     }
 
-    private func currentOriginApproval(_ route: EgressRoute) throws -> ProviderOriginApproval? {
+    private func currentOriginApproval(
+        profileID: String,
+        profileRevision: UInt64,
+        origin: EgressOrigin
+    ) throws -> ProviderOriginApproval? {
         let rows = try database.queryRows(
             """
             SELECT approval_revision, origin, record_schema_version, record_json
@@ -327,7 +559,7 @@ public actor ProviderEgressPolicy {
             ORDER BY CAST(approval_revision AS INTEGER) DESC LIMIT 1
             """,
             bindings: [
-                .text(route.session.profileID), .text(String(route.session.profileRevision)),
+                .text(profileID), .text(String(profileRevision)),
             ]
         )
         guard let row = rows.first else { return nil }
@@ -338,13 +570,29 @@ public actor ProviderEgressPolicy {
             VersionedEgressRecord<ProviderOriginApproval>.self,
             json: json
         ).value
-        guard value.profileID == route.session.profileID,
-              value.profileRevision == route.session.profileRevision,
-              value.origin == route.profile.origin,
+        guard value.profileID == profileID,
+              value.profileRevision == profileRevision,
+              value.origin == origin,
               row.text("approval_revision") == String(value.approvalRevision),
               row.text("origin") == value.origin.serialized
         else { throw egressFailure("egress.origin_approval_invalid", "origin approval does not match route") }
         return value
+    }
+
+    private func insertOriginApproval(_ approval: ProviderOriginApproval) throws {
+        try database.execute(
+            """
+            INSERT INTO provider_origin_approvals(
+              profile_id, profile_revision, approval_revision, origin,
+              record_schema_version, record_json
+            ) VALUES (?1, ?2, ?3, ?4, 2, ?5)
+            """,
+            bindings: [
+                .text(approval.profileID), .text(String(approval.profileRevision)),
+                .text(String(approval.approvalRevision)), .text(approval.origin.serialized),
+                .text(try encodeEgressRecord(VersionedEgressRecord(approval))),
+            ]
+        )
     }
 
     private func conservativeScope(
@@ -603,10 +851,11 @@ public actor ProviderEgressPolicy {
         authorization: GenerationEgressAuthorization,
         retentionApproval: ProviderRetentionApproval?
     ) async throws -> AuthorizedCloudGenerationTurn {
-        let lease = try await credentialStore.revalidatePreparationLease(
+        let lease = try await revalidateCredentialLease(
             session.credentialUseLeaseID,
             credentialRef: session.credentialRef,
-            generation: session.credentialGeneration
+            generation: session.credentialGeneration,
+            purpose: .preparation
         )
         let leaseDigest = try credentialUseLeaseDigest(lease).hex
         let subject = EgressSubjectFixture(
@@ -635,31 +884,110 @@ public actor ProviderEgressPolicy {
         )
     }
 
-    private func readRoute(_ session: CloudEgressSessionContext) throws -> EgressRoute {
-        guard !session.runID.isEmpty, !session.credentialUseLeaseID.isEmpty else {
-            throw egressFailure("egress.session_invalid", "cloud egress session identity is empty")
-        }
-        let profileRows = try database.queryRows(
+    private func readActiveProfile(
+        profileID: String,
+        revision: UInt64
+    ) throws -> PublishedProviderProfileRevision {
+        let rows = try database.queryRows(
             """
             SELECT origin, credential_ref, retention_mode, lifecycle,
               record_schema_version, record_json
             FROM provider_profile_revisions WHERE profile_id = ?1 AND revision = ?2
             """,
-            bindings: [.text(session.profileID), .text(String(session.profileRevision))]
+            bindings: [.text(profileID), .text(String(revision))]
         )
-        guard let profileRow = profileRows.first, profileRows.count == 1,
-              profileRow.integer("record_schema_version") == 2,
-              profileRow.text("lifecycle") == ProviderRevisionLifecycle.active.rawValue,
-              let profileJSON = profileRow.text("record_json")
+        guard let row = rows.first, rows.count == 1,
+              row.integer("record_schema_version") == 2,
+              row.text("lifecycle") == ProviderRevisionLifecycle.active.rawValue,
+              let json = row.text("record_json")
         else { throw egressFailure("egress.profile_not_active", "provider profile is not active") }
-        let profile = try decodeEgressRecord(PersistedProfileRevision.self, json: profileJSON).published
+        let profile = try decodeEgressRecord(PersistedProfileRevision.self, json: json).published
+        guard profile.revision.profileID == profileID,
+              profile.revision.revision == revision,
+              profile.lifecycle == .active,
+              row.text("origin") == profile.origin.serialized,
+              row.text("credential_ref") == profile.revision.credentialRef,
+              row.text("retention_mode") == profile.revision.retentionMode.rawValue
+        else { throw egressFailure("egress.profile_invalid", "provider profile is inconsistent") }
+        return profile
+    }
+
+    private func revalidateCredentialLease(
+        _ leaseID: String,
+        credentialRef: String,
+        generation: UInt64,
+        purpose: CredentialUsePurpose
+    ) async throws -> CredentialUseLease {
+        do {
+            return try await credentialStore.revalidateLease(
+                leaseID,
+                credentialRef: credentialRef,
+                generation: generation,
+                purpose: purpose
+            )
+        } catch let failure as CredentialFailure {
+            throw egressFailure(failure.code, failure.message)
+        }
+    }
+
+    private func readRetentionIdentity(
+        profile: PublishedProviderProfileRevision
+    ) throws -> (revision: UInt64?, digest: String?) {
+        let rows = try database.queryRows(
+            """
+            SELECT retention_approval_revision, retention_approval_digest
+            FROM provider_profile_state WHERE profile_id = ?1 AND profile_revision = ?2
+            """,
+            bindings: [
+                .text(profile.revision.profileID),
+                .text(String(profile.revision.revision)),
+            ]
+        )
+        guard let row = rows.first, rows.count == 1 else {
+            throw egressFailure("retention.approval_invalid", "provider retention state is missing")
+        }
+        let revision = try row.text("retention_approval_revision").map { value -> UInt64 in
+            guard let parsed = UInt64(value) else {
+                throw egressFailure("retention.approval_invalid", "retention revision is invalid")
+            }
+            return parsed
+        }
+        let digest = row.text("retention_approval_digest")
+        guard (revision == nil) == (digest == nil),
+              profile.revision.retentionMode == .statelessRequired
+                ? revision == nil
+                : revision != nil
+        else {
+            throw egressFailure("retention.approval_invalid", "retention approval binding is incomplete")
+        }
+        return (revision, digest)
+    }
+
+    private func validateSealedWirePath(_ path: String) throws {
+        do {
+            try CloudTransportPolicy.validateWirePath(path)
+        } catch {
+            throw egressFailure("egress.request_path_forbidden", "cloud request path was rejected")
+        }
+    }
+
+    private func providerPreset(_ id: ProviderPresetID) -> ProviderPreset? {
+        let matches = ProviderPreset.shipped.filter { $0.id == id }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func readRoute(_ session: CloudEgressSessionContext) throws -> EgressRoute {
+        guard !session.runID.isEmpty, !session.credentialUseLeaseID.isEmpty else {
+            throw egressFailure("egress.session_invalid", "cloud egress session identity is empty")
+        }
+        let profile = try readActiveProfile(
+            profileID: session.profileID,
+            revision: session.profileRevision
+        )
         guard profile.revision.profileID == session.profileID,
               profile.revision.revision == session.profileRevision,
               profile.origin == session.origin,
-              profile.revision.credentialRef == session.credentialRef,
-              profileRow.text("origin") == session.origin.serialized,
-              profileRow.text("credential_ref") == session.credentialRef,
-              profileRow.text("retention_mode") == profile.revision.retentionMode.rawValue
+              profile.revision.credentialRef == session.credentialRef
         else { throw egressFailure("egress.route_mismatch", "provider profile does not match egress session") }
 
         let targetRows = try database.queryRows(
