@@ -168,6 +168,7 @@ public actor ProviderProfileStore {
             return existing
         }
         try validateNewRevision(revision)
+        try validateCredentialReference(revision.credentialRef)
         let origin: EgressOrigin
         do {
             origin = try await originValidator.validate(revision.baseURL)
@@ -197,6 +198,7 @@ public actor ProviderProfileStore {
         )
         do {
             try database.transaction {
+                try validateCredentialReference(revision.credentialRef)
                 try database.execute(
                     """
                     INSERT INTO provider_profile_revisions(
@@ -427,6 +429,23 @@ public actor ProviderProfileStore {
             throw failure(
                 "provider_profile.revision_not_monotonic",
                 "provider profile revision must increase"
+            )
+        }
+    }
+
+    private func validateCredentialReference(_ credentialRef: String) throws {
+        let rows = try database.queryRows(
+            "SELECT lifecycle, record_schema_version FROM credential_slots WHERE credential_ref = ?1",
+            bindings: [.text(credentialRef)]
+        )
+        guard let row = rows.first else { return }
+        guard rows.count == 1, row.integer("record_schema_version") == 2 else {
+            throw failure("provider_profile.credential_record_invalid", "credential slot record is invalid")
+        }
+        guard row.text("lifecycle") == "active" else {
+            throw failure(
+                "provider_profile.credential_not_active",
+                "provider profile cannot reference a non-active credential slot"
             )
         }
     }
