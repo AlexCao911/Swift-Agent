@@ -1,0 +1,8 @@
+event: response.reasoning_summary_text.delta
+data: {"delta":"Checking constraints"}
+
+event: response.output_text.delta
+data: {"delta":"Done"}
+
+event: response.completed
+data: {"response":{"id":"resp_reasoning","status":"completed"}}

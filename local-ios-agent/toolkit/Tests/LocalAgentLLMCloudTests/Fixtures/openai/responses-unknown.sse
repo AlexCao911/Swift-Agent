@@ -1,0 +1,8 @@
+event: response.future_telemetry.delta
+data: {"private":"must-not-surface"}
+
+event: response.output_text.delta
+data: {"delta":"Known"}
+
+event: response.completed
+data: {"response":{"id":"resp_unknown","status":"completed"}}

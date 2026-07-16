@@ -1,0 +1,2 @@
+event: error
+data: {"code":"invalid_api_key","message":"SECRET provider body"}

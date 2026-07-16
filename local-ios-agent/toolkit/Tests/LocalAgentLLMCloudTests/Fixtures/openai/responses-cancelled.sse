@@ -1,0 +1,2 @@
+event: response.cancelled
+data: {"response":{"id":"resp_cancelled","status":"cancelled"}}

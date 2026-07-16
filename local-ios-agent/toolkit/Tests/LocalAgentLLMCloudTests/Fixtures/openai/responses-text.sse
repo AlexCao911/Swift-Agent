@@ -1,0 +1,11 @@
+event: response.created
+data: {"response":{"id":"resp_text","status":"in_progress"}}
+
+event: response.output_text.delta
+data: {"delta":"Hello"}
+
+event: response.output_text.delta
+data: {"delta":" world"}
+
+event: response.completed
+data: {"response":{"id":"resp_text","status":"completed","usage":{"input_tokens":12,"output_tokens":3}}}

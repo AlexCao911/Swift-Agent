@@ -1,0 +1,11 @@
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"reasoning_1","type":"reasoning","encrypted_content":"encrypted-reasoning-token"}}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":"Safe summary"}
+
+event: response.output_text.delta
+data: {"delta":"Answer"}
+
+event: response.completed
+data: {"response":{"id":"resp_state","status":"completed"}}

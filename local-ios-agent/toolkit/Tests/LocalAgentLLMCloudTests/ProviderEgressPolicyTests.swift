@@ -693,16 +693,40 @@ private struct EgressHarness: Sendable {
 struct AuthorizedTransportFixture: Sendable {
     let directory: URL
     let credentials: ProviderCredentialStore
+    let authorizedTurn: AuthorizedCloudGenerationTurn
+    let sessionContext: CloudProviderSessionContext
     let request: AuthorizedCloudHTTPRequest
     let credentialLoadCount: @Sendable () async -> Int
 
     func cleanup() { try? FileManager.default.removeItem(at: directory) }
 }
 
-func makeAuthorizedTransportFixture() async throws -> AuthorizedTransportFixture {
-    let harness = try await EgressHarness.make()
+func makeAuthorizedTransportFixture(
+    retentionMode: ProviderRetentionMode = .statelessRequired,
+    modelID: String = "model-main",
+    providerHistory: CanonicalJSONValue = .array([]),
+    parameters: GenerationConfiguration = GenerationConfiguration(),
+    includeToolResult: Bool = false
+) async throws -> AuthorizedTransportFixture {
+    let harness = try await EgressHarness.make(retentionMode: retentionMode)
+    if retentionMode == .providerStateApproved {
+        _ = try await harness.retentionPolicy.approveProviderState(
+            profileID: harness.session.profileID,
+            profileRevision: harness.session.profileRevision,
+            disclosure: ProviderRetentionDisclosure(
+                behavior: .serverSideConversationState,
+                windowClass: .thirtyOneToSixtyDays
+            )
+        )
+    }
     let authorized = try await harness.policy.authorizeTurn(
-        try validatedTurn(turnID: "transport-turn", text: "private prompt sentinel"),
+        try validatedTurn(
+            turnID: "transport-turn",
+            text: "private prompt sentinel",
+            includeToolResult: includeToolResult,
+            providerHistory: providerHistory,
+            resolvedParameters: parameters
+        ),
         session: harness.session,
         priorGrant: nil
     )
@@ -719,6 +743,18 @@ func makeAuthorizedTransportFixture() async throws -> AuthorizedTransportFixture
     return AuthorizedTransportFixture(
         directory: harness.directory,
         credentials: harness.credentials,
+        authorizedTurn: authorized,
+        sessionContext: CloudProviderSessionContext(
+            targetID: harness.session.targetID,
+            targetRevision: harness.session.targetRevision,
+            providerProfileID: harness.session.profileID,
+            providerProfileRevision: harness.session.profileRevision,
+            modelID: modelID,
+            retentionMode: authorized.retentionMode,
+            retentionApprovalRevision: authorized.retentionApprovalRevision,
+            retentionApprovalDigest: authorized.retentionApprovalDigest,
+            hostProcessEpoch: harness.epoch
+        ),
         request: request,
         credentialLoadCount: { await harness.vault.loadCount }
     )
@@ -862,7 +898,9 @@ private func validatedTurn(
     includeToolResult: Bool = false,
     toolResultValue: String = "two contacts",
     toolResultClasses: Set<EgressDataClass> = [.contacts, .toolResult],
-    toolResultSensitivity: DataSensitivity = .sensitive
+    toolResultSensitivity: DataSensitivity = .sensitive,
+    providerHistory: CanonicalJSONValue = .array([]),
+    resolvedParameters: GenerationConfiguration = GenerationConfiguration()
 ) throws -> ValidatedCloudGenerationTurn {
     let toolResults = includeToolResult ? [NormalizedToolResult(
         callID: "call-1",
@@ -906,9 +944,9 @@ private func validatedTurn(
         ]),
         resolvedAttachments: [],
         toolResults: toolResults,
-        providerRequiredSemanticHistory: .array([]),
+        providerRequiredSemanticHistory: providerHistory,
         disclosure: placeholder,
-        resolvedParameters: GenerationConfiguration()
+        resolvedParameters: resolvedParameters
     )
     let contentDigest = try CanonicalDigestV1.digest(
         domain: "agent-input:v1",
@@ -928,7 +966,7 @@ private func validatedTurn(
         sourceRevisionDocument: base.sourceRevisionDocument,
         resolvedAttachments: [],
         toolResults: toolResults,
-        providerRequiredSemanticHistory: .array([]),
+        providerRequiredSemanticHistory: providerHistory,
         disclosure: GenerationDisclosure(
             schemaVersion: "1",
             generationTurnID: turnID,
@@ -938,7 +976,7 @@ private func validatedTurn(
             highestSensitivity: sensitivity,
             safeDisplaySummary: placeholder.safeDisplaySummary
         ),
-        resolvedParameters: GenerationConfiguration()
+        resolvedParameters: resolvedParameters
     )
     return try CloudSemanticTurnValidator().validate(candidate)
 }
@@ -970,7 +1008,10 @@ private func egressSemanticDocument(
                 .init(name: "role", value: .string(message.role.rawValue)),
             ])
         })),
-        .init(name: "provider_required_semantic_history", value: .array([])),
+        .init(
+            name: "provider_required_semantic_history",
+            value: candidate.providerRequiredSemanticHistory
+        ),
         .init(name: "resolved_attachments", value: .array([])),
         .init(name: "schema_version", value: .string("1")),
         .init(name: "tool_results", value: .array(try candidate.toolResults.map { result in

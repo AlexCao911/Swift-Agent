@@ -1,0 +1,8 @@
+event: response.reasoning_summary_text.delta
+data: {"delta":"Grok summary"}
+
+event: response.output_text.delta
+data: {"delta":"Grok answer"}
+
+event: response.completed
+data: {"response":{"id":"xresp_reasoning","status":"completed","usage":{"input_tokens":8,"output_tokens":4}}}

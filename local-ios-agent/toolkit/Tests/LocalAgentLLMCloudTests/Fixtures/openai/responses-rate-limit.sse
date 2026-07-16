@@ -1,0 +1,2 @@
+event: error
+data: {"code":"rate_limit_exceeded","message":"SECRET provider body"}
