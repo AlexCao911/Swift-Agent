@@ -78,7 +78,7 @@ public actor LLMStore {
             )
         } else {
             database = try SQLiteConnection(path: fileURL?.path ?? ":memory:")
-            try Self.createSchema(database)
+            try LLMStoreSchema.ensureBaseSchema(database)
         }
         document = try Self.loadDocument(from: database)
     }
@@ -241,7 +241,7 @@ public actor LLMStore {
         injectedPersistenceFailure = true
     }
 
-    func schemaVersionForTesting() -> UInt64 {
+    package func schemaVersionForTesting() -> UInt64 {
         guard let rows = try? database.query("PRAGMA user_version"),
               let first = rows.first,
               let wrapped = first["user_version"],
@@ -369,47 +369,6 @@ public actor LLMStore {
                 code: "llm_store.injected_persistence_failure",
                 message: "injected LLM store persistence failure"
             )
-        }
-    }
-
-    private static func createSchema(_ database: SQLiteConnection) throws {
-        try database.transaction {
-            try database.execute(
-                "CREATE TABLE IF NOT EXISTS llm_store_meta(schema_version INTEGER NOT NULL)"
-            )
-            try database.execute(
-                "INSERT INTO llm_store_meta(schema_version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM llm_store_meta)"
-            )
-            try database.execute(
-                """
-                CREATE TABLE IF NOT EXISTS host_bindings(
-                  operation_token TEXT PRIMARY KEY,
-                  state TEXT NOT NULL,
-                  binding_id TEXT NOT NULL,
-                  binding_revision TEXT NOT NULL,
-                  binding_hash TEXT NOT NULL,
-                  record_json TEXT NOT NULL
-                )
-                """
-            )
-            try database.execute(
-                "CREATE INDEX IF NOT EXISTS host_bindings_state_idx ON host_bindings(state)"
-            )
-            try database.execute(
-                """
-                CREATE TABLE IF NOT EXISTS prepared_sessions(
-                  preparation_id TEXT PRIMARY KEY,
-                  state TEXT NOT NULL,
-                  registration_digest TEXT NOT NULL,
-                  cleanup_command_id TEXT,
-                  record_json TEXT NOT NULL
-                )
-                """
-            )
-            try database.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS prepared_sessions_cleanup_idx ON prepared_sessions(cleanup_command_id) WHERE cleanup_command_id IS NOT NULL"
-            )
-            try database.execute("PRAGMA user_version = 1")
         }
     }
 
@@ -570,7 +529,7 @@ public actor LLMStore {
         try? FileManager.default.removeItem(at: importing)
         let database = try SQLiteConnection(path: importing.path)
         do {
-            try createSchema(database)
+            try LLMStoreSchema.ensureBaseSchema(database)
             try importLegacy(document, into: database)
         } catch {
             try? FileManager.default.removeItem(at: importing)

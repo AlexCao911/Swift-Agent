@@ -878,11 +878,17 @@ fn phase_a_bridge_accepts_real_start_references_not_caller_digests() {
 #[test]
 fn llm_store_is_transactional_sqlite_and_redacts_bearers() {
     let store = read_workspace_file("toolkit/Sources/LocalAgentLLMCore/LLMStore.swift");
+    let schema = read_workspace_file("toolkit/Sources/LocalAgentLLMCore/LLMStoreSchema.swift");
     let connection =
         read_workspace_file("toolkit/Sources/LocalAgentLLMCore/SQLiteConnection.swift");
     assert!(store.contains("SQLiteConnection"));
     assert!(connection.contains("BEGIN IMMEDIATE"));
-    assert!(store.contains("PRAGMA user_version = 1"));
+    assert!(store.contains("LLMStoreSchema.ensureBaseSchema"));
+    assert!(!store.contains("PRAGMA user_version ="));
+    assert!(schema.contains("if version == 0"));
+    assert!(schema.contains("PRAGMA user_version = 1"));
+    assert!(schema.contains("PRAGMA user_version = 2"));
+    assert!(schema.contains("guard version <= currentVersion"));
     assert!(store.contains("persistedHostBinding"));
     assert!(store.contains("operationToken: \"\""));
     assert!(store.contains("persistedPreparedSession"));

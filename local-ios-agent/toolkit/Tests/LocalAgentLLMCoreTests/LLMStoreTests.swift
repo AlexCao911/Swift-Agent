@@ -23,6 +23,19 @@ struct LLMStoreTests {
     }
 
     @Test
+    func reopeningVersionTwoNeverDowngradesSharedSchema() async throws {
+        let (directory, url) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try SQLiteConnection(path: url.path)
+        try LLMStoreSchema.ensureBaseSchema(database)
+        try LLMStoreSchema.migrateToVersionTwo(database)
+
+        let reopened = try LLMStore(fileURL: url)
+
+        #expect(await reopened.schemaVersionForTesting() == 2)
+    }
+
+    @Test
     func bearerTokensNeverEnterSQLiteTextValues() async throws {
         let (directory, url) = try temporaryDatabase()
         defer { try? FileManager.default.removeItem(at: directory) }
