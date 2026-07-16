@@ -463,6 +463,24 @@ public actor ProviderCredentialStore {
         return try await operation(secret)
     }
 
+    public func revalidatePreparationLease(
+        _ leaseID: String,
+        credentialRef: String,
+        generation: UInt64
+    ) throws -> CredentialUseLease {
+        let lease = try authorizedLease(leaseID)
+        guard lease.purpose == .preparation,
+              lease.credentialRef == credentialRef,
+              lease.generation == generation
+        else {
+            throw credentialStoreFailure(
+                "credential.lease_identity_mismatch",
+                "credential lease does not match the authorized cloud route"
+            )
+        }
+        return lease
+    }
+
     package func replaceSlotLifecycleForTesting(
         credentialRef: String,
         lifecycle: CredentialSlotLifecycle

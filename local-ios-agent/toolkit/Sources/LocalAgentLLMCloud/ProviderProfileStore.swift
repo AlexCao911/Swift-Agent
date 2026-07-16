@@ -68,7 +68,7 @@ struct PersistedProfileState: Codable, Sendable {
     }
 }
 
-private struct PersistedTargetRevision: Codable, Sendable {
+struct PersistedTargetRevision: Codable, Sendable {
     let recordSchemaVersion: Int
     let target: LLMTargetRevision
 

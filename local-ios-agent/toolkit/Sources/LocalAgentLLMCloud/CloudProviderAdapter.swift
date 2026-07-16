@@ -11,8 +11,8 @@ package protocol CloudProviderAdapter: Sendable {
 }
 
 package protocol CloudProviderSession: AnyObject, Sendable {
-    func encodeStart(_ turn: ValidatedCloudGenerationTurn) throws -> CloudWireRequest
-    func encodeResume(_ turn: ValidatedCloudGenerationTurn) throws -> CloudWireRequest
+    func encodeStart(_ turn: AuthorizedCloudGenerationTurn) throws -> CloudWireRequest
+    func encodeResume(_ turn: AuthorizedCloudGenerationTurn) throws -> CloudWireRequest
     func decode(_ events: AsyncThrowingStream<SSEEvent, Error>) -> LLMBackendEventStream
     func cancel() async
     func close() async
