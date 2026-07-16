@@ -225,7 +225,7 @@ public struct CredentialUseLease: Codable, Equatable, Sendable {
     }
 }
 
-private struct VersionedCredentialRecord<Value: Codable & Sendable>: Codable, Sendable {
+struct VersionedCredentialRecord<Value: Codable & Sendable>: Codable, Sendable {
     let recordSchemaVersion: Int
     let value: Value
 
@@ -254,10 +254,15 @@ private struct VersionedCredentialRecord<Value: Codable & Sendable>: Codable, Se
 }
 
 public actor ProviderCredentialStore {
-    private let database: SQLiteConnection
-    private let vault: any CredentialVault
+    let database: SQLiteConnection
+    let vault: any CredentialVault
+    let faultInjector: (@Sendable (CredentialLifecycleCheckpoint) throws -> Void)?
 
-    package init(database: SQLiteConnection, vault: any CredentialVault) throws {
+    package init(
+        database: SQLiteConnection,
+        vault: any CredentialVault,
+        faultInjector: (@Sendable (CredentialLifecycleCheckpoint) throws -> Void)? = nil
+    ) throws {
         guard try LLMStoreSchema.userVersion(database) == 2 else {
             throw credentialStoreFailure(
                 "credential.schema_not_ready",
@@ -266,12 +271,18 @@ public actor ProviderCredentialStore {
         }
         self.database = database
         self.vault = vault
+        self.faultInjector = faultInjector
         try validatePersistedRecords()
+        try validatePersistedLifecycleRecords()
     }
 
-    package init(fileURL: URL, vault: any CredentialVault) throws {
+    package init(
+        fileURL: URL,
+        vault: any CredentialVault,
+        faultInjector: (@Sendable (CredentialLifecycleCheckpoint) throws -> Void)? = nil
+    ) throws {
         let database = try SQLiteConnection(path: fileURL.path)
-        try self.init(database: database, vault: vault)
+        try self.init(database: database, vault: vault, faultInjector: faultInjector)
     }
 
     public func createSlot(
@@ -288,6 +299,7 @@ public actor ProviderCredentialStore {
             credentialRef: credentialRef
         )
         if operation.phase == .complete { return }
+        try faultInjector?(.creationIntentPersisted)
 
         if operation.phase == .intent {
             try await vault.writeStaged(
@@ -297,9 +309,11 @@ public actor ProviderCredentialStore {
                 secret: initialSecret
             )
             operation = try advance(operation, to: .stagedWritten)
+            try faultInjector?(.creationStagedWritten)
         }
         if operation.phase == .stagedWritten {
             operation = try publishCreatingSlot(operation)
+            try faultInjector?(.creationSlotPublished)
         }
         if operation.phase == .slotPublished {
             try await vault.promoteStaged(
@@ -308,9 +322,11 @@ public actor ProviderCredentialStore {
                 operationID: operationID
             )
             operation = try advance(operation, to: .keyPromoted)
+            try faultInjector?(.creationKeyPromoted)
         }
         if operation.phase == .keyPromoted {
             try activateCreatedSlot(operation)
+            try faultInjector?(.creationActivated)
         }
     }
 
@@ -475,6 +491,8 @@ public actor ProviderCredentialStore {
             "credential_creation_operations",
             "credential_slots",
             "credential_use_leases",
+            "credential_operation_tombstones",
+            "credential_key_tombstones",
         ]
         return tables.flatMap { table in
             ((try? database.query("SELECT * FROM \(table)")) ?? []).flatMap { row in
@@ -526,7 +544,7 @@ public actor ProviderCredentialStore {
         }
     }
 
-    private func advance(
+    func advance(
         _ operation: CredentialCreationOperation,
         to phase: CredentialCreationPhase
     ) throws -> CredentialCreationOperation {
@@ -579,7 +597,7 @@ public actor ProviderCredentialStore {
         }
     }
 
-    private func activateCreatedSlot(_ operation: CredentialCreationOperation) throws {
+    func activateCreatedSlot(_ operation: CredentialCreationOperation) throws {
         try database.transaction {
             guard var slot = try readSlot(operation.credentialRef) else {
                 throw credentialStoreFailure("credential.slot_missing", "creating credential slot is missing")
@@ -652,7 +670,7 @@ public actor ProviderCredentialStore {
         return lease
     }
 
-    nonisolated private func readOperation(_ operationID: String) throws -> CredentialCreationOperation? {
+    nonisolated func readOperation(_ operationID: String) throws -> CredentialCreationOperation? {
         let rows = try database.queryRows(
             "SELECT operation_id, credential_ref, generation, phase, record_schema_version, record_json FROM credential_creation_operations WHERE operation_id = ?1",
             bindings: [.text(operationID)]
@@ -674,7 +692,7 @@ public actor ProviderCredentialStore {
         return value
     }
 
-    nonisolated private func readSlot(_ credentialRef: String) throws -> CredentialSlotState? {
+    nonisolated func readSlot(_ credentialRef: String) throws -> CredentialSlotState? {
         let rows = try database.queryRows(
             "SELECT credential_ref, current_generation, lifecycle, operation_id, record_schema_version, record_json FROM credential_slots WHERE credential_ref = ?1",
             bindings: [.text(credentialRef)]
@@ -696,7 +714,7 @@ public actor ProviderCredentialStore {
         return value
     }
 
-    nonisolated private func readLease(_ leaseID: String) throws -> CredentialUseLease? {
+    nonisolated func readLease(_ leaseID: String) throws -> CredentialUseLease? {
         let rows = try database.queryRows(
             "SELECT lease_id, credential_ref, generation, purpose, preparation_id, host_epoch, lifecycle, revision, record_schema_version, record_json FROM credential_use_leases WHERE lease_id = ?1",
             bindings: [.text(leaseID)]
@@ -738,13 +756,13 @@ public actor ProviderCredentialStore {
     }
 }
 
-private func encodeCredentialRecord<T: Encodable>(_ value: T) throws -> String {
+func encodeCredentialRecord<T: Encodable>(_ value: T) throws -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     return String(decoding: try encoder.encode(value), as: UTF8.self)
 }
 
-private func decodeCredentialRecord<T: Decodable>(_ type: T.Type, json: String) throws -> T {
+func decodeCredentialRecord<T: Decodable>(_ type: T.Type, json: String) throws -> T {
     do {
         return try JSONDecoder().decode(type, from: Data(json.utf8))
     } catch {
@@ -764,11 +782,11 @@ private func randomCredentialID() throws -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
-private func credentialStoreFailure(_ code: String, _ message: String) -> CredentialFailure {
+func credentialStoreFailure(_ code: String, _ message: String) -> CredentialFailure {
     CredentialFailure(code: code, message: message)
 }
 
-private func corruptCredentialRecord(_ subject: String) -> CredentialFailure {
+func corruptCredentialRecord(_ subject: String) -> CredentialFailure {
     credentialStoreFailure("credential.corrupt_record", "invalid persisted \(subject)")
 }
 

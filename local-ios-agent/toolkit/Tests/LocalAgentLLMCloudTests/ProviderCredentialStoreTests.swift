@@ -382,6 +382,13 @@ private actor RecordingCredentialVault: CredentialVault {
         return SecretBytes(bytes: value)
     }
 
+    package func finalExists(credentialRef: String, generation: UInt64) async throws -> Bool {
+        values[CredentialVaultAccount.final(
+            credentialRef: credentialRef,
+            generation: generation
+        )] != nil
+    }
+
     package func deleteStaged(
         credentialRef: String,
         generation: UInt64,

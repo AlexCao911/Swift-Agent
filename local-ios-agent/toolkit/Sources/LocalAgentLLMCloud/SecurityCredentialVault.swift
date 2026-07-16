@@ -74,6 +74,8 @@ package protocol CredentialVault: Sendable {
         operationID: String
     ) async throws
 
+    func finalExists(credentialRef: String, generation: UInt64) async throws -> Bool
+
     func loadFinal(credentialRef: String, generation: UInt64) async throws -> SecretBytes
 
     func deleteStaged(
@@ -179,6 +181,13 @@ public actor SecurityCredentialVault: CredentialVault {
         }
         defer { eraseData(&value) }
         return SecretBytes(bytes: value)
+    }
+
+    public func finalExists(credentialRef: String, generation: UInt64) async throws -> Bool {
+        try contains(account: CredentialVaultAccount.final(
+            credentialRef: credentialRef,
+            generation: generation
+        ))
     }
 
     public func deleteStaged(

@@ -12,7 +12,7 @@ private struct TargetKey: Hashable, Sendable {
     let revision: UInt64
 }
 
-private struct PersistedProfileRevision: Codable, Sendable {
+struct PersistedProfileRevision: Codable, Sendable {
     let recordSchemaVersion: Int
     let published: PublishedProviderProfileRevision
 
@@ -40,9 +40,9 @@ private struct PersistedProfileRevision: Codable, Sendable {
     }
 }
 
-private struct PersistedProfileState: Codable, Sendable {
+struct PersistedProfileState: Codable, Sendable {
     let recordSchemaVersion: Int
-    let state: ProviderProfileState
+    var state: ProviderProfileState
 
     enum CodingKeys: String, CodingKey {
         case recordSchemaVersion = "record_schema_version"
@@ -241,14 +241,82 @@ public actor ProviderProfileStore {
         profileID: String,
         revision: UInt64
     ) -> PublishedProviderProfileRevision? {
-        profiles[ProfileKey(id: profileID, revision: revision)]
+        let key = ProfileKey(id: profileID, revision: revision)
+        do {
+            let rows = try database.queryRows(
+                """
+                SELECT lifecycle, record_schema_version, record_json
+                FROM provider_profile_revisions
+                WHERE profile_id = ?1 AND revision = ?2
+                """,
+                bindings: [.text(profileID), .text(String(revision))]
+            )
+            guard let row = rows.first else {
+                profiles.removeValue(forKey: key)
+                return nil
+            }
+            guard rows.count == 1,
+                  row.integer("record_schema_version") == 2,
+                  let json = row.text("record_json")
+            else {
+                profiles.removeValue(forKey: key)
+                return nil
+            }
+            let value = try Self.decode(PersistedProfileRevision.self, json: json).published
+            guard value.revision.profileID == profileID,
+                  value.revision.revision == revision,
+                  value.lifecycle.rawValue == row.text("lifecycle")
+            else {
+                profiles.removeValue(forKey: key)
+                return nil
+            }
+            profiles[key] = value
+            return value
+        } catch {
+            profiles.removeValue(forKey: key)
+            return nil
+        }
     }
 
     public func state(
         profileID: String,
         profileRevision: UInt64
     ) -> ProviderProfileState? {
-        states[ProfileKey(id: profileID, revision: profileRevision)]
+        let key = ProfileKey(id: profileID, revision: profileRevision)
+        do {
+            let rows = try database.queryRows(
+                """
+                SELECT state_revision, record_schema_version, record_json
+                FROM provider_profile_state
+                WHERE profile_id = ?1 AND profile_revision = ?2
+                """,
+                bindings: [.text(profileID), .text(String(profileRevision))]
+            )
+            guard let row = rows.first else {
+                states.removeValue(forKey: key)
+                return nil
+            }
+            guard rows.count == 1,
+                  row.integer("record_schema_version") == 2,
+                  let json = row.text("record_json")
+            else {
+                states.removeValue(forKey: key)
+                return nil
+            }
+            let value = try Self.decode(PersistedProfileState.self, json: json).state
+            guard row.text("state_revision") == String(value.stateRevision),
+                  value.profileID == profileID,
+                  value.profileRevision == profileRevision
+            else {
+                states.removeValue(forKey: key)
+                return nil
+            }
+            states[key] = value
+            return value
+        } catch {
+            states.removeValue(forKey: key)
+            return nil
+        }
     }
 
     @discardableResult
@@ -343,6 +411,81 @@ public actor ProviderProfileStore {
         profiles[key] = archived
     }
 
+    @discardableResult
+    public func archiveLogicalProfile(profileID: String) throws -> [String] {
+        var replacements: [ProfileKey: PublishedProviderProfileRevision] = [:]
+        var credentialRefs: Set<String> = []
+        do {
+            try database.transaction {
+                let rows = try database.queryRows(
+                    """
+                    SELECT revision, record_schema_version, record_json
+                    FROM provider_profile_revisions
+                    WHERE profile_id = ?1 ORDER BY revision
+                    """,
+                    bindings: [.text(profileID)]
+                )
+                guard !rows.isEmpty else {
+                    throw failure(
+                        "provider_profile.not_found",
+                        "logical provider profile does not exist"
+                    )
+                }
+                var matching: [(ProfileKey, PublishedProviderProfileRevision)] = []
+                for row in rows {
+                    guard row.integer("record_schema_version") == 2,
+                          let revisionText = row.text("revision"),
+                          let revision = UInt64(revisionText),
+                          let json = row.text("record_json")
+                    else { throw corruptRecord("provider profile revision") }
+                    let published = try Self.decode(
+                        PersistedProfileRevision.self,
+                        json: json
+                    ).published
+                    guard published.revision.profileID == profileID,
+                          published.revision.revision == revision
+                    else { throw corruptRecord("provider profile revision index") }
+                    matching.append((ProfileKey(id: profileID, revision: revision), published))
+                    credentialRefs.insert(published.revision.credentialRef)
+                }
+                for (key, current) in matching {
+                    guard current.lifecycle == .active else { continue }
+                    let archived = PublishedProviderProfileRevision(
+                        revision: current.revision,
+                        origin: current.origin,
+                        lifecycle: .archived
+                    )
+                    let changed = try database.executeChanges(
+                        """
+                        UPDATE provider_profile_revisions SET lifecycle = 'archived', record_json = ?1
+                        WHERE profile_id = ?2 AND revision = ?3 AND lifecycle = 'active'
+                        """,
+                        bindings: [
+                            .text(try Self.encode(PersistedProfileRevision(published: archived))),
+                            .text(profileID), .text(String(key.revision)),
+                        ]
+                    )
+                    guard changed == 1 else {
+                        throw failure(
+                            "provider_profile.lifecycle_conflict",
+                            "provider profile lifecycle changed"
+                        )
+                    }
+                    replacements[key] = archived
+                }
+            }
+        } catch let profileFailure as ProviderProfileFailure {
+            throw profileFailure
+        } catch {
+            throw failure(
+                "provider_profile.persistence_failed",
+                "could not archive logical provider profile"
+            )
+        }
+        for (key, archived) in replacements { profiles[key] = archived }
+        return credentialRefs.sorted()
+    }
+
     public func publishTarget(_ target: LLMTargetRevision) throws {
         let key = TargetKey(id: target.targetID.rawValue, revision: target.revision)
         if let existing = targets[key] {
@@ -363,7 +506,7 @@ public actor ProviderProfileStore {
         case .local:
             throw failure("llm_target.kind_not_cloud", "provider profile store accepts cloud targets only")
         }
-        guard profiles[ProfileKey(id: profileID, revision: profileRevision)] != nil else {
+        guard profile(profileID: profileID, revision: profileRevision)?.lifecycle == .active else {
             throw failure("llm_target.profile_not_found", "cloud target references a missing profile revision")
         }
         let latest = targets.values
@@ -374,19 +517,36 @@ public actor ProviderProfileStore {
             throw failure("llm_target.revision_not_monotonic", "LLM target revision must increase")
         }
         do {
-            try database.execute(
-                """
-                INSERT INTO llm_target_revisions(
-                  target_id, revision, kind, model_id, profile_id, profile_revision,
-                  record_schema_version, record_json
-                ) VALUES (?1, ?2, 'cloud', ?3, ?4, ?5, 2, ?6)
-                """,
-                bindings: [
-                    .text(target.targetID.rawValue), .text(String(target.revision)),
-                    .text(target.modelID), .text(profileID), .text(String(profileRevision)),
-                    .text(try Self.encode(PersistedTargetRevision(target: target))),
-                ]
-            )
+            try database.transaction {
+                let rows = try database.queryRows(
+                    """
+                    SELECT lifecycle FROM provider_profile_revisions
+                    WHERE profile_id = ?1 AND revision = ?2
+                    """,
+                    bindings: [.text(profileID), .text(String(profileRevision))]
+                )
+                guard rows.count == 1, rows.first?.text("lifecycle") == "active" else {
+                    throw failure(
+                        "llm_target.profile_not_found",
+                        "cloud target references a missing profile revision"
+                    )
+                }
+                try database.execute(
+                    """
+                    INSERT INTO llm_target_revisions(
+                      target_id, revision, kind, model_id, profile_id, profile_revision,
+                      record_schema_version, record_json
+                    ) VALUES (?1, ?2, 'cloud', ?3, ?4, ?5, 2, ?6)
+                    """,
+                    bindings: [
+                        .text(target.targetID.rawValue), .text(String(target.revision)),
+                        .text(target.modelID), .text(profileID), .text(String(profileRevision)),
+                        .text(try Self.encode(PersistedTargetRevision(target: target))),
+                    ]
+                )
+            }
+        } catch let profileFailure as ProviderProfileFailure {
+            throw profileFailure
         } catch {
             throw failure("llm_target.persistence_failed", "could not persist LLM target revision")
         }
