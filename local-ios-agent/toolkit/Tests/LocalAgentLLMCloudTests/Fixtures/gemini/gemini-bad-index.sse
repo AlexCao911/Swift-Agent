@@ -1,0 +1,2 @@
+event: step.start
+data: {"index":1,"step":{"type":"model_output"},"event_type":"step.start"}

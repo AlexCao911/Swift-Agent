@@ -706,6 +706,7 @@ func makeAuthorizedTransportFixture(
     modelID: String = "model-main",
     providerHistory: CanonicalJSONValue = .array([]),
     parameters: GenerationConfiguration = GenerationConfiguration(),
+    systemText: String? = nil,
     includeToolResult: Bool = false,
     toolResults: [NormalizedToolResult]? = nil
 ) async throws -> AuthorizedTransportFixture {
@@ -727,7 +728,8 @@ func makeAuthorizedTransportFixture(
             includeToolResult: includeToolResult,
             toolResultsOverride: toolResults,
             providerHistory: providerHistory,
-            resolvedParameters: parameters
+            resolvedParameters: parameters,
+            systemText: systemText
         ),
         session: harness.session,
         priorGrant: nil
@@ -903,7 +905,8 @@ private func validatedTurn(
     toolResultSensitivity: DataSensitivity = .sensitive,
     toolResultsOverride: [NormalizedToolResult]? = nil,
     providerHistory: CanonicalJSONValue = .array([]),
-    resolvedParameters: GenerationConfiguration = GenerationConfiguration()
+    resolvedParameters: GenerationConfiguration = GenerationConfiguration(),
+    systemText: String? = nil
 ) throws -> ValidatedCloudGenerationTurn {
     let defaultToolResults = includeToolResult ? [NormalizedToolResult(
         callID: "call-1",
@@ -931,10 +934,15 @@ private func validatedTurn(
             triggeringToolDisplayKeys: toolDisplayKeys
         )
     )
+    var inputMessages: [LLMInputMessage] = []
+    if let systemText {
+        inputMessages.append(.init(role: .system, content: [.text(systemText)]))
+    }
+    inputMessages.append(.init(role: .user, content: [.text(text)]))
     let base = CloudGenerationTurnCandidate(
         input: AgentLLMInput(
             inputID: "input-\(turnID)",
-            messages: [.init(role: .user, content: [.text(text)])]
+            messages: inputMessages
         ),
         canonicalToolSchema: try .object(entries: [
             .init(name: "tools", value: .array([.string("contacts.search")])),

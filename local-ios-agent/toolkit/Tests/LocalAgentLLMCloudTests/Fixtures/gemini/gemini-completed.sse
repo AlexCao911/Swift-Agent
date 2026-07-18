@@ -1,0 +1,17 @@
+event: interaction.created
+data: {"interaction":{"id":"interaction-final","status":"in_progress","model":"gemini-3.5-flash"},"event_type":"interaction.created"}
+
+event: step.start
+data: {"index":0,"step":{"type":"model_output"},"event_type":"step.start"}
+
+event: step.delta
+data: {"index":0,"delta":{"type":"text","text":"Gemini answer"},"event_type":"step.delta"}
+
+event: step.stop
+data: {"index":0,"event_type":"step.stop"}
+
+event: interaction.completed
+data: {"interaction":{"id":"interaction-final","status":"completed","usage":{"total_input_tokens":9,"input_tokens_by_modality":[{"modality":"text","tokens":9}],"total_output_tokens":3}},"event_type":"interaction.completed"}
+
+event: done
+data: [DONE]

@@ -1,0 +1,2 @@
+event: error
+data: {"error":{"code":"UNAUTHENTICATED","message":"SECRET credential rejected"},"event_type":"error"}

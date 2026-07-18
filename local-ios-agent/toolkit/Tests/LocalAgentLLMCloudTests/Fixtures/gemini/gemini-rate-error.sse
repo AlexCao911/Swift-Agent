@@ -1,0 +1,2 @@
+event: error
+data: {"error":{"code":"RESOURCE_EXHAUSTED","message":"SECRET quota reached"},"event_type":"error"}

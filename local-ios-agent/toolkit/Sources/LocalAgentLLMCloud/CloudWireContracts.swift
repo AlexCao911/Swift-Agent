@@ -138,6 +138,14 @@ package struct CloudWireRequest: Equatable, Sendable {
     }
 }
 
+extension CloudWireRequest: CustomDebugStringConvertible {
+    package var debugDescription: String {
+        let names = queryItems.map(\.name).sorted().joined(separator: ",")
+        let headerNames = headers.keys.sorted().joined(separator: ",")
+        return "CloudWireRequest(method: \(method), path: \(path), queryNames: [\(names)], headerNames: [\(headerNames)], bodyBytes: \(body?.count ?? 0))"
+    }
+}
+
 package struct CloudProviderSessionContext: Equatable, Sendable {
     package let targetID: LLMTargetID
     package let targetRevision: UInt64

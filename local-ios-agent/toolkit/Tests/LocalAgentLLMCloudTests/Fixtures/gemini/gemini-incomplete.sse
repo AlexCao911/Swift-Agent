@@ -1,0 +1,2 @@
+event: interaction.completed
+data: {"interaction":{"id":"incomplete","status":"incomplete"},"event_type":"interaction.completed"}

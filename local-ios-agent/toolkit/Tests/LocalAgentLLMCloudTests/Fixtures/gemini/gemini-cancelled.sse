@@ -1,0 +1,2 @@
+event: interaction.completed
+data: {"interaction":{"id":"cancelled","status":"cancelled"},"event_type":"interaction.completed"}
