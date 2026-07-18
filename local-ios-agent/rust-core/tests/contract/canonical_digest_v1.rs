@@ -97,6 +97,10 @@ fn cloud_policy_digests_match_shared_fixtures_without_parsing_provider_semantics
         "egress-subject-cloud-v1.json",
         "egress-attestation-cloud-v1.json",
         "egress-audit-chain-cloud-v1.json",
+        "capability-evidence-cloud-v1.json",
+        "capability-observation-cloud-v1.json",
+        "capability-snapshot-cloud-v1.json",
+        "resolved-parameters-cloud-v1.json",
     ] {
         let fixture = fixture(name);
         let canonical = CanonicalDigestV1::canonicalize(&fixture.document).unwrap();

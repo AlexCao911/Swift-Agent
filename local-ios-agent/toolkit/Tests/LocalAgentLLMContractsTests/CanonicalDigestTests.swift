@@ -60,6 +60,10 @@ struct CanonicalDigestTests {
             "egress-subject-cloud-v1.json",
             "egress-attestation-cloud-v1.json",
             "egress-audit-chain-cloud-v1.json",
+            "capability-evidence-cloud-v1.json",
+            "capability-observation-cloud-v1.json",
+            "capability-snapshot-cloud-v1.json",
+            "resolved-parameters-cloud-v1.json",
         ] {
             let fixture = try DigestFixture.load(name)
             let canonical = try CanonicalDigestV1.canonicalize(fixture.document)

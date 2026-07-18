@@ -57,6 +57,7 @@ var packageTargets: [Target] = [
     .target(
         name: "LocalAgentLLMCloud",
         dependencies: ["LocalAgentLLMContracts", "LocalAgentLLMCore", "CSQLite"],
+        resources: [.process("Resources")],
         linkerSettings: [
             .linkedFramework("Security"),
         ]
@@ -103,6 +104,10 @@ var packageTargets: [Target] = [
         name: "LocalModelCatalogSigner",
         dependencies: ["LocalAgentLLMLocal"]
     ),
+    .executableTarget(
+        name: "CloudCapabilityCatalogSigner",
+        dependencies: ["LocalAgentLLMCloud"]
+    ),
 ]
 
 let package = Package(
@@ -141,6 +146,10 @@ let package = Package(
         .executable(
             name: "LocalModelCatalogSigner",
             targets: ["LocalModelCatalogSigner"]
+        ),
+        .executable(
+            name: "CloudCapabilityCatalogSigner",
+            targets: ["CloudCapabilityCatalogSigner"]
         ),
     ],
     targets: packageTargets

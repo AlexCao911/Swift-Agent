@@ -1,0 +1,31 @@
+{
+  "name": "capability-snapshot-cloud-v1",
+  "domain": "capability-snapshot:v1",
+  "document": {
+    "schema_version": "1",
+    "subject": {
+      "adapter_id": "openai.responses",
+      "engine_id": null,
+      "provider_profile_id": "profile-main",
+      "provider_profile_revision": "1",
+      "credential_generation": "2",
+      "llm_target_id": "target-cloud",
+      "llm_target_revision": "3",
+      "model_id": "gpt-5.2",
+      "model_revision": "gpt-5.2",
+      "catalog_revision": "1",
+      "retention_mode": "stateless_required",
+      "retention_approval_revision": null,
+      "retention_approval_digest": null
+    },
+    "capabilities": {
+      "tool_calling": { "support": "supported", "verified_upper_bound": null }
+    },
+    "contributing_observation_digests": [
+      "0aa97107f2c916e822c3372fc45317d7529a50fa7bbe8b6e7f5bd9ea723e0113"
+    ],
+    "nearest_expiry": "2027-01-16T08:00:00.000Z"
+  },
+  "expected_canonical_utf8": "{\"capabilities\":{\"tool_calling\":{\"support\":\"supported\",\"verified_upper_bound\":null}},\"contributing_observation_digests\":[\"0aa97107f2c916e822c3372fc45317d7529a50fa7bbe8b6e7f5bd9ea723e0113\"],\"nearest_expiry\":\"2027-01-16T08:00:00.000Z\",\"schema_version\":\"1\",\"subject\":{\"adapter_id\":\"openai.responses\",\"catalog_revision\":\"1\",\"credential_generation\":\"2\",\"engine_id\":null,\"llm_target_id\":\"target-cloud\",\"llm_target_revision\":\"3\",\"model_id\":\"gpt-5.2\",\"model_revision\":\"gpt-5.2\",\"provider_profile_id\":\"profile-main\",\"provider_profile_revision\":\"1\",\"retention_approval_digest\":null,\"retention_approval_revision\":null,\"retention_mode\":\"stateless_required\"}}",
+  "expected_sha256": "4643b1a68cfbaed00867128133ef34409b76e90d66e744e41d35af6e27609c85"
+}

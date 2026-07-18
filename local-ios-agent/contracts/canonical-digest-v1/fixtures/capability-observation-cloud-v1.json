@@ -1,0 +1,42 @@
+{
+  "name": "capability-observation-cloud-v1",
+  "domain": "capability-observation:v1",
+  "document": {
+    "schema_version": "1",
+    "capability_id": "tool_calling",
+    "dimension": "model_supports",
+    "value": { "type": "support", "value": "supported" },
+    "authority": "authoritative",
+    "source": "signed_cloud_catalog",
+    "subject": {
+      "adapter_id": "openai.responses",
+      "engine_id": null,
+      "provider_profile_id": "profile-main",
+      "provider_profile_revision": "1",
+      "credential_generation": "2",
+      "llm_target_id": "target-cloud",
+      "llm_target_revision": "3",
+      "model_id": "gpt-5.2",
+      "model_revision": "gpt-5.2",
+      "catalog_revision": "1",
+      "retention_mode": "stateless_required",
+      "retention_approval_revision": null,
+      "retention_approval_digest": null
+    },
+    "adapter_or_engine_version": "1",
+    "observed_at": "2027-01-15T08:00:00.000Z",
+    "expires_at": null,
+    "validation_scope": "signed_declaration",
+    "invalidation_triggers": [
+      "adapter_version",
+      "catalog_revision",
+      "credential_generation",
+      "model_identity",
+      "provider_profile_revision",
+      "retention_identity"
+    ],
+    "evidence_digest": "829048f32a4799cdc66ebb40ff77f1661be6377125a9584871430846127b78ce"
+  },
+  "expected_canonical_utf8": "{\"adapter_or_engine_version\":\"1\",\"authority\":\"authoritative\",\"capability_id\":\"tool_calling\",\"dimension\":\"model_supports\",\"evidence_digest\":\"829048f32a4799cdc66ebb40ff77f1661be6377125a9584871430846127b78ce\",\"expires_at\":null,\"invalidation_triggers\":[\"adapter_version\",\"catalog_revision\",\"credential_generation\",\"model_identity\",\"provider_profile_revision\",\"retention_identity\"],\"observed_at\":\"2027-01-15T08:00:00.000Z\",\"schema_version\":\"1\",\"source\":\"signed_cloud_catalog\",\"subject\":{\"adapter_id\":\"openai.responses\",\"catalog_revision\":\"1\",\"credential_generation\":\"2\",\"engine_id\":null,\"llm_target_id\":\"target-cloud\",\"llm_target_revision\":\"3\",\"model_id\":\"gpt-5.2\",\"model_revision\":\"gpt-5.2\",\"provider_profile_id\":\"profile-main\",\"provider_profile_revision\":\"1\",\"retention_approval_digest\":null,\"retention_approval_revision\":null,\"retention_mode\":\"stateless_required\"},\"validation_scope\":\"signed_declaration\",\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
+  "expected_sha256": "0aa97107f2c916e822c3372fc45317d7529a50fa7bbe8b6e7f5bd9ea723e0113"
+}

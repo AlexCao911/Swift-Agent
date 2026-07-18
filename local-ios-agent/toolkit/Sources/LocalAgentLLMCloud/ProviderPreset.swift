@@ -17,7 +17,7 @@ public struct ProviderPresetID: RawRepresentable, Codable, Hashable, Sendable {
     public static let glm = Self(rawValue: "glm")
 }
 
-public enum ProviderRetentionMode: String, Equatable, Sendable {
+public enum ProviderRetentionMode: String, Equatable, Hashable, Sendable {
     case statelessRequired = "stateless_required"
     case providerStateApproved = "provider_state_approved"
 }

@@ -1,0 +1,157 @@
+{
+  "schema_version": "1",
+  "key_id": "cloud-catalog-2026-07",
+  "catalog_revision": "1",
+  "models": [
+    {
+      "identity": { "preset_id": "openai", "model_id": "gpt-5.2", "model_revision": "gpt-5.2" },
+      "adapter_id": "openai.responses",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 400000 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 128000, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "output.verbosity", "value_type": "text", "support": "supported", "choices": ["high", "low", "medium"], "mutually_exclusive_with": [] },
+        { "id": "reasoning.effort", "value_type": "text", "support": "supported", "choices": ["high", "low", "medium", "minimal", "none", "xhigh"], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 2, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required", "provider_state_approved"]
+    },
+    {
+      "identity": { "preset_id": "anthropic", "model_id": "claude-sonnet-5", "model_revision": "claude-sonnet-5" },
+      "adapter_id": "anthropic.messages",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 200000 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 64000, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "reasoning.token_budget", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 128000, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_k", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 500, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required"]
+    },
+    {
+      "identity": { "preset_id": "gemini", "model_id": "gemini-3.5-flash", "model_revision": "gemini-3.5-flash" },
+      "adapter_id": "gemini.interactions",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 1048576 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 65536, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.seed", "value_type": "integer", "support": "supported", "minimum": 0, "maximum": 2147483647, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "reasoning.effort", "value_type": "text", "support": "supported", "choices": ["high", "low", "medium", "minimal"], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 2, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "thinking.display", "value_type": "text", "support": "supported", "choices": ["omitted", "summarized"], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required", "provider_state_approved"]
+    },
+    {
+      "identity": { "preset_id": "xai", "model_id": "grok-4.3", "model_revision": "grok-4.3" },
+      "adapter_id": "xai.responses",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 1000000 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 131072, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "reasoning.effort", "value_type": "text", "support": "supported", "choices": ["high", "low", "medium", "minimal", "none"], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 2, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required", "provider_state_approved"]
+    },
+    {
+      "identity": { "preset_id": "deepseek", "model_id": "deepseek-v4-flash", "model_revision": "deepseek-v4-flash" },
+      "adapter_id": "deepseek.chat_completions",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 128000 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 65536, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 2, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required"]
+    },
+    {
+      "identity": { "preset_id": "minimax", "model_id": "MiniMax-M2.7", "model_revision": "MiniMax-M2.7" },
+      "adapter_id": "minimax.messages",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 204800 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 131072, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "reasoning.token_budget", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 131072, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required"]
+    },
+    {
+      "identity": { "preset_id": "glm", "model_id": "glm-5.1", "model_revision": "glm-5.1" },
+      "adapter_id": "glm.chat_completions",
+      "minimum_adapter_version": "1",
+      "maximum_adapter_version": "1",
+      "capabilities": [
+        { "capability_id": "text_generation", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "streaming", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "tool_calling", "value": { "support": { "_0": "supported" } } },
+        { "capability_id": "context_length", "value": { "verifiedUpperBound": { "_0": 200000 } } }
+      ],
+      "parameter_definitions": [
+        { "id": "generation.max_output_tokens", "value_type": "integer", "support": "supported", "minimum": 1, "maximum": 128000, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "generation.stop_sequences", "value_type": "text_list", "support": "supported", "choices": [], "mutually_exclusive_with": [] },
+        { "id": "reasoning.effort", "value_type": "text", "support": "supported", "choices": ["high", "low", "medium", "minimal", "none"], "mutually_exclusive_with": [] },
+        { "id": "sampling.temperature", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 2, "choices": [], "mutually_exclusive_with": [] },
+        { "id": "sampling.top_p", "value_type": "decimal", "support": "supported", "minimum": 0, "maximum": 1, "choices": [], "mutually_exclusive_with": [] }
+      ],
+      "parameter_defaults": { "parameters": {} },
+      "continuation_modes": ["stateless_required"]
+    }
+  ],
+  "revoked_models": []
+}

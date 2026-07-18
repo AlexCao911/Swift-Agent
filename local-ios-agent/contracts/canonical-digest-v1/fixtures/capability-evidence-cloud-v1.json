@@ -1,0 +1,29 @@
+{
+  "name": "capability-evidence-cloud-v1",
+  "domain": "capability-evidence:v1",
+  "document": {
+    "schema_version": "1",
+    "source": "signed_cloud_catalog",
+    "capability_id": "tool_calling",
+    "dimension": "model_supports",
+    "value": { "type": "support", "value": "supported" },
+    "subject": {
+      "adapter_id": "openai.responses",
+      "engine_id": null,
+      "provider_profile_id": "profile-main",
+      "provider_profile_revision": "1",
+      "credential_generation": "2",
+      "llm_target_id": "target-cloud",
+      "llm_target_revision": "3",
+      "model_id": "gpt-5.2",
+      "model_revision": "gpt-5.2",
+      "catalog_revision": "1",
+      "retention_mode": "stateless_required",
+      "retention_approval_revision": null,
+      "retention_approval_digest": null
+    },
+    "adapter_version": "1"
+  },
+  "expected_canonical_utf8": "{\"adapter_version\":\"1\",\"capability_id\":\"tool_calling\",\"dimension\":\"model_supports\",\"schema_version\":\"1\",\"source\":\"signed_cloud_catalog\",\"subject\":{\"adapter_id\":\"openai.responses\",\"catalog_revision\":\"1\",\"credential_generation\":\"2\",\"engine_id\":null,\"llm_target_id\":\"target-cloud\",\"llm_target_revision\":\"3\",\"model_id\":\"gpt-5.2\",\"model_revision\":\"gpt-5.2\",\"provider_profile_id\":\"profile-main\",\"provider_profile_revision\":\"1\",\"retention_approval_digest\":null,\"retention_approval_revision\":null,\"retention_mode\":\"stateless_required\"},\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
+  "expected_sha256": "829048f32a4799cdc66ebb40ff77f1661be6377125a9584871430846127b78ce"
+}

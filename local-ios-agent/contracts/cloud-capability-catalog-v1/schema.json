@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-agent.invalid/contracts/cloud-capability-catalog-v1/schema.json",
+  "title": "Official cloud capability catalog envelope v1",
+  "type": "object",
+  "required": ["signed", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "signed": { "$ref": "#/$defs/signedCatalog" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+  },
+  "$defs": {
+    "uint64String": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$" },
+    "identity": {
+      "type": "object",
+      "required": ["preset_id", "model_id", "model_revision"],
+      "additionalProperties": false,
+      "properties": {
+        "preset_id": { "enum": ["openai", "anthropic", "gemini", "xai", "deepseek", "minimax", "glm"] },
+        "model_id": { "type": "string", "minLength": 1 },
+        "model_revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilityValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["support"],
+          "additionalProperties": false,
+          "properties": {
+            "support": {
+              "type": "object",
+              "required": ["_0"],
+              "additionalProperties": false,
+              "properties": { "_0": { "enum": ["supported", "unsupported", "unknown"] } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["verifiedUpperBound"],
+          "additionalProperties": false,
+          "properties": {
+            "verifiedUpperBound": {
+              "type": "object",
+              "required": ["_0"],
+              "additionalProperties": false,
+              "properties": { "_0": { "type": "integer", "minimum": 1 } }
+            }
+          }
+        }
+      ]
+    },
+    "parameterValue": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["_0"],
+        "additionalProperties": false
+      }
+    },
+    "parameterDefinition": {
+      "type": "object",
+      "required": ["id", "value_type", "support", "choices", "mutually_exclusive_with"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "value_type": { "enum": ["decimal", "integer", "text", "boolean", "text_list"] },
+        "support": { "enum": ["supported", "unsupported", "unknown"] },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "choices": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "mutually_exclusive_with": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "disabled_when_id": { "type": "string", "minLength": 1 },
+        "disabled_when_value": { "$ref": "#/$defs/parameterValue" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "identity", "adapter_id", "minimum_adapter_version", "maximum_adapter_version",
+        "capabilities", "parameter_definitions", "parameter_defaults", "continuation_modes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "adapter_id": { "type": "string", "minLength": 1 },
+        "minimum_adapter_version": { "$ref": "#/$defs/uint64String" },
+        "maximum_adapter_version": { "$ref": "#/$defs/uint64String" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["capability_id", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "capability_id": { "type": "string", "minLength": 1 },
+              "value": { "$ref": "#/$defs/capabilityValue" }
+            }
+          }
+        },
+        "parameter_definitions": { "type": "array", "items": { "$ref": "#/$defs/parameterDefinition" } },
+        "parameter_defaults": {
+          "type": "object",
+          "required": ["parameters"],
+          "additionalProperties": false,
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/parameterValue" }
+            }
+          }
+        },
+        "continuation_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["stateless_required", "provider_state_approved"] }
+        }
+      }
+    },
+    "signedCatalog": {
+      "type": "object",
+      "required": ["schema_version", "key_id", "catalog_revision", "models", "revoked_models"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1" },
+        "key_id": { "type": "string", "minLength": 1 },
+        "catalog_revision": { "$ref": "#/$defs/uint64String" },
+        "models": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/model" } },
+        "revoked_models": { "type": "array", "items": { "$ref": "#/$defs/identity" } }
+      }
+    }
+  }
+}

@@ -65,6 +65,7 @@ public enum CapabilityInvalidationTrigger: String, Codable, Equatable, Hashable,
     case providerProfileRevision = "provider_profile_revision"
     case credentialGeneration = "credential_generation"
     case modelIdentity = "model_identity"
+    case retentionIdentity = "retention_identity"
 }
 
 public struct CapabilitySubject: Codable, Equatable, Sendable {
@@ -78,6 +79,9 @@ public struct CapabilitySubject: Codable, Equatable, Sendable {
     public let modelID: String?
     public let modelRevision: String?
     public let catalogRevision: UInt64?
+    public let retentionMode: String?
+    public let retentionApprovalRevision: UInt64?
+    public let retentionApprovalDigest: String?
 
     public init(
         adapterID: String? = nil,
@@ -89,7 +93,10 @@ public struct CapabilitySubject: Codable, Equatable, Sendable {
         llmTargetRevision: UInt64? = nil,
         modelID: String? = nil,
         modelRevision: String? = nil,
-        catalogRevision: UInt64? = nil
+        catalogRevision: UInt64? = nil,
+        retentionMode: String? = nil,
+        retentionApprovalRevision: UInt64? = nil,
+        retentionApprovalDigest: String? = nil
     ) {
         self.adapterID = adapterID
         self.engineID = engineID
@@ -101,6 +108,9 @@ public struct CapabilitySubject: Codable, Equatable, Sendable {
         self.modelID = modelID
         self.modelRevision = modelRevision
         self.catalogRevision = catalogRevision
+        self.retentionMode = retentionMode
+        self.retentionApprovalRevision = retentionApprovalRevision
+        self.retentionApprovalDigest = retentionApprovalDigest
     }
 
     public static let unscoped = Self()
@@ -116,6 +126,9 @@ public struct CapabilitySubject: Codable, Equatable, Sendable {
             && matches(modelID, exact.modelID)
             && matches(modelRevision, exact.modelRevision)
             && matches(catalogRevision, exact.catalogRevision)
+            && matches(retentionMode, exact.retentionMode)
+            && matches(retentionApprovalRevision, exact.retentionApprovalRevision)
+            && matches(retentionApprovalDigest, exact.retentionApprovalDigest)
     }
 }
 

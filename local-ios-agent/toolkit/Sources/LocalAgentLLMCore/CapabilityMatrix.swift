@@ -4,6 +4,7 @@ import LocalAgentLLMContracts
 public enum CapabilityResolutionPolicy: Equatable, Sendable {
     case providerNeutral
     case local
+    case cloud
 }
 
 public enum CapabilityMatrix {
@@ -44,6 +45,11 @@ public enum CapabilityMatrix {
         _ observations: [CapabilityObservation],
         policy: CapabilityResolutionPolicy
     ) -> ResolvedCapability {
+        if policy == .cloud,
+           let capabilityID = observations.first?.capabilityID,
+           cloudAttachmentCapabilities.contains(capabilityID) {
+            return ResolvedCapability(support: .unknown, verifiedUpperBound: nil)
+        }
         let authoritativeNegative = observations.contains { observation in
             observation.authority == .authoritative
                 && {
@@ -60,6 +66,8 @@ public enum CapabilityMatrix {
             return resolveProviderNeutral(observations)
         case .local:
             return resolveLocal(observations)
+        case .cloud:
+            return resolveCloud(observations)
         }
     }
 
@@ -95,6 +103,10 @@ public enum CapabilityMatrix {
         _ observation: CapabilityObservation,
         under policy: CapabilityResolutionPolicy
     ) -> Bool {
+        if policy == .cloud,
+           cloudAttachmentCapabilities.contains(observation.capabilityID) {
+            return false
+        }
         if observation.authority == .authoritative,
            case .support(.unsupported) = observation.value {
             return true
@@ -110,6 +122,65 @@ public enum CapabilityMatrix {
             else { return false }
             if case .support(.unknown) = observation.value { return false }
             return true
+        case .cloud:
+            guard observation.authority != .advisory else { return false }
+            if case .support(.unknown) = observation.value { return false }
+            return observation.dimension == .adapterCanEncode
+                || observation.dimension == .endpointSupports
+                || observation.dimension == .modelSupports
+        }
+    }
+
+    private static func resolveCloud(
+        _ observations: [CapabilityObservation]
+    ) -> ResolvedCapability {
+        guard let capabilityID = observations.first?.capabilityID,
+              !cloudAttachmentCapabilities.contains(capabilityID)
+        else {
+            return ResolvedCapability(support: .unknown, verifiedUpperBound: nil)
+        }
+        let adapter = observations.filter { $0.dimension == .adapterCanEncode }
+        let endpoint = observations.filter { $0.dimension == .endpointSupports }
+        let model = observations.filter { $0.dimension == .modelSupports }
+        guard hasCloudPositive(adapter),
+              hasCloudPositive(endpoint),
+              hasCloudModelPositive(model, capabilityID: capabilityID)
+        else {
+            return ResolvedCapability(support: .unknown, verifiedUpperBound: nil)
+        }
+        let bounds = (adapter + endpoint + model).compactMap { observation -> UInt64? in
+            guard observation.authority != .advisory else { return nil }
+            if case let .verifiedUpperBound(value) = observation.value { return value }
+            return nil
+        }
+        return ResolvedCapability(support: .supported, verifiedUpperBound: bounds.min())
+    }
+
+    private static func hasCloudPositive(_ observations: [CapabilityObservation]) -> Bool {
+        observations.contains { observation in
+            guard observation.authority != .advisory else { return false }
+            switch observation.value {
+            case .support(.supported), .verifiedUpperBound: return true
+            case .support(.unsupported), .support(.unknown): return false
+            }
+        }
+    }
+
+    private static func hasCloudModelPositive(
+        _ observations: [CapabilityObservation],
+        capabilityID: String
+    ) -> Bool {
+        observations.contains { observation in
+            let trustedSigned = observation.authority == .authoritative
+                && observation.source == .signedCloudCatalog
+            let probeMayProveRoutineText = observation.authority == .verified
+                && observation.source == .connectivityProbe
+                && cloudProbeProvableCapabilities.contains(capabilityID)
+            guard trustedSigned || probeMayProveRoutineText else { return false }
+            switch observation.value {
+            case .support(.supported), .verifiedUpperBound: return true
+            case .support(.unsupported), .support(.unknown): return false
+            }
         }
     }
 
@@ -150,3 +221,11 @@ public enum CapabilityMatrix {
         )
     }
 }
+
+private let cloudAttachmentCapabilities: Set<String> = [
+    "audio_input", "document_input", "image_input", "video_input",
+]
+
+private let cloudProbeProvableCapabilities: Set<String> = [
+    "streaming", "text_generation",
+]

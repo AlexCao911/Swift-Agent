@@ -19,7 +19,10 @@ struct CloudSemanticTurnValidatorTests {
 
     @Test(arguments: SemanticMutation.allCases)
     func rejectsDisclosureForAnySemanticMutation(_ mutation: SemanticMutation) throws {
-        let original = try fixtureCandidate(includeToolResult: true)
+        let original = try fixtureCandidate(
+            includeAttachment: mutation.requiresAttachment,
+            includeToolResult: true
+        )
         let mutated = try mutation.apply(to: original)
 
         #expect(throws: CloudTurnValidationFailure.self) {
@@ -41,6 +44,18 @@ struct CloudSemanticTurnValidatorTests {
         )
         #expect(throws: CloudTurnValidationFailure.self) {
             try validator.validate(duplicate)
+        }
+    }
+
+    @Test
+    func phaseThreeRejectsEvenWellFormedAttachmentInputBeforeEgress() throws {
+        let candidate = try fixtureCandidate(includeAttachment: true)
+
+        do {
+            _ = try validator.validate(candidate)
+            Issue.record("expected attachment path rejection")
+        } catch let failure as CloudTurnValidationFailure {
+            #expect(failure.code == "capability.cloud_attachment_path_unavailable")
         }
     }
 
@@ -70,6 +85,10 @@ enum SemanticMutation: String, CaseIterable, CustomTestStringConvertible {
     case semanticHistory
 
     var testDescription: String { rawValue }
+
+    var requiresAttachment: Bool {
+        self == .attachmentRevision || self == .attachmentContentDigest
+    }
 
     func apply(to candidate: CloudGenerationTurnCandidate) throws -> CloudGenerationTurnCandidate {
         switch self {
@@ -113,7 +132,7 @@ enum SemanticMutation: String, CaseIterable, CustomTestStringConvertible {
 }
 
 private func fixtureCandidate(
-    includeAttachment: Bool = true,
+    includeAttachment: Bool = false,
     includeToolResult: Bool = false
 ) throws -> CloudGenerationTurnCandidate {
     let attachments = includeAttachment ? [CloudResolvedAttachmentIdentity(

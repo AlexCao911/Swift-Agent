@@ -75,6 +75,18 @@ package struct CloudSemanticTurnValidator: CloudSemanticTurnValidating {
     }
 
     private func validateAttachments(_ candidate: CloudGenerationTurnCandidate) throws {
+        let hasAttachmentReference = candidate.input.messages.contains { message in
+            message.content.contains { content in
+                if case .attachment = content { return true }
+                return false
+            }
+        }
+        guard !hasAttachmentReference, candidate.resolvedAttachments.isEmpty else {
+            throw failure(
+                "capability.cloud_attachment_path_unavailable",
+                "cloud attachment encoding and upload are unavailable in phase three"
+            )
+        }
         var referenced: [String: String] = [:]
         for message in candidate.input.messages {
             for content in message.content {

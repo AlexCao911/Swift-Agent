@@ -1,0 +1,870 @@
+{
+  "signature" : "0enAzMOfJxpkqVAYDsG_4A-g8A6rdb-0HtZs7ntLnLsd1G5uFJghiUZc1WEv5FdRyrZpq_hw29MQwJ0LkEqNDw",
+  "signed" : {
+    "catalog_revision" : "1",
+    "key_id" : "cloud-catalog-2026-07",
+    "models" : [
+      {
+        "adapter_id" : "openai.responses",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 400000
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required",
+          "provider_state_approved"
+        ],
+        "identity" : {
+          "model_id" : "gpt-5.2",
+          "model_revision" : "gpt-5.2",
+          "preset_id" : "openai"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 128000,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+              "high",
+              "low",
+              "medium"
+            ],
+            "id" : "output.verbosity",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          },
+          {
+            "choices" : [
+              "high",
+              "low",
+              "medium",
+              "minimal",
+              "none",
+              "xhigh"
+            ],
+            "id" : "reasoning.effort",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 2,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "anthropic.messages",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 200000
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required"
+        ],
+        "identity" : {
+          "model_id" : "claude-sonnet-5",
+          "model_revision" : "claude-sonnet-5",
+          "preset_id" : "anthropic"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 64000,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "reasoning.token_budget",
+            "maximum" : 128000,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_k",
+            "maximum" : 500,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "gemini.interactions",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 1048576
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required",
+          "provider_state_approved"
+        ],
+        "identity" : {
+          "model_id" : "gemini-3.5-flash",
+          "model_revision" : "gemini-3.5-flash",
+          "preset_id" : "gemini"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 65536,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.seed",
+            "maximum" : 2147483647,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+              "high",
+              "low",
+              "medium",
+              "minimal"
+            ],
+            "id" : "reasoning.effort",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 2,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+              "omitted",
+              "summarized"
+            ],
+            "id" : "thinking.display",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "xai.responses",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 1000000
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required",
+          "provider_state_approved"
+        ],
+        "identity" : {
+          "model_id" : "grok-4.3",
+          "model_revision" : "grok-4.3",
+          "preset_id" : "xai"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 131072,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+              "high",
+              "low",
+              "medium",
+              "minimal",
+              "none"
+            ],
+            "id" : "reasoning.effort",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 2,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "deepseek.chat_completions",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 128000
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required"
+        ],
+        "identity" : {
+          "model_id" : "deepseek-v4-flash",
+          "model_revision" : "deepseek-v4-flash",
+          "preset_id" : "deepseek"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 65536,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 2,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "minimax.messages",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 204800
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required"
+        ],
+        "identity" : {
+          "model_id" : "MiniMax-M2.7",
+          "model_revision" : "MiniMax-M2.7",
+          "preset_id" : "minimax"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 131072,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "reasoning.token_budget",
+            "maximum" : 131072,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      },
+      {
+        "adapter_id" : "glm.chat_completions",
+        "capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : {
+              "support" : {
+                "_0" : "supported"
+              }
+            }
+          },
+          {
+            "capability_id" : "context_length",
+            "value" : {
+              "verifiedUpperBound" : {
+                "_0" : 200000
+              }
+            }
+          }
+        ],
+        "continuation_modes" : [
+          "stateless_required"
+        ],
+        "identity" : {
+          "model_id" : "glm-5.1",
+          "model_revision" : "glm-5.1",
+          "preset_id" : "glm"
+        },
+        "maximum_adapter_version" : "1",
+        "minimum_adapter_version" : "1",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_definitions" : [
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.max_output_tokens",
+            "maximum" : 128000,
+            "minimum" : 1,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "integer"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "generation.stop_sequences",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text_list"
+          },
+          {
+            "choices" : [
+              "high",
+              "low",
+              "medium",
+              "minimal",
+              "none"
+            ],
+            "id" : "reasoning.effort",
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "text"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.temperature",
+            "maximum" : 2,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          },
+          {
+            "choices" : [
+
+            ],
+            "id" : "sampling.top_p",
+            "maximum" : 1,
+            "minimum" : 0,
+            "mutually_exclusive_with" : [
+
+            ],
+            "support" : "supported",
+            "value_type" : "decimal"
+          }
+        ]
+      }
+    ],
+    "revoked_models" : [
+
+    ],
+    "schema_version" : "1"
+  }
+}

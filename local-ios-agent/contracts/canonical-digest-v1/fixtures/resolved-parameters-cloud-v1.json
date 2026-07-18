@@ -1,0 +1,20 @@
+{
+  "name": "resolved-parameters-cloud-v1",
+  "domain": "resolved-parameters:v1",
+  "document": {
+    "schema_version": "1",
+    "adapter_id": "openai.responses",
+    "model_id": "gpt-5.2",
+    "model_revision": "gpt-5.2",
+    "semantic": {
+      "generation.max_output_tokens": { "type": "integer", "value": "64" },
+      "reasoning.effort": { "type": "text", "value": "high" }
+    },
+    "provider_fields": {
+      "max_output_tokens": 64,
+      "reasoning": { "effort": "high" }
+    }
+  },
+  "expected_canonical_utf8": "{\"adapter_id\":\"openai.responses\",\"model_id\":\"gpt-5.2\",\"model_revision\":\"gpt-5.2\",\"provider_fields\":{\"max_output_tokens\":64,\"reasoning\":{\"effort\":\"high\"}},\"schema_version\":\"1\",\"semantic\":{\"generation.max_output_tokens\":{\"type\":\"integer\",\"value\":\"64\"},\"reasoning.effort\":{\"type\":\"text\",\"value\":\"high\"}}}",
+  "expected_sha256": "f8b84fd1d18552bbbef57aabeb1be2d93612b9f44087f7fbc77bce89d4da0586"
+}
