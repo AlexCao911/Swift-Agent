@@ -3304,6 +3304,63 @@ The following work remains intentionally outside Phase 2:
   profiles to exact host targets, and removes the legacy Rust provider/local
   inference path only after parity is proven.
 
+## Phase 3 implementation evidence (2026-07-18)
+
+Phase 3 now provides a directly testable Swift-owned cloud product path while
+leaving the Rust Agent worker unchanged. `CloudLLMSubsystem` opens the shared
+SQLite v2 store, reconciles credential operations, interrupts old-epoch cloud
+sessions and leases, verifies the signed official catalog, installs exactly
+seven semantic adapters, and exposes Provider Profile, retention, egress,
+validation, and one-session runtime services. App composition supplies the
+single App-owned host epoch and an awaited local-route unloader; the cloud
+module does not import the local inference module.
+
+`CloudLLMRuntime` prepares only an exact active target and host binding. It
+requires the current catalog/adapter/model/credential-generation/retention
+validation, resolves target defaults plus host overrides, resolves attachment
+identities, and recomputes the complete `agent-input:v1`,
+`source-revisions:v1`, and `generation-disclosure:v1` binding before egress.
+The immutable sanitized `PreparedCloudSession` persists the target, binding,
+requirements, Profile revision and origin, credential generation and use-lease
+digest, retention identity, capability and parameter digests, scope and
+authorization IDs, opaque egress subject, outer egress attestation, adapter,
+and host epoch. It contains no key, request/response body, private reasoning,
+absolute path, or live handle.
+
+Every start and resume rechecks the exact Profile/target, retention approval,
+credential slot and lease, signed catalog, installed adapter, capability
+snapshot, and resolved parameters. The provider adapter can produce only a
+tagged unsendable wire value; egress policy must seal it as the exact
+generation class before the sole transport resolves Keychain material. Tool
+calls terminate as one ordered batch, normalized labeled results are approved
+incrementally and resumed once, and provider-private continuation remains in
+the Swift session. A retry is bounded to one attempt and only before any
+normalized reasoning summary, text, tool, or usage event. There is no model or
+provider fallback. Cancel and close are idempotent, provider cancel/close occur
+once, and lease closing plus the session tombstone is atomic.
+
+Deterministic evidence is provided by
+`scripts/run-llm-phase-3-contracts.sh`: it clears only the seven known provider
+key variables, runs all Phase 2 gates, the Rust/Swift/C++ architecture lint,
+the complete secret-free Swift fixture suite and product-path integration, and
+the hosted iOS Keychain attribute test against one resolved Simulator UDID
+(`LOCAL_AGENT_PHASE3_SIMULATOR_UDID` may explicitly override selection). The separate
+`scripts/run-llm-phase-3-live-smoke.sh` is manual: it accepts only existing
+Profile/model/credential references, rejects key/token/secret environment
+variables, sends one fixed synthetic prompt, retains no response, and cannot
+replace fixture CI.
+
+The following work remains intentionally unfinished:
+
+- Phase 4 aligns Rust public registration/attestation recomputation with these
+  canonical Phase 3 documents and connects the provider-neutral worker through
+  durable host commands, acknowledgements, event sequencing, watchdogs, and
+  incremental disclosure failures. `host_slot_v2` remains non-runnable until
+  that bridge lands.
+- Phase 5 adds the iPhone/iPad Model Center and Provider Profile UI, migrates
+  production Agent profiles to exact host targets, and removes the legacy Rust
+  Provider/local path only after parity and recovery evidence pass.
+
 ## Official API References
 
 The adapter design was checked against official provider documentation on

@@ -108,6 +108,14 @@ var packageTargets: [Target] = [
         name: "CloudCapabilityCatalogSigner",
         dependencies: ["LocalAgentLLMCloud"]
     ),
+    .executableTarget(
+        name: "CloudProviderLiveSmoke",
+        dependencies: [
+            "LocalAgentLLMContracts",
+            "LocalAgentLLMCore",
+            "LocalAgentLLMCloud",
+        ]
+    ),
 ]
 
 let package = Package(

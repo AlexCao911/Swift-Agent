@@ -403,6 +403,28 @@ public actor ProviderCredentialStore {
         guard changed == 1 else { throw leaseConflict() }
     }
 
+    package func abortPreparationLease(
+        _ leaseID: String,
+        expectedRevision: UInt64
+    ) throws {
+        guard let lease = try readLease(leaseID) else { return }
+        guard lease.purpose == .preparation,
+              lease.lifecycle == .acquired,
+              lease.revision == expectedRevision
+        else {
+            throw leaseConflict()
+        }
+        let changed = try database.executeChanges(
+            """
+            DELETE FROM credential_use_leases
+            WHERE lease_id = ?1 AND purpose = 'preparation'
+              AND lifecycle = 'acquired' AND revision = ?2
+            """,
+            bindings: [.text(leaseID), .text(String(expectedRevision))]
+        )
+        guard changed == 1 else { throw leaseConflict() }
+    }
+
     public func bindPreparationLease(
         _ leaseID: String,
         expectedRevision: UInt64

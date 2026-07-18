@@ -2,16 +2,16 @@ import Foundation
 import LocalAgentLLMContracts
 import LocalAgentLLMCore
 
-package struct ProviderValidationResult: Sendable {
-    package let validationID: String
-    package let subject: CapabilitySubject
-    package let observations: [CapabilityObservation]
-    package let snapshot: CapabilitySnapshot
-    package let evidenceDigest: String
-    package let expiresAt: Date
+public struct ProviderValidationResult: Sendable {
+    public let validationID: String
+    public let subject: CapabilitySubject
+    public let observations: [CapabilityObservation]
+    public let snapshot: CapabilitySnapshot
+    public let evidenceDigest: String
+    public let expiresAt: Date
 }
 
-package actor ProviderValidationService {
+public actor ProviderValidationService {
     private struct StoredObservation: Codable {
         let recordSchemaVersion = 2
         let observation: CapabilityObservation
@@ -78,7 +78,7 @@ package actor ProviderValidationService {
         self.idGenerator = idGenerator
     }
 
-    package func validate(
+    public func validate(
         profileID: String,
         profileRevision: UInt64,
         modelID: String,
@@ -167,6 +167,168 @@ package actor ProviderValidationService {
         }
     }
 
+    package func currentValidation(
+        profileID: String,
+        profileRevision: UInt64,
+        modelID: String,
+        adapterVersion: String,
+        targetID: LLMTargetID,
+        targetRevision: UInt64
+    ) async throws -> ProviderValidationResult {
+        let now = clock()
+        guard !profileID.isEmpty, profileRevision > 0, !modelID.isEmpty,
+              !adapterVersion.isEmpty, !targetID.rawValue.isEmpty, targetRevision > 0,
+              let profile = await profileStore.profile(
+                  profileID: profileID,
+                  revision: profileRevision
+              ),
+              profile.lifecycle == .active,
+              let state = await profileStore.state(
+                  profileID: profileID,
+                  profileRevision: profileRevision
+              ),
+              case let .validated(evidence) = state.validationState,
+              let catalog = try await catalogStore.current(),
+              let entry = catalog.entry(presetID: profile.revision.presetID, modelID: modelID),
+              !catalog.isRevoked(entry.identity),
+              entry.supports(adapterVersion: adapterVersion),
+              entry.adapterID == evidence.adapterID,
+              evidence.modelID == modelID,
+              evidence.origin == profile.origin,
+              evidence.catalogRevision == catalog.catalogRevision,
+              evidence.adapterVersion == adapterVersion,
+              evidence.expiresAt > now,
+              evidence.retentionMode == profile.revision.retentionMode,
+              evidence.retentionApprovalRevision == state.retentionApprovalRevision,
+              evidence.retentionApprovalDigest == state.retentionApprovalDigest,
+              let slot = try await credentialStore.slot(profile.revision.credentialRef),
+              slot.lifecycle == .active,
+              slot.currentGeneration == evidence.credentialGeneration
+        else {
+            throw validationFailure(
+                "provider_validation.current_unavailable",
+                "no current exact provider validation is available"
+            )
+        }
+
+        let rows = try database.queryRows(
+            """
+            SELECT validation_id, credential_generation, expires_at,
+              record_schema_version, record_json
+            FROM provider_validation_records
+            WHERE profile_id = ?1 AND profile_revision = ?2 AND model_id = ?3
+            """,
+            bindings: [
+                .text(profileID), .text(String(profileRevision)), .text(modelID),
+            ]
+        )
+        guard rows.count == 1,
+              rows[0].integer("record_schema_version") == 2,
+              rows[0].text("credential_generation") == String(evidence.credentialGeneration),
+              let validationJSON = rows[0].text("record_json"),
+              let validation = try? decodeValidation(StoredValidation.self, validationJSON),
+              validation.validationID == rows[0].text("validation_id"),
+              validation.expiresAt == evidence.expiresAt,
+              validation.expiresAt > now,
+              validation.evidenceDigest == evidence.evidenceDigest,
+              validation.subject.adapterID == evidence.adapterID,
+              validation.subject.providerProfileID == profileID,
+              validation.subject.providerProfileRevision == profileRevision,
+              validation.subject.credentialGeneration == evidence.credentialGeneration,
+              validation.subject.llmTargetID == nil,
+              validation.subject.llmTargetRevision == nil,
+              validation.subject.modelID == modelID,
+              validation.subject.catalogRevision == evidence.catalogRevision,
+              validation.subject.retentionMode == evidence.retentionMode.rawValue,
+              validation.subject.retentionApprovalRevision == evidence.retentionApprovalRevision,
+              validation.subject.retentionApprovalDigest == evidence.retentionApprovalDigest
+        else {
+            throw validationFailure(
+                "provider_validation.current_corrupt",
+                "current provider validation record is missing or inconsistent"
+            )
+        }
+
+        let observationRows = try database.queryRows(
+            """
+            SELECT observation_digest, credential_generation, expires_at,
+              record_schema_version, record_json
+            FROM cloud_capability_observations
+            WHERE profile_id = ?1 AND profile_revision = ?2 AND model_id = ?3
+            ORDER BY observation_digest
+            """,
+            bindings: [
+                .text(profileID), .text(String(profileRevision)), .text(modelID),
+            ]
+        )
+        var observations: [CapabilityObservation] = []
+        for row in observationRows {
+            guard row.integer("record_schema_version") == 2,
+                  row.text("credential_generation") == String(evidence.credentialGeneration),
+                  let json = row.text("record_json"),
+                  let stored = try? decodeValidation(StoredObservation.self, json),
+                  stored.observation.observationDigest == row.text("observation_digest"),
+                  validation.observationDigests.contains(stored.observation.observationDigest)
+            else {
+                throw validationFailure(
+                    "provider_validation.current_corrupt",
+                    "current capability observation is inconsistent"
+                )
+            }
+            observations.append(stored.observation)
+        }
+        guard observations.count == validation.observationDigests.count,
+              Set(observations.map(\.observationDigest)) == Set(validation.observationDigests)
+        else {
+            throw validationFailure(
+                "provider_validation.current_corrupt",
+                "current capability observations are incomplete"
+            )
+        }
+
+        let persistedSnapshot = CapabilityMatrix.resolve(
+            observations: observations,
+            subject: validation.subject,
+            policy: .cloud,
+            now: now
+        )
+        guard try validationEvidenceDigest(persistedSnapshot) == validation.evidenceDigest else {
+            throw validationFailure(
+                "provider_validation.current_corrupt",
+                "current capability snapshot evidence does not recompute"
+            )
+        }
+
+        let exactSubject = CapabilitySubject(
+            adapterID: validation.subject.adapterID,
+            providerProfileID: profileID,
+            providerProfileRevision: profileRevision,
+            credentialGeneration: evidence.credentialGeneration,
+            llmTargetID: targetID,
+            llmTargetRevision: targetRevision,
+            modelID: modelID,
+            modelRevision: validation.subject.modelRevision,
+            catalogRevision: catalog.catalogRevision,
+            retentionMode: profile.revision.retentionMode.rawValue,
+            retentionApprovalRevision: state.retentionApprovalRevision,
+            retentionApprovalDigest: state.retentionApprovalDigest
+        )
+        let snapshot = CapabilityMatrix.resolve(
+            observations: observations,
+            subject: exactSubject,
+            policy: .cloud,
+            now: now
+        )
+        return ProviderValidationResult(
+            validationID: validation.validationID,
+            subject: exactSubject,
+            observations: observations,
+            snapshot: snapshot,
+            evidenceDigest: try validationEvidenceDigest(snapshot),
+            expiresAt: validation.expiresAt
+        )
+    }
+
     private func performValidation(
         profile: PublishedProviderProfileRevision,
         preset: ProviderPreset,
@@ -218,7 +380,7 @@ package actor ProviderValidationService {
             hostProcessEpoch: hostProcessEpoch
         )
 
-        let now = clock()
+        let now = millisecondDate(clock())
         let expiresAt = now.addingTimeInterval(validity)
         let subject = CloudCapabilityObservationFactory.exactSubject(
             adapterID: preset.semanticAdapterID,
@@ -596,7 +758,7 @@ private func validationAdapter(
     }
 }
 
-private func validationEvidenceDigest(
+package func validationEvidenceDigest(
     _ snapshot: CapabilitySnapshot
 ) throws -> String {
     let capabilities = try CanonicalJSONValue.object(entries: snapshot.capabilities.map {
@@ -630,8 +792,17 @@ private func validationEvidenceDigest(
 
 private func validationJSON<T: Encodable>(_ value: T) throws -> String {
     let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
+    encoder.dateEncodingStrategy = .millisecondsSince1970
     return String(decoding: try encoder.encode(value), as: UTF8.self)
+}
+
+private func decodeValidation<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .millisecondsSince1970
+    guard let data = json.data(using: .utf8) else {
+        throw validationFailure("provider_validation.current_corrupt", "validation record is not UTF-8")
+    }
+    return try decoder.decode(type, from: data)
 }
 
 private func profileStateJSON<T: Encodable>(_ value: T) throws -> String {
