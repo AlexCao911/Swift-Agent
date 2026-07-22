@@ -841,7 +841,7 @@ git commit -m "feat: commit authoritative host llm runs"
 - The same callback transports regular `HostCommandEnvelope` and preparation-scoped cleanup envelopes under `HostDispatchEnvelope`; their asynchronous acknowledgements remain separate FFI operations and cannot be confused.
 - Rejected acknowledgement handling is explicit: rejected start/resume records a logical failure and schedules close; rejected cancel schedules close or quarantine according to backend confirmation; rejected close or prepared cleanup moves the resource to `quarantined` and keeps the lease `releasing`.
 
-- [ ] **Step 1: Write failing ownership, reentrancy, redispatch, and FFI tests**
+- [x] **Step 1: Write failing ownership, reentrancy, redispatch, and FFI tests**
 
 Add a callback probe that records buffer bytes, tries to lock the runtime during the callback, blocks on demand, and returns scripted receipts. Require byte-for-byte stable redispatch, no held mutex, scheduler-owned timeouts, and safe teardown:
 
@@ -890,7 +890,7 @@ fn runtime_free_waits_for_blocked_callback_before_releasing_context() {
 
 Swift tests must prove the callback copies into owned `Data` before returning, never synchronously re-enters Rust, survives uninstall/reinstall without reusing a released context, and cannot accept work after quiescing begins. Add reopen-deadline and App suspend/resume tests.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration host_llm_ffi -- --nocapture
@@ -899,7 +899,7 @@ swift test --package-path toolkit --filter RustRuntimeClientContractTests.llmHos
 
 Expected: fail because the C ABI, runtime-owned scheduler/lifecycle, deadline wakeup, safe context release, and Swift wrapper are absent.
 
-- [ ] **Step 3: Implement the narrow ABI and post-lock dispatcher**
+- [x] **Step 3: Implement the narrow ABI and post-lock dispatcher**
 
 Add the C contract:
 
@@ -925,7 +925,7 @@ The Rust dispatcher snapshots pending rows under the repository lock, releases i
 
 Store the retained Swift context behind an in-flight callback guard. Install rejects a second live host, uninstall transitions to quiescing and waits for callbacks, reinstall creates a fresh context generation, and runtime destruction follows `stop intake → wake → quiesce callbacks → join dispatcher → release_context → free Rust state`. Test-only drive hooks call the same single-iteration routine used by the scheduler and are not needed in production.
 
-- [ ] **Step 4: Run GREEN and bridge regressions**
+- [x] **Step 4: Run GREEN and bridge regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration -- --nocapture
@@ -935,7 +935,7 @@ git diff --check
 
 Expected: ownership/reentrancy/redispatch, autonomous timeout, suspend/resume, uninstall/reinstall, callback-blocked free, and existing bridge tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/execution rust-core/src/ffi_bridge.rs rust-core/tests/integration* \

@@ -14,7 +14,7 @@ pub use event_store::{
 pub use migration::{MigrationPlan, MigrationStep, SchemaVersion};
 pub use repository::{RepositoryName, StorageRepository};
 pub use runtime_state::{
-    HostCommandOutboxRow, HostCommandOutboxStatus, InMemoryRuntimeStateStore,
+    runtime_now_millis, HostCommandOutboxRow, HostCommandOutboxStatus, InMemoryRuntimeStateStore,
     PreparedHostRunCommit, RuntimeAggregateFailurePoint, RuntimeAggregateInspection,
     RuntimeStateError, RuntimeTransition, UnifiedRuntimeStateRepository,
 };

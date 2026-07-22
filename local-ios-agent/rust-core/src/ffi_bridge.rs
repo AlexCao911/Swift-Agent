@@ -34,13 +34,14 @@ use crate::execution::{
     CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionModelClient,
     ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionStartError, ExecutionToolCall,
     ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
-    ExecutionWorkerDependencies, RunHandle, RuntimeOptions, StartExecutionRequest,
+    ExecutionWorkerDependencies, HostLLMDispatcherConfig, HostLLMDispatcherRuntime,
+    LocalAgentLLMHostVTable, RunHandle, RuntimeOptions, StartExecutionRequest,
 };
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
-    HostBindingSubjectCatalog, PackageBindingPreparation, PreparationAbortReason,
-    PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
-    PreparedSessionRegistration, ProfilePublishPreparation,
+    HostBindingSubjectCatalog, HostCommandAcknowledgement, LLMEventEnvelope,
+    PackageBindingPreparation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::run_snapshot::{RunPreparationService, StartRunRequest};
@@ -225,6 +226,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     conversation_commits: ConversationCommitService,
     host_binding: AgentHostBindingService,
     run_preparation: RunPreparationService,
+    host_llm_dispatcher: HostLLMDispatcherRuntime,
     ffi_tainted: AtomicBool,
 }
 
@@ -278,6 +280,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             host_process_epoch.clone(),
         );
+        let host_llm_dispatcher = HostLLMDispatcherRuntime::new_with_preparations(
+            runtime_state.clone(),
+            Some(agent_os_state.clone()),
+            HostLLMDispatcherConfig::default(),
+        );
         let run_preparation = RunPreparationService::with_host_runtime(
             agent_os_state.clone(),
             host_process_epoch,
@@ -302,6 +309,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             conversation_commits,
             host_binding,
             run_preparation,
+            host_llm_dispatcher,
             ffi_tainted: AtomicBool::new(false),
         })
     }
@@ -318,6 +326,36 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         } else {
             Ok(())
         }
+    }
+
+    fn install_llm_host(&self, vtable: LocalAgentLLMHostVTable) -> Result<(), AgentError> {
+        self.host_llm_dispatcher
+            .install(vtable)
+            .map_err(|error| AgentError::Ffi(format!("{}: {error}", error.code())))
+    }
+
+    fn uninstall_llm_host(&self) -> Result<(), AgentError> {
+        self.host_llm_dispatcher
+            .uninstall()
+            .map_err(|error| AgentError::Ffi(format!("{}: {error}", error.code())))
+    }
+
+    fn suspend_llm_host(&self) -> Result<(), AgentError> {
+        self.host_llm_dispatcher
+            .suspend()
+            .map_err(|error| AgentError::Ffi(format!("{}: {error}", error.code())))
+    }
+
+    fn resume_llm_host(&self) -> Result<(), AgentError> {
+        self.host_llm_dispatcher
+            .resume()
+            .map_err(|error| AgentError::Ffi(format!("{}: {error}", error.code())))
+    }
+
+    fn drive_llm_host(&self) -> Result<(), AgentError> {
+        self.host_llm_dispatcher
+            .drive_once()
+            .map_err(|error| AgentError::Ffi(format!("{}: {error}", error.code())))
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, AgentRuntime<S>>, AgentError> {
@@ -563,6 +601,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .run_preparation
             .commit_start(&request.token, request.attestation, request.now_millis)
             .map_err(preparation_agent_error)?;
+        self.host_llm_dispatcher.wake();
         to_json(&handle)
     }
 
@@ -590,6 +629,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
                 request.reason,
             )
             .map_err(preparation_agent_error)?;
+        self.host_llm_dispatcher.wake();
         to_json(&record)
     }
 
@@ -611,7 +651,26 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .run_preparation
             .ack_prepared_session_cleanup(acknowledgement)
             .map_err(preparation_agent_error)?;
+        self.host_llm_dispatcher.wake();
         to_json(&record)
+    }
+
+    fn acknowledge_llm_command_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let acknowledgement: HostCommandAcknowledgement = from_json(request_json)?;
+        let row = self
+            .host_llm_dispatcher
+            .acknowledge_command(&acknowledgement)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&row)
+    }
+
+    fn submit_llm_event_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let event: LLMEventEnvelope = from_json(request_json)?;
+        let receipt = self
+            .host_llm_dispatcher
+            .submit_event(&event)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&receipt)
     }
 
     fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
@@ -903,6 +962,55 @@ impl RuntimeJsonBridge {
         match self {
             Self::InMemory(runtime) => runtime.ensure_ffi_usable(),
             Self::Sqlite(runtime) => runtime.ensure_ffi_usable(),
+        }
+    }
+
+    fn install_llm_host(&self, vtable: LocalAgentLLMHostVTable) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.install_llm_host(vtable),
+            Self::Sqlite(runtime) => runtime.install_llm_host(vtable),
+        }
+    }
+
+    fn uninstall_llm_host(&self) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.uninstall_llm_host(),
+            Self::Sqlite(runtime) => runtime.uninstall_llm_host(),
+        }
+    }
+
+    fn suspend_llm_host(&self) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.suspend_llm_host(),
+            Self::Sqlite(runtime) => runtime.suspend_llm_host(),
+        }
+    }
+
+    fn resume_llm_host(&self) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.resume_llm_host(),
+            Self::Sqlite(runtime) => runtime.resume_llm_host(),
+        }
+    }
+
+    fn drive_llm_host(&self) -> Result<(), AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.drive_llm_host(),
+            Self::Sqlite(runtime) => runtime.drive_llm_host(),
+        }
+    }
+
+    fn acknowledge_llm_command_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.acknowledge_llm_command_json(request_json),
+            Self::Sqlite(runtime) => runtime.acknowledge_llm_command_json(request_json),
+        }
+    }
+
+    fn submit_llm_event_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.submit_llm_event_json(request_json),
+            Self::Sqlite(runtime) => runtime.submit_llm_event_json(request_json),
         }
     }
 
@@ -1426,6 +1534,70 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_free(runtime: *mut RuntimeJs
             drop(Box::from_raw(runtime));
         }
     }));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_install_llm_host(
+    runtime: *mut RuntimeJsonBridge,
+    vtable: *const LocalAgentLLMHostVTable,
+) -> c_int {
+    c_runtime_status(runtime, || {
+        let vtable = vtable
+            .as_ref()
+            .copied()
+            .ok_or_else(|| AgentError::Ffi("LLM host vtable must not be null".into()))?;
+        bridge_ref(runtime)?.install_llm_host(vtable)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_uninstall_llm_host(
+    runtime: *mut RuntimeJsonBridge,
+) -> c_int {
+    c_runtime_status(runtime, || bridge_ref(runtime)?.uninstall_llm_host())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_suspend_llm_host(
+    runtime: *mut RuntimeJsonBridge,
+) -> c_int {
+    c_runtime_status(runtime, || bridge_ref(runtime)?.suspend_llm_host())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_resume_llm_host(
+    runtime: *mut RuntimeJsonBridge,
+) -> c_int {
+    c_runtime_status(runtime, || bridge_ref(runtime)?.resume_llm_host())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_drive_llm_host(
+    runtime: *mut RuntimeJsonBridge,
+) -> c_int {
+    c_runtime_status(runtime, || bridge_ref(runtime)?.drive_llm_host())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_submit_llm_command_ack(
+    runtime: *mut RuntimeJsonBridge,
+    acknowledgement_json: *const c_char,
+) -> *mut c_char {
+    c_runtime_result(runtime, || {
+        let acknowledgement_json = c_str_arg(acknowledgement_json, "acknowledgement_json")?;
+        bridge_ref(runtime)?.acknowledge_llm_command_json(acknowledgement_json)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_submit_llm_event(
+    runtime: *mut RuntimeJsonBridge,
+    event_json: *const c_char,
+) -> *mut c_char {
+    c_runtime_result(runtime, || {
+        let event_json = c_str_arg(event_json, "event_json")?;
+        bridge_ref(runtime)?.submit_llm_event_json(event_json)
+    })
 }
 
 #[no_mangle]
@@ -3008,6 +3180,26 @@ unsafe fn c_runtime_result(
         }
     };
     into_c_string(json)
+}
+
+unsafe fn c_runtime_status(
+    runtime: *mut RuntimeJsonBridge,
+    run: impl FnOnce() -> Result<(), AgentError>,
+) -> c_int {
+    match catch_unwind(AssertUnwindSafe(|| {
+        let bridge = bridge_ref(runtime)?;
+        bridge.ensure_ffi_usable()?;
+        run()
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(_)) => -1,
+        Err(_) => {
+            if let Some(bridge) = runtime.as_ref() {
+                bridge.mark_ffi_tainted();
+            }
+            -1
+        }
+    }
 }
 
 fn c_void_boundary(run: impl FnOnce()) {

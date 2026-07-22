@@ -1,6 +1,9 @@
 #ifndef CLOCAL_AGENT_RUNTIME_H
 #define CLOCAL_AGENT_RUNTIME_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -8,10 +11,45 @@ extern "C" {
 typedef struct LocalAgentRuntimeBridge LocalAgentRuntimeBridge;
 typedef int (*LocalAgentRuntimeEventCallback)(const char *event_json, void *user_data);
 
+typedef enum {
+  LOCAL_AGENT_LLM_HOST_COPIED = 0,
+  LOCAL_AGENT_LLM_HOST_BACKPRESSURE = 1,
+  LOCAL_AGENT_LLM_HOST_UNAVAILABLE = 2
+} local_agent_llm_host_copy_receipt_t;
+
+typedef local_agent_llm_host_copy_receipt_t (*local_agent_llm_host_command_fn)(
+    const uint8_t *bytes,
+    size_t length,
+    void *context
+);
+
+typedef struct {
+  uint32_t abi_version;
+  local_agent_llm_host_command_fn submit_command;
+  void (*release_context)(void *context);
+  void *context;
+} local_agent_llm_host_vtable_t;
+
 LocalAgentRuntimeBridge *local_agent_runtime_bridge_new(void);
 LocalAgentRuntimeBridge *local_agent_runtime_bridge_new_with_config(const char *config_json);
 void local_agent_runtime_bridge_free(LocalAgentRuntimeBridge *runtime);
 void local_agent_runtime_bridge_string_free(char *value);
+int local_agent_runtime_bridge_install_llm_host(
+    LocalAgentRuntimeBridge *runtime,
+    const local_agent_llm_host_vtable_t *vtable
+);
+int local_agent_runtime_bridge_uninstall_llm_host(LocalAgentRuntimeBridge *runtime);
+int local_agent_runtime_bridge_suspend_llm_host(LocalAgentRuntimeBridge *runtime);
+int local_agent_runtime_bridge_resume_llm_host(LocalAgentRuntimeBridge *runtime);
+int local_agent_runtime_bridge_drive_llm_host(LocalAgentRuntimeBridge *runtime);
+char *local_agent_runtime_bridge_submit_llm_command_ack(
+    LocalAgentRuntimeBridge *runtime,
+    const char *acknowledgement_json
+);
+char *local_agent_runtime_bridge_submit_llm_event(
+    LocalAgentRuntimeBridge *runtime,
+    const char *event_json
+);
 
 char *local_agent_runtime_bridge_create_session(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_session_ids(LocalAgentRuntimeBridge *runtime);

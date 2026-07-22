@@ -1,9 +1,59 @@
 import Foundation
 import Testing
 @testable import LocalAgentBridge
+#if canImport(CLocalAgentRuntime)
+import CLocalAgentRuntime
+#endif
 
 @Suite("Runtime clients")
 struct RustRuntimeClientContractTests {
+    #if canImport(CLocalAgentRuntime)
+    @Test
+    func llmHostCopiesBytesBeforeReturningAndQuiescesBeforeRelease() throws {
+        let probe = LLMHostPortProbe()
+        let received = LockedDataBox()
+        let port = try RustLLMHostPort(
+            owner: probe,
+            runtime: probe.runtime,
+            functions: probe.table()
+        ) { data in
+            received.set(data)
+            return .copied
+        }
+
+        var source: [UInt8] = [1, 2, 3, 4]
+        #expect(probe.submit(source) == LOCAL_AGENT_LLM_HOST_COPIED)
+        source[0] = 99
+        #expect(received.value() == Data([1, 2, 3, 4]))
+
+        try port.close()
+        #expect(probe.receiptObservedDuringUninstall == LOCAL_AGENT_LLM_HOST_UNAVAILABLE)
+        #expect(probe.releaseCount == 1)
+    }
+
+    @Test
+    func llmHostUninstallAllowsFreshReinstallWithoutReleasingTwice() throws {
+        let probe = LLMHostPortProbe()
+        let first = try RustLLMHostPort(
+            owner: probe,
+            runtime: probe.runtime,
+            functions: probe.table()
+        ) { _ in .copied }
+        try first.close()
+
+        let second = try RustLLMHostPort(
+            owner: probe,
+            runtime: probe.runtime,
+            functions: probe.table()
+        ) { _ in .backpressure }
+        #expect(probe.submit([7]) == LOCAL_AGENT_LLM_HOST_BACKPRESSURE)
+        try second.close()
+
+        #expect(probe.installCount == 2)
+        #expect(probe.releaseCount == 2)
+    }
+    #endif
+
     @Test
     func rustRuntimeConfigurationEncodesRequiredHostProcessEpoch() throws {
         let epoch = try #require(
@@ -859,6 +909,85 @@ struct RustRuntimeClientContractTests {
         )
     }
 }
+
+#if canImport(CLocalAgentRuntime)
+private final class LockedDataBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func set(_ data: Data) {
+        lock.lock()
+        self.data = data
+        lock.unlock()
+    }
+
+    func value() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
+private final class LLMHostPortProbe: @unchecked Sendable {
+    let runtime = UnsafeMutableRawPointer(bitPattern: 1)!
+    private let lock = NSLock()
+    private var vtable: local_agent_llm_host_vtable_t?
+    private(set) var installCount = 0
+    private(set) var releaseCount = 0
+    private(set) var receiptObservedDuringUninstall: local_agent_llm_host_copy_receipt_t?
+
+    func table() -> RustLLMHostCFunctionTable {
+        RustLLMHostCFunctionTable(
+            install: { [self] _, pointer in
+                lock.lock()
+                defer { lock.unlock() }
+                guard vtable == nil, let pointer else { return -1 }
+                vtable = pointer.pointee
+                installCount += 1
+                return 0
+            },
+            uninstall: { [self] _ in
+                lock.lock()
+                guard let installed = vtable else {
+                    lock.unlock()
+                    return -1
+                }
+                vtable = nil
+                lock.unlock()
+                var byte: UInt8 = 0
+                receiptObservedDuringUninstall = installed.submit_command?(
+                    &byte,
+                    1,
+                    installed.context
+                )
+                installed.release_context?(installed.context)
+                releaseCount += 1
+                return 0
+            },
+            suspend: { _ in 0 },
+            resume: { _ in 0 },
+            drive: { _ in 0 },
+            submitAcknowledgement: { _, _ in nil },
+            submitEvent: { _, _ in nil },
+            freeString: { _ in }
+        )
+    }
+
+    func submit(_ bytes: [UInt8]) -> local_agent_llm_host_copy_receipt_t? {
+        lock.lock()
+        let installed = vtable
+        lock.unlock()
+        guard let installed else { return nil }
+        return bytes.withUnsafeBufferPointer { buffer in
+            installed.submit_command?(
+                buffer.baseAddress,
+                buffer.count,
+                installed.context
+            )
+        }
+    }
+}
+#endif
 
 private func assertProviderNeutralBridgeObject(_ value: Any) {
     if let object = value as? [String: Any] {

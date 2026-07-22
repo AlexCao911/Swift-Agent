@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::execution::{ExecutionEvent, ExecutionEventRepository};
 use crate::llm_contracts::{
     HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
-    HostCommandEnvelope, HostRunHandle, HostSessionCloseDisposition, HostSessionRecord,
-    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
-    LLMEventSubmissionResult, LogicalRunOutcome, PreparationError, PreparationReconciliation,
-    PreparedSessionCleanupIdentity, ResourceLifecycle, RunPreparationState,
+    HostCommandEnvelope, HostCommandKind, HostExecutionPhase, HostRunHandle,
+    HostSessionCloseDisposition, HostSessionRecord, HostWorkerRecord, LLMEventEnvelope,
+    LLMEventReceipt, LLMEventReceiptDisposition, LLMEventSubmissionResult, LogicalRunOutcome,
+    PreparationError, PreparationReconciliation, PreparedSessionCleanupIdentity, ResourceLifecycle,
+    RunPreparationState,
 };
 use crate::storage::agent_os_state::{PreparedRunConsumption, SharedAgentOSStateStore};
 
@@ -46,6 +48,7 @@ pub enum HostCommandOutboxStatus {
     Accepted,
     Rejected,
     Cancelled,
+    TimedOut,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -64,6 +67,12 @@ pub struct HostCommandOutboxRow {
     acknowledgement: Option<HostCommandAcknowledgement>,
     #[serde(default)]
     payload: Option<HostCommandEnvelope>,
+    #[serde(default)]
+    first_dispatch_millis: Option<u64>,
+    #[serde(default)]
+    next_dispatch_millis: Option<u64>,
+    #[serde(default)]
+    acknowledgement_deadline_millis: Option<u64>,
 }
 
 impl HostCommandOutboxRow {
@@ -79,6 +88,9 @@ impl HostCommandOutboxRow {
             copy_receipt: None,
             acknowledgement: None,
             payload: Some(command),
+            first_dispatch_millis: None,
+            next_dispatch_millis: None,
+            acknowledgement_deadline_millis: None,
         }
     }
 
@@ -109,6 +121,28 @@ impl HostCommandOutboxRow {
     pub fn copy_receipt(&self) -> Option<HostCommandCopyReceipt> {
         self.copy_receipt
     }
+    pub fn acknowledgement(&self) -> Option<&HostCommandAcknowledgement> {
+        self.acknowledgement.as_ref()
+    }
+    pub fn first_dispatch_millis(&self) -> Option<u64> {
+        self.first_dispatch_millis
+    }
+    pub fn next_dispatch_millis(&self) -> Option<u64> {
+        self.next_dispatch_millis
+    }
+    pub fn acknowledgement_deadline_millis(&self) -> Option<u64> {
+        self.acknowledgement_deadline_millis
+    }
+    pub fn is_dispatch_due(&self, now_millis: u64) -> bool {
+        self.next_dispatch_millis
+            .map(|deadline| now_millis >= deadline)
+            .unwrap_or(true)
+    }
+    pub fn is_acknowledgement_overdue(&self, now_millis: u64) -> bool {
+        self.acknowledgement_deadline_millis
+            .map(|deadline| now_millis >= deadline)
+            .unwrap_or(false)
+    }
     pub(crate) fn with_copy_receipt(mut self, receipt: HostCommandCopyReceipt) -> Self {
         self.copy_receipt = Some(receipt);
         self.status = if receipt == HostCommandCopyReceipt::Copied {
@@ -116,6 +150,22 @@ impl HostCommandOutboxRow {
         } else {
             HostCommandOutboxStatus::PendingCopy
         };
+        self
+    }
+    pub(crate) fn with_timed_copy_receipt(
+        mut self,
+        receipt: HostCommandCopyReceipt,
+        now_millis: u64,
+        acknowledgement_timeout: Duration,
+        redispatch_interval: Duration,
+    ) -> Self {
+        self = self.with_copy_receipt(receipt);
+        self.first_dispatch_millis.get_or_insert(now_millis);
+        self.acknowledgement_deadline_millis.get_or_insert_with(|| {
+            now_millis.saturating_add(duration_millis(acknowledgement_timeout))
+        });
+        self.next_dispatch_millis =
+            Some(now_millis.saturating_add(duration_millis(redispatch_interval).max(1)));
         self
     }
     pub(crate) fn with_acknowledgement(
@@ -126,9 +176,7 @@ impl HostCommandOutboxRow {
             HostCommandAcknowledgementDisposition::Accepted => HostCommandOutboxStatus::Accepted,
             HostCommandAcknowledgementDisposition::Rejected => HostCommandOutboxStatus::Rejected,
         };
-        if acknowledgement.disposition() == HostCommandAcknowledgementDisposition::Accepted {
-            self.payload = None;
-        }
+        self.payload = None;
         self.acknowledgement = Some(acknowledgement);
         self
     }
@@ -137,6 +185,110 @@ impl HostCommandOutboxRow {
         self.payload = None;
         self
     }
+    pub(crate) fn timed_out(mut self) -> Self {
+        self.status = HostCommandOutboxStatus::TimedOut;
+        self.payload = None;
+        self
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+pub(crate) fn close_command_for(
+    row: &HostCommandOutboxRow,
+    worker: &HostWorkerRecord,
+) -> Result<HostCommandEnvelope, RuntimeStateError> {
+    let command_id = crate::llm_contracts::BearerTokenIssuer::system()
+        .issue("saga-token:v1")
+        .map_err(|error| RuntimeStateError::new("llm.command.id_failed", error.to_string()))?
+        .raw()
+        .to_string();
+    HostCommandEnvelope::lifecycle(
+        command_id,
+        row.run_id(),
+        row.session_handle(),
+        row.host_process_epoch(),
+        worker.expected_command_sequence(),
+        HostCommandKind::CloseSession,
+    )
+    .map_err(|error| RuntimeStateError::new("llm.command.close_invalid", error.to_string()))
+}
+
+pub(crate) fn apply_command_acknowledgement_state(
+    row: &HostCommandOutboxRow,
+    acknowledgement: &HostCommandAcknowledgement,
+    worker: &HostWorkerRecord,
+    session: &HostSessionRecord,
+) -> Result<
+    (
+        HostWorkerRecord,
+        HostSessionRecord,
+        Option<HostCommandEnvelope>,
+    ),
+    RuntimeStateError,
+> {
+    let kind = row
+        .payload()
+        .map(HostCommandEnvelope::kind)
+        .ok_or_else(conflict)?;
+    let mut next_worker = worker.clone().with_revision(worker.revision() + 1);
+    let mut lifecycle = worker.resource_lifecycle().clone();
+    let mut close_command = None;
+
+    match acknowledgement.disposition() {
+        HostCommandAcknowledgementDisposition::Accepted => match kind {
+            HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration => {
+                next_worker = next_worker
+                    .with_execution_phase(Some(HostExecutionPhase::AwaitingGenerationStarted));
+            }
+            HostCommandKind::CancelGeneration => {
+                lifecycle = ResourceLifecycle::AwaitingCancelledTerminal;
+            }
+            HostCommandKind::CloseSession => {
+                lifecycle = ResourceLifecycle::AwaitingSessionClosed;
+            }
+            HostCommandKind::CapacityAvailable => {}
+        },
+        HostCommandAcknowledgementDisposition::Rejected => {
+            let code = acknowledgement
+                .rejection_code()
+                .unwrap_or("llm.command.rejected")
+                .to_string();
+            next_worker = next_worker
+                .with_execution_phase(None)
+                .with_logical_outcome(LogicalRunOutcome::Failed { code: code.clone() });
+            match kind {
+                HostCommandKind::CloseSession | HostCommandKind::CapacityAvailable => {
+                    lifecycle = ResourceLifecycle::Quarantined { code };
+                }
+                HostCommandKind::StartGeneration
+                | HostCommandKind::ResumeGeneration
+                | HostCommandKind::CancelGeneration => {
+                    lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                    close_command = Some(close_command_for(row, worker)?);
+                    next_worker = next_worker
+                        .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+                }
+            }
+        }
+    }
+    next_worker = next_worker.with_resource_lifecycle(lifecycle.clone());
+    Ok((
+        next_worker,
+        session.clone().with_resource_lifecycle(lifecycle),
+        close_command,
+    ))
+}
+
+pub fn runtime_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[derive(Clone, Debug)]
@@ -248,7 +400,27 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
         &self,
         command_id: &str,
         receipt: HostCommandCopyReceipt,
+    ) -> Result<HostCommandOutboxRow, RuntimeStateError> {
+        self.record_copy_receipt_at(
+            command_id,
+            receipt,
+            runtime_now_millis(),
+            Duration::from_secs(10),
+            Duration::from_millis(250),
+        )
+    }
+    fn record_copy_receipt_at(
+        &self,
+        command_id: &str,
+        receipt: HostCommandCopyReceipt,
+        now_millis: u64,
+        acknowledgement_timeout: Duration,
+        redispatch_interval: Duration,
     ) -> Result<HostCommandOutboxRow, RuntimeStateError>;
+    fn fail_command_acknowledgement_timeout(
+        &self,
+        command_id: &str,
+    ) -> Result<HostWorkerRecord, RuntimeStateError>;
     fn acknowledge_command(
         &self,
         acknowledgement: &HostCommandAcknowledgement,
@@ -490,20 +662,100 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         Ok(row)
     }
 
-    fn record_copy_receipt(
+    fn record_copy_receipt_at(
         &self,
         command_id: &str,
         receipt: HostCommandCopyReceipt,
+        now_millis: u64,
+        acknowledgement_timeout: Duration,
+        redispatch_interval: Duration,
     ) -> Result<HostCommandOutboxRow, RuntimeStateError> {
         let mut state = self.inner.lock().map_err(|_| poisoned())?;
         let row = state.commands.get_mut(command_id).ok_or_else(not_found)?;
-        row.copy_receipt = Some(receipt);
-        row.status = if receipt == HostCommandCopyReceipt::Copied {
-            HostCommandOutboxStatus::Copied
-        } else {
-            HostCommandOutboxStatus::PendingCopy
-        };
+        if !matches!(
+            row.status(),
+            HostCommandOutboxStatus::PendingCopy | HostCommandOutboxStatus::Copied
+        ) {
+            return Ok(row.clone());
+        }
+        *row = row.clone().with_timed_copy_receipt(
+            receipt,
+            now_millis,
+            acknowledgement_timeout,
+            redispatch_interval,
+        );
         Ok(row.clone())
+    }
+
+    fn fail_command_acknowledgement_timeout(
+        &self,
+        command_id: &str,
+    ) -> Result<HostWorkerRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let row = state
+            .commands
+            .get(command_id)
+            .ok_or_else(not_found)?
+            .clone();
+        if row.status() == HostCommandOutboxStatus::TimedOut {
+            return state
+                .workers
+                .get(row.run_id())
+                .cloned()
+                .ok_or_else(not_found);
+        }
+        if !matches!(
+            row.status(),
+            HostCommandOutboxStatus::PendingCopy | HostCommandOutboxStatus::Copied
+        ) {
+            return Err(conflict());
+        }
+        let worker = state
+            .workers
+            .get(row.run_id())
+            .ok_or_else(not_found)?
+            .clone();
+        let kind = row
+            .payload()
+            .map(HostCommandEnvelope::kind)
+            .ok_or_else(conflict)?;
+        let close_command = (!matches!(kind, HostCommandKind::CloseSession))
+            .then(|| close_command_for(&row, &worker))
+            .transpose()?;
+        let lifecycle = if close_command.is_some() {
+            ResourceLifecycle::AwaitingCloseCommandAck
+        } else {
+            ResourceLifecycle::Quarantined {
+                code: "llm.command.ack_timeout".into(),
+            }
+        };
+        let failed = worker
+            .clone()
+            .with_revision(worker.revision() + 1)
+            .with_execution_phase(None)
+            .with_logical_outcome(LogicalRunOutcome::Failed {
+                code: "llm.command.ack_timeout".into(),
+            })
+            .with_resource_lifecycle(lifecycle.clone())
+            .with_expected_command_sequence(
+                worker.expected_command_sequence() + u64::from(close_command.is_some()),
+            );
+        state
+            .workers
+            .insert(row.run_id().to_string(), failed.clone());
+        if let Some(session) = state.sessions.get_mut(row.session_handle()) {
+            *session = session.clone().with_resource_lifecycle(lifecycle);
+        }
+        state
+            .commands
+            .insert(command_id.to_string(), row.timed_out());
+        if let Some(close_command) = close_command {
+            let close_row = HostCommandOutboxRow::pending(close_command);
+            state
+                .commands
+                .insert(close_row.command_id().to_string(), close_row);
+        }
+        Ok(failed)
     }
 
     fn acknowledge_command(
@@ -513,18 +765,42 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         let mut state = self.inner.lock().map_err(|_| poisoned())?;
         let row = state
             .commands
-            .get_mut(acknowledgement.command_id())
+            .get(acknowledgement.command_id())
+            .cloned()
             .ok_or_else(not_found)?;
-        validate_ack(row, acknowledgement)?;
-        row.status = match acknowledgement.disposition() {
-            HostCommandAcknowledgementDisposition::Accepted => HostCommandOutboxStatus::Accepted,
-            HostCommandAcknowledgementDisposition::Rejected => HostCommandOutboxStatus::Rejected,
-        };
-        if acknowledgement.disposition() == HostCommandAcknowledgementDisposition::Accepted {
-            row.payload = None;
+        validate_ack(&row, acknowledgement)?;
+        if let Some(existing) = row.acknowledgement() {
+            return if existing == acknowledgement {
+                Ok(row)
+            } else {
+                Err(conflict())
+            };
         }
-        row.acknowledgement = Some(acknowledgement.clone());
-        Ok(row.clone())
+        let worker = state
+            .workers
+            .get(row.run_id())
+            .cloned()
+            .ok_or_else(not_found)?;
+        let session = state
+            .sessions
+            .get(row.session_handle())
+            .cloned()
+            .ok_or_else(not_found)?;
+        let (worker, session, close_command) =
+            apply_command_acknowledgement_state(&row, acknowledgement, &worker, &session)?;
+        let acknowledged = row.with_acknowledgement(acknowledgement.clone());
+        state
+            .commands
+            .insert(acknowledged.command_id().to_string(), acknowledged.clone());
+        state.workers.insert(worker.run_id().to_string(), worker);
+        state
+            .sessions
+            .insert(session.session_handle().to_string(), session);
+        if let Some(close_command) = close_command {
+            let close = HostCommandOutboxRow::pending(close_command);
+            state.commands.insert(close.command_id().to_string(), close);
+        }
+        Ok(acknowledged)
     }
 
     fn apply_event_transactionally(

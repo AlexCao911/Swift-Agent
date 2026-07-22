@@ -666,6 +666,14 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
         functions.freeRuntime(handle)
     }
 
+    #if canImport(CLocalAgentRuntime)
+    public func installLLMHost(
+        receive: @escaping @Sendable (Data) -> RustLLMHostCopyReceipt
+    ) throws -> RustLLMHostPort {
+        try RustLLMHostPort(owner: self, runtime: handle, receive: receive)
+    }
+    #endif
+
     public func createSession() async throws -> String {
         try decode(functions.createSession(handle), as: String.self)
     }

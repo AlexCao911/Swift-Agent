@@ -6,6 +6,7 @@ mod event_log;
 mod execution_plan;
 mod execution_planner;
 mod execution_service;
+mod host_llm_dispatcher;
 mod inference_settings;
 mod react_worker;
 mod run_lifecycle;
@@ -26,6 +27,11 @@ pub use execution_planner::{ExecutionPlanner, ExecutionPlanningError, ExecutionP
 pub use execution_service::{
     ActiveExecutionRunRegistry, ExecutionService, ExecutionServiceParts,
     ExecutionWorkerDependencies, ExecutionWorkerMode,
+};
+pub use host_llm_dispatcher::{
+    HostLLMDispatcherConfig, HostLLMDispatcherRuntime, LocalAgentLLMHostCommandFn,
+    LocalAgentLLMHostCopyReceipt, LocalAgentLLMHostReleaseContextFn, LocalAgentLLMHostVTable,
+    LOCAL_AGENT_LLM_HOST_ABI_VERSION,
 };
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use react_worker::{

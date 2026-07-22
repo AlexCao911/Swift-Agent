@@ -25,12 +25,13 @@ use super::agent_os_state::{
     RunPreparationRepository, SharedAgentOSStateStore, SqliteAgentOSStateStore,
 };
 use super::runtime_state::{
-    conflict, contract_error, not_found, poisoned, reconciliation_conflict, transaction_failed,
-    validate_ack, validate_command_for_worker, validate_transition, validate_worker_session,
+    apply_command_acknowledgement_state, close_command_for, conflict, contract_error, not_found,
+    poisoned, reconciliation_conflict, transaction_failed, validate_ack,
+    validate_command_for_worker, validate_transition, validate_worker_session,
 };
 use super::{
-    HostCommandOutboxRow, PreparedHostRunCommit, RuntimeAggregateFailurePoint,
-    RuntimeAggregateInspection, RuntimeStateError, RuntimeTransition,
+    HostCommandOutboxRow, HostCommandOutboxStatus, PreparedHostRunCommit,
+    RuntimeAggregateFailurePoint, RuntimeAggregateInspection, RuntimeStateError, RuntimeTransition,
     UnifiedRuntimeStateRepository,
 };
 
@@ -322,22 +323,91 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         Ok(row)
     }
 
-    fn record_copy_receipt(
+    fn record_copy_receipt_at(
         &self,
         command_id: &str,
         receipt: HostCommandCopyReceipt,
+        now_millis: u64,
+        acknowledgement_timeout: std::time::Duration,
+        redispatch_interval: std::time::Duration,
     ) -> Result<HostCommandOutboxRow, RuntimeStateError> {
         let mut store = self.inner.lock().map_err(|_| poisoned())?;
         let transaction = store
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_error)?;
-        let row = load_outbox(&transaction, command_id)?
-            .ok_or_else(not_found)?
-            .with_copy_receipt(receipt);
+        let row = load_outbox(&transaction, command_id)?.ok_or_else(not_found)?;
+        if !matches!(
+            row.status(),
+            HostCommandOutboxStatus::PendingCopy | HostCommandOutboxStatus::Copied
+        ) {
+            return Ok(row);
+        }
+        let row = row.with_timed_copy_receipt(
+            receipt,
+            now_millis,
+            acknowledgement_timeout,
+            redispatch_interval,
+        );
         update_outbox(&transaction, &row)?;
         transaction.commit().map_err(sqlite_error)?;
         Ok(row)
+    }
+
+    fn fail_command_acknowledgement_timeout(
+        &self,
+        command_id: &str,
+    ) -> Result<HostWorkerRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let row = load_outbox(&transaction, command_id)?.ok_or_else(not_found)?;
+        if row.status() == HostCommandOutboxStatus::TimedOut {
+            return load_worker(&transaction, row.run_id())?.ok_or_else(not_found);
+        }
+        if !matches!(
+            row.status(),
+            HostCommandOutboxStatus::PendingCopy | HostCommandOutboxStatus::Copied
+        ) {
+            return Err(conflict());
+        }
+        let worker = load_worker(&transaction, row.run_id())?.ok_or_else(not_found)?;
+        let kind = row
+            .payload()
+            .map(crate::llm_contracts::HostCommandEnvelope::kind)
+            .ok_or_else(conflict)?;
+        let close_command = (!matches!(kind, crate::llm_contracts::HostCommandKind::CloseSession))
+            .then(|| close_command_for(&row, &worker))
+            .transpose()?;
+        let lifecycle = if close_command.is_some() {
+            ResourceLifecycle::AwaitingCloseCommandAck
+        } else {
+            ResourceLifecycle::Quarantined {
+                code: "llm.command.ack_timeout".into(),
+            }
+        };
+        let failed = worker
+            .clone()
+            .with_revision(worker.revision() + 1)
+            .with_execution_phase(None)
+            .with_logical_outcome(LogicalRunOutcome::Failed {
+                code: "llm.command.ack_timeout".into(),
+            })
+            .with_resource_lifecycle(lifecycle.clone())
+            .with_expected_command_sequence(
+                worker.expected_command_sequence() + u64::from(close_command.is_some()),
+            );
+        update_worker(&transaction, worker.revision(), &failed)?;
+        let session = load_session(&transaction, row.session_handle())?.ok_or_else(not_found)?;
+        update_session(&transaction, &session.with_resource_lifecycle(lifecycle))?;
+        update_outbox(&transaction, &row.timed_out())?;
+        if let Some(close_command) = close_command {
+            insert_outbox(&transaction, &HostCommandOutboxRow::pending(close_command))?;
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(failed)
     }
 
     fn acknowledge_command(
@@ -351,8 +421,24 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             .map_err(sqlite_error)?;
         let row = load_outbox(&transaction, acknowledgement.command_id())?.ok_or_else(not_found)?;
         validate_ack(&row, acknowledgement)?;
+        if let Some(existing) = row.acknowledgement() {
+            return if existing == acknowledgement {
+                Ok(row)
+            } else {
+                Err(conflict())
+            };
+        }
+        let worker = load_worker(&transaction, row.run_id())?.ok_or_else(not_found)?;
+        let session = load_session(&transaction, row.session_handle())?.ok_or_else(not_found)?;
+        let (next_worker, next_session, close_command) =
+            apply_command_acknowledgement_state(&row, acknowledgement, &worker, &session)?;
         let row = row.with_acknowledgement(acknowledgement.clone());
         update_outbox(&transaction, &row)?;
+        update_worker(&transaction, worker.revision(), &next_worker)?;
+        update_session(&transaction, &next_session)?;
+        if let Some(close_command) = close_command {
+            insert_outbox(&transaction, &HostCommandOutboxRow::pending(close_command))?;
+        }
         transaction.commit().map_err(sqlite_error)?;
         Ok(row)
     }

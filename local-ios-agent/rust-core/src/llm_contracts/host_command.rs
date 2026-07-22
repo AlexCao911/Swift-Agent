@@ -81,6 +81,23 @@ pub struct HostCommandPayload {
 }
 
 impl HostCommandPayload {
+    pub fn lifecycle() -> Self {
+        Self {
+            schema_version: "1".into(),
+            model_input_id: "lifecycle".into(),
+            messages: Vec::new(),
+            tool_schema_json: "{}".into(),
+            tool_schema_digest: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                .into(),
+            source_revisions: Vec::new(),
+            source_revisions_digest:
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            attachments: Vec::new(),
+            semantic_history: Vec::new(),
+            tool_results: Vec::new(),
+        }
+    }
+
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
         digest("host-command-payload:v1", self)
     }
@@ -190,6 +207,42 @@ impl HostCommandEnvelope {
         Ok(envelope)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn lifecycle(
+        command_id: impl Into<String>,
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        command_sequence: u64,
+        kind: HostCommandKind,
+    ) -> Result<Self, HostContractError> {
+        if matches!(
+            kind,
+            HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration
+        ) {
+            return Err(HostContractError::new("llm.command.lifecycle_kind_invalid"));
+        }
+        let payload = HostCommandPayload::lifecycle();
+        let payload_digest = payload.expected_digest()?;
+        let mut envelope = Self {
+            schema_version: 1,
+            command_id: command_id.into(),
+            run_id: run_id.into(),
+            session_handle: session_handle.into(),
+            host_process_epoch: host_process_epoch.into(),
+            command_sequence,
+            generation_turn_id: None,
+            kind,
+            payload_digest,
+            disclosure_digest: None,
+            command_envelope_digest: String::new(),
+            disclosure: None,
+            payload,
+        };
+        envelope.command_envelope_digest = envelope.expected_digest()?;
+        Ok(envelope)
+    }
+
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
         if self.payload.expected_digest()? != self.payload_digest {
             return Err(HostContractError::new(
@@ -268,6 +321,9 @@ impl HostCommandAcknowledgement {
     pub fn disposition(&self) -> HostCommandAcknowledgementDisposition {
         self.disposition
     }
+    pub fn rejection_code(&self) -> Option<&str> {
+        self.rejection_code.as_deref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -343,6 +399,24 @@ impl<'de> Deserialize<'de> for HostDispatchEnvelope {
 }
 
 impl HostDispatchEnvelope {
+    pub fn command(command: HostCommandEnvelope) -> Self {
+        Self {
+            schema_version: 1,
+            dispatch_kind: HostDispatchKind::Command,
+            command: Some(command),
+            prepared_session_cleanup: None,
+        }
+    }
+
+    pub fn prepared_session_cleanup(cleanup: PreparedSessionCleanupEnvelope) -> Self {
+        Self {
+            schema_version: 1,
+            dispatch_kind: HostDispatchKind::PreparedSessionCleanup,
+            command: None,
+            prepared_session_cleanup: Some(cleanup),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), HostContractError> {
         let valid = match self.dispatch_kind {
             HostDispatchKind::Command => {

@@ -19,6 +19,8 @@ mod context_assembly_lifecycle;
 mod ffi_bridge;
 #[path = "integration/ffi_streaming_events.rs"]
 mod ffi_streaming_events;
+#[path = "integration/host_llm_ffi.rs"]
+mod host_llm_ffi;
 #[path = "integration/openai_chat_adapter.rs"]
 mod openai_chat_adapter;
 #[path = "integration/runtime_execution_lifecycle.rs"]
