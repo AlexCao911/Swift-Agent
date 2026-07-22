@@ -117,6 +117,33 @@ struct DeepSeekAdapterTests {
     }
 
     @Test
+    func toolFragmentsCannotEndAsFinalResponse() async throws {
+        let fixture = try await makeAuthorizedTransportFixture(modelID: "deepseek-chat")
+        defer { fixture.cleanup() }
+        await expectChatDecodeFailure(
+            "cloud_adapter.terminal_conflict",
+            fixture: "deepseek-tool-stop-conflict",
+            session: try DeepSeekAdapter().makeSession(fixture.sessionContext)
+        )
+    }
+
+    @Test
+    func toolTerminalRequiresANonemptyCompleteBatch() async throws {
+        let fixture = try await makeAuthorizedTransportFixture(modelID: "deepseek-chat")
+        defer { fixture.cleanup() }
+        await expectChatDecodeFailure(
+            "cloud_adapter.tool_call_incomplete",
+            fixture: "deepseek-empty-tool-terminal",
+            session: try DeepSeekAdapter().makeSession(fixture.sessionContext)
+        )
+        await expectChatDecodeFailure(
+            "cloud_adapter.tool_call_incomplete",
+            fixture: "deepseek-incomplete-tool-terminal",
+            session: try DeepSeekAdapter().makeSession(fixture.sessionContext)
+        )
+    }
+
+    @Test
     func authRateCancellationAndModelConstraintsFailWithStableSemantics() async throws {
         let fixture = try await makeAuthorizedTransportFixture(modelID: "deepseek-chat")
         defer { fixture.cleanup() }

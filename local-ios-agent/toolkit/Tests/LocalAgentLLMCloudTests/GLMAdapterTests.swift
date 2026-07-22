@@ -99,6 +99,17 @@ struct GLMAdapterTests {
     }
 
     @Test
+    func toolFragmentsCannotEndAsFinalResponse() async throws {
+        let fixture = try await makeAuthorizedTransportFixture(modelID: "glm-4.5")
+        defer { fixture.cleanup() }
+        await expectChatDecodeFailure(
+            "cloud_adapter.terminal_conflict",
+            fixture: "deepseek-tool-stop-conflict",
+            session: try GLMAdapter().makeSession(fixture.sessionContext)
+        )
+    }
+
+    @Test
     func nonGLMModelAndProviderPrivateParameterNamesAreRejected() async throws {
         let wrong = try await makeAuthorizedTransportFixture(modelID: "deepseek-chat")
         let raw = try await makeAuthorizedTransportFixture(

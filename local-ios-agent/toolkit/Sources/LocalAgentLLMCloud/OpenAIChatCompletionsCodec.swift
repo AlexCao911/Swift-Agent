@@ -315,7 +315,7 @@ private struct OpenAIChatCompletionsDecoder {
                 throw chatFailure("stream.interrupted", "Chat stream ended before finish_reason")
             }
             done = true
-            let ordered = tools.keys.sorted().compactMap { tools[$0] }
+            let ordered = try terminalTools(for: finishReason)
             if finishReason == .toolCalls {
                 assistantContinuation = ChatAssistantContinuation(
                     reasoningContent: preserveReasoning ? reasoning : "",
@@ -368,6 +368,11 @@ private struct OpenAIChatCompletionsDecoder {
                 finishReason = mapFinishReason(rawFinish)
                 if finishReason == .toolCalls {
                     output.append(contentsOf: try completeTools())
+                } else if !tools.isEmpty {
+                    throw chatFailure(
+                        "cloud_adapter.terminal_conflict",
+                        "Chat stream accumulated tool calls but ended as a final response"
+                    )
                 }
             }
         }
@@ -440,11 +445,36 @@ private struct OpenAIChatCompletionsDecoder {
     }
 
     private mutating func completeTools() throws -> [LLMBackendEvent] {
+        try completeToolValues().map { tool in
+            .toolCallCompleted(NormalizedToolCall(
+                callID: tool.callID,
+                name: tool.name,
+                argumentsJSON: tool.arguments
+            ))
+        }
+    }
+
+    private func terminalTools(
+        for finishReason: LLMFinishReason
+    ) throws -> [PartialTool] {
+        guard finishReason == .toolCalls else {
+            guard tools.isEmpty else {
+                throw chatFailure(
+                    "cloud_adapter.terminal_conflict",
+                    "Chat stream accumulated tool calls but ended as a final response"
+                )
+            }
+            return []
+        }
+        return try completeToolValues()
+    }
+
+    private func completeToolValues() throws -> [PartialTool] {
         let ordered = tools.keys.sorted().compactMap { tools[$0] }
         guard !ordered.isEmpty, ordered.indices.allSatisfy({ ordered[$0].index == $0 }) else {
             throw chatFailure("cloud_adapter.tool_call_incomplete", "tool call batch is incomplete")
         }
-        return try ordered.map { tool in
+        for tool in ordered {
             guard let data = tool.arguments.data(using: .utf8),
                   (try? JSONSerialization.jsonObject(
                       with: data,
@@ -452,16 +482,12 @@ private struct OpenAIChatCompletionsDecoder {
                   )) != nil
             else {
                 throw chatFailure(
-                    "cloud_adapter.tool_arguments_invalid",
-                    "tool arguments are not one complete JSON value"
+                    "cloud_adapter.tool_call_incomplete",
+                    "tool call ended before one complete JSON argument value"
                 )
             }
-            return .toolCallCompleted(NormalizedToolCall(
-                callID: tool.callID,
-                name: tool.name,
-                argumentsJSON: tool.arguments
-            ))
         }
+        return ordered
     }
 }
 

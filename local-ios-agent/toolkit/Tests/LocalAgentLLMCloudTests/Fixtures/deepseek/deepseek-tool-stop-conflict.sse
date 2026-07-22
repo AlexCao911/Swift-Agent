@@ -1,0 +1,5 @@
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"conflict_call","type":"function","function":{"name":"search.one","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
