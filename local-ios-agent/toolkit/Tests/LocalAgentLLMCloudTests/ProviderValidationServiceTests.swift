@@ -308,6 +308,157 @@ struct ProviderValidationServiceTests {
             "SELECT COUNT(*) AS value FROM cloud_capability_observations"
         ).first?.integer("value") == 0)
     }
+
+    @Test
+    func manualModelValidationIsCurrentAndConservative() async throws {
+        let harness = try await ValidationHarness.make()
+        defer { harness.cleanup() }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let service = try ProviderValidationService(
+            fileURL: harness.databaseURL,
+            profileStore: harness.profiles,
+            catalogStore: harness.catalog,
+            credentialStore: harness.credentials,
+            egressPolicy: harness.egress,
+            transport: ValidationTransport(),
+            hostProcessEpoch: harness.epoch,
+            clock: { now },
+            idGenerator: { "manual-validation" }
+        )
+
+        let validated = try await service.validate(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "manual-openai-model",
+            adapterVersion: "1"
+        )
+
+        #expect(validated.subject.catalogRevision == nil)
+        #expect(validated.subject.modelRevision == nil)
+        #expect(validated.snapshot.support(for: "text_generation") == .supported)
+        #expect(validated.snapshot.support(for: "streaming") == .supported)
+        #expect(validated.snapshot.support(for: "tool_calling") == .unknown)
+
+        let current = try await service.currentValidation(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "manual-openai-model",
+            adapterVersion: "1",
+            targetID: LLMTargetID(rawValue: "manual-target"),
+            targetRevision: 1
+        )
+        #expect(current.subject.catalogRevision == nil)
+        #expect(current.snapshot.support(for: "tool_calling") == .unknown)
+        let state = try #require(await harness.profiles.state(
+            profileID: "profile-main",
+            profileRevision: 1
+        ))
+        #expect(state.catalogRevision == nil)
+        guard case let .validated(evidence) = state.validationState else {
+            Issue.record("manual profile was not marked validated")
+            return
+        }
+        #expect(evidence.catalogRevision == nil)
+    }
+
+    @Test
+    func catalogAdvancePreservesManualEvidenceWithoutPromotion() async throws {
+        let harness = try await ValidationHarness.make()
+        defer { harness.cleanup() }
+        let service = try ProviderValidationService(
+            fileURL: harness.databaseURL,
+            profileStore: harness.profiles,
+            catalogStore: harness.catalog,
+            credentialStore: harness.credentials,
+            egressPolicy: harness.egress,
+            transport: ValidationTransport(),
+            hostProcessEpoch: harness.epoch
+        )
+        _ = try await service.validate(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "manual-openai-model",
+            adapterVersion: "1"
+        )
+
+        _ = try await harness.catalog.accept(envelope: try signedCloudCatalog(
+            revision: 2,
+            signingKey: harness.catalogSigningKey
+        ).envelope)
+
+        let state = try #require(await harness.profiles.state(
+            profileID: "profile-main",
+            profileRevision: 1
+        ))
+        guard case let .validated(evidence) = state.validationState else {
+            Issue.record("manual validation was invalidated by an unrelated catalog advance")
+            return
+        }
+        #expect(state.catalogRevision == nil)
+        #expect(evidence.modelID == "manual-openai-model")
+        #expect(evidence.catalogRevision == nil)
+        let current = try await service.currentValidation(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "manual-openai-model",
+            adapterVersion: "1",
+            targetID: LLMTargetID(rawValue: "manual-target"),
+            targetRevision: 1
+        )
+        #expect(current.subject.catalogRevision == nil)
+        #expect(current.snapshot.support(for: "tool_calling") == .unknown)
+
+        let database = try SQLiteConnection(path: harness.databaseURL.path)
+        #expect(try database.queryRows(
+            "SELECT COUNT(*) AS value FROM provider_validation_records"
+        ).first?.integer("value") == 1)
+        #expect(try database.queryRows(
+            "SELECT COUNT(*) AS value FROM cloud_capability_observations"
+        ).first?.integer("value") == 6)
+    }
+
+    @Test
+    func catalogAdvanceDeletesStaleCatalogRowsButKeepsCurrentManualRows() async throws {
+        let harness = try await ValidationHarness.make()
+        defer { harness.cleanup() }
+        let service = try ProviderValidationService(
+            fileURL: harness.databaseURL,
+            profileStore: harness.profiles,
+            catalogStore: harness.catalog,
+            credentialStore: harness.credentials,
+            egressPolicy: harness.egress,
+            transport: ValidationTransport(),
+            hostProcessEpoch: harness.epoch
+        )
+        _ = try await service.validate(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "fixture-model",
+            adapterVersion: "1"
+        )
+        _ = try await service.validate(
+            profileID: "profile-main",
+            profileRevision: 1,
+            modelID: "manual-openai-model",
+            adapterVersion: "1"
+        )
+
+        _ = try await harness.catalog.accept(envelope: try signedCloudCatalog(
+            revision: 2,
+            signingKey: harness.catalogSigningKey
+        ).envelope)
+
+        let database = try SQLiteConnection(path: harness.databaseURL.path)
+        #expect(try database.queryRows(
+            "SELECT COUNT(*) AS value FROM provider_validation_records"
+        ).first?.integer("value") == 1)
+        #expect(try database.queryRows(
+            "SELECT model_id FROM provider_validation_records"
+        ).first?.text("model_id") == "manual-openai-model")
+        #expect(try database.queryRows(
+            "SELECT COUNT(*) AS value FROM cloud_capability_observations"
+        ).first?.integer("value") == 6)
+    }
 }
 
 private func expectProbeIdentity(

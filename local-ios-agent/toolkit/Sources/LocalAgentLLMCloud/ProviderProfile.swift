@@ -92,7 +92,7 @@ public struct ProviderValidationEvidenceIdentity: Codable, Equatable, Sendable {
     public let retentionMode: ProviderRetentionMode
     public let retentionApprovalRevision: UInt64?
     public let retentionApprovalDigest: String?
-    public let catalogRevision: UInt64
+    public let catalogRevision: UInt64?
     public let adapterID: String
     public let adapterVersion: String
     public let evidenceDigest: String
@@ -105,7 +105,7 @@ public struct ProviderValidationEvidenceIdentity: Codable, Equatable, Sendable {
         retentionMode: ProviderRetentionMode,
         retentionApprovalRevision: UInt64?,
         retentionApprovalDigest: String?,
-        catalogRevision: UInt64,
+        catalogRevision: UInt64?,
         adapterID: String,
         adapterVersion: String,
         evidenceDigest: String,

@@ -188,14 +188,13 @@ public actor ProviderValidationService {
                   profileRevision: profileRevision
               ),
               case let .validated(evidence) = state.validationState,
-              let catalog = try await catalogStore.current(),
-              let entry = catalog.entry(presetID: profile.revision.presetID, modelID: modelID),
-              !catalog.isRevoked(entry.identity),
-              entry.supports(adapterVersion: adapterVersion),
-              entry.adapterID == evidence.adapterID,
+              let preset = ProviderPreset.shipped.first(where: {
+                  $0.id == profile.revision.presetID
+              }),
+              preset.semanticAdapterID == evidence.adapterID,
               evidence.modelID == modelID,
               evidence.origin == profile.origin,
-              evidence.catalogRevision == catalog.catalogRevision,
+              state.catalogRevision == evidence.catalogRevision,
               evidence.adapterVersion == adapterVersion,
               evidence.expiresAt > now,
               evidence.retentionMode == profile.revision.retentionMode,
@@ -209,6 +208,28 @@ public actor ProviderValidationService {
                 "provider_validation.current_unavailable",
                 "no current exact provider validation is available"
             )
+        }
+        let catalogEntry: CloudModelCatalogEntry?
+        if let catalogRevision = evidence.catalogRevision {
+            guard let catalog = try await catalogStore.current(),
+                  catalog.catalogRevision == catalogRevision,
+                  let entry = catalog.entry(
+                      presetID: profile.revision.presetID,
+                      modelID: modelID
+                  ),
+                  !catalog.isRevoked(entry.identity),
+                  entry.supports(adapterVersion: adapterVersion),
+                  entry.adapterID == evidence.adapterID,
+                  entry.continuationModes.contains(profile.revision.retentionMode)
+            else {
+                throw validationFailure(
+                    "provider_validation.current_unavailable",
+                    "no current exact provider validation is available"
+                )
+            }
+            catalogEntry = entry
+        } else {
+            catalogEntry = nil
         }
 
         let rows = try database.queryRows(
@@ -247,6 +268,21 @@ public actor ProviderValidationService {
                 "provider_validation.current_corrupt",
                 "current provider validation record is missing or inconsistent"
             )
+        }
+        if let catalogEntry {
+            guard validation.subject.modelRevision == catalogEntry.identity.modelRevision else {
+                throw validationFailure(
+                    "provider_validation.current_corrupt",
+                    "catalog-backed validation model revision is inconsistent"
+                )
+            }
+        } else {
+            guard validation.subject.modelRevision == nil else {
+                throw validationFailure(
+                    "provider_validation.current_corrupt",
+                    "manual validation unexpectedly contains a catalog model revision"
+                )
+            }
         }
 
         let observationRows = try database.queryRows(
@@ -308,7 +344,7 @@ public actor ProviderValidationService {
             llmTargetRevision: targetRevision,
             modelID: modelID,
             modelRevision: validation.subject.modelRevision,
-            catalogRevision: catalog.catalogRevision,
+            catalogRevision: validation.subject.catalogRevision,
             retentionMode: profile.revision.retentionMode.rawValue,
             retentionApprovalRevision: state.retentionApprovalRevision,
             retentionApprovalDigest: state.retentionApprovalDigest
@@ -389,7 +425,7 @@ public actor ProviderValidationService {
             credentialGeneration: lease.generation,
             modelID: modelID,
             modelRevision: entry?.identity.modelRevision,
-            catalogRevision: catalog.catalogRevision,
+            catalogRevision: entry == nil ? nil : catalog.catalogRevision,
             retentionMode: profile.revision.retentionMode,
             retentionApprovalRevision: retention.revision,
             retentionApprovalDigest: retention.digest
@@ -496,7 +532,7 @@ public actor ProviderValidationService {
                     retentionMode: profile.revision.retentionMode,
                     retentionApprovalRevision: result.subject.retentionApprovalRevision,
                     retentionApprovalDigest: result.subject.retentionApprovalDigest,
-                    catalogRevision: result.subject.catalogRevision ?? 0,
+                    catalogRevision: result.subject.catalogRevision,
                     adapterID: result.subject.adapterID ?? "",
                     adapterVersion: result.observations.first?.adapterOrEngineVersion ?? "",
                     evidenceDigest: result.evidenceDigest,

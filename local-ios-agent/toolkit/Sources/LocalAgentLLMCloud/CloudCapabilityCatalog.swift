@@ -472,6 +472,16 @@ package actor CloudCapabilityCatalogStore {
         }
     }
 
+    private struct ValidationRecordProjection: Codable {
+        let recordSchemaVersion: Int
+        let subject: CapabilitySubject
+
+        enum CodingKeys: String, CodingKey {
+            case recordSchemaVersion = "record_schema_version"
+            case subject
+        }
+    }
+
     private let database: SQLiteConnection
     private let trustedKeyRing: Data
 
@@ -596,7 +606,10 @@ package actor CloudCapabilityCatalogStore {
                   String(persisted.state.profileRevision) == profileRevision,
                   persisted.state.catalogRevision.map(String.init) == catalogRevision,
                   String(persisted.state.stateRevision) == stateRevision,
-                  persisted.state.stateRevision < UInt64.max
+                  persisted.state.stateRevision < UInt64.max,
+                  case let .validated(evidence) = persisted.state.validationState,
+                  evidence.catalogRevision.map(String.init) == catalogRevision,
+                  !evidence.modelID.isEmpty
             else {
                 throw cloudCatalogFailure(
                     "cloud_catalog.persisted_corrupt",
@@ -627,8 +640,48 @@ package actor CloudCapabilityCatalogStore {
                 )
             }
         }
-        try database.execute("DELETE FROM cloud_capability_observations")
-        try database.execute("DELETE FROM provider_validation_records")
+
+        let validationRows = try database.queryRows(
+            """
+            SELECT profile_id, profile_revision, model_id,
+              record_schema_version, record_json
+            FROM provider_validation_records
+            """
+        )
+        for row in validationRows {
+            guard row.integer("record_schema_version") == 2,
+                  let profileID = row.text("profile_id"),
+                  let profileRevision = row.text("profile_revision"),
+                  let modelID = row.text("model_id"),
+                  let json = row.text("record_json"),
+                  let data = json.data(using: .utf8),
+                  let validation = try? JSONDecoder().decode(
+                      ValidationRecordProjection.self,
+                      from: data
+                  ),
+                  validation.recordSchemaVersion == 2,
+                  validation.subject.providerProfileID == profileID,
+                  validation.subject.providerProfileRevision.map(String.init) == profileRevision,
+                  validation.subject.modelID == modelID
+            else {
+                throw cloudCatalogFailure(
+                    "cloud_catalog.persisted_corrupt",
+                    "provider validation record index is corrupt"
+                )
+            }
+            guard validation.subject.catalogRevision != nil else { continue }
+            let bindings: [SQLiteValue] = [
+                .text(profileID), .text(profileRevision), .text(modelID),
+            ]
+            try database.execute(
+                "DELETE FROM cloud_capability_observations WHERE profile_id = ?1 AND profile_revision = ?2 AND model_id = ?3",
+                bindings: bindings
+            )
+            try database.execute(
+                "DELETE FROM provider_validation_records WHERE profile_id = ?1 AND profile_revision = ?2 AND model_id = ?3",
+                bindings: bindings
+            )
+        }
     }
 }
 
