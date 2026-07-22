@@ -62,13 +62,18 @@ struct XAIAdapterTests {
 
     @Test
     func grokResumeResendsCompleteStatelessHistoryAndToolResults() async throws {
+        let first = try await makeAuthorizedTransportFixture(modelID: "grok-4")
         let fixture = try await makeAuthorizedTransportFixture(
             modelID: "grok-4",
             providerHistory: .array([.string("xai-history-sentinel")]),
-            includeToolResult: true
+            toolResults: [
+                xaiToolResult(callID: "xcall_1", name: "search.one"),
+                xaiToolResult(callID: "xcall_2", name: "search.two"),
+            ]
         )
-        defer { fixture.cleanup() }
-        let session = try XAIAdapter().makeSession(fixture.sessionContext)
+        defer { first.cleanup(); fixture.cleanup() }
+        let session = try XAIAdapter().makeSession(first.sessionContext)
+        _ = try await decodeResponsesFixture("xai-two-tools", session: session)
 
         let wire = try session.encodeResume(fixture.authorizedTurn)
         let body = try wireJSONObject(wire)
@@ -78,7 +83,27 @@ struct XAIAdapterTests {
         #expect(body["previous_response_id"] == nil)
         #expect(serialized.contains("xai-history-sentinel"))
         #expect(serialized.contains("function_call_output"))
-        #expect(serialized.contains("call-1"))
+        #expect(serialized.contains("xcall_1"))
+        #expect(serialized.contains("xcall_2"))
+    }
+
+    @Test
+    func resumeRejectsReorderedToolResults() async throws {
+        let first = try await makeAuthorizedTransportFixture(modelID: "grok-4")
+        let reordered = try await makeAuthorizedTransportFixture(
+            modelID: "grok-4",
+            toolResults: [
+                xaiToolResult(callID: "xcall_2", name: "search.two"),
+                xaiToolResult(callID: "xcall_1", name: "search.one"),
+            ]
+        )
+        defer { first.cleanup(); reordered.cleanup() }
+        let session = try XAIAdapter().makeSession(first.sessionContext)
+        _ = try await decodeResponsesFixture("xai-two-tools", session: session)
+
+        expectAdapterFailure("cloud_adapter.tool_result_batch_mismatch") {
+            _ = try session.encodeResume(reordered.authorizedTurn)
+        }
     }
 
     @Test
@@ -113,4 +138,15 @@ struct XAIAdapterTests {
             #expect(!failure.message.contains("SECRET"))
         }
     }
+}
+
+private func xaiToolResult(callID: String, name: String) -> NormalizedToolResult {
+    NormalizedToolResult(
+        callID: callID,
+        toolName: name,
+        result: .string("result"),
+        isError: false,
+        dataClasses: [.toolResult],
+        highestSensitivity: .routine
+    )
 }

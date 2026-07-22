@@ -54,7 +54,7 @@ struct OpenAIResponsesAdapterTests {
     }
 
     @Test
-    func resumeIncludesNormalizedToolResultWithoutCredentialMaterial() async throws {
+    func resumeWithoutDecodedToolBatchFailsBeforeWireEncoding() async throws {
         let fixture = try await makeAuthorizedTransportFixture(
             modelID: "gpt-5",
             includeToolResult: true
@@ -62,13 +62,9 @@ struct OpenAIResponsesAdapterTests {
         defer { fixture.cleanup() }
         let session = try OpenAIResponsesAdapter().makeSession(fixture.sessionContext)
 
-        let wire = try session.encodeResume(fixture.authorizedTurn)
-        let serialized = try wireJSONString(wire)
-
-        #expect(serialized.contains("function_call_output"))
-        #expect(serialized.contains("call-1"))
-        #expect(serialized.contains("two contacts"))
-        #expect(!serialized.contains("test-only-key"))
+        expectAdapterFailure("cloud_adapter.continuation_missing") {
+            _ = try session.encodeResume(fixture.authorizedTurn)
+        }
     }
 
     @Test
@@ -126,19 +122,102 @@ struct OpenAIResponsesAdapterTests {
         let first = try await makeAuthorizedTransportFixture(modelID: "gpt-5")
         let next = try await makeAuthorizedTransportFixture(
             modelID: "gpt-5",
-            providerHistory: .array([.string("complete-history-sentinel")])
+            providerHistory: .array([.string("complete-history-sentinel")]),
+            toolResults: [responseToolResult(
+                callID: "call-1",
+                name: "contacts.search",
+                output: "two contacts"
+            )]
         )
         defer { first.cleanup(); next.cleanup() }
         let session = try OpenAIResponsesAdapter().makeSession(first.sessionContext)
-        _ = try await decodeResponsesFixture("responses-encrypted", session: session)
+        _ = try await decodeResponsesFixture("responses-encrypted-tool", session: session)
 
-        let body = try wireJSONObject(session.encodeResume(next.authorizedTurn))
-        let serialized = try wireJSONString(session.encodeResume(next.authorizedTurn))
+        let wire = try session.encodeResume(next.authorizedTurn)
+        let body = try wireJSONObject(wire)
+        let serialized = try wireJSONString(wire)
 
         #expect(body["store"] as? Bool == false)
         #expect(body["previous_response_id"] == nil)
         #expect(serialized.contains("complete-history-sentinel"))
         #expect(serialized.contains("encrypted-reasoning-token"))
+        let rawInput = try #require(body["input"] as? [Any])
+        let input = rawInput.compactMap { $0 as? [String: Any] }
+        let types = input.compactMap { $0["type"] as? String }
+        let callIndex = try #require(types.firstIndex(of: "function_call"))
+        let outputIndex = try #require(types.firstIndex(of: "function_call_output"))
+        #expect(callIndex < outputIndex)
+        #expect(input[callIndex]["id"] as? String == "item-1")
+        #expect(input[callIndex]["call_id"] as? String == "call-1")
+        #expect(input[callIndex]["name"] as? String == "contacts.search")
+        #expect(input[callIndex]["arguments"] as? String == "{}")
+
+        expectAdapterFailure("cloud_adapter.continuation_missing") {
+            _ = try session.encodeResume(next.authorizedTurn)
+        }
+    }
+
+    @Test
+    func resumeRequiresExactOrderedDecodedToolBatch() async throws {
+        let first = try await makeAuthorizedTransportFixture(modelID: "gpt-5")
+        defer { first.cleanup() }
+        let session = try OpenAIResponsesAdapter().makeSession(first.sessionContext)
+        _ = try await decodeResponsesFixture("responses-two-tools", session: session)
+        let weather = responseToolResult(
+            callID: "call_weather",
+            name: "weather.get",
+            output: "sunny"
+        )
+        let calendar = responseToolResult(
+            callID: "call_calendar",
+            name: "calendar.search",
+            output: "free"
+        )
+        let invalidBatches = [
+            [weather],
+            [weather, weather],
+            [calendar, weather],
+            [weather, calendar, responseToolResult(
+                callID: "call_extra",
+                name: "extra",
+                output: "extra"
+            )],
+            [responseToolResult(
+                callID: "call_unrelated",
+                name: "unrelated",
+                output: "unrelated"
+            ), calendar],
+        ]
+        for (index, results) in invalidBatches.enumerated() {
+            let next = try await makeAuthorizedTransportFixture(
+                modelID: "gpt-5",
+                providerHistory: .array([.string("history-\(index)")]),
+                toolResults: results
+            )
+            defer { next.cleanup() }
+            expectAdapterFailure("cloud_adapter.tool_result_batch_mismatch") {
+                _ = try session.encodeResume(next.authorizedTurn)
+            }
+        }
+
+        let valid = try await makeAuthorizedTransportFixture(
+            modelID: "gpt-5",
+            providerHistory: .array([.string("complete-history")]),
+            toolResults: [weather, calendar]
+        )
+        defer { valid.cleanup() }
+        let body = try wireJSONObject(session.encodeResume(valid.authorizedTurn))
+        let rawInput = try #require(body["input"] as? [Any])
+        let input = rawInput.compactMap { $0 as? [String: Any] }
+        let continuation = input.filter {
+            ["function_call", "function_call_output"].contains($0["type"] as? String)
+        }
+        #expect(continuation.compactMap { $0["type"] as? String } == [
+            "function_call", "function_call", "function_call_output", "function_call_output",
+        ])
+        #expect(continuation.compactMap { $0["call_id"] as? String } == [
+            "call_weather", "call_calendar", "call_weather", "call_calendar",
+        ])
     }
 
     @Test
@@ -150,15 +229,18 @@ struct OpenAIResponsesAdapterTests {
         let next = try await makeAuthorizedTransportFixture(
             retentionMode: .providerStateApproved,
             modelID: "gpt-5",
-            includeToolResult: true
+            toolResults: [
+                responseToolResult(callID: "call_weather", name: "weather.get", output: "sunny"),
+                responseToolResult(callID: "call_calendar", name: "calendar.search", output: "free"),
+            ]
         )
         defer { first.cleanup(); next.cleanup() }
         let session = try OpenAIResponsesAdapter().makeSession(first.sessionContext)
-        _ = try await decodeResponsesFixture("responses-encrypted", session: session)
+        _ = try await decodeResponsesFixture("responses-two-tools", session: session)
 
         let body = try wireJSONObject(session.encodeResume(next.authorizedTurn))
         #expect(body["store"] as? Bool == true)
-        #expect(body["previous_response_id"] as? String == "resp_state")
+        #expect(body["previous_response_id"] as? String == "resp_tools")
 
         let wrongContext = CloudProviderSessionContext(
             targetID: first.sessionContext.targetID,
@@ -196,6 +278,21 @@ struct OpenAIResponsesAdapterTests {
             session: cancelledSession
         ) == [.cancelled])
     }
+}
+
+private func responseToolResult(
+    callID: String,
+    name: String,
+    output: String
+) -> NormalizedToolResult {
+    NormalizedToolResult(
+        callID: callID,
+        toolName: name,
+        result: .string(output),
+        isError: false,
+        dataClasses: [.toolResult],
+        highestSensitivity: .routine
+    )
 }
 
 func decodeResponsesFixture(

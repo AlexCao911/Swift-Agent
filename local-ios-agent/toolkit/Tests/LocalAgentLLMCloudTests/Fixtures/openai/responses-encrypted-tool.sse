@@ -1,0 +1,14 @@
+event: response.created
+data: {"response":{"id":"resp_state","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"id":"reasoning_1","type":"reasoning","encrypted_content":"encrypted-reasoning-token"}}
+
+event: response.output_item.added
+data: {"output_index":1,"item":{"id":"item-1","type":"function_call","call_id":"call-1","name":"contacts.search","arguments":"{}"}}
+
+event: response.output_item.done
+data: {"output_index":1,"item":{"id":"item-1","type":"function_call","call_id":"call-1","name":"contacts.search","arguments":"{}"}}
+
+event: response.completed
+data: {"response":{"id":"resp_state","status":"completed"}}

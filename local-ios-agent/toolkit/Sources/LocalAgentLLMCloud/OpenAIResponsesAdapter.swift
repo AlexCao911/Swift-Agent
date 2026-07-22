@@ -27,10 +27,29 @@ package enum ResponsesProviderSemantics: Sendable {
     }
 }
 
+private struct ResponsesToolContinuation: Sendable {
+    let itemID: String
+    let callID: String
+    let name: String
+    let arguments: String
+
+    var wireObject: [String: Any] {
+        [
+            "type": "function_call",
+            "id": itemID,
+            "call_id": callID,
+            "name": name,
+            "arguments": arguments,
+        ]
+    }
+}
+
 package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sendable {
     private struct ContinuationState: Sendable {
         var responseID: String?
         var encryptedReasoning: [String] = []
+        var pendingToolCalls: [ResponsesToolContinuation] = []
+        var resumeEncoding = false
     }
 
     private let lock = NSLock()
@@ -67,13 +86,30 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
     package func encodeStart(
         _ turn: AuthorizedCloudGenerationTurn
     ) throws -> CloudWireRequest {
-        try encode(turn)
+        try validate(turn)
+        guard turn.validated.semantic.toolResults.isEmpty else {
+            throw responsesFailure(
+                "cloud_adapter.tool_result_batch_mismatch",
+                "a start request cannot contain tool results"
+            )
+        }
+        let state = try continuationSnapshot()
+        return try encode(turn, state: state, isResume: false)
     }
 
     package func encodeResume(
         _ turn: AuthorizedCloudGenerationTurn
     ) throws -> CloudWireRequest {
-        try encode(turn)
+        try validate(turn)
+        let state = try beginResume(turn.validated.semantic.toolResults)
+        do {
+            let wire = try encode(turn, state: state, isResume: true)
+            finishResume(success: true)
+            return wire
+        } catch {
+            finishResume(success: false)
+            throw error
+        }
     }
 
     package func decode(
@@ -81,7 +117,7 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
     ) -> LLMBackendEventStream {
         let pair = LLMBackendEventStream.makeStream(bufferingPolicy: .bufferingOldest(32))
         lock.lock()
-        guard !closed, decodeTask == nil else {
+        guard !closed, decodeTask == nil, !continuationState.resumeEncoding else {
             lock.unlock()
             pair.continuation.finish(throwing: responsesFailure(
                 "cloud_adapter.session_busy",
@@ -110,7 +146,8 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
                 try decoder.finish()
                 self.recordContinuation(
                     responseID: decoder.responseID,
-                    encryptedReasoning: decoder.encryptedReasoning
+                    encryptedReasoning: decoder.encryptedReasoning,
+                    pendingToolCalls: decoder.toolContinuations
                 )
                 pair.continuation.finish()
             } catch is CancellationError {
@@ -148,16 +185,11 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
         task?.cancel()
     }
 
-    private func encode(_ turn: AuthorizedCloudGenerationTurn) throws -> CloudWireRequest {
-        let state: ContinuationState
-        lock.lock()
-        let isClosed = closed
-        state = continuationState
-        lock.unlock()
-        guard !isClosed else {
-            throw responsesFailure("cloud_adapter.session_closed", "Responses session is closed")
-        }
-        try validate(turn)
+    private func encode(
+        _ turn: AuthorizedCloudGenerationTurn,
+        state: ContinuationState,
+        isResume: Bool
+    ) throws -> CloudWireRequest {
         if semantics == .xAI, !context.modelID.lowercased().hasPrefix("grok-") {
             throw responsesFailure(
                 "cloud_adapter.model_incompatible",
@@ -178,6 +210,9 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
             })
         }
         input.append(contentsOf: try responseMessages(turn.validated.semantic.input))
+        if isResume, !usesProviderState {
+            input.append(contentsOf: state.pendingToolCalls.map(\.wireObject))
+        }
         input.append(contentsOf: try responseToolResults(turn.validated.semantic.toolResults))
 
         var body: [String: Any] = [
@@ -189,7 +224,7 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
         ]
         let tools = try responseTools(turn.validated.semantic.canonicalToolSchema)
         if !tools.isEmpty { body["tools"] = tools }
-        if usesProviderState, let responseID = state.responseID {
+        if isResume, usesProviderState, let responseID = state.responseID {
             body["previous_response_id"] = responseID
         }
         try applyParameters(
@@ -251,11 +286,84 @@ package final class OpenAIResponsesSession: CloudProviderSession, @unchecked Sen
         }
     }
 
-    private func recordContinuation(responseID: String?, encryptedReasoning: [String]) {
+    private func continuationSnapshot() throws -> ContinuationState {
+        try lock.withLock {
+            guard !closed else {
+                throw responsesFailure(
+                    "cloud_adapter.session_closed",
+                    "Responses session is closed"
+                )
+            }
+            return continuationState
+        }
+    }
+
+    private func beginResume(
+        _ toolResults: [NormalizedToolResult]
+    ) throws -> ContinuationState {
+        try lock.withLock {
+            guard !closed else {
+                throw responsesFailure(
+                    "cloud_adapter.session_closed",
+                    "Responses session is closed"
+                )
+            }
+            guard !continuationState.resumeEncoding else {
+                throw responsesFailure(
+                    "cloud_adapter.session_busy",
+                    "Responses session is already encoding a resume"
+                )
+            }
+            let pending = continuationState.pendingToolCalls
+            guard !pending.isEmpty else {
+                throw responsesFailure(
+                    "cloud_adapter.continuation_missing",
+                    "tool results require the preceding decoded Responses tool batch"
+                )
+            }
+            let suppliedIDs = toolResults.map(\.callID)
+            let expectedIDs = pending.map(\.callID)
+            guard suppliedIDs == expectedIDs,
+                  Set(suppliedIDs).count == suppliedIDs.count,
+                  zip(toolResults, pending).allSatisfy({ pair in
+                      pair.0.toolName == pair.1.name
+                  })
+            else {
+                throw responsesFailure(
+                    "cloud_adapter.tool_result_batch_mismatch",
+                    "tool-result batch does not match the preceding ordered tool calls"
+                )
+            }
+            if context.retentionMode == .providerStateApproved,
+               continuationState.responseID == nil {
+                throw responsesFailure(
+                    "cloud_adapter.continuation_missing",
+                    "provider-state resume requires the preceding response identity"
+                )
+            }
+            continuationState.resumeEncoding = true
+            return continuationState
+        }
+    }
+
+    private func finishResume(success: Bool) {
+        lock.withLock {
+            if success { continuationState.pendingToolCalls = [] }
+            continuationState.resumeEncoding = false
+        }
+    }
+
+    private func recordContinuation(
+        responseID: String?,
+        encryptedReasoning: [String],
+        pendingToolCalls: [ResponsesToolContinuation]
+    ) {
         lock.lock()
         if !closed {
             continuationState.responseID = responseID
             continuationState.encryptedReasoning = encryptedReasoning
+            continuationState.pendingToolCalls = pendingToolCalls
+            continuationState.resumeEncoding = false
         }
         lock.unlock()
     }
@@ -279,6 +387,7 @@ private struct OpenAIResponsesDecoder {
     let providerSemanticID: String
     private(set) var responseID: String?
     private(set) var encryptedReasoning: [String] = []
+    private(set) var toolContinuations: [ResponsesToolContinuation] = []
     private var tools: [ToolState] = []
     private var terminal = false
 
@@ -432,6 +541,14 @@ private struct OpenAIResponsesDecoder {
             throw responsesFailure(
                 "cloud_adapter.tool_call_incomplete",
                 "provider completed before every tool call was assembled"
+            )
+        }
+        toolContinuations = tools.map {
+            ResponsesToolContinuation(
+                itemID: $0.itemID,
+                callID: $0.callID,
+                name: $0.name,
+                arguments: $0.arguments
             )
         }
         terminal = true
