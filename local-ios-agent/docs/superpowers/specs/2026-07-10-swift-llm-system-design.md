@@ -3316,8 +3316,11 @@ single App-owned host epoch and an awaited local-route unloader; the cloud
 module does not import the local inference module.
 
 `CloudLLMRuntime` prepares only an exact active target and host binding. It
-requires the current catalog/adapter/model/credential-generation/retention
-validation, resolves target defaults plus host overrides, resolves attachment
+requires either a current exact catalog-backed validation or conservative
+probe-only manual validation, plus the matching adapter, model,
+credential-generation, and retention identity. It resolves target defaults
+plus host overrides for catalog routes and rejects all parameters for manual
+routes, resolves attachment
 identities, and recomputes the complete `agent-input:v1`,
 `source-revisions:v1`, and `generation-disclosure:v1` binding before egress.
 The immutable sanitized `PreparedCloudSession` persists the target, binding,
@@ -3328,8 +3331,10 @@ and host epoch. It contains no key, request/response body, private reasoning,
 absolute path, or live handle.
 
 Every start and resume rechecks the exact Profile/target, retention approval,
-credential slot and lease, signed catalog, installed adapter, capability
-snapshot, and resolved parameters. The provider adapter can produce only a
+credential slot and lease, explicit catalog-or-manual route source, installed
+adapter, capability snapshot, and resolved parameters. Catalog routes recheck
+the signed catalog; manual routes remain bound to nil catalog/model revisions
+and cannot be silently promoted. The provider adapter can produce only a
 tagged unsendable wire value; egress policy must seal it as the exact
 generation class before the sole transport resolves Keychain material. Tool
 calls terminate as one ordered batch, normalized labeled results are approved
@@ -3360,6 +3365,51 @@ The following work remains intentionally unfinished:
 - Phase 5 adds the iPhone/iPad Model Center and Provider Profile UI, migrates
   production Agent profiles to exact host targets, and removes the legacy Rust
   Provider/local path only after parity and recovery evidence pass.
+
+## Phase 3.1 hardening evidence (2026-07-22)
+
+Phase 3.1 closes the post-implementation reliability and provider-wire review
+without changing the Rust Agent kernel or the C++ local-inference boundary.
+The bounded outer `AsyncThrowingStream` now checks every yield result. A drop
+fails with `runtime.cloud_consumer_backpressure`; terminal lifecycle state is
+committed only after the matching terminal event is enqueued. Consumer
+termination, explicit cancellation, and their race share one actor-isolated
+cancel arbiter, so provider cancel occurs once and normal completion does not
+cancel. This is a loss-detecting in-process handoff, not durable delivery:
+Phase 4 still owns Rust/Swift command acknowledgements, event receipts,
+sequences, watchdogs, and restart-safe outboxes.
+
+Responses/xAI sessions now retain the complete ordered provider-private tool
+batch decoded for the preceding turn. Resume requires exact ordered call IDs
+and names, rejects missing/duplicate/reordered/extra/unrelated or already
+consumed results with `cloud_adapter.tool_result_batch_mismatch`, and replays
+the necessary function-call continuation items in stateless mode. The shared
+OpenAI Chat decoder rejects a final terminal after any accumulated tool-call
+fragment as `cloud_adapter.terminal_conflict`, and rejects empty or incomplete
+tool batches as `cloud_adapter.tool_call_incomplete`.
+
+Each of the seven semantic adapters now owns discovery, account-validation,
+and model-validation request construction. Anthropic probe requests carry the
+required version header while MiniMax does not inherit it. Validation and
+discovery services retain policy, lease, evidence, and decoding ownership but
+no longer guess provider wire headers or endpoints.
+
+Manual validation evidence uses nil catalog and model revisions. Catalog
+advances atomically invalidate current catalog-backed Profile states and scan
+all validation records to delete only rows whose decoded subject is
+catalog-backed; manual evidence and observations survive without acquiring
+new catalog capabilities. Runtime route identity is explicit as
+`catalog(entry)` or `manual(adapterID, modelID)`. Manual routes are stateless,
+parameter-free, text-and-streaming only, and their resolved-parameter digest
+binds the exact adapter, model, and manual source.
+
+Every cloud generation now requires both `text_generation` and `streaming`.
+The provider-neutral tool-schema gate treats `[]`, `{}`, and `{ "tools": [] }`
+as empty, requires `tool_calling` only for a non-empty tool array, and rejects
+unrelated or non-array object shapes with
+`runtime.cloud_tool_schema_invalid`. Deterministic evidence is included in
+`scripts/run-llm-phase-3-contracts.sh` and the dated Phase 3.1 design and
+execution plan.
 
 ## Official API References
 

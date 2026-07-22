@@ -52,13 +52,21 @@ Authorization header, API-key query, or credential value.
 ## Prepared session
 
 Preparation requires an immutable cloud `LLMTargetRevision`, an exact active
-`AgentHostConfiguration`, an active Provider Profile revision, a trusted
-catalog entry, an installed matching adapter, a current credential-generation
-validation, and retention-bound capabilities. Parameter resolution is:
+`AgentHostConfiguration`, an active Provider Profile revision, an installed
+matching adapter, a current credential-generation validation, and
+retention-bound capabilities. A catalog route additionally requires the exact
+current, non-revoked catalog entry. A probe-only manual route has explicit
+`manual(adapterID, modelID)` identity, requires stateless retention, and keeps
+both catalog and model revision nil. Catalog parameter resolution is:
 
 ```text
 signed model defaults → target defaults → host overrides
 ```
+
+Manual routes reject non-empty target defaults or host overrides and resolve
+an empty semantic/provider configuration whose digest binds the adapter,
+model, and manual source. A later catalog entry with the same model ID does not
+promote existing manual evidence.
 
 Swift authorizes the initial disclosure under a preparation credential lease,
 persists a sanitized session and capability/configuration snapshot, waits for
@@ -74,6 +82,49 @@ the whole normalized result batch. Mixed text before tool calls is visible; no
 provider-private response ID, encrypted reasoning, or signature crosses the
 normalized backend event boundary.
 
+## Runtime event handoff
+
+The outer generation stream is bounded. Every yield is checked: `.enqueued`
+allows progress, `.dropped` fails as
+`runtime.cloud_consumer_backpressure`, and `.terminated` enters cancellation.
+A terminal lifecycle transition is persisted only after its terminal event is
+enqueued. Explicit cancel, consumer abandonment, and their race share one
+actor-isolated cancel-once decision; normal completion does not cancel the
+provider.
+
+This boundary detects in-process loss but is not a durable Rust/Swift delivery
+protocol. Phase 4 still supplies command IDs and acknowledgements, durable
+outbox rows, event sequence receipts, watchdogs, and restart recovery.
+
+## Continuation and terminal rules
+
+OpenAI Responses and xAI sessions can resume only the exact complete ordered
+tool batch decoded by that session. Missing, duplicate, reordered, extra,
+unrelated, or consumed result batches fail before request construction with
+`cloud_adapter.tool_result_batch_mismatch`. Stateless requests replay the
+required provider-private function-call continuation items; approved
+provider-state requests use the exact prior response identity.
+
+DeepSeek and GLM share framing but not weakened terminal semantics. A final
+finish reason cannot coexist with accumulated tool fragments
+(`cloud_adapter.terminal_conflict`), and `tool_calls` requires a non-empty,
+complete ordered batch (`cloud_adapter.tool_call_incomplete`).
+
+## Probe wire and capability gates
+
+Every semantic adapter constructs its own discovery, account-validation, and
+model-validation `CloudWireRequest`. Policy services seal those requests but
+do not infer provider endpoints or headers. In particular, all Anthropic probe
+requests carry `anthropic-version: 2023-06-01`; MiniMax selects its own headers.
+
+Manual probe evidence proves only routine text generation and streaming.
+Catalog acceptance deletes all validation rows whose decoded subject has a
+catalog revision while preserving nil-revision manual rows. Runtime preparation
+requires both text generation and streaming. Tool schemas accept only an array,
+an empty object, or an object whose sole member is an array-valued `tools`;
+malformed shapes fail with `runtime.cloud_tool_schema_invalid`, and only a
+non-empty array requires tool-calling capability.
+
 ## Failure and retry rules
 
 - A changed message, tool schema, source revision, attachment identity, tool
@@ -84,6 +135,11 @@ normalized backend event boundary.
 - Credential rotation/deletion state, generation change, Profile archival,
   retention change, catalog change, adapter mismatch, or expired capability
   evidence fails closed.
+- Outer handoff overflow fails as `runtime.cloud_consumer_backpressure`; it is
+  never converted into a successful terminal state.
+- Manual route parameters fail as
+  `cloud_parameters.manual_parameter_unsupported`; manual provider-state
+  retention is not runnable.
 - At most one retry is allowed before any normalized output. Once reasoning
   summary, text, tool, or usage output exists, interruption is terminal.
 - Cancellation and close are idempotent. Provider cancel and close each have a
