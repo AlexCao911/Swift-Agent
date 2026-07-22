@@ -758,7 +758,7 @@ git add docs/superpowers/specs/2026-07-10-swift-llm-system-design.md \
 git commit -m "docs: record phase three cloud hardening"
 ```
 
-- [ ] **Step 5: Re-run after the final commit**
+- [x] **Step 5: Re-run after the final commit**
 
 ```bash
 scripts/run-llm-phase-3-contracts.sh
