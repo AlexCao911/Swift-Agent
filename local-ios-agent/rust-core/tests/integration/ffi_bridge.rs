@@ -309,12 +309,12 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         let exact_commit = CString::new(
             json!({
                 "token":exact_pending["token"],
-                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                 "receipt":{
                     "token_digest":exact_pending["token_digest"],
                     "llm_slot_id":exact_pending["llm_slot_id"],
                     "requirements_hash":exact_pending["requirements_hash"],
-                    "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                    "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                     "receipt_digest":"receipt-ffi-exact"
                 }
             })
@@ -331,7 +331,7 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
                 "agent_profile_revision":1,
                 "llm_slot_id":preview["binding"]["requirements"]["slot_id"],
                 "requirements_hash":preview["binding"]["requirements_hash"],
-                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"binding-hash-ffi-1"},
+                "binding":{"binding_id":"binding-ffi-1","binding_revision":1,"binding_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                 "staging_receipt_digest":exact_cross_link["staging_receipt_digest"]
             })
             .to_string(),
@@ -367,7 +367,7 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
             "host_process_epoch":renewed["host_process_epoch"],
             "binding_id":"binding-ffi-1",
             "binding_revision":1,
-            "binding_hash":"binding-hash-ffi-1",
+            "binding_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "registration_digest":""
         });
         registration["registration_digest"] = Value::String(registration_digest(&registration));
@@ -388,25 +388,36 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         let disclosure_digest = renewed["binding"]["initial_disclosure_digest"]
             .as_str()
             .unwrap();
-        let egress_digest = egress_attestation_digest(
-            renewed["binding_digest"].as_str().unwrap(),
-            registration["registration_digest"].as_str().unwrap(),
-            disclosure_digest,
-        );
+        let attestation_document = json!({
+            "schema_version":"1",
+            "preparation_id":renewed["preparation_id"],
+            "proposed_run_id":renewed["proposed_run_id"],
+            "session_id":registration["session_handle"],
+            "swift_snapshot_id":registration["swift_snapshot_id"],
+            "prepared_session_registration_digest":registration["registration_digest"],
+            "binding_id":registration["binding_id"],
+            "binding_revision":"1",
+            "binding_hash":registration["binding_hash"],
+            "requirements_hash":renewed["binding"]["requirements_hash"],
+            "disclosure_digest":disclosure_digest,
+            "capability_snapshot_digest":capability["attestation_digest"],
+            "resolved_parameters_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "host_process_epoch":renewed["host_process_epoch"],
+            "expires_at":"1970-01-01T00:02:00.000Z",
+            "opaque_egress_subject_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        });
+        let egress_digest = egress_attestation_digest(&attestation_document);
         let commit_start = CString::new(
             json!({
                 "token":renewed["token"],
                 "attestation":{
-                    "registration":registration,
+                    "document":attestation_document,
                     "preparation_binding_digest":renewed["binding_digest"],
                     "egress_attestation_digest":egress_digest,
-                    "disclosure_digest":disclosure_digest,
                     "disclosure_grant_id":"grant-ffi-1",
                     "data_classes":{"text":true},
                     "highest_sensitivity":"private",
-                    "opaque_subject_digest":"opaque-subject-ffi-1",
-                    "capability_attestation":capability,
-                    "expiration_millis":120_000
+                    "capability_attestation":capability
                 },
                 "now_millis":90_000
             })
@@ -581,22 +592,10 @@ fn capability_attestation(preview: &Value, expiration_millis: u64) -> Value {
     attestation
 }
 
-fn egress_attestation_digest(
-    preparation_binding_digest: &str,
-    registration_digest: &str,
-    disclosure_digest: &str,
-) -> String {
+fn egress_attestation_digest(document: &Value) -> String {
     local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
         "egress-attestation:v1",
-        &json!({
-            "preparation_binding_digest":preparation_binding_digest,
-            "registration_digest":registration_digest,
-            "disclosure_digest":disclosure_digest,
-            "disclosure_grant_id":"grant-ffi-1",
-            "data_classes":["text"],
-            "highest_sensitivity":"private",
-            "opaque_subject_digest":"opaque-subject-ffi-1"
-        }),
+        document,
     )
     .unwrap()
     .as_str()

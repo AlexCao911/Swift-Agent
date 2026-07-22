@@ -1,0 +1,35 @@
+{
+  "name": "host-command-envelope-v1",
+  "domain": "host-command-envelope:v1",
+  "document": {
+    "schema_version": 1,
+    "command_id": "command-1",
+    "run_id": "run-1",
+    "session_handle": "session-1",
+    "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "command_sequence": 1,
+    "generation_turn_id": "turn-1",
+    "kind": "start_generation",
+    "payload_digest": "eb55b1b1e03269c33c4280fc41daf559e28535913dbdb99900bb6864257c78da",
+    "disclosure_digest": "1fbc067f3247d6f97345e7ba2525cc1af9bb3f6f26c1eeba0cfbb2c32b1c6631",
+    "disclosure": {"schema_version":"1","generation_turn_id":"turn-1","content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_revision_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","data_classes":["text"],"highest_sensitivity":"private","safe_display_summary":{"source_kinds":["conversation"],"added_item_counts":[{"data_class":"text","count":"1"}],"approximate_added_size":"less_than_1_kib","triggering_tool_display_keys":[]}},
+    "payload": {"schema_version":"1","model_input_id":"input-1","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}]}],"tool_schema_json":"{\"type\":\"object\"}","tool_schema_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_revisions":[{"source_id":"frame-1","revision":"7","digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],"source_revisions_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","attachments":[{"attachment_id":"attachment-1","revision":"2","modality":"document","media_type":"text/plain","content_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}],"semantic_history":[{"role":"assistant","content":[{"kind":"text","text":"prior"}]}],"tool_results":[]}
+  },
+  "wire": {
+    "schema_version": 1,
+    "command_id": "command-1",
+    "run_id": "run-1",
+    "session_handle": "session-1",
+    "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "command_sequence": 1,
+    "generation_turn_id": "turn-1",
+    "kind": "start_generation",
+    "payload_digest": "eb55b1b1e03269c33c4280fc41daf559e28535913dbdb99900bb6864257c78da",
+    "disclosure_digest": "1fbc067f3247d6f97345e7ba2525cc1af9bb3f6f26c1eeba0cfbb2c32b1c6631",
+    "command_envelope_digest": "2f27f10e5f6273afa339b600f04e87d23ae09f1d22ed8d5e98149fb5684de8b3",
+    "disclosure": {"schema_version":"1","generation_turn_id":"turn-1","content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_revision_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","data_classes":["text"],"highest_sensitivity":"private","safe_display_summary":{"source_kinds":["conversation"],"added_item_counts":[{"data_class":"text","count":"1"}],"approximate_added_size":"less_than_1_kib","triggering_tool_display_keys":[]}},
+    "payload": {"schema_version":"1","model_input_id":"input-1","messages":[{"role":"user","content":[{"kind":"text","text":"hello"}]}],"tool_schema_json":"{\"type\":\"object\"}","tool_schema_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_revisions":[{"source_id":"frame-1","revision":"7","digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],"source_revisions_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","attachments":[{"attachment_id":"attachment-1","revision":"2","modality":"document","media_type":"text/plain","content_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}],"semantic_history":[{"role":"assistant","content":[{"kind":"text","text":"prior"}]}],"tool_results":[]}
+  },
+  "expected_canonical_utf8": "{\"command_id\":\"command-1\",\"command_sequence\":1,\"disclosure\":{\"content_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"data_classes\":[\"text\"],\"generation_turn_id\":\"turn-1\",\"highest_sensitivity\":\"private\",\"safe_display_summary\":{\"added_item_counts\":[{\"count\":\"1\",\"data_class\":\"text\"}],\"approximate_added_size\":\"less_than_1_kib\",\"source_kinds\":[\"conversation\"],\"triggering_tool_display_keys\":[]},\"schema_version\":\"1\",\"source_revision_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},\"disclosure_digest\":\"1fbc067f3247d6f97345e7ba2525cc1af9bb3f6f26c1eeba0cfbb2c32b1c6631\",\"generation_turn_id\":\"turn-1\",\"host_process_epoch\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"kind\":\"start_generation\",\"payload\":{\"attachments\":[{\"attachment_id\":\"attachment-1\",\"content_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"media_type\":\"text/plain\",\"modality\":\"document\",\"revision\":\"2\"}],\"messages\":[{\"content\":[{\"kind\":\"text\",\"text\":\"hello\"}],\"role\":\"user\"}],\"model_input_id\":\"input-1\",\"schema_version\":\"1\",\"semantic_history\":[{\"content\":[{\"kind\":\"text\",\"text\":\"prior\"}],\"role\":\"assistant\"}],\"source_revisions\":[{\"digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"revision\":\"7\",\"source_id\":\"frame-1\"}],\"source_revisions_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"tool_results\":[],\"tool_schema_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tool_schema_json\":\"{\\\"type\\\":\\\"object\\\"}\"},\"payload_digest\":\"eb55b1b1e03269c33c4280fc41daf559e28535913dbdb99900bb6864257c78da\",\"run_id\":\"run-1\",\"schema_version\":1,\"session_handle\":\"session-1\"}",
+  "expected_sha256": "2f27f10e5f6273afa339b600f04e87d23ae09f1d22ed8d5e98149fb5684de8b3"
+}

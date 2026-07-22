@@ -804,6 +804,53 @@ struct RustRuntimeClientContractTests {
         }
     }
 
+    @Test
+    func hostAttestationDTORejectsLegacyFlattenedFields() throws {
+        let digest = String(repeating: "a", count: 64)
+        let json = """
+        {
+          "document": {
+            "schema_version": "1",
+            "preparation_id": "preparation-1",
+            "proposed_run_id": "run-1",
+            "session_id": "session-1",
+            "swift_snapshot_id": "snapshot-1",
+            "prepared_session_registration_digest": "\(digest)",
+            "binding_id": "binding-1",
+            "binding_revision": "1",
+            "binding_hash": "\(digest)",
+            "requirements_hash": "\(digest)",
+            "disclosure_digest": "\(digest)",
+            "capability_snapshot_digest": "\(digest)",
+            "resolved_parameters_digest": "\(digest)",
+            "host_process_epoch": "epoch-1",
+            "expires_at": "2026-07-22T00:02:00.000Z",
+            "opaque_egress_subject_digest": "\(digest)"
+          },
+          "preparation_binding_digest": "\(digest)",
+          "egress_attestation_digest": "\(digest)",
+          "disclosure_grant_id": "grant-1",
+          "data_classes": {"user_content": true},
+          "highest_sensitivity": "private",
+          "capability_attestation": {
+            "supported_capabilities": ["text"],
+            "input_modalities": ["text"],
+            "context_length": "4096",
+            "streaming": true,
+            "tool_calling": false,
+            "expiration_millis": 120000,
+            "attestation_digest": "\(digest)"
+          },
+          "registration": {},
+          "expiration_millis": 120000
+        }
+        """
+
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(HostAttestationDTO.self, from: Data(json.utf8))
+        }
+    }
+
     private static func testHostProcessEpoch() throws -> HostProcessEpoch {
         try #require(
             HostProcessEpoch(

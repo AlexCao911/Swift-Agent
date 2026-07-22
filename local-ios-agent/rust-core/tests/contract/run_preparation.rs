@@ -20,6 +20,15 @@ use local_ios_agent_runtime::storage::agent_os_state::{
 use local_ios_agent_runtime::user_customization::AgentProfileVersion;
 
 const MINUTE: u64 = 60_000;
+const BINDING_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const RESOLVED_PARAMETERS_DIGEST: &str =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const CAPABILITY_PLACEHOLDER_DIGEST: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const OPAQUE_SUBJECT_DIGEST: &str =
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const ALTERNATE_OPAQUE_SUBJECT_DIGEST: &str =
+    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 #[test]
 fn authoritative_preview_derives_model_input_and_source_digests_from_rust_sources() {
@@ -137,7 +146,7 @@ fn registration(
         "session-handle-1",
         "swift-snapshot-1",
         "epoch-1",
-        "binding-hash-1",
+        BINDING_HASH,
         "",
     )
     .with_binding_identity("binding-1", 1)
@@ -150,12 +159,17 @@ fn egress_attestation(
     registration: PreparedSessionRegistration,
 ) -> HostAttestation {
     HostAttestation::from_registration(registration, preview.binding_digest(), "", 2 * MINUTE)
+        .with_document_context(
+            preview.binding().requirements_hash(),
+            RESOLVED_PARAMETERS_DIGEST,
+        )
+        .with_capability_snapshot_digest(CAPABILITY_PLACEHOLDER_DIGEST)
         .with_egress_scope(
             preview.binding().initial_disclosure_digest(),
             "disclosure-grant-1",
             ["text"],
             "private",
-            "opaque-subject-1",
+            OPAQUE_SUBJECT_DIGEST,
         )
         .with_computed_egress_digest()
         .unwrap()
@@ -170,6 +184,11 @@ fn egress_with_scope(
     subject: &str,
 ) -> HostAttestation {
     HostAttestation::from_registration(registration, preview.binding_digest(), "", 2 * MINUTE)
+        .with_document_context(
+            preview.binding().requirements_hash(),
+            RESOLVED_PARAMETERS_DIGEST,
+        )
+        .with_capability_snapshot_digest(CAPABILITY_PLACEHOLDER_DIGEST)
         .with_egress_scope(
             preview.binding().initial_disclosure_digest(),
             grant,
@@ -191,7 +210,10 @@ fn valid_attestation(
     )
     .with_computed_digest()
     .unwrap();
-    egress_attestation(preview, registration).with_capability_attestation(capability)
+    egress_attestation(preview, registration)
+        .with_capability_attestation(capability)
+        .with_computed_egress_digest()
+        .unwrap()
 }
 
 fn capability_with_bad_digest(
@@ -201,7 +223,7 @@ fn capability_with_bad_digest(
         preview.binding().requirements().unwrap(),
         2 * MINUTE,
     )
-    .with_attestation_digest("caller-invented-capability-digest")
+    .with_attestation_digest("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 }
 
 fn capability_with_insufficient_context(
@@ -409,7 +431,7 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
         "different-handle",
         "swift-snapshot-1",
         "epoch-1",
-        "binding-hash-1",
+        BINDING_HASH,
         "registration-digest-1",
     );
     assert_eq!(
@@ -521,7 +543,9 @@ fn commit_validation_rejects_capability_digest_and_claim_mutations() {
             .register_prepared_session(preview.token(), registration.clone(), MINUTE)
             .unwrap();
         let attestation = egress_attestation(&preview, registration)
-            .with_capability_attestation(capability(&preview));
+            .with_capability_attestation(capability(&preview))
+            .with_computed_egress_digest()
+            .unwrap();
         assert_eq!(
             service
                 .commit_start(preview.token(), attestation, 90_000)
@@ -653,6 +677,18 @@ fn commit_rejects_unrecomputed_egress_digest() {
         preview.binding_digest(),
         "caller-invented-egress-digest",
         2 * MINUTE,
+    )
+    .with_document_context(
+        preview.binding().requirements_hash(),
+        RESOLVED_PARAMETERS_DIGEST,
+    )
+    .with_capability_snapshot_digest(CAPABILITY_PLACEHOLDER_DIGEST)
+    .with_egress_scope(
+        preview.binding().initial_disclosure_digest(),
+        "disclosure-grant-1",
+        ["text"],
+        "private",
+        OPAQUE_SUBJECT_DIGEST,
     );
 
     assert_eq!(
@@ -667,22 +703,34 @@ fn commit_rejects_unrecomputed_egress_digest() {
 #[test]
 fn commit_validation_rejects_egress_public_field_mutations() {
     for (suffix, grant, classes, sensitivity, subject) in [
-        ("egress-grant", "", &["text"][..], "private", "subject"),
+        (
+            "egress-grant",
+            "",
+            &["text"][..],
+            "private",
+            OPAQUE_SUBJECT_DIGEST,
+        ),
         (
             "egress-classes",
             "grant",
             &["attachment"][..],
             "private",
-            "subject",
+            OPAQUE_SUBJECT_DIGEST,
         ),
         (
             "egress-sensitivity",
             "grant",
             &["text"][..],
             "secret",
-            "subject",
+            OPAQUE_SUBJECT_DIGEST,
         ),
-        ("egress-subject", "grant", &["text"][..], "private", ""),
+        (
+            "egress-subject",
+            "grant",
+            &["text"][..],
+            "private",
+            ALTERNATE_OPAQUE_SUBJECT_DIGEST,
+        ),
     ] {
         let state = SharedAgentOSStateStore::in_memory();
         let service = test_service(state, "epoch-1");

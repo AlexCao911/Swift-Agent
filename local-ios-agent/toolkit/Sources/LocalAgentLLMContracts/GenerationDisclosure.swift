@@ -62,6 +62,25 @@ public struct EgressDataClassCount: Codable, Equatable, Sendable {
         self.dataClass = dataClass
         self.count = count
     }
+
+    private enum CodingKeys: String, CodingKey { case dataClass = "data_class", count }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dataClass = try container.decode(EgressDataClass.self, forKey: .dataClass)
+        if let canonical = try? container.decode(String.self, forKey: .count),
+           let value = UInt64(canonical), String(value) == canonical {
+            count = value
+        } else {
+            count = try container.decode(UInt64.self, forKey: .count)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(dataClass, forKey: .dataClass)
+        try container.encode(String(count), forKey: .count)
+    }
 }
 
 public struct SafeDisplaySummary: Codable, Equatable, Sendable {
@@ -80,6 +99,28 @@ public struct SafeDisplaySummary: Codable, Equatable, Sendable {
         self.addedItemCounts = addedItemCounts
         self.approximateAddedSize = approximateAddedSize
         self.triggeringToolDisplayKeys = triggeringToolDisplayKeys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceKinds = "source_kinds", addedItemCounts = "added_item_counts"
+        case approximateAddedSize = "approximate_added_size"
+        case triggeringToolDisplayKeys = "triggering_tool_display_keys"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceKinds = Set(try container.decode([EgressSourceKind].self, forKey: .sourceKinds))
+        addedItemCounts = try container.decode([EgressDataClassCount].self, forKey: .addedItemCounts)
+        approximateAddedSize = try container.decode(EgressSizeBucket.self, forKey: .approximateAddedSize)
+        triggeringToolDisplayKeys = Set(try container.decode([String].self, forKey: .triggeringToolDisplayKeys))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourceKinds.sorted { $0.rawValue < $1.rawValue }, forKey: .sourceKinds)
+        try container.encode(addedItemCounts.sorted { $0.dataClass.rawValue < $1.dataClass.rawValue }, forKey: .addedItemCounts)
+        try container.encode(approximateAddedSize, forKey: .approximateAddedSize)
+        try container.encode(triggeringToolDisplayKeys.sorted(), forKey: .triggeringToolDisplayKeys)
     }
 }
 
@@ -202,5 +243,35 @@ public struct GenerationDisclosure: Codable, Equatable, Sendable {
         value.utf8.count == 64 && value.utf8.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version", generationTurnID = "generation_turn_id"
+        case contentDigest = "content_digest", sourceRevisionDigest = "source_revision_digest"
+        case dataClasses = "data_classes", highestSensitivity = "highest_sensitivity"
+        case safeDisplaySummary = "safe_display_summary"
+    }
+
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(String.self, forKey: .schemaVersion)
+        generationTurnID = try container.decode(String.self, forKey: .generationTurnID)
+        contentDigest = try container.decode(String.self, forKey: .contentDigest)
+        sourceRevisionDigest = try container.decode(String.self, forKey: .sourceRevisionDigest)
+        dataClasses = Set(try container.decode([EgressDataClass].self, forKey: .dataClasses))
+        highestSensitivity = try container.decode(DataSensitivity.self, forKey: .highestSensitivity)
+        safeDisplaySummary = try container.decode(SafeDisplaySummary.self, forKey: .safeDisplaySummary)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(generationTurnID, forKey: .generationTurnID)
+        try container.encode(contentDigest, forKey: .contentDigest)
+        try container.encode(sourceRevisionDigest, forKey: .sourceRevisionDigest)
+        try container.encode(dataClasses.sorted { $0.rawValue < $1.rawValue }, forKey: .dataClasses)
+        try container.encode(highestSensitivity, forKey: .highestSensitivity)
+        try container.encode(safeDisplaySummary, forKey: .safeDisplaySummary)
     }
 }

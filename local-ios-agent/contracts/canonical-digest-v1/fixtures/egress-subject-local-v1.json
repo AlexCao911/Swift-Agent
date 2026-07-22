@@ -1,0 +1,11 @@
+{
+  "name": "egress-subject-local-v1",
+  "domain": "egress-subject:v1",
+  "document": {
+    "kind": "not_applicable",
+    "reason": "local_inference",
+    "schema_version": "1"
+  },
+  "expected_canonical_utf8": "{\"kind\":\"not_applicable\",\"reason\":\"local_inference\",\"schema_version\":\"1\"}",
+  "expected_sha256": "36eb3f18dc9339783b8bd44cf672a39d02fabad80b46d63c8bd29ba3a884317e"
+}

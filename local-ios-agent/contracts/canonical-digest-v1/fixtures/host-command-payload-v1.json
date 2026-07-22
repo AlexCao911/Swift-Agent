@@ -1,0 +1,18 @@
+{
+  "name": "host-command-payload-v1",
+  "domain": "host-command-payload:v1",
+  "document": {
+    "schema_version": "1",
+    "model_input_id": "input-1",
+    "messages": [{"role": "user", "content": [{"kind": "text", "text": "hello"}]}],
+    "tool_schema_json": "{\"type\":\"object\"}",
+    "tool_schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_revisions": [{"source_id": "frame-1", "revision": "7", "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+    "source_revisions_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attachments": [{"attachment_id": "attachment-1", "revision": "2", "modality": "document", "media_type": "text/plain", "content_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}],
+    "semantic_history": [{"role": "assistant", "content": [{"kind": "text", "text": "prior"}]}],
+    "tool_results": []
+  },
+  "expected_canonical_utf8": "{\"attachments\":[{\"attachment_id\":\"attachment-1\",\"content_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"media_type\":\"text/plain\",\"modality\":\"document\",\"revision\":\"2\"}],\"messages\":[{\"content\":[{\"kind\":\"text\",\"text\":\"hello\"}],\"role\":\"user\"}],\"model_input_id\":\"input-1\",\"schema_version\":\"1\",\"semantic_history\":[{\"content\":[{\"kind\":\"text\",\"text\":\"prior\"}],\"role\":\"assistant\"}],\"source_revisions\":[{\"digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"revision\":\"7\",\"source_id\":\"frame-1\"}],\"source_revisions_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"tool_results\":[],\"tool_schema_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tool_schema_json\":\"{\\\"type\\\":\\\"object\\\"}\"}",
+  "expected_sha256": "eb55b1b1e03269c33c4280fc41daf559e28535913dbdb99900bb6864257c78da"
+}

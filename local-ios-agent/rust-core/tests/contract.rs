@@ -23,6 +23,8 @@ mod conversation_execution_boundary;
 mod global_run_lease;
 #[path = "contract/host_binding_saga.rs"]
 mod host_binding_saga;
+#[path = "contract/host_llm_contracts.rs"]
+mod host_llm_contracts;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
 #[path = "contract/llm_slot_v2.rs"]

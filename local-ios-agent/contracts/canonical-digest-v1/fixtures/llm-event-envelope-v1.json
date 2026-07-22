@@ -1,0 +1,8 @@
+{
+  "name": "llm-event-envelope-v1",
+  "domain": "llm-event-envelope:v1",
+  "document": {"schema_version":1,"event_id":"event-1","run_id":"run-1","session_handle":"session-1","host_process_epoch":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","generation_turn_id":"turn-1","event_sequence":1,"kind":"text_delta","payload":{"text":"hello"}},
+  "wire": {"schema_version":1,"event_id":"event-1","run_id":"run-1","session_handle":"session-1","host_process_epoch":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","generation_turn_id":"turn-1","event_sequence":1,"kind":"text_delta","payload":{"text":"hello"},"event_envelope_digest":"488195c800f9fbed1568a205a650f3f69467f701b98d9cd794935115d6ef1f99"},
+  "expected_canonical_utf8": "{\"event_id\":\"event-1\",\"event_sequence\":1,\"generation_turn_id\":\"turn-1\",\"host_process_epoch\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"kind\":\"text_delta\",\"payload\":{\"text\":\"hello\"},\"run_id\":\"run-1\",\"schema_version\":1,\"session_handle\":\"session-1\"}",
+  "expected_sha256": "488195c800f9fbed1568a205a650f3f69467f701b98d9cd794935115d6ef1f99"
+}

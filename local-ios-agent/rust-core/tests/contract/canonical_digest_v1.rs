@@ -64,6 +64,8 @@ fn local_runtime_digests_match_shared_fixtures() {
     for name in [
         "capability-snapshot-local-v1.json",
         "resolved-parameters-local-v1.json",
+        "egress-subject-local-v1.json",
+        "egress-attestation-local-v1.json",
     ] {
         let fixture = fixture(name);
         let canonical = CanonicalDigestV1::canonicalize(&fixture.document).unwrap();
@@ -72,16 +74,36 @@ fn local_runtime_digests_match_shared_fixtures() {
             fixture.expected_canonical_utf8,
             "canonical bytes differ for {name}"
         );
-        let digest = CanonicalDigestV1::digest(
-            fixture.domain.as_deref().unwrap(),
-            &fixture.document,
-        )
-        .unwrap();
+        let digest =
+            CanonicalDigestV1::digest(fixture.domain.as_deref().unwrap(), &fixture.document)
+                .unwrap();
         assert_eq!(
             digest.as_str(),
             fixture.expected_sha256.as_deref().unwrap(),
             "digest differs for {name}"
         );
+    }
+}
+
+#[test]
+fn host_bridge_digests_match_shared_fixtures() {
+    for name in [
+        "host-command-payload-v1.json",
+        "host-command-envelope-v1.json",
+        "llm-event-envelope-v1.json",
+        "llm-event-receipt-v1.json",
+        "host-tool-effect-result-v1.json",
+    ] {
+        let fixture = fixture(name);
+        let canonical = CanonicalDigestV1::canonicalize(&fixture.document).unwrap();
+        assert_eq!(
+            String::from_utf8(canonical).unwrap(),
+            fixture.expected_canonical_utf8
+        );
+        let digest =
+            CanonicalDigestV1::digest(fixture.domain.as_deref().unwrap(), &fixture.document)
+                .unwrap();
+        assert_eq!(digest.as_str(), fixture.expected_sha256.as_deref().unwrap());
     }
 }
 
@@ -109,11 +131,9 @@ fn cloud_policy_digests_match_shared_fixtures_without_parsing_provider_semantics
             fixture.expected_canonical_utf8,
             "canonical bytes differ for {name}"
         );
-        let digest = CanonicalDigestV1::digest(
-            fixture.domain.as_deref().unwrap(),
-            &fixture.document,
-        )
-        .unwrap();
+        let digest =
+            CanonicalDigestV1::digest(fixture.domain.as_deref().unwrap(), &fixture.document)
+                .unwrap();
         assert_eq!(
             digest.as_str(),
             fixture.expected_sha256.as_deref().unwrap(),

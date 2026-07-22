@@ -1,0 +1,24 @@
+{
+  "name": "egress-attestation-local-v1",
+  "domain": "egress-attestation:v1",
+  "document": {
+    "schema_version": "1",
+    "preparation_id": "prep-local-1",
+    "proposed_run_id": "run-local-1",
+    "session_id": "session-local-1",
+    "swift_snapshot_id": "snapshot-local-1",
+    "prepared_session_registration_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "binding_id": "binding-local-1",
+    "binding_revision": "5",
+    "binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requirements_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "disclosure_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "capability_snapshot_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "resolved_parameters_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "host_process_epoch": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "expires_at": "2027-01-15T08:06:00.000Z",
+    "opaque_egress_subject_digest": "36eb3f18dc9339783b8bd44cf672a39d02fabad80b46d63c8bd29ba3a884317e"
+  },
+  "expected_canonical_utf8": "{\"binding_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"binding_id\":\"binding-local-1\",\"binding_revision\":\"5\",\"capability_snapshot_digest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"disclosure_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"expires_at\":\"2027-01-15T08:06:00.000Z\",\"host_process_epoch\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"opaque_egress_subject_digest\":\"36eb3f18dc9339783b8bd44cf672a39d02fabad80b46d63c8bd29ba3a884317e\",\"preparation_id\":\"prep-local-1\",\"prepared_session_registration_digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"proposed_run_id\":\"run-local-1\",\"requirements_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"resolved_parameters_digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"schema_version\":\"1\",\"session_id\":\"session-local-1\",\"swift_snapshot_id\":\"snapshot-local-1\"}",
+  "expected_sha256": "58ef0e04243b5a3b4f324869b60de728ba04928eec536f8d72eff217132c4034"
+}

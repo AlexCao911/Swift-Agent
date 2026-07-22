@@ -673,6 +673,11 @@ private func requireCompleteProbe(
     do {
         for try await event in session.decode(stream) {
             switch event {
+            case .generationStarted, .sessionClosed:
+                throw validationFailure(
+                    "provider_validation.probe_incomplete",
+                    "model validation adapter emitted a host lifecycle event"
+                )
             case let .textDelta(text), let .reasoningSummaryDelta(text):
                 produced = produced || !text.isEmpty
             case .toolCallStarted, .toolCallArgumentsDelta, .toolCallCompleted:
@@ -685,6 +690,11 @@ private func requireCompleteProbe(
                 throw validationFailure(
                     "provider_validation.probe_incomplete",
                     "model validation probe was cancelled"
+                )
+            case .failed:
+                throw validationFailure(
+                    "provider_validation.probe_incomplete",
+                    "model validation probe failed"
                 )
             }
         }

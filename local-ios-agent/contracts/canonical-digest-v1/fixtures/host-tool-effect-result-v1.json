@@ -1,0 +1,7 @@
+{
+  "name": "host-tool-effect-result-v1",
+  "domain": "host-tool-effect-result:v1",
+  "document": {"schema_version":"1","effect_id":"run-1:call-1:contacts.search","run_id":"run-1","generation_turn_id":"turn-1","call_id":"call-1","tool_name":"contacts.search","normalized_result":{"matches":1},"is_error":false,"replay_class":"safe_result","completed_at":"2027-01-15T08:06:00.000Z"},
+  "expected_canonical_utf8": "{\"call_id\":\"call-1\",\"completed_at\":\"2027-01-15T08:06:00.000Z\",\"effect_id\":\"run-1:call-1:contacts.search\",\"generation_turn_id\":\"turn-1\",\"is_error\":false,\"normalized_result\":{\"matches\":1},\"replay_class\":\"safe_result\",\"run_id\":\"run-1\",\"schema_version\":\"1\",\"tool_name\":\"contacts.search\"}",
+  "expected_sha256": "80770b7b8ae8a69544e98958cb768154adfe641d7711f6c227fdea8942ba86a3"
+}

@@ -387,12 +387,164 @@ impl PreparedSessionRegistration {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct HostAttestationV1Document {
+    schema_version: String,
+    preparation_id: String,
+    proposed_run_id: String,
+    session_id: String,
+    swift_snapshot_id: String,
+    prepared_session_registration_digest: String,
+    binding_id: String,
+    binding_revision: String,
+    binding_hash: String,
+    requirements_hash: String,
+    disclosure_digest: String,
+    capability_snapshot_digest: String,
+    resolved_parameters_digest: String,
+    host_process_epoch: String,
+    expires_at: String,
+    opaque_egress_subject_digest: String,
+}
+
+impl HostAttestationV1Document {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        preparation_id: impl Into<String>,
+        proposed_run_id: impl Into<String>,
+        session_id: impl Into<String>,
+        swift_snapshot_id: impl Into<String>,
+        prepared_session_registration_digest: impl Into<String>,
+        binding_id: impl Into<String>,
+        binding_revision: u64,
+        binding_hash: impl Into<String>,
+        requirements_hash: impl Into<String>,
+        disclosure_digest: impl Into<String>,
+        capability_snapshot_digest: impl Into<String>,
+        resolved_parameters_digest: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        expires_at: impl Into<String>,
+        opaque_egress_subject_digest: impl Into<String>,
+    ) -> Self {
+        Self {
+            schema_version: "1".into(),
+            preparation_id: preparation_id.into(),
+            proposed_run_id: proposed_run_id.into(),
+            session_id: session_id.into(),
+            swift_snapshot_id: swift_snapshot_id.into(),
+            prepared_session_registration_digest: prepared_session_registration_digest.into(),
+            binding_id: binding_id.into(),
+            binding_revision: binding_revision.to_string(),
+            binding_hash: binding_hash.into(),
+            requirements_hash: requirements_hash.into(),
+            disclosure_digest: disclosure_digest.into(),
+            capability_snapshot_digest: capability_snapshot_digest.into(),
+            resolved_parameters_digest: resolved_parameters_digest.into(),
+            host_process_epoch: host_process_epoch.into(),
+            expires_at: expires_at.into(),
+            opaque_egress_subject_digest: opaque_egress_subject_digest.into(),
+        }
+    }
+
+    pub fn expected_digest(&self) -> Result<String, PreparationError> {
+        let identity_is_canonical = self.schema_version == "1"
+            && !self.preparation_id.is_empty()
+            && !self.proposed_run_id.is_empty()
+            && !self.session_id.is_empty()
+            && !self.swift_snapshot_id.is_empty()
+            && !self.binding_id.is_empty()
+            && self
+                .binding_revision
+                .parse::<u64>()
+                .ok()
+                .map(|value| value.to_string())
+                == Some(self.binding_revision.clone())
+            && !self.host_process_epoch.is_empty();
+        let digests_are_canonical = [
+            &self.prepared_session_registration_digest,
+            &self.binding_hash,
+            &self.requirements_hash,
+            &self.disclosure_digest,
+            &self.capability_snapshot_digest,
+            &self.resolved_parameters_digest,
+            &self.opaque_egress_subject_digest,
+        ]
+        .into_iter()
+        .all(|value| is_lowercase_sha256(value));
+        if !identity_is_canonical
+            || !digests_are_canonical
+            || canonical_timestamp_to_millis(&self.expires_at).is_none()
+        {
+            return Err(PreparationError::new(
+                "preparation.egress_attestation_document_invalid",
+                "host attestation identity, digest, schema, or expiry is not canonical",
+            ));
+        }
+        crate::canonical_digest::CanonicalDigestV1::digest("egress-attestation:v1", self)
+            .map(|digest| digest.as_str().to_string())
+            .map_err(|error| {
+                PreparationError::new("preparation.egress_digest_failed", error.to_string())
+            })
+    }
+    pub fn expiration_millis(&self) -> Option<u64> {
+        canonical_timestamp_to_millis(&self.expires_at)
+    }
+    pub fn preparation_id(&self) -> &str {
+        &self.preparation_id
+    }
+    pub fn proposed_run_id(&self) -> &str {
+        &self.proposed_run_id
+    }
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+    pub fn swift_snapshot_id(&self) -> &str {
+        &self.swift_snapshot_id
+    }
+    pub fn prepared_session_registration_digest(&self) -> &str {
+        &self.prepared_session_registration_digest
+    }
+    pub fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+    pub fn binding_revision(&self) -> &str {
+        &self.binding_revision
+    }
+    pub fn binding_hash(&self) -> &str {
+        &self.binding_hash
+    }
+    pub fn requirements_hash(&self) -> &str {
+        &self.requirements_hash
+    }
+    pub fn disclosure_digest(&self) -> &str {
+        &self.disclosure_digest
+    }
+    pub fn capability_snapshot_digest(&self) -> &str {
+        &self.capability_snapshot_digest
+    }
+    pub fn resolved_parameters_digest(&self) -> &str {
+        &self.resolved_parameters_digest
+    }
+    pub fn host_process_epoch(&self) -> &str {
+        &self.host_process_epoch
+    }
+    pub fn opaque_egress_subject_digest(&self) -> &str {
+        &self.opaque_egress_subject_digest
+    }
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostAttestation {
-    registration: PreparedSessionRegistration,
+    document: HostAttestationV1Document,
     preparation_binding_digest: String,
     egress_attestation_digest: String,
-    #[serde(default)]
-    disclosure_digest: String,
     #[serde(default)]
     disclosure_grant_id: String,
     #[serde(default)]
@@ -400,10 +552,62 @@ pub struct HostAttestation {
     #[serde(default)]
     highest_sensitivity: String,
     #[serde(default)]
-    opaque_subject_digest: String,
-    #[serde(default)]
     capability_attestation: Option<PreparedCapabilityAttestation>,
-    expiration_millis: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostRunHandle {
+    run_id: String,
+    session_handle: String,
+    first_command_id: String,
+}
+
+impl HostRunHandle {
+    pub fn new(
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        first_command_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            session_handle: session_handle.into(),
+            first_command_id: first_command_id.into(),
+        }
+    }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
+    pub fn first_command_id(&self) -> &str {
+        &self.first_command_id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedSessionCleanupIdentity {
+    cleanup_command_id: String,
+    cleanup_command_sequence: u64,
+    preparation_id: String,
+    proposed_run_id: String,
+    session_handle: String,
+    registration_digest: String,
+    host_process_epoch: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PreparationReconciliation {
+    Committed {
+        handle: HostRunHandle,
+    },
+    Pending,
+    Aborting {
+        cleanup_identity: PreparedSessionCleanupIdentity,
+    },
 }
 
 impl HostAttestation {
@@ -413,33 +617,59 @@ impl HostAttestation {
         egress_attestation_digest: impl Into<String>,
         expiration_millis: u64,
     ) -> Self {
+        let expires_at = canonical_timestamp_from_millis(expiration_millis);
+        let document = HostAttestationV1Document::new(
+            registration.preparation_id(),
+            registration.proposed_run_id(),
+            registration.session_handle(),
+            registration.swift_snapshot_id(),
+            registration.registration_digest(),
+            registration.binding_id(),
+            registration.binding_revision(),
+            registration.binding_hash(),
+            "",
+            "",
+            "",
+            "",
+            registration.host_process_epoch(),
+            expires_at,
+            "",
+        );
         Self {
-            registration,
+            document,
             preparation_binding_digest: preparation_binding_digest.into(),
             egress_attestation_digest: egress_attestation_digest.into(),
-            disclosure_digest: String::new(),
             disclosure_grant_id: String::new(),
             data_classes: BTreeMap::new(),
             highest_sensitivity: String::new(),
-            opaque_subject_digest: String::new(),
             capability_attestation: None,
-            expiration_millis,
         }
     }
-    pub fn registration(&self) -> &PreparedSessionRegistration {
-        &self.registration
+    pub fn for_contract_fixture(document: HostAttestationV1Document) -> Self {
+        Self {
+            document,
+            preparation_binding_digest: String::new(),
+            egress_attestation_digest: String::new(),
+            disclosure_grant_id: String::new(),
+            data_classes: BTreeMap::new(),
+            highest_sensitivity: String::new(),
+            capability_attestation: None,
+        }
+    }
+    pub fn document(&self) -> &HostAttestationV1Document {
+        &self.document
     }
     pub fn preparation_binding_digest(&self) -> &str {
         &self.preparation_binding_digest
     }
     pub fn expiration_millis(&self) -> u64 {
-        self.expiration_millis
+        self.document.expiration_millis().unwrap_or(0)
     }
     pub fn egress_attestation_digest(&self) -> &str {
         &self.egress_attestation_digest
     }
     pub fn disclosure_digest(&self) -> &str {
-        &self.disclosure_digest
+        self.document.disclosure_digest()
     }
     pub fn disclosure_grant_id(&self) -> &str {
         &self.disclosure_grant_id
@@ -451,7 +681,7 @@ impl HostAttestation {
         &self.highest_sensitivity
     }
     pub fn opaque_subject_digest(&self) -> &str {
-        &self.opaque_subject_digest
+        self.document.opaque_egress_subject_digest()
     }
     pub fn capability_attestation(&self) -> Option<&PreparedCapabilityAttestation> {
         self.capability_attestation.as_ref()
@@ -460,7 +690,22 @@ impl HostAttestation {
         mut self,
         capability_attestation: PreparedCapabilityAttestation,
     ) -> Self {
+        self.document.capability_snapshot_digest =
+            capability_attestation.attestation_digest().to_string();
         self.capability_attestation = Some(capability_attestation);
+        self
+    }
+    pub fn with_document_context(
+        mut self,
+        requirements_hash: impl Into<String>,
+        resolved_parameters_digest: impl Into<String>,
+    ) -> Self {
+        self.document.requirements_hash = requirements_hash.into();
+        self.document.resolved_parameters_digest = resolved_parameters_digest.into();
+        self
+    }
+    pub fn with_capability_snapshot_digest(mut self, digest: impl Into<String>) -> Self {
+        self.document.capability_snapshot_digest = digest.into();
         self
     }
     pub fn with_egress_scope(
@@ -471,14 +716,14 @@ impl HostAttestation {
         highest_sensitivity: impl Into<String>,
         opaque_subject_digest: impl Into<String>,
     ) -> Self {
-        self.disclosure_digest = disclosure_digest.into();
+        self.document.disclosure_digest = disclosure_digest.into();
         self.disclosure_grant_id = disclosure_grant_id.into();
         self.data_classes = data_classes
             .into_iter()
             .map(|value| (value.into(), true))
             .collect();
         self.highest_sensitivity = highest_sensitivity.into();
-        self.opaque_subject_digest = opaque_subject_digest.into();
+        self.document.opaque_egress_subject_digest = opaque_subject_digest.into();
         self
     }
     pub fn with_computed_egress_digest(mut self) -> Result<Self, PreparationError> {
@@ -486,33 +731,99 @@ impl HostAttestation {
         Ok(self)
     }
     pub fn expected_egress_digest(&self) -> Result<String, PreparationError> {
-        #[derive(Serialize)]
-        struct Document<'a> {
-            preparation_binding_digest: &'a str,
-            registration_digest: &'a str,
-            disclosure_digest: &'a str,
-            disclosure_grant_id: &'a str,
-            data_classes: Vec<&'a str>,
-            highest_sensitivity: &'a str,
-            opaque_subject_digest: &'a str,
-        }
-        crate::canonical_digest::CanonicalDigestV1::digest(
-            "egress-attestation:v1",
-            &Document {
-                preparation_binding_digest: &self.preparation_binding_digest,
-                registration_digest: self.registration.registration_digest(),
-                disclosure_digest: &self.disclosure_digest,
-                disclosure_grant_id: &self.disclosure_grant_id,
-                data_classes: self.data_classes.keys().map(String::as_str).collect(),
-                highest_sensitivity: &self.highest_sensitivity,
-                opaque_subject_digest: &self.opaque_subject_digest,
-            },
-        )
-        .map(|digest| digest.as_str().to_string())
-        .map_err(|error| {
-            PreparationError::new("preparation.egress_digest_failed", error.to_string())
-        })
+        self.document.expected_digest()
     }
+}
+
+fn canonical_timestamp_from_millis(millis: u64) -> String {
+    let seconds = millis / 1_000;
+    let millisecond = millis % 1_000;
+    let days = seconds / 86_400;
+    let second_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millisecond:03}Z",
+        second_of_day / 3_600,
+        (second_of_day % 3_600) / 60,
+        second_of_day % 60
+    )
+}
+
+fn canonical_timestamp_to_millis(value: &str) -> Option<u64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 24
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'.'
+        || bytes[23] != b'Z'
+    {
+        return None;
+    }
+    let number = |start: usize, end: usize| value.get(start..end)?.parse::<u32>().ok();
+    let year = number(0, 4)?;
+    let month = number(5, 7)?;
+    let day = number(8, 10)?;
+    let hour = number(11, 13)?;
+    let minute = number(14, 16)?;
+    let second = number(17, 19)?;
+    let millis = number(20, 23)?;
+    if !(1..=12).contains(&month)
+        || day == 0
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let days = days_from_civil(year as i64, month as i64, day as i64)?;
+    u64::try_from(days)
+        .ok()?
+        .checked_mul(86_400_000)?
+        .checked_add(
+            hour as u64 * 3_600_000
+                + minute as u64 * 60_000
+                + second as u64 * 1_000
+                + millis as u64,
+        )
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    let adjusted = year - i64::from(month <= 2);
+    let era = adjusted.div_euclid(400);
+    let yoe = adjusted - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    (days >= 0).then_some(days)
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

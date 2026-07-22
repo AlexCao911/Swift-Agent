@@ -1,4 +1,5 @@
 import Foundation
+import LocalAgentLLMContracts
 
 public struct ProfilePublishPreparationDTO: Codable, Equatable, Sendable {
     public let idempotencyKey: String
@@ -246,6 +247,11 @@ public struct PreparedCapabilityAttestationDTO: Codable, Equatable, Sendable {
     public let toolCalling: Bool
     public let expirationMillis: UInt64
     public let attestationDigest: String
+    public init(supportedCapabilities: [String], inputModalities: [String], contextLength: String, streaming: Bool, toolCalling: Bool, expirationMillis: UInt64, attestationDigest: String) {
+        self.supportedCapabilities = supportedCapabilities; self.inputModalities = inputModalities
+        self.contextLength = contextLength; self.streaming = streaming; self.toolCalling = toolCalling
+        self.expirationMillis = expirationMillis; self.attestationDigest = attestationDigest
+    }
     private enum CodingKeys: String, CodingKey {
         case supportedCapabilities = "supported_capabilities", inputModalities = "input_modalities"
         case contextLength = "context_length", streaming, toolCalling = "tool_calling"
@@ -254,24 +260,111 @@ public struct PreparedCapabilityAttestationDTO: Codable, Equatable, Sendable {
 }
 
 public struct HostAttestationDTO: Codable, Equatable, Sendable {
-    public let registration: PreparedSessionRegistrationDTO
+    public let document: HostAttestationV1Document
     public let preparationBindingDigest: String
     public let egressAttestationDigest: String
-    public let disclosureDigest: String
     public let disclosureGrantId: String
     public let dataClasses: [String: Bool]
     public let highestSensitivity: String
-    public let opaqueSubjectDigest: String
     public let capabilityAttestation: PreparedCapabilityAttestationDTO
-    public let expirationMillis: UInt64
-    public init(registration: PreparedSessionRegistrationDTO, preparationBindingDigest: String, egressAttestationDigest: String, disclosureDigest: String, disclosureGrantId: String, dataClasses: [String: Bool], highestSensitivity: String, opaqueSubjectDigest: String, capabilityAttestation: PreparedCapabilityAttestationDTO, expirationMillis: UInt64) {
-        self.registration = registration; self.preparationBindingDigest = preparationBindingDigest
-        self.egressAttestationDigest = egressAttestationDigest; self.disclosureDigest = disclosureDigest
+    public init(document: HostAttestationV1Document, preparationBindingDigest: String, egressAttestationDigest: String, disclosureGrantId: String, dataClasses: [String: Bool], highestSensitivity: String, capabilityAttestation: PreparedCapabilityAttestationDTO) {
+        self.document = document; self.preparationBindingDigest = preparationBindingDigest
+        self.egressAttestationDigest = egressAttestationDigest
         self.disclosureGrantId = disclosureGrantId; self.dataClasses = dataClasses
-        self.highestSensitivity = highestSensitivity; self.opaqueSubjectDigest = opaqueSubjectDigest
-        self.capabilityAttestation = capabilityAttestation; self.expirationMillis = expirationMillis
+        self.highestSensitivity = highestSensitivity; self.capabilityAttestation = capabilityAttestation
     }
-    private enum CodingKeys: String, CodingKey { case registration, preparationBindingDigest = "preparation_binding_digest", egressAttestationDigest = "egress_attestation_digest", disclosureDigest = "disclosure_digest", disclosureGrantId = "disclosure_grant_id", dataClasses = "data_classes", highestSensitivity = "highest_sensitivity", opaqueSubjectDigest = "opaque_subject_digest", capabilityAttestation = "capability_attestation", expirationMillis = "expiration_millis" }
+
+    public init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: HostAttestationDynamicCodingKey.self)
+        let unknownKeys = Set(dynamic.allKeys.map(\.stringValue)).subtracting(CodingKeys.allCases.map(\.rawValue))
+        guard unknownKeys.isEmpty else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "host attestation contains unknown fields: \(unknownKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        document = try container.decode(HostAttestationV1Document.self, forKey: .document)
+        preparationBindingDigest = try container.decode(String.self, forKey: .preparationBindingDigest)
+        egressAttestationDigest = try container.decode(String.self, forKey: .egressAttestationDigest)
+        disclosureGrantId = try container.decode(String.self, forKey: .disclosureGrantId)
+        dataClasses = try container.decode([String: Bool].self, forKey: .dataClasses)
+        highestSensitivity = try container.decode(String.self, forKey: .highestSensitivity)
+        capabilityAttestation = try container.decode(PreparedCapabilityAttestationDTO.self, forKey: .capabilityAttestation)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case document, preparationBindingDigest = "preparation_binding_digest"
+        case egressAttestationDigest = "egress_attestation_digest"
+        case disclosureGrantId = "disclosure_grant_id", dataClasses = "data_classes"
+        case highestSensitivity = "highest_sensitivity", capabilityAttestation = "capability_attestation"
+    }
+}
+
+private struct HostAttestationDynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}
+
+public struct HostRunHandleDTO: Codable, Equatable, Sendable {
+    public let runID: String
+    public let sessionHandle: String
+    public let firstCommandID: String
+    public init(runID: String, sessionHandle: String, firstCommandID: String) {
+        self.runID = runID; self.sessionHandle = sessionHandle; self.firstCommandID = firstCommandID
+    }
+    private enum CodingKeys: String, CodingKey {
+        case runID = "run_id", sessionHandle = "session_handle", firstCommandID = "first_command_id"
+    }
+}
+
+public struct PreparedSessionCleanupIdentityDTO: Codable, Equatable, Sendable {
+    public let cleanupCommandID: String; public let cleanupCommandSequence: UInt64
+    public let preparationID: String; public let proposedRunID: String; public let sessionHandle: String
+    public let registrationDigest: String; public let hostProcessEpoch: String
+    private enum CodingKeys: String, CodingKey {
+        case cleanupCommandID = "cleanup_command_id", cleanupCommandSequence = "cleanup_command_sequence"
+        case preparationID = "preparation_id", proposedRunID = "proposed_run_id"
+        case sessionHandle = "session_handle", registrationDigest = "registration_digest"
+        case hostProcessEpoch = "host_process_epoch"
+    }
+}
+
+public enum PreparationReconciliationStatusDTO: String, Codable, Sendable { case committed, pending, aborting }
+
+public struct PreparationReconciliationDTO: Codable, Equatable, Sendable {
+    public let status: PreparationReconciliationStatusDTO
+    public let handle: HostRunHandleDTO?
+    public let cleanupIdentity: PreparedSessionCleanupIdentityDTO?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(PreparationReconciliationStatusDTO.self, forKey: .status)
+        handle = try container.decodeIfPresent(HostRunHandleDTO.self, forKey: .handle)
+        cleanupIdentity = try container.decodeIfPresent(PreparedSessionCleanupIdentityDTO.self, forKey: .cleanupIdentity)
+        let valid = switch status {
+        case .committed: handle != nil && cleanupIdentity == nil
+        case .pending: handle == nil && cleanupIdentity == nil
+        case .aborting: handle == nil && cleanupIdentity != nil
+        }
+        guard valid else {
+            throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "reconciliation payload does not match status")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(handle, forKey: .handle)
+        try container.encodeIfPresent(cleanupIdentity, forKey: .cleanupIdentity)
+    }
+
+    private enum CodingKeys: String, CodingKey { case status, handle, cleanupIdentity = "cleanup_identity" }
 }
 
 public struct CommitPreparedStartRequestDTO: Codable, Equatable, Sendable {

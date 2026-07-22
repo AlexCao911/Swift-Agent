@@ -65,7 +65,16 @@ impl PreparedStartValidator {
             )
         })?;
         validate_registration(registration)?;
-        if attestation.registration() != registration
+        let document = attestation.document();
+        if document.preparation_id() != registration.preparation_id()
+            || document.proposed_run_id() != registration.proposed_run_id()
+            || document.session_id() != registration.session_handle()
+            || document.swift_snapshot_id() != registration.swift_snapshot_id()
+            || document.prepared_session_registration_digest() != registration.registration_digest()
+            || document.binding_id() != registration.binding_id()
+            || document.binding_revision() != registration.binding_revision().to_string()
+            || document.binding_hash() != registration.binding_hash()
+            || document.host_process_epoch() != registration.host_process_epoch()
             || attestation.preparation_binding_digest() != record.preview().binding_digest()
             || attestation.expiration_millis() < now_millis
         {
@@ -87,6 +96,8 @@ impl PreparedStartValidator {
         let attested_data_classes: std::collections::BTreeSet<_> =
             attestation.data_classes().map(str::to_string).collect();
         if attestation.disclosure_digest() != binding.initial_disclosure_digest()
+            || document.requirements_hash() != binding.requirements_hash()
+            || document.resolved_parameters_digest().is_empty()
             || attested_data_classes != *binding.initial_data_classes()
             || attestation.highest_sensitivity() != binding.initial_highest_sensitivity()
             || attestation.disclosure_grant_id().is_empty()
@@ -109,7 +120,9 @@ impl PreparedStartValidator {
             )
         })?;
         let expected_capability_digest = capability.expected_digest()?;
-        if !constant_time_text_eq(capability.attestation_digest(), &expected_capability_digest) {
+        if document.capability_snapshot_digest() != capability.attestation_digest()
+            || !constant_time_text_eq(capability.attestation_digest(), &expected_capability_digest)
+        {
             return Err(error(
                 "preparation.capability_attestation_digest_mismatch",
                 "capability attestation digest does not match its public claims",

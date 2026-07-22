@@ -656,21 +656,24 @@ public actor CloudLLMRuntime {
             binding: binding,
             credentialUseLeaseDigest: leaseDigest
         )
-        let attestationDigest = try cloudEgressAttestationDigest(
+        let hostAttestation = HostAttestationV1Document(
             preparationID: context.preparationID,
             proposedRunID: context.proposedRunID,
             sessionID: sessionID,
-            snapshotID: snapshotID,
-            registrationDigest: registrationDigest,
-            binding: binding,
+            swiftSnapshotID: snapshotID,
+            preparedSessionRegistrationDigest: registrationDigest,
+            bindingID: binding.bindingID,
+            bindingRevision: String(binding.bindingRevision),
+            bindingHash: binding.bindingHash,
             requirementsHash: hostConfiguration.requirementsHash,
             disclosureDigest: disclosureDigest,
             capabilitySnapshotDigest: currentValidation.evidenceDigest,
             resolvedParametersDigest: resolved.digest,
-            hostProcessEpoch: hostProcessEpoch,
-            expiresAt: authorized.authorization.expiresAt,
+            hostProcessEpoch: hostProcessEpoch.rawValue,
+            expiresAt: try cloudRuntimeTimestamp(authorized.authorization.expiresAt),
             opaqueEgressSubjectDigest: authorized.egressSubjectDigest
         )
+        let attestationDigest = try hostAttestation.computedDigest().hex
         let prepared = PreparedCloudSession(
             sessionID: sessionID,
             preparationID: context.preparationID,
@@ -1148,45 +1151,6 @@ private func preparedRegistrationDigest(
     ])
     return try CanonicalDigestV1.digest(
         domain: "prepared-session-registration:v1",
-        document: document
-    ).hex
-}
-
-private func cloudEgressAttestationDigest(
-    preparationID: String,
-    proposedRunID: String,
-    sessionID: String,
-    snapshotID: String,
-    registrationDigest: String,
-    binding: HostBindingTuple,
-    requirementsHash: String,
-    disclosureDigest: String,
-    capabilitySnapshotDigest: String,
-    resolvedParametersDigest: String,
-    hostProcessEpoch: HostProcessEpoch,
-    expiresAt: Date,
-    opaqueEgressSubjectDigest: String
-) throws -> String {
-    let document = try CanonicalJSONValue.object(entries: [
-        .init(name: "binding_hash", value: .string(binding.bindingHash)),
-        .init(name: "binding_id", value: .string(binding.bindingID)),
-        .init(name: "binding_revision", value: .string(String(binding.bindingRevision))),
-        .init(name: "capability_snapshot_digest", value: .string(capabilitySnapshotDigest)),
-        .init(name: "disclosure_digest", value: .string(disclosureDigest)),
-        .init(name: "expires_at", value: .string(try cloudRuntimeTimestamp(expiresAt))),
-        .init(name: "host_process_epoch", value: .string(hostProcessEpoch.rawValue)),
-        .init(name: "opaque_egress_subject_digest", value: .string(opaqueEgressSubjectDigest)),
-        .init(name: "preparation_id", value: .string(preparationID)),
-        .init(name: "prepared_session_registration_digest", value: .string(registrationDigest)),
-        .init(name: "proposed_run_id", value: .string(proposedRunID)),
-        .init(name: "requirements_hash", value: .string(requirementsHash)),
-        .init(name: "resolved_parameters_digest", value: .string(resolvedParametersDigest)),
-        .init(name: "schema_version", value: .string("1")),
-        .init(name: "session_id", value: .string(sessionID)),
-        .init(name: "swift_snapshot_id", value: .string(snapshotID)),
-    ])
-    return try CanonicalDigestV1.digest(
-        domain: "egress-attestation:v1",
         document: document
     ).hex
 }

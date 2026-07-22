@@ -35,6 +35,8 @@ struct CanonicalDigestTests {
             "capability-observation-local-catalog-v1.json",
             "capability-snapshot-local-v1.json",
             "resolved-parameters-local-v1.json",
+            "egress-subject-local-v1.json",
+            "egress-attestation-local-v1.json",
         ] {
             let fixture = try DigestFixture.load(name)
             let canonical = try CanonicalDigestV1.canonicalize(fixture.document)
@@ -45,6 +47,26 @@ struct CanonicalDigestTests {
             )
             let expected = try #require(fixture.expectedSHA256)
             #expect(digest.hex == expected)
+        }
+    }
+
+    @Test
+    func hostBridgeDigestsMatchSharedFixtures() throws {
+        for name in [
+            "host-command-payload-v1.json",
+            "host-command-envelope-v1.json",
+            "llm-event-envelope-v1.json",
+            "llm-event-receipt-v1.json",
+            "host-tool-effect-result-v1.json",
+        ] {
+            let fixture = try DigestFixture.load(name)
+            let expected = try #require(fixture.expectedSHA256)
+            #expect(String(decoding: try CanonicalDigestV1.canonicalize(fixture.document), as: UTF8.self)
+                == fixture.expectedCanonicalUTF8)
+            #expect(try CanonicalDigestV1.digest(
+                domain: try #require(fixture.domain),
+                document: fixture.document
+            ).hex == expected)
         }
     }
 
@@ -107,19 +129,6 @@ struct CanonicalDigestTests {
             document: capability
         ).hex == "9673926303e128b9467da26d2a89a39f06f1b1f5c1b01a3eed185c27542cb862")
 
-        let egress = try CanonicalJSONValue.object(entries: [
-            .init(name: "preparation_binding_digest", value: .string("prep-binding-1")),
-            .init(name: "registration_digest", value: .string("registration-1")),
-            .init(name: "disclosure_digest", value: .string("disclosure-1")),
-            .init(name: "disclosure_grant_id", value: .string("grant-1")),
-            .init(name: "data_classes", value: .array([.string("text")])),
-            .init(name: "highest_sensitivity", value: .string("private")),
-            .init(name: "opaque_subject_digest", value: .string("subject-1")),
-        ])
-        #expect(try CanonicalDigestV1.digest(
-            domain: "egress-attestation:v1",
-            document: egress
-        ).hex == "a6dd8d2f51df170716e5cc538fd2c999a37ec240d6acd8799617f2e2bdb0525c")
     }
 
     @Test
