@@ -403,6 +403,176 @@ struct CloudLLMRuntimeTests {
     }
 
     @Test
+    func outerBufferOverflowFailsInsteadOfDroppingTerminal() async throws {
+        let providerSession = RuntimeSpyProviderSession(scriptedEvents:
+            (0..<40).map { .textDelta("chunk-\($0)") } + [
+                .generationCompleted(.init(
+                    outcome: .finalResponse,
+                    orderedCallIDs: [],
+                    finishReason: .stop
+                )),
+            ]
+        )
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: [[]]),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            adapters: try CloudProviderAdapterRegistry(adapters: [
+                RuntimeSpyAdapter(session: providerSession),
+            ])
+        )
+        defer { harness.cleanup() }
+        let prepared = try await harness.runtime.prepareSession(
+            context: .init(
+                preparationID: "preparation-overflow",
+                proposedRunID: "run-overflow",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+
+        let stream = try await harness.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: harness.initialTurn
+        )
+        for _ in 0..<1_000 where await harness.runtime.state != .terminal {
+            await Task.yield()
+        }
+
+        await expectRuntimeFailure("runtime.cloud_consumer_backpressure") {
+            _ = try await collect(stream)
+        }
+        #expect(await harness.runtime.state == .terminal)
+        try await harness.runtime.closeSession(sessionID: prepared.sessionID)
+    }
+
+    @Test
+    func consumerTerminationCancelsProviderExactlyOnce() async throws {
+        let providerSession = RuntimeSpyProviderSession()
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: [[]]),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            adapters: try CloudProviderAdapterRegistry(adapters: [
+                RuntimeSpyAdapter(session: providerSession),
+            ])
+        )
+        defer { harness.cleanup() }
+        let prepared = try await harness.runtime.prepareSession(
+            context: .init(
+                preparationID: "preparation-consumer-cancel",
+                proposedRunID: "run-consumer-cancel",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+        let stream = try await harness.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: harness.initialTurn
+        )
+        let consumer = Task { try await collect(stream) }
+        for _ in 0..<1_000 where providerSession.decodeCount == 0 {
+            await Task.yield()
+        }
+
+        consumer.cancel()
+        _ = await consumer.result
+        for _ in 0..<1_000 where providerSession.cancelCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(providerSession.cancelCount == 1)
+        #expect(await harness.runtime.state == .terminal)
+        try await harness.runtime.closeSession(sessionID: prepared.sessionID)
+        #expect(providerSession.closeCount == 1)
+    }
+
+    @Test
+    func consumerTerminationAndExplicitCancelShareOneProviderCancel() async throws {
+        let providerSession = RuntimeSpyProviderSession()
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: [[]]),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            adapters: try CloudProviderAdapterRegistry(adapters: [
+                RuntimeSpyAdapter(session: providerSession),
+            ])
+        )
+        defer { harness.cleanup() }
+        let prepared = try await harness.runtime.prepareSession(
+            context: .init(
+                preparationID: "preparation-cancel-race",
+                proposedRunID: "run-cancel-race",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+        let stream = try await harness.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: harness.initialTurn
+        )
+        let consumer = Task { try await collect(stream) }
+        for _ in 0..<1_000 where providerSession.decodeCount == 0 {
+            await Task.yield()
+        }
+
+        consumer.cancel()
+        try await harness.runtime.cancel(sessionID: prepared.sessionID)
+        _ = await consumer.result
+
+        #expect(providerSession.cancelCount == 1)
+        try await harness.runtime.closeSession(sessionID: prepared.sessionID)
+        #expect(providerSession.closeCount == 1)
+    }
+
+    @Test
+    func normalCompletionDoesNotCancelProvider() async throws {
+        let providerSession = RuntimeSpyProviderSession(scriptedEvents: [
+            .textDelta("done"),
+            .generationCompleted(.init(
+                outcome: .finalResponse,
+                orderedCallIDs: [],
+                finishReason: .stop
+            )),
+        ])
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: [[]]),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            adapters: try CloudProviderAdapterRegistry(adapters: [
+                RuntimeSpyAdapter(session: providerSession),
+            ])
+        )
+        defer { harness.cleanup() }
+        let prepared = try await harness.runtime.prepareSession(
+            context: .init(
+                preparationID: "preparation-normal-terminal",
+                proposedRunID: "run-normal-terminal",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+
+        let events = try await collect(try await harness.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: harness.initialTurn
+        ))
+
+        #expect(events.last == .generationCompleted(.init(
+            outcome: .finalResponse,
+            orderedCallIDs: [],
+            finishReason: .stop
+        )))
+        #expect(providerSession.cancelCount == 0)
+        try await harness.runtime.closeSession(sessionID: prepared.sessionID)
+        #expect(providerSession.closeCount == 1)
+    }
+
+    @Test
     func generationRechecksCredentialSlotAndRetentionIdentityBeforeTransport() async throws {
         let transport = RuntimeGenerationTransport(scripts: [runtimeFinalEvents()])
         let harness = try await CloudRuntimeHarness.make(
@@ -675,10 +845,15 @@ private struct RuntimeSpyAdapter: CloudProviderAdapter {
 
 private final class RuntimeSpyProviderSession: CloudProviderSession, @unchecked Sendable {
     private let lock = NSLock()
+    private let scriptedEvents: [LLMBackendEvent]?
     private var continuation: LLMBackendEventStream.Continuation?
     private var storedDecodeCount = 0
     private var storedCancelCount = 0
     private var storedCloseCount = 0
+
+    init(scriptedEvents: [LLMBackendEvent]? = nil) {
+        self.scriptedEvents = scriptedEvents
+    }
 
     var decodeCount: Int { lock.withLock { storedDecodeCount } }
     var cancelCount: Int { lock.withLock { storedCancelCount } }
@@ -695,6 +870,13 @@ private final class RuntimeSpyProviderSession: CloudProviderSession, @unchecked 
     func decode(
         _ events: AsyncThrowingStream<SSEEvent, Error>
     ) -> LLMBackendEventStream {
+        if let scriptedEvents {
+            let pair = LLMBackendEventStream.makeStream(bufferingPolicy: .unbounded)
+            lock.withLock { storedDecodeCount += 1 }
+            for event in scriptedEvents { pair.continuation.yield(event) }
+            pair.continuation.finish()
+            return pair.stream
+        }
         let pair = LLMBackendEventStream.makeStream(bufferingPolicy: .bufferingOldest(2))
         lock.withLock {
             storedDecodeCount += 1

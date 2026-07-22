@@ -367,24 +367,22 @@ public actor CloudLLMRuntime {
     }
 
     public func cancel(sessionID: String) async throws {
-        guard var active, active.prepared.sessionID == sessionID else {
+        guard let active, active.prepared.sessionID == sessionID else {
             if try sessionStore.tombstone(sessionID) != nil { return }
             throw cloudRuntimeFailure(
                 "runtime.cloud_session_not_found",
                 "prepared cloud session was not found"
             )
         }
-        guard let task = active.generationTask else { return }
-        guard !active.cancelRequested else {
-            await task.value
-            return
-        }
-        active.cancelRequested = true
-        self.active = active
-        state = .cancelling
-        await active.providerSession.cancel()
-        task.cancel()
-        await task.value
+        guard let generationID = active.generationID,
+              let task = active.generationTask
+        else { return }
+        let claimedTask = await cancelGenerationOnce(
+            sessionID: sessionID,
+            generationID: generationID,
+            cancelPump: true
+        )
+        await (claimedTask ?? task).value
     }
 
     public func closeSession(sessionID: String) async throws {
@@ -811,7 +809,16 @@ public actor CloudLLMRuntime {
         next.cancelRequested = false
         self.active = next
         state = .generating
-        streamPair.continuation.onTermination = { @Sendable _ in task.cancel() }
+        streamPair.continuation.onTermination = { @Sendable [weak self] termination in
+            guard case .cancelled = termination else { return }
+            Task {
+                _ = await self?.cancelGenerationOnce(
+                    sessionID: sessionID,
+                    generationID: generationID,
+                    cancelPump: true
+                )
+            }
+        }
         return streamPair.stream
     }
 
@@ -832,6 +839,7 @@ public actor CloudLLMRuntime {
                 var sawTerminal = false
                 for try await event in providerSession.decode(events) {
                     emittedOutput = true
+                    try yieldRuntimeEvent(event, to: continuation)
                     switch event {
                     case let .generationCompleted(completion):
                         sawTerminal = true
@@ -850,8 +858,6 @@ public actor CloudLLMRuntime {
                     default:
                         break
                     }
-                    guard case .terminated = continuation.yield(event) else { continue }
-                    throw CancellationError()
                 }
                 guard sawTerminal else {
                     throw cloudRuntimeFailure(
@@ -864,6 +870,11 @@ public actor CloudLLMRuntime {
                 continuation.finish()
                 return
             } catch is CancellationError {
+                _ = await cancelGenerationOnce(
+                    sessionID: sessionID,
+                    generationID: generationID,
+                    cancelPump: false
+                )
                 try? finishGeneration(
                     sessionID: sessionID,
                     generationID: generationID,
@@ -878,6 +889,13 @@ public actor CloudLLMRuntime {
                     await Task.yield()
                     continue
                 }
+                if (error as? LLMFailure)?.code == "runtime.cloud_consumer_backpressure" {
+                    _ = await cancelGenerationOnce(
+                        sessionID: sessionID,
+                        generationID: generationID,
+                        cancelPump: false
+                    )
+                }
                 try? failGeneration(
                     sessionID: sessionID,
                     generationID: generationID
@@ -886,6 +904,25 @@ public actor CloudLLMRuntime {
                 return
             }
         }
+    }
+
+    private func cancelGenerationOnce(
+        sessionID: String,
+        generationID: String,
+        cancelPump: Bool
+    ) async -> Task<Void, Never>? {
+        guard var active,
+              active.prepared.sessionID == sessionID,
+              active.generationID == generationID,
+              let task = active.generationTask
+        else { return nil }
+        guard !active.cancelRequested else { return task }
+        active.cancelRequested = true
+        self.active = active
+        state = .cancelling
+        await active.providerSession.cancel()
+        if cancelPump { task.cancel() }
+        return task
     }
 
     private func finishGeneration(
@@ -943,6 +980,28 @@ public actor CloudLLMRuntime {
                 "validated cloud route does not support the requested tools"
             )
         }
+    }
+}
+
+private func yieldRuntimeEvent(
+    _ event: LLMBackendEvent,
+    to continuation: LLMBackendEventStream.Continuation
+) throws {
+    switch continuation.yield(event) {
+    case .enqueued:
+        return
+    case .dropped:
+        throw cloudRuntimeFailure(
+            "runtime.cloud_consumer_backpressure",
+            "cloud generation consumer exceeded its bounded event buffer"
+        )
+    case .terminated:
+        throw CancellationError()
+    @unknown default:
+        throw cloudRuntimeFailure(
+            "runtime.cloud_consumer_backpressure",
+            "cloud generation consumer state is unknown"
+        )
     }
 }
 
