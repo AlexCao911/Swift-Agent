@@ -7,6 +7,130 @@ import Testing
 @Suite("Cloud product path integration", .serialized)
 struct CloudProductPathIntegrationTests {
     @Test
+    func manualModelCompletesRoutineTextPath() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cloud-manual-product-path-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let transport = SubsystemFixtureTransport(toolLoop: false)
+        let epoch = try HostProcessEpoch.generate()
+        let subsystem = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: directory,
+            hostProcessEpoch: epoch,
+            bundledCatalog: catalogFixture.envelope,
+            trustedKeyRing: catalogFixture.keyRing,
+            remoteCatalog: nil,
+            vault: RuntimeCredentialVault(),
+            approvalPrompt: RuntimeApprovalPrompt(),
+            transportFactory: { _ in transport },
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            originValidator: RuntimeOriginValidator()
+        )
+
+        try await subsystem.credentials.createSlot(
+            credentialRef: "manual-integration-key",
+            initialSecret: SecretBytes(utf8: "fixture-secret"),
+            operationID: "manual-integration-create-key"
+        )
+        _ = try await subsystem.profiles.publish(ProviderProfileRevision(
+            profileID: "manual-integration-profile",
+            revision: 1,
+            presetID: .openAI,
+            displayName: "Manual integration provider",
+            baseURL: URL(string: "https://api.example.com/v1")!,
+            credentialRef: "manual-integration-key",
+            retentionMode: .statelessRequired
+        ))
+        let target = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "manual-integration-target"),
+            revision: 1,
+            kind: .cloud(
+                providerProfileID: "manual-integration-profile",
+                providerProfileRevision: 1
+            ),
+            modelID: "manual-openai-model",
+            defaultParameters: GenerationConfiguration()
+        )
+        try await subsystem.profiles.publishTarget(target)
+        let validation = try await subsystem.validation.validate(
+            profileID: "manual-integration-profile",
+            profileRevision: 1,
+            modelID: target.modelID,
+            adapterVersion: "1"
+        )
+        #expect(validation.subject.catalogRevision == nil)
+        #expect(validation.snapshot.support(for: "text_generation") == .supported)
+        #expect(validation.snapshot.support(for: "streaming") == .supported)
+        #expect(validation.snapshot.support(for: "tool_calling") == .unknown)
+
+        let configuration = AgentHostConfiguration(
+            bindingID: "manual-integration-binding",
+            revision: 1,
+            agentProfileID: "manual-integration-agent",
+            agentProfileRevision: 1,
+            llmSlotID: "assistant",
+            requirementsHash: String(repeating: "d", count: 64),
+            llmTargetID: target.targetID,
+            llmTargetRevision: target.revision,
+            parameterOverrides: GenerationConfiguration()
+        )
+        let saga = AgentHostBindingSaga(store: subsystem.bindingStore)
+        let binding = try await saga.stageHostBinding(HostBindingStageRequest(
+            operationToken: "manual-integration-binding-token",
+            tokenDigest: "manual-integration-binding-token-digest",
+            llmSlotID: configuration.llmSlotID,
+            requirementsHash: configuration.requirementsHash,
+            configuration: configuration
+        ))
+        try await saga.activateHostBinding(
+            operationToken: "manual-integration-binding-token",
+            binding: binding.binding
+        )
+        let resolved = try CloudGenerationConfigurationResolver.resolveManual(
+            adapterID: "openai.responses",
+            modelID: target.modelID
+        )
+        let initial = try runtimeTurn(
+            resolvedParameters: resolved.semantic,
+            generationTurnID: "manual-integration-turn",
+            inputID: "manual-integration-input",
+            text: "hello manual model",
+            semanticHistory: .array([]),
+            toolResults: [],
+            dataClasses: [.text],
+            sensitivity: .routine,
+            sourceKinds: [.conversation],
+            triggeringToolDisplayKeys: [],
+            toolSchema: .array([])
+        )
+        let prepared = try await subsystem.runtime.prepareSession(
+            context: .init(
+                preparationID: "manual-integration-preparation",
+                proposedRunID: "manual-integration-run",
+                initialTurn: initial,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: configuration,
+            target: target
+        )
+        let events = try await collect(try await subsystem.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: initial
+        ))
+        #expect(events.contains(.textDelta("Done")))
+        #expect(events.last == .generationCompleted(.init(
+            outcome: .finalResponse,
+            orderedCallIDs: [],
+            finishReason: .stop
+        )))
+        try await subsystem.runtime.closeSession(sessionID: prepared.sessionID)
+        #expect(await transport.validationRequestCount == 3)
+        #expect(await transport.generationRequestCount == 1)
+    }
+
+    @Test
     func subsystemRunsValidatedToolLoopThenRotationRequiresRevalidation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "cloud-product-path-\(UUID().uuidString)",
@@ -170,8 +294,13 @@ struct CloudProductPathIntegrationTests {
 }
 
 private actor SubsystemFixtureTransport: CloudHTTPTransport {
+    private let toolLoop: Bool
     private(set) var validationRequestCount = 0
     private(set) var generationRequestCount = 0
+
+    init(toolLoop: Bool = true) {
+        self.toolLoop = toolLoop
+    }
 
     func json(_ request: AuthorizedCloudHTTPRequest) async throws -> Data {
         validationRequestCount += 1
@@ -188,7 +317,7 @@ private actor SubsystemFixtureTransport: CloudHTTPTransport {
             events = runtimeFinalEvents(text: "OK", responseID: "integration-validation")
         case .generation:
             generationRequestCount += 1
-            events = generationRequestCount == 1
+            events = toolLoop && generationRequestCount == 1
                 ? runtimeToolBatchEvents()
                 : runtimeFinalEvents()
         case .discovery:

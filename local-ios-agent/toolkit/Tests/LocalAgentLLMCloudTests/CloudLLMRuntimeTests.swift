@@ -17,6 +17,124 @@ struct CloudLLMRuntimeTests {
     }
 
     @Test
+    func probedManualModelRunsOnlyConservativeStatelessText() async throws {
+        let transport = RuntimeGenerationTransport(scripts: [runtimeFinalEvents()])
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: transport,
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            modelID: "manual-openai-model",
+            toolSchema: .array([])
+        )
+        defer { harness.cleanup() }
+
+        let prepared = try await harness.runtime.prepareSession(
+            context: .init(
+                preparationID: "manual-preparation",
+                proposedRunID: "manual-run",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+        let events = try await collect(try await harness.runtime.startGeneration(
+            sessionID: prepared.sessionID,
+            turn: harness.initialTurn
+        ))
+        #expect(events.contains(.textDelta("Done")))
+        #expect(events.last == .generationCompleted(.init(
+            outcome: .finalResponse,
+            orderedCallIDs: [],
+            finishReason: .stop
+        )))
+        try await harness.runtime.closeSession(sessionID: prepared.sessionID)
+
+        let toolHarness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: []),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            modelID: "manual-openai-model"
+        )
+        defer { toolHarness.cleanup() }
+        await expectRuntimeFailure("runtime.cloud_capability_unsatisfied") {
+            _ = try await toolHarness.runtime.prepareSession(
+                context: .init(
+                    preparationID: "manual-tools-preparation",
+                    proposedRunID: "manual-tools-run",
+                    initialTurn: toolHarness.initialTurn,
+                    signedToolDisplayKeys: ["contacts.search"]
+                ),
+                hostConfiguration: toolHarness.hostConfiguration,
+                target: toolHarness.target
+            )
+        }
+
+        let targetParameterHarness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: []),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            modelID: "manual-openai-model",
+            targetDefaults: GenerationConfiguration()
+                .setting(.samplingTemperature, to: .decimal(0.2)),
+            toolSchema: .array([])
+        )
+        defer { targetParameterHarness.cleanup() }
+        await expectRuntimeFailure("cloud_parameters.manual_parameter_unsupported") {
+            _ = try await targetParameterHarness.runtime.prepareSession(
+                context: .init(
+                    preparationID: "manual-target-parameter-preparation",
+                    proposedRunID: "manual-target-parameter-run",
+                    initialTurn: targetParameterHarness.initialTurn,
+                    signedToolDisplayKeys: []
+                ),
+                hostConfiguration: targetParameterHarness.hostConfiguration,
+                target: targetParameterHarness.target
+            )
+        }
+
+        let hostParameterHarness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: []),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            modelID: "manual-openai-model",
+            hostOverrides: GenerationConfiguration()
+                .setting(.generationMaxOutputTokens, to: .integer(64)),
+            toolSchema: .array([])
+        )
+        defer { hostParameterHarness.cleanup() }
+        await expectRuntimeFailure("cloud_parameters.manual_parameter_unsupported") {
+            _ = try await hostParameterHarness.runtime.prepareSession(
+                context: .init(
+                    preparationID: "manual-host-parameter-preparation",
+                    proposedRunID: "manual-host-parameter-run",
+                    initialTurn: hostParameterHarness.initialTurn,
+                    signedToolDisplayKeys: []
+                ),
+                hostConfiguration: hostParameterHarness.hostConfiguration,
+                target: hostParameterHarness.target
+            )
+        }
+
+        let statefulHarness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: []),
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            modelID: "manual-openai-model",
+            retentionMode: .providerStateApproved,
+            toolSchema: .array([])
+        )
+        defer { statefulHarness.cleanup() }
+        await expectRuntimeFailure("runtime.cloud_target_not_runnable") {
+            _ = try await statefulHarness.runtime.prepareSession(
+                context: .init(
+                    preparationID: "manual-stateful-preparation",
+                    proposedRunID: "manual-stateful-run",
+                    initialTurn: statefulHarness.initialTurn,
+                    signedToolDisplayKeys: []
+                ),
+                hostConfiguration: statefulHarness.hostConfiguration,
+                target: statefulHarness.target
+            )
+        }
+    }
+
+    @Test
     func turnRequestUsesAuthoritativeAttachmentResolverBeforeSemanticValidation() throws {
         let input = AgentLLMInput(
             inputID: "input-1",
@@ -682,7 +800,12 @@ private struct CloudRuntimeHarness: Sendable {
     static func make(
         generationTransport: any CloudHTTPTransport,
         localUnloader: any LocalRouteUnloading,
-        adapters: CloudProviderAdapterRegistry? = nil
+        adapters: CloudProviderAdapterRegistry? = nil,
+        modelID: String = "fixture-model",
+        retentionMode: ProviderRetentionMode = .statelessRequired,
+        targetDefaults: GenerationConfiguration = GenerationConfiguration(),
+        hostOverrides: GenerationConfiguration = GenerationConfiguration(),
+        toolSchema: CanonicalJSONValue? = nil
     ) async throws -> Self {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "cloud-runtime-\(UUID().uuidString)",
@@ -694,7 +817,12 @@ private struct CloudRuntimeHarness: Sendable {
             fileURL: databaseURL,
             originValidator: RuntimeOriginValidator()
         )
-        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let catalogFixture = try signedCloudCatalog(
+            revision: 1,
+            continuationModes: retentionMode == .providerStateApproved
+                ? [.statelessRequired, .providerStateApproved]
+                : [.statelessRequired]
+        )
         let catalog = try CloudCapabilityCatalogStore(
             fileURL: databaseURL,
             trustedKeyRing: catalogFixture.keyRing
@@ -716,11 +844,21 @@ private struct CloudRuntimeHarness: Sendable {
             displayName: "Runtime fixture provider",
             baseURL: URL(string: "https://api.example.com/v1")!,
             credentialRef: "credential-main",
-            retentionMode: .statelessRequired
+            retentionMode: retentionMode
         ))
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let prompt = RuntimeApprovalPrompt()
         let retention = try ProviderRetentionPolicy(fileURL: databaseURL, prompt: prompt)
+        if retentionMode == .providerStateApproved {
+            _ = try await retention.approveProviderState(
+                profileID: "profile-main",
+                profileRevision: 1,
+                disclosure: ProviderRetentionDisclosure(
+                    behavior: .serverSideConversationState,
+                    windowClass: .thirtyOneToSixtyDays
+                )
+            )
+        }
         let egress = try ProviderEgressPolicy(
             fileURL: databaseURL,
             credentialStore: credentials,
@@ -744,15 +882,15 @@ private struct CloudRuntimeHarness: Sendable {
         _ = try await validation.validate(
             profileID: "profile-main",
             profileRevision: 1,
-            modelID: "fixture-model",
+            modelID: modelID,
             adapterVersion: "1"
         )
         let target = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "target-cloud"),
             revision: 1,
             kind: .cloud(providerProfileID: "profile-main", providerProfileRevision: 1),
-            modelID: "fixture-model",
-            defaultParameters: GenerationConfiguration()
+            modelID: modelID,
+            defaultParameters: targetDefaults
         )
         try await profiles.publishTarget(target)
         let hostConfiguration = AgentHostConfiguration(
@@ -764,7 +902,7 @@ private struct CloudRuntimeHarness: Sendable {
             requirementsHash: String(repeating: "b", count: 64),
             llmTargetID: target.targetID,
             llmTargetRevision: target.revision,
-            parameterOverrides: GenerationConfiguration()
+            parameterOverrides: hostOverrides
         )
         let bindingStore = try LLMStore(fileURL: databaseURL)
         let bindingSaga = AgentHostBindingSaga(store: bindingStore)
@@ -780,11 +918,19 @@ private struct CloudRuntimeHarness: Sendable {
             binding: receipt.binding
         )
         let verifiedCatalog = try #require(try await catalog.current())
-        let entry = try #require(verifiedCatalog.entry(
-            presetID: .openAI,
-            modelID: target.modelID
-        ))
-        let resolved = try CloudGenerationConfigurationResolver.resolve(entry: entry)
+        let resolved: ResolvedCloudGenerationConfiguration
+        if let entry = verifiedCatalog.entry(presetID: .openAI, modelID: target.modelID) {
+            resolved = try CloudGenerationConfigurationResolver.resolve(
+                entry: entry,
+                targetDefaults: targetDefaults,
+                hostOverrides: hostOverrides
+            )
+        } else {
+            resolved = try CloudGenerationConfigurationResolver.resolveManual(
+                adapterID: "openai.responses",
+                modelID: target.modelID
+            )
+        }
         let initialTurn = try runtimeTurn(
             resolvedParameters: resolved.semantic,
             generationTurnID: "turn-1",
@@ -795,7 +941,8 @@ private struct CloudRuntimeHarness: Sendable {
             dataClasses: [.text],
             sensitivity: .routine,
             sourceKinds: [.conversation],
-            triggeringToolDisplayKeys: []
+            triggeringToolDisplayKeys: [],
+            toolSchema: toolSchema
         )
         let sessionStore = try PreparedCloudSessionStore(fileURL: databaseURL)
         let runtime = CloudLLMRuntime(
@@ -1129,15 +1276,17 @@ func runtimeTurn(
     dataClasses: Set<EgressDataClass>,
     sensitivity: DataSensitivity,
     sourceKinds: Set<EgressSourceKind>,
-    triggeringToolDisplayKeys: Set<String>
+    triggeringToolDisplayKeys: Set<String>,
+    toolSchema requestedToolSchema: CanonicalJSONValue? = nil
 ) throws -> CloudGenerationTurnRequest {
     let input = AgentLLMInput(
         inputID: inputID,
         messages: [.init(role: .user, content: [.text(text)])]
     )
-    let toolSchema = try CanonicalJSONValue.object(entries: [
+    let defaultToolSchema = try CanonicalJSONValue.object(entries: [
         .init(name: "tools", value: .array([.string("contacts.search")])),
     ])
+    let toolSchema = requestedToolSchema ?? defaultToolSchema
     let sourceDocument = try CanonicalJSONValue.object(entries: [])
     let placeholder = GenerationDisclosure(
         schemaVersion: "1",

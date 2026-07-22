@@ -100,6 +100,40 @@ struct CloudGenerationConfigurationResolverTests {
         #expect(pruned.value(for: .samplingTopK) == nil)
         #expect(pruned.value(for: .generationMaxOutputTokens) == nil)
     }
+
+    @Test
+    func manualRouteAllowsOnlyEmptyParameters() throws {
+        let resolved = try CloudGenerationConfigurationResolver.resolveManual(
+            adapterID: "openai.responses",
+            modelID: "manual-openai-model"
+        )
+        let repeated = try CloudGenerationConfigurationResolver.resolveManual(
+            adapterID: "openai.responses",
+            modelID: "manual-openai-model"
+        )
+
+        #expect(resolved.semantic.parameters.isEmpty)
+        #expect(resolved.providerFields.objectKeys == [])
+        #expect(resolved.digest == repeated.digest)
+        #expect(resolved.digest.count == 64)
+
+        expectCloudResolverFailure("cloud_parameters.manual_parameter_unsupported") {
+            _ = try CloudGenerationConfigurationResolver.resolveManual(
+                adapterID: "openai.responses",
+                modelID: "manual-openai-model",
+                targetDefaults: GenerationConfiguration()
+                    .setting(.samplingTemperature, to: .decimal(0.2))
+            )
+        }
+        expectCloudResolverFailure("cloud_parameters.manual_parameter_unsupported") {
+            _ = try CloudGenerationConfigurationResolver.resolveManual(
+                adapterID: "openai.responses",
+                modelID: "manual-openai-model",
+                hostOverrides: GenerationConfiguration()
+                    .setting(.generationMaxOutputTokens, to: .integer(64))
+            )
+        }
+    }
 }
 
 private func cloudParameterEntry() -> CloudModelCatalogEntry {

@@ -246,12 +246,13 @@ public actor CloudLLMRuntime {
                 targetID: target.targetID,
                 targetRevision: target.revision
             )
+            try requireValidationSource(validation, route: route)
             try requireCapabilities(
                 validation.snapshot,
                 toolSchema: context.initialTurn.canonicalToolSchema
             )
-            let resolved = try CloudGenerationConfigurationResolver.resolve(
-                entry: route.entry,
+            let resolved = try resolveConfiguration(
+                route: route,
                 targetDefaults: target.defaultParameters,
                 hostOverrides: hostConfiguration.parameterOverrides
             )
@@ -430,7 +431,7 @@ public actor CloudLLMRuntime {
     private struct Route {
         let profile: PublishedProviderProfileRevision
         let state: ProviderProfileState
-        let entry: CloudModelCatalogEntry
+        let source: CloudModelRouteSource
         let adapter: any CloudProviderAdapter
     }
 
@@ -467,13 +468,7 @@ public actor CloudLLMRuntime {
               case let .validated(evidence) = profileState.validationState,
               let preset = ProviderPreset.shipped.first(where: {
                   $0.id == profile.revision.presetID
-              }),
-              let catalog = try await catalogStore.current(),
-              let entry = catalog.entry(
-                  presetID: profile.revision.presetID,
-                  modelID: target.modelID
-              ),
-              !catalog.isRevoked(entry.identity)
+              })
         else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_target_not_runnable",
@@ -485,22 +480,112 @@ public actor CloudLLMRuntime {
             expectedAdapterID: evidence.adapterID,
             expectedVersion: evidence.adapterVersion
         )
-        guard evidence.adapterID == entry.adapterID,
+        guard evidence.adapterID == preset.semanticAdapterID,
               evidence.modelID == target.modelID,
-              entry.supports(adapterVersion: adapter.adapterVersion),
-              entry.continuationModes.contains(profile.revision.retentionMode)
+              evidence.origin == profile.origin,
+              evidence.retentionMode == profile.revision.retentionMode,
+              profileState.catalogRevision == evidence.catalogRevision
         else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_target_not_runnable",
-                "cloud adapter or retention mode is incompatible with the catalog model"
+                "cloud adapter, model, or retention identity is not current"
+            )
+        }
+        let source: CloudModelRouteSource
+        if let catalogRevision = evidence.catalogRevision {
+            guard let catalog = try await catalogStore.current(),
+                  catalog.catalogRevision == catalogRevision,
+                  let entry = catalog.entry(
+                      presetID: profile.revision.presetID,
+                      modelID: target.modelID
+                  ),
+                  !catalog.isRevoked(entry.identity),
+                  entry.adapterID == evidence.adapterID,
+                  entry.supports(adapterVersion: adapter.adapterVersion),
+                  entry.continuationModes.contains(profile.revision.retentionMode)
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_target_not_runnable",
+                    "catalog-backed cloud route is no longer exact or compatible"
+                )
+            }
+            source = .catalog(entry)
+        } else {
+            guard profile.revision.retentionMode == .statelessRequired
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_target_not_runnable",
+                    "manual cloud routes require stateless retention"
+                )
+            }
+            source = .manual(
+                adapterID: evidence.adapterID,
+                modelID: evidence.modelID
             )
         }
         return Route(
             profile: profile,
             state: profileState,
-            entry: entry,
+            source: source,
             adapter: adapter
         )
+    }
+
+    private func resolveConfiguration(
+        route: Route,
+        targetDefaults: GenerationConfiguration,
+        hostOverrides: GenerationConfiguration
+    ) throws -> ResolvedCloudGenerationConfiguration {
+        switch route.source {
+        case let .catalog(entry):
+            return try CloudGenerationConfigurationResolver.resolve(
+                entry: entry,
+                targetDefaults: targetDefaults,
+                hostOverrides: hostOverrides
+            )
+        case let .manual(adapterID, modelID):
+            return try CloudGenerationConfigurationResolver.resolveManual(
+                adapterID: adapterID,
+                modelID: modelID,
+                targetDefaults: targetDefaults,
+                hostOverrides: hostOverrides
+            )
+        }
+    }
+
+    private func requireValidationSource(
+        _ validation: ProviderValidationResult,
+        route: Route
+    ) throws {
+        guard validation.subject.adapterID == route.adapter.adapterID else {
+            throw cloudRuntimeFailure(
+                "runtime.cloud_validation_stale",
+                "validated adapter does not match the current cloud route"
+            )
+        }
+        switch route.source {
+        case let .catalog(entry):
+            guard validation.subject.modelID == entry.identity.modelID,
+                  validation.subject.modelRevision == entry.identity.modelRevision,
+                  validation.subject.catalogRevision == route.state.catalogRevision
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_validation_stale",
+                    "catalog validation does not match the exact model route"
+                )
+            }
+        case let .manual(adapterID, modelID):
+            guard validation.subject.adapterID == adapterID,
+                  validation.subject.modelID == modelID,
+                  validation.subject.modelRevision == nil,
+                  validation.subject.catalogRevision == nil
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_validation_stale",
+                    "manual validation was promoted or changed"
+                )
+            }
+        }
     }
 
     private func finishPreparation(
@@ -534,7 +619,7 @@ public actor CloudLLMRuntime {
         let currentRoute = try await requireRoute(target: target)
         guard currentRoute.profile == route.profile,
               currentRoute.state == route.state,
-              currentRoute.entry == route.entry,
+              currentRoute.source == route.source,
               currentRoute.adapter.adapterID == route.adapter.adapterID,
               currentRoute.adapter.adapterVersion == route.adapter.adapterVersion
         else {
@@ -551,6 +636,7 @@ public actor CloudLLMRuntime {
             targetID: target.targetID,
             targetRevision: target.revision
         )
+        try requireValidationSource(currentValidation, route: currentRoute)
         guard currentValidation.evidenceDigest == validation.evidenceDigest else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_validation_stale",
@@ -720,14 +806,15 @@ public actor CloudLLMRuntime {
             targetID: active.prepared.targetID,
             targetRevision: active.prepared.targetRevision
         )
+        try requireValidationSource(validation, route: route)
         guard validation.evidenceDigest == active.prepared.capabilitySnapshotDigest else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_capability_changed",
                 "cloud capability snapshot changed after preparation"
             )
         }
-        let resolved = try CloudGenerationConfigurationResolver.resolve(
-            entry: route.entry,
+        let resolved = try resolveConfiguration(
+            route: route,
             targetDefaults: active.target.defaultParameters,
             hostOverrides: active.hostConfiguration.parameterOverrides
         )

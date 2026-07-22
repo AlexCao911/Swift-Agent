@@ -233,6 +233,7 @@ func signedCloudCatalog(
     parameterDefaults: GenerationConfiguration = GenerationConfiguration()
         .setting(.samplingTemperature, to: .decimal(0.2))
         .setting(.generationMaxOutputTokens, to: .integer(256)),
+    continuationModes: [ProviderRetentionMode] = [.statelessRequired],
     additionalModels: [CloudModelCatalogEntry] = [],
     signingKey: Curve25519.Signing.PrivateKey? = nil
 ) throws -> SignedCloudCatalogFixture {
@@ -249,7 +250,7 @@ func signedCloudCatalog(
         capabilities: capabilities,
         parameterDefinitions: parameterDefinitions,
         parameterDefaults: parameterDefaults,
-        continuationModes: [.statelessRequired]
+        continuationModes: continuationModes
     )
     let payload = SignedCloudCapabilityCatalogPayload(
         keyID: "test-cloud-key",

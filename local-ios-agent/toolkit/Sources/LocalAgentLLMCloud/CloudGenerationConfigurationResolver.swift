@@ -8,6 +8,11 @@ package struct ResolvedCloudGenerationConfiguration: Equatable, Sendable {
     package let digest: String
 }
 
+package enum CloudModelRouteSource: Equatable, Sendable {
+    case catalog(CloudModelCatalogEntry)
+    case manual(adapterID: String, modelID: String)
+}
+
 package enum CloudGenerationConfigurationResolver {
     package static func resolve(
         entry: CloudModelCatalogEntry,
@@ -29,6 +34,47 @@ package enum CloudGenerationConfigurationResolver {
             .init(name: "adapter_id", value: .string(entry.adapterID)),
             .init(name: "model_id", value: .string(entry.identity.modelID)),
             .init(name: "model_revision", value: .string(entry.identity.modelRevision)),
+            .init(name: "semantic", value: try semanticDocument(semantic)),
+            .init(name: "provider_fields", value: providerFields),
+        ])
+        return ResolvedCloudGenerationConfiguration(
+            semantic: semantic,
+            providerFields: providerFields,
+            digest: try CanonicalDigestV1.digest(
+                domain: "resolved-parameters:v1",
+                document: document
+            ).hex
+        )
+    }
+
+    package static func resolveManual(
+        adapterID: String,
+        modelID: String,
+        targetDefaults: GenerationConfiguration = GenerationConfiguration(),
+        hostOverrides: GenerationConfiguration = GenerationConfiguration()
+    ) throws -> ResolvedCloudGenerationConfiguration {
+        guard !adapterID.isEmpty, !modelID.isEmpty else {
+            throw resolverFailure(
+                "cloud_parameters.manual_route_invalid",
+                "manual cloud route identity is empty"
+            )
+        }
+        guard targetDefaults.parameters.isEmpty,
+              hostOverrides.parameters.isEmpty
+        else {
+            throw resolverFailure(
+                "cloud_parameters.manual_parameter_unsupported",
+                "manual cloud routes do not accept unverified generation parameters"
+            )
+        }
+        let semantic = GenerationConfiguration()
+        let providerFields = try CanonicalJSONValue.object(entries: [])
+        let document = try CanonicalJSONValue.object(entries: [
+            .init(name: "schema_version", value: .string("1")),
+            .init(name: "adapter_id", value: .string(adapterID)),
+            .init(name: "model_id", value: .string(modelID)),
+            .init(name: "model_revision", value: .null),
+            .init(name: "route_source", value: .string("manual")),
             .init(name: "semantic", value: try semanticDocument(semantic)),
             .init(name: "provider_fields", value: providerFields),
         ])
