@@ -14,7 +14,10 @@ use crate::llm_contracts::{
 
 use super::in_memory::{busy, stale};
 use super::in_memory::{conflict, not_found, saga_token_digest, validate_commit};
-use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
+use super::{
+    AgentOSStateRepository, GlobalRunLeaseRepository, PreparedRunConsumption,
+    RunPreparationRepository,
+};
 
 pub struct SqliteAgentOSStateStore {
     conn: Connection,
@@ -134,6 +137,14 @@ impl SqliteAgentOSStateStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_error)?;
         Ok(names)
+    }
+
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub(crate) fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.conn
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -456,6 +467,67 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
 }
 
 impl RunPreparationRepository for SqliteAgentOSStateStore {
+    fn consume_registered_preparation_and_promote(
+        &mut self,
+        request: &PreparedRunConsumption,
+    ) -> Result<(), PreparationError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(preparation_sqlite_error)?;
+        let record =
+            load_preparation(&tx, &request.preparation_id)?.ok_or_else(preparation_not_found)?;
+        let registration = record.registration().ok_or_else(preparation_stale)?;
+        if record.state() != RunPreparationState::Registered
+            || record.preview().proposed_run_id() != request.proposed_run_id
+            || record.preview().token_digest() != request.token_digest
+            || record.preview().lease_generation() != request.lease_generation
+            || registration.session_handle() != request.session_handle
+            || registration.host_process_epoch() != request.host_process_epoch
+            || registration.binding_id() != request.binding_id
+            || registration.binding_revision() != request.binding_revision
+            || registration.binding_hash() != request.binding_hash
+        {
+            return Err(preparation_stale());
+        }
+        let lease_changed = tx
+            .execute(
+                "update global_run_lease
+                 set owner_run_id = ?1, state = 'active', preparation_expiration = null
+                 where singleton_id = 1 and lease_generation = ?2 and preparation_id = ?3
+                   and owner_run_id is null and binding_schema = 'host_slot_v2'
+                   and host_process_epoch = ?4 and state = 'preparing'",
+                params![
+                    request.proposed_run_id,
+                    request.lease_generation.to_string(),
+                    request.preparation_id,
+                    request.host_process_epoch
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if lease_changed != 1 {
+            return Err(preparation_stale());
+        }
+        let preparation_changed = tx
+            .execute(
+                "delete from run_preparations where preparation_id = ?1
+                   and proposed_run_id = ?2 and token_digest = ?3
+                   and lease_generation = ?4 and state = 'registered'",
+                params![
+                    request.preparation_id,
+                    request.proposed_run_id,
+                    request.token_digest,
+                    request.lease_generation.to_string()
+                ],
+            )
+            .map_err(preparation_sqlite_error)?;
+        if preparation_changed != 1 {
+            return Err(preparation_stale());
+        }
+        tx.commit().map_err(preparation_sqlite_error)?;
+        Ok(())
+    }
+
     fn create_preparation_and_acquire_lease(
         &mut self,
         mut record: RunPreparationRecord,
@@ -977,6 +1049,9 @@ fn preparation_stale() -> PreparationError {
         "preparation.state_stale",
         "preparation state changed before persistence",
     )
+}
+fn preparation_not_found() -> PreparationError {
+    PreparationError::new("preparation.not_found", "run preparation was not found")
 }
 fn preparation_lease_error(error: GlobalRunLeaseError) -> PreparationError {
     PreparationError::new(

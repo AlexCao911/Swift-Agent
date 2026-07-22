@@ -443,7 +443,7 @@ git commit -m "feat: freeze host llm bridge attestation contracts"
 - A later start/resume waits for asynchronous acceptance of the earlier lifecycle command. Cancel/close may follow an earlier `copied` receipt, and an atomically cancelled never-copied sequence is released only for its replacement cleanup command.
 - Phase 4 bootstrap transactionally imports the current `agent.sqlite.agent-os` tables into `agent.sqlite`, records a migration marker and source digest, and activates the unified store only after all rows validate. A failed or interrupted migration leaves the old sidecar readable and does not expose a half-migrated runtime; after successful activation, the sidecar is never opened as an authority.
 
-- [ ] **Step 1: Write failing aggregate, migration, CAS, and crash-injection tests**
+- [x] **Step 1: Write failing aggregate, migration, CAS, and crash-injection tests**
 
 Create repository tests for in-memory and SQLite implementations. Start migration tests from realistic `agent.sqlite` plus `agent.sqlite.agent-os` fixtures. Require zero partial rows after every injected failure, exact replay after reopen, monotonic sequences, one winner under concurrent commit, and no active sidecar authority after successful migration:
 
@@ -491,7 +491,7 @@ fn acknowledgement_redacts_payload_but_keeps_identity() {
 
 Add reopen tests proving accepted/terminally ignored event receipts persist, while `backpressure` creates no receipt and consumes no sequence. Add schema-version/future-version rejection, rollback-and-retry migration, and in-memory transaction-equivalence tests.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_outbox -- --nocapture
@@ -500,7 +500,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test co
 
 Expected: fail because the unified repository, aggregate transaction methods, migration, and orthogonal lifecycle types do not exist.
 
-- [ ] **Step 3: Add the unified repository, orthogonal state machine, and SQLite schema**
+- [x] **Step 3: Add the unified repository, orthogonal state machine, and SQLite schema**
 
 Define exact state axes:
 
@@ -548,7 +548,7 @@ Create normalized SQLite tables for complete V2 snapshots, Agent execution event
 
 Move initialization in `ffi_bridge.rs` from two separately opened SQLite files plus default in-memory `ExecutionEventLog`/`RunSnapshotRepository` to one shared `SqliteRuntimeStateStore`. Adapt `storage/event_store.rs`, `execution/event_log.rs`, and `run_snapshot/resolver.rs` so existing observe/commit APIs can use typed views backed by that store. Compatibility traits clone a store handle, not a connection or transaction boundary. The in-memory implementation must expose the same aggregate methods and injected failure points; tests may not fake atomicity by calling lower-level writes directly.
 
-- [ ] **Step 4: Run GREEN and Phase 1 storage regressions**
+- [x] **Step 4: Run GREEN and Phase 1 storage regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_outbox -- --nocapture
@@ -559,7 +559,7 @@ git diff --check
 
 Expected: migration, aggregate transaction, reopen, idempotency, orthogonal lifecycle, and existing preparation/lease tests pass from one authority.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/llm_contracts rust-core/src/storage rust-core/src/ffi_bridge.rs \

@@ -3,6 +3,7 @@ mod global_run_lease;
 mod host_binding;
 mod host_binding_service;
 mod host_command;
+mod host_worker;
 mod llm_event;
 mod preparation;
 mod prepared_start_validator;
@@ -21,6 +22,10 @@ pub use host_command::{
     GenerationDisclosureDocument, HostCommandAcknowledgement,
     HostCommandAcknowledgementDisposition, HostCommandCopyReceipt, HostCommandEnvelope,
     HostCommandKind, HostCommandPayload, HostContractError, HostDispatchEnvelope, HostDispatchKind,
+};
+pub use host_worker::{
+    HostExecutionPhase, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,
+    HostWorkerRecord, LogicalRunOutcome, ResourceLifecycle,
 };
 pub use llm_event::{
     LLMBackendCompletionWire, LLMEventEnvelope, LLMEventKind, LLMEventPayload, LLMEventReceipt,

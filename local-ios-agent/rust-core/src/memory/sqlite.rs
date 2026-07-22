@@ -1,4 +1,6 @@
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{params, Connection};
 
@@ -7,28 +9,111 @@ use crate::memory::{
     AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord, MemoryCandidate,
     ProviderSetting,
 };
+use crate::storage::agent_os_state::SqliteAgentOSStateStore;
 
 pub struct SqliteEventStore {
-    conn: Connection,
+    connection: SqliteEventStoreConnection,
+}
+
+enum SqliteEventStoreConnection {
+    Owned(Connection),
+    Unified(Arc<Mutex<SqliteAgentOSStateStore>>),
+}
+
+enum SqliteConnectionRef<'a> {
+    Owned(&'a Connection),
+    Unified(MutexGuard<'a, SqliteAgentOSStateStore>),
+}
+
+impl Deref for SqliteConnectionRef<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(connection) => connection,
+            Self::Unified(store) => store.connection(),
+        }
+    }
+}
+
+enum SqliteConnectionMut<'a> {
+    Owned(&'a mut Connection),
+    Unified(MutexGuard<'a, SqliteAgentOSStateStore>),
+}
+
+impl Deref for SqliteConnectionMut<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(connection) => connection,
+            Self::Unified(store) => store.connection(),
+        }
+    }
+}
+
+impl DerefMut for SqliteConnectionMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Owned(connection) => connection,
+            Self::Unified(store) => store.connection_mut(),
+        }
+    }
 }
 
 impl SqliteEventStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, AgentError> {
         let conn = Connection::open(path).map_err(storage_error)?;
-        let store = Self { conn };
+        let store = Self {
+            connection: SqliteEventStoreConnection::Owned(conn),
+        };
         store.migrate()?;
         Ok(store)
     }
 
+    pub(crate) fn from_unified_owner(
+        owner: Arc<Mutex<SqliteAgentOSStateStore>>,
+    ) -> Result<Self, AgentError> {
+        let store = Self {
+            connection: SqliteEventStoreConnection::Unified(owner),
+        };
+        store.migrate()?;
+        Ok(store)
+    }
+
+    fn connection(&self) -> Result<SqliteConnectionRef<'_>, AgentError> {
+        match &self.connection {
+            SqliteEventStoreConnection::Owned(connection) => {
+                Ok(SqliteConnectionRef::Owned(connection))
+            }
+            SqliteEventStoreConnection::Unified(owner) => owner
+                .lock()
+                .map(SqliteConnectionRef::Unified)
+                .map_err(|_| AgentError::Storage("unified sqlite owner mutex poisoned".into())),
+        }
+    }
+
+    fn connection_mut(&mut self) -> Result<SqliteConnectionMut<'_>, AgentError> {
+        match &mut self.connection {
+            SqliteEventStoreConnection::Owned(connection) => {
+                Ok(SqliteConnectionMut::Owned(connection))
+            }
+            SqliteEventStoreConnection::Unified(owner) => owner
+                .lock()
+                .map(SqliteConnectionMut::Unified)
+                .map_err(|_| AgentError::Storage("unified sqlite owner mutex poisoned".into())),
+        }
+    }
+
     pub fn schema_version(&self) -> Result<i64, AgentError> {
-        self.conn
+        self.connection()?
             .query_row("select version from schema_meta", [], |row| row.get(0))
             .map_err(storage_error)
     }
 
     pub fn table_names(&self) -> Result<Vec<String>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare("select name from sqlite_master where type = 'table' order by name")
             .map_err(storage_error)?;
         let rows = statement
@@ -70,7 +155,7 @@ impl SqliteEventStore {
     }
 
     fn migrate(&self) -> Result<(), AgentError> {
-        self.conn
+        self.connection()?
             .execute_batch(
                 "
                 create table if not exists schema_meta (
@@ -177,15 +262,15 @@ impl SqliteEventStore {
     }
 
     fn ensure_sessions_archived_column(&self) -> Result<(), AgentError> {
-        if self
-            .conn
+        let connection = self.connection()?;
+        if connection
             .prepare("select archived from sessions limit 0")
             .is_ok()
         {
             return Ok(());
         }
 
-        self.conn
+        connection
             .execute(
                 "alter table sessions add column archived integer not null default 0",
                 [],
@@ -195,30 +280,30 @@ impl SqliteEventStore {
     }
 
     fn ensure_sessions_title_override_column(&self) -> Result<(), AgentError> {
-        if self
-            .conn
+        let connection = self.connection()?;
+        if connection
             .prepare("select title_override from sessions limit 0")
             .is_ok()
         {
             return Ok(());
         }
 
-        self.conn
+        connection
             .execute("alter table sessions add column title_override text", [])
             .map_err(storage_error)?;
         Ok(())
     }
 
     fn ensure_events_created_at_millis_column(&self) -> Result<(), AgentError> {
-        if self
-            .conn
+        let connection = self.connection()?;
+        if connection
             .prepare("select created_at_millis from events limit 0")
             .is_ok()
         {
             return Ok(());
         }
 
-        self.conn
+        connection
             .execute(
                 "alter table events add column created_at_millis integer not null default 0",
                 [],
@@ -236,7 +321,8 @@ impl SqliteEventStore {
         } = record;
         let keywords_json = serde_json::to_string(&keywords)
             .map_err(|error| AgentError::Storage(error.to_string()))?;
-        self.conn
+        let connection = self.connection()?;
+        connection
             .execute(
                 "
                 insert into long_term_memory(id, text, keywords, confirmed)
@@ -250,7 +336,7 @@ impl SqliteEventStore {
             )
             .map_err(storage_error)?;
 
-        self.conn
+        connection
             .execute(
                 "delete from long_term_memory_keywords where memory_id = ?1",
                 params![id.as_str()],
@@ -258,7 +344,7 @@ impl SqliteEventStore {
             .map_err(storage_error)?;
 
         for keyword in &keywords {
-            self.conn
+            connection
                 .execute(
                     "
                     insert or ignore into long_term_memory_keywords(keyword, memory_id)
@@ -272,8 +358,8 @@ impl SqliteEventStore {
     }
 
     pub fn search_memory(&self, keyword: &str) -> Result<Vec<LongTermMemoryRecord>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare(
                 "
                 select m.id, m.text, m.keywords, m.confirmed
@@ -311,7 +397,7 @@ impl SqliteEventStore {
     }
 
     pub fn save_memory_candidate(&self, candidate: MemoryCandidate) -> Result<(), AgentError> {
-        self.conn
+        self.connection()?
             .execute(
                 "
                 insert into memory_candidates(text, confirmed)
@@ -325,8 +411,8 @@ impl SqliteEventStore {
     }
 
     pub fn memory_candidates(&self) -> Result<Vec<MemoryCandidate>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare(
                 "
                 select text, confirmed
@@ -360,7 +446,7 @@ impl SqliteEventStore {
             ))
         })?;
 
-        self.conn
+        self.connection()?
             .execute(
                 "
                 insert into blobs(id, path, mime_type, byte_count)
@@ -377,7 +463,8 @@ impl SqliteEventStore {
     }
 
     pub fn get_blob(&self, id: &str) -> Result<Option<BlobRecord>, AgentError> {
-        match self.conn.query_row(
+        let connection = self.connection()?;
+        match connection.query_row(
             "
             select id, path, mime_type, byte_count
             from blobs
@@ -407,7 +494,7 @@ impl SqliteEventStore {
     }
 
     pub fn put_branch_summary(&self, record: BranchSummaryRecord) -> Result<(), AgentError> {
-        self.conn
+        self.connection()?
             .execute(
                 "
                 insert into branch_summaries(session_id, leaf_id, summary)
@@ -426,7 +513,8 @@ impl SqliteEventStore {
         session_id: &str,
         leaf_id: &str,
     ) -> Result<Option<BranchSummaryRecord>, AgentError> {
-        match self.conn.query_row(
+        let connection = self.connection()?;
+        match connection.query_row(
             "
             select session_id, leaf_id, summary
             from branch_summaries
@@ -453,7 +541,7 @@ impl SqliteEventStore {
         event_id: &str,
         summary: &str,
     ) -> Result<(), AgentError> {
-        self.conn
+        self.connection()?
             .execute(
                 "
                 insert into audit_log(session_id, event_id, summary)
@@ -466,8 +554,8 @@ impl SqliteEventStore {
     }
 
     pub fn audit_rows(&self, session_id: &str) -> Result<Vec<AuditRow>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare(
                 "
                 select session_id, event_id, summary
@@ -496,7 +584,7 @@ impl SqliteEventStore {
     }
 
     pub fn save_provider_setting(&self, key: &str, value: &str) -> Result<(), AgentError> {
-        self.conn
+        self.connection()?
             .execute(
                 "
                 insert into provider_settings(key, value)
@@ -510,7 +598,8 @@ impl SqliteEventStore {
     }
 
     pub fn provider_setting(&self, key: &str) -> Result<Option<String>, AgentError> {
-        match self.conn.query_row(
+        let connection = self.connection()?;
+        match connection.query_row(
             "
             select value
             from provider_settings
@@ -532,7 +621,8 @@ impl EventStore for SqliteEventStore {
             self.get(&event.session_id, parent_id)?;
         }
 
-        let tx = self.conn.transaction().map_err(storage_error)?;
+        let mut connection = self.connection_mut()?;
+        let tx = connection.transaction().map_err(storage_error)?;
         tx.execute(
             "
             insert into sessions(id, active_leaf_id, archived)
@@ -603,7 +693,7 @@ impl EventStore for SqliteEventStore {
     }
 
     fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {
-        self.conn
+        self.connection()?
             .query_row(
                 "
                 select id, session_id, parent_id, run_id, sequence, created_at_millis, depth, kind, payload, blob_refs
@@ -675,8 +765,8 @@ impl EventStore for SqliteEventStore {
         session_id: &SessionId,
         leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare(
                 "
                 select ancestor_id
@@ -697,6 +787,8 @@ impl EventStore for SqliteEventStore {
         for row in rows {
             ancestor_ids.push(EntryId(row.map_err(storage_error)?));
         }
+        drop(statement);
+        drop(connection);
 
         if ancestor_ids.is_empty() {
             return Err(AgentError::Storage(format!(
@@ -713,8 +805,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare("select id from sessions where archived = 0 order by id")
             .map_err(storage_error)?;
         let rows = statement
@@ -729,8 +821,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn list_all_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare("select id from sessions order by id")
             .map_err(storage_error)?;
         let rows = statement
@@ -745,8 +837,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare("select active_leaf_id from sessions where id = ?1")
             .map_err(storage_error)?;
         let mut rows = statement
@@ -763,8 +855,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare(
                 "
                 select id
@@ -779,18 +871,22 @@ impl EventStore for SqliteEventStore {
             .query(params![session_id.0.as_str()])
             .map_err(storage_error)?;
 
-        match rows.next().map_err(storage_error)? {
-            Some(row) => {
-                let entry_id: String = row.get(0).map_err(storage_error)?;
-                self.get(session_id, &EntryId(entry_id)).map(Some)
-            }
-            None => Ok(None),
-        }
+        let entry_id = rows
+            .next()
+            .map_err(storage_error)?
+            .map(|row| row.get::<_, String>(0).map_err(storage_error))
+            .transpose()?;
+        drop(rows);
+        drop(statement);
+        drop(connection);
+        entry_id
+            .map(|entry_id| self.get(session_id, &EntryId(entry_id)))
+            .transpose()
     }
 
     fn rename_session(&mut self, session_id: &SessionId, title: String) -> Result<(), AgentError> {
         let changed = self
-            .conn
+            .connection()?
             .execute(
                 "update sessions set title_override = ?2 where id = ?1",
                 params![session_id.0.as_str(), title.as_str()],
@@ -806,8 +902,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn session_title_override(&self, session_id: &SessionId) -> Result<Option<String>, AgentError> {
-        let mut statement = self
-            .conn
+        let connection = self.connection()?;
+        let mut statement = connection
             .prepare("select title_override from sessions where id = ?1")
             .map_err(storage_error)?;
         let mut rows = statement
@@ -822,7 +918,7 @@ impl EventStore for SqliteEventStore {
 
     fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
         let changed = self
-            .conn
+            .connection()?
             .execute(
                 "update sessions set archived = 1 where id = ?1",
                 params![session_id.0.as_str()],
@@ -838,7 +934,8 @@ impl EventStore for SqliteEventStore {
     }
 
     fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
-        let tx = self.conn.transaction().map_err(storage_error)?;
+        let mut connection = self.connection_mut()?;
+        let tx = connection.transaction().map_err(storage_error)?;
         tx.execute(
             "delete from branch_summaries where session_id = ?1",
             params![session_id.0.as_str()],

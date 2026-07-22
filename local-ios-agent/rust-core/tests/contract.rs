@@ -25,6 +25,8 @@ mod global_run_lease;
 mod host_binding_saga;
 #[path = "contract/host_llm_contracts.rs"]
 mod host_llm_contracts;
+#[path = "contract/host_llm_outbox.rs"]
+mod host_llm_outbox;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
 #[path = "contract/llm_slot_v2.rs"]
@@ -53,6 +55,8 @@ mod run_preparation;
 mod run_snapshot_resolution_agent_os;
 #[path = "contract/runtime_execution_agent_os.rs"]
 mod runtime_execution_agent_os;
+#[path = "contract/runtime_state_migration.rs"]
+mod runtime_state_migration;
 #[path = "contract/security_approval_protocol.rs"]
 mod security_approval_protocol;
 #[path = "contract/security_data_egress.rs"]

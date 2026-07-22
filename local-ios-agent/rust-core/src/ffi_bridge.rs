@@ -48,7 +48,8 @@ use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
 };
-use crate::storage::agent_os_state::{SharedAgentOSStateStore, SqliteAgentOSStateStore};
+use crate::storage::agent_os_state::SharedAgentOSStateStore;
+use crate::storage::{InMemoryRuntimeStateStore, SqliteRuntimeStateStore};
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
@@ -227,11 +228,13 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
 
 impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
+        let runtime_state = InMemoryRuntimeStateStore::new();
         Self::try_new(
             runtime,
             app_services,
-            SharedAgentOSStateStore::in_memory(),
+            runtime_state.agent_os_state(),
             TEST_HOST_PROCESS_EPOCH.to_string(),
+            ExecutionEventLog::new(runtime_state),
         )
         .expect("in-memory Agent OS state initialization must succeed")
     }
@@ -241,6 +244,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         app_services: AgentOSApplicationService,
         agent_os_state: SharedAgentOSStateStore,
         host_process_epoch: String,
+        event_log: ExecutionEventLog,
     ) -> Result<Self, AgentError> {
         agent_os_state
             .with_preparation_mut(|store| {
@@ -251,7 +255,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let cancellations = runtime.provider_cancellation_registry();
         let runtime = Arc::new(Mutex::new(runtime));
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
-        let event_log = ExecutionEventLog::default();
         let completed_runs = CompletedRunRegistry::default();
         let snapshot_service = app_services.snapshot_service();
         let worker_dependencies = ExecutionWorkerDependencies::new(
@@ -825,29 +828,35 @@ impl RuntimeJsonBridge {
             .map_err(|error| AgentError::Storage(error.to_string()))?;
         let host_process_epoch = config.host_process_epoch.clone();
         match config.store {
-            StoreConfigJson::InMemory { .. } => Ok(Self::InMemory(BridgeRuntime::try_new(
-                AgentRuntime::with_store_and_registry(
-                    runtime_config,
-                    InMemoryEventStore::new(),
-                    registry,
-                )?,
-                app_services,
-                SharedAgentOSStateStore::in_memory(),
-                host_process_epoch,
-            )?)),
-            StoreConfigJson::Sqlite { path, .. } => {
-                let agent_os_path = format!("{path}.agent-os");
-                let agent_os_store = SqliteAgentOSStateStore::open(agent_os_path)
-                    .map_err(|error| AgentError::Storage(error.to_string()))?;
-                Ok(Self::Sqlite(BridgeRuntime::try_new(
+            StoreConfigJson::InMemory { .. } => {
+                let runtime_state = InMemoryRuntimeStateStore::new();
+                Ok(Self::InMemory(BridgeRuntime::try_new(
                     AgentRuntime::with_store_and_registry(
                         runtime_config,
-                        SqliteEventStore::open(path)?,
+                        InMemoryEventStore::new(),
                         registry,
                     )?,
                     app_services,
-                    SharedAgentOSStateStore::new(agent_os_store),
+                    runtime_state.agent_os_state(),
                     host_process_epoch,
+                    ExecutionEventLog::new(runtime_state),
+                )?))
+            }
+            StoreConfigJson::Sqlite { path, .. } => {
+                let runtime_state = SqliteRuntimeStateStore::open(&path)
+                    .map_err(|error| AgentError::Storage(error.to_string()))?;
+                let agent_os_state = runtime_state.agent_os_state();
+                let conversation_event_store = runtime_state.conversation_event_store()?;
+                Ok(Self::Sqlite(BridgeRuntime::try_new(
+                    AgentRuntime::with_store_and_registry(
+                        runtime_config,
+                        conversation_event_store,
+                        registry,
+                    )?,
+                    app_services,
+                    agent_os_state,
+                    host_process_epoch,
+                    ExecutionEventLog::new(runtime_state),
                 )?))
             }
         }

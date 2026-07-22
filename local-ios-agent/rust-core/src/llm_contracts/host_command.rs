@@ -197,11 +197,47 @@ impl HostCommandEnvelope {
     pub fn payload(&self) -> &HostCommandPayload {
         &self.payload
     }
+    pub fn command_id(&self) -> &str {
+        &self.command_id
+    }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
+    pub fn host_process_epoch(&self) -> &str {
+        &self.host_process_epoch
+    }
+    pub fn command_sequence(&self) -> u64 {
+        self.command_sequence
+    }
+    pub fn kind(&self) -> HostCommandKind {
+        self.kind
+    }
     pub fn payload_digest(&self) -> &str {
         &self.payload_digest
     }
     pub fn command_envelope_digest(&self) -> &str {
         &self.command_envelope_digest
+    }
+}
+
+impl HostCommandAcknowledgement {
+    pub fn command_id(&self) -> &str {
+        &self.command_id
+    }
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
+    pub fn command_sequence(&self) -> u64 {
+        self.command_sequence
+    }
+    pub fn command_envelope_digest(&self) -> &str {
+        &self.command_envelope_digest
+    }
+    pub fn disposition(&self) -> HostCommandAcknowledgementDisposition {
+        self.disposition
     }
 }
 

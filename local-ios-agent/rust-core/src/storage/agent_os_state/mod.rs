@@ -11,6 +11,19 @@ use crate::llm_contracts::{
 };
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedRunConsumption {
+    pub preparation_id: String,
+    pub proposed_run_id: String,
+    pub token_digest: String,
+    pub lease_generation: u64,
+    pub session_handle: String,
+    pub host_process_epoch: String,
+    pub binding_id: String,
+    pub binding_revision: u64,
+    pub binding_hash: String,
+}
+
 pub trait GlobalRunLeaseRepository {
     fn acquire_legacy(
         &mut self,
@@ -49,6 +62,10 @@ pub trait GlobalRunLeaseRepository {
 }
 
 pub trait RunPreparationRepository {
+    fn consume_registered_preparation_and_promote(
+        &mut self,
+        request: &PreparedRunConsumption,
+    ) -> Result<(), PreparationError>;
     fn create_preparation_and_acquire_lease(
         &mut self,
         record: RunPreparationRecord,

@@ -105,6 +105,24 @@ impl LLMEventEnvelope {
     pub fn event_envelope_digest(&self) -> &str {
         &self.event_envelope_digest
     }
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
+    pub fn host_process_epoch(&self) -> &str {
+        &self.host_process_epoch
+    }
+    pub fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+    pub fn kind(&self) -> LLMEventKind {
+        self.kind
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -142,6 +160,30 @@ struct ReceiptDigestDocument<'a> {
 }
 
 impl LLMEventReceipt {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        event_sequence: u64,
+        event_id: impl Into<String>,
+        event_envelope_digest: impl Into<String>,
+        disposition: LLMEventReceiptDisposition,
+    ) -> Result<Self, HostContractError> {
+        let mut receipt = Self {
+            schema_version: 1,
+            run_id: run_id.into(),
+            session_handle: session_handle.into(),
+            host_process_epoch: host_process_epoch.into(),
+            event_sequence,
+            event_id: event_id.into(),
+            event_envelope_digest: event_envelope_digest.into(),
+            disposition,
+            receipt_digest: String::new(),
+        };
+        receipt.receipt_digest = receipt.expected_digest()?;
+        Ok(receipt)
+    }
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
         digest(
             "llm-event-receipt:v1",
@@ -162,6 +204,9 @@ impl LLMEventReceipt {
     }
     pub fn event_envelope_digest(&self) -> &str {
         &self.event_envelope_digest
+    }
+    pub fn disposition(&self) -> LLMEventReceiptDisposition {
+        self.disposition
     }
 }
 

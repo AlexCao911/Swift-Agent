@@ -9,9 +9,12 @@ use crate::llm_contracts::{
     RunPreparationState,
 };
 
-use super::{AgentOSStateRepository, GlobalRunLeaseRepository, RunPreparationRepository};
+use super::{
+    AgentOSStateRepository, GlobalRunLeaseRepository, PreparedRunConsumption,
+    RunPreparationRepository,
+};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct InMemoryAgentOSStateStore {
     operations: HashMap<String, HostBindingOperation>,
     idempotency: HashMap<(HostBindingKindKey, String), String>,
@@ -320,6 +323,43 @@ impl GlobalRunLeaseRepository for InMemoryAgentOSStateStore {
 }
 
 impl RunPreparationRepository for InMemoryAgentOSStateStore {
+    fn consume_registered_preparation_and_promote(
+        &mut self,
+        request: &PreparedRunConsumption,
+    ) -> Result<(), PreparationError> {
+        let record = self
+            .run_preparations
+            .get(&request.preparation_id)
+            .ok_or_else(preparation_not_found)?;
+        let registration = record.registration().ok_or_else(preparation_stale)?;
+        if record.state() != RunPreparationState::Registered
+            || record.preview().proposed_run_id() != request.proposed_run_id
+            || record.preview().token_digest() != request.token_digest
+            || record.preview().lease_generation() != request.lease_generation
+            || registration.session_handle() != request.session_handle
+            || registration.host_process_epoch() != request.host_process_epoch
+            || registration.binding_id() != request.binding_id
+            || registration.binding_revision() != request.binding_revision
+            || registration.binding_hash() != request.binding_hash
+        {
+            return Err(preparation_stale());
+        }
+        let lease = self
+            .global_run_lease
+            .clone()
+            .ok_or_else(preparation_stale)?;
+        if lease.state() != GlobalRunLeaseState::Preparing
+            || lease.preparation_id() != Some(request.preparation_id.as_str())
+            || lease.generation() != request.lease_generation
+            || lease.host_process_epoch() != request.host_process_epoch
+        {
+            return Err(preparation_stale());
+        }
+        self.global_run_lease = Some(lease.promoted(request.proposed_run_id.clone()));
+        self.run_preparations.remove(&request.preparation_id);
+        Ok(())
+    }
+
     fn create_preparation_and_acquire_lease(
         &mut self,
         mut record: RunPreparationRecord,

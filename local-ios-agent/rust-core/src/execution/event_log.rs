@@ -8,15 +8,21 @@ pub struct InMemoryExecutionEventRepository {
     subscribers: Arc<Mutex<BTreeMap<String, Vec<Sender<ExecutionEvent>>>>>,
 }
 
-pub trait ExecutionEventRepository: Clone + Send + Sync + 'static {
+pub trait ExecutionEventRepository: Send + Sync + 'static {
     fn append(&self, run_id: String, code: String, payload: String) -> ExecutionEvent;
     fn replay_after(&self, run_id: &str, from_sequence: u64) -> Vec<ExecutionEvent>;
     fn subscribe_live(&self, run_id: &str) -> Receiver<ExecutionEvent>;
 }
 
-#[derive(Clone, Debug)]
-pub struct ExecutionEventLog<R: ExecutionEventRepository = InMemoryExecutionEventRepository> {
-    repository: R,
+#[derive(Clone)]
+pub struct ExecutionEventLog {
+    repository: Arc<dyn ExecutionEventRepository>,
+}
+
+impl std::fmt::Debug for ExecutionEventLog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ExecutionEventLog(..)")
+    }
 }
 
 #[derive(Debug)]
@@ -34,15 +40,17 @@ pub struct ExecutionEvent {
     payload: String,
 }
 
-impl Default for ExecutionEventLog<InMemoryExecutionEventRepository> {
+impl Default for ExecutionEventLog {
     fn default() -> Self {
         Self::new(InMemoryExecutionEventRepository::default())
     }
 }
 
-impl<R: ExecutionEventRepository> ExecutionEventLog<R> {
-    pub fn new(repository: R) -> Self {
-        Self { repository }
+impl ExecutionEventLog {
+    pub fn new(repository: impl ExecutionEventRepository) -> Self {
+        Self {
+            repository: Arc::new(repository),
+        }
     }
 
     pub fn append(&self, run_id: impl Into<String>, code: impl Into<String>) -> ExecutionEvent {
@@ -155,6 +163,19 @@ impl ExecutionEventStream {
 }
 
 impl ExecutionEvent {
+    pub(crate) fn persisted(
+        run_id: impl Into<String>,
+        sequence: u64,
+        code: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            sequence,
+            code: code.into(),
+            payload: payload.into(),
+        }
+    }
     pub fn sequence(&self) -> u64 {
         self.sequence
     }
