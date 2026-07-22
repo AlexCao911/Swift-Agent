@@ -3,7 +3,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentLLMRequirements, LLMInputModality, LLMToolCallingMode};
+use super::{
+    AgentLLMRequirements, GenerationDisclosureDocument, LLMInputModality, LLMToolCallingMode,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -188,6 +190,7 @@ pub struct RunPreparationPreview {
     token_generation: u64,
     binding: PreparationBinding,
     binding_digest: String,
+    initial_disclosure: GenerationDisclosureDocument,
     host_process_epoch: String,
     lease_generation: u64,
     expiration_millis: u64,
@@ -201,6 +204,7 @@ impl RunPreparationPreview {
         token: String,
         token_digest: String,
         binding_digest: String,
+        initial_disclosure: GenerationDisclosureDocument,
         host_epoch: String,
         lease_generation: u64,
         expiration_millis: u64,
@@ -214,6 +218,7 @@ impl RunPreparationPreview {
             token_generation: 1,
             binding: request.binding.clone(),
             binding_digest,
+            initial_disclosure,
             host_process_epoch: host_epoch,
             lease_generation,
             expiration_millis,
@@ -240,6 +245,9 @@ impl RunPreparationPreview {
     }
     pub fn binding_digest(&self) -> &str {
         &self.binding_digest
+    }
+    pub fn initial_disclosure(&self) -> &GenerationDisclosureDocument {
+        &self.initial_disclosure
     }
     pub fn host_process_epoch(&self) -> &str {
         &self.host_process_epoch
@@ -596,6 +604,48 @@ pub struct PreparedSessionCleanupIdentity {
     session_handle: String,
     registration_digest: String,
     host_process_epoch: String,
+}
+
+impl PreparedSessionCleanupIdentity {
+    pub fn from_cleanup(cleanup: &PreparedSessionCleanupEnvelope) -> Self {
+        Self {
+            cleanup_command_id: cleanup.cleanup_command_id().to_string(),
+            cleanup_command_sequence: cleanup.preparation_cleanup_sequence(),
+            preparation_id: cleanup.preparation_id().to_string(),
+            proposed_run_id: cleanup.proposed_run_id().to_string(),
+            session_handle: cleanup.session_handle().to_string(),
+            registration_digest: cleanup.prepared_session_registration_digest().to_string(),
+            host_process_epoch: cleanup.host_process_epoch().to_string(),
+        }
+    }
+
+    pub fn cleanup_command_id(&self) -> &str {
+        &self.cleanup_command_id
+    }
+
+    pub fn cleanup_command_sequence(&self) -> u64 {
+        self.cleanup_command_sequence
+    }
+
+    pub fn preparation_id(&self) -> &str {
+        &self.preparation_id
+    }
+
+    pub fn proposed_run_id(&self) -> &str {
+        &self.proposed_run_id
+    }
+
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
+
+    pub fn registration_digest(&self) -> &str {
+        &self.registration_digest
+    }
+
+    pub fn host_process_epoch(&self) -> &str {
+        &self.host_process_epoch
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

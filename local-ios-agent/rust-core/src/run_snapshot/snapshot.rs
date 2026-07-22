@@ -1,9 +1,17 @@
-use crate::conversation::ConversationRunFrameRef;
+use std::collections::BTreeMap;
+use std::fmt;
+
+use crate::conversation::{ConversationFrameId, ConversationRunFrameRef};
+use crate::core::{EntryId, SessionId};
+use crate::llm_contracts::{AgentLLMRequirements, HostAttestation, HostAttestationV1Document};
 use crate::run_snapshot::{
-    ResolvedComponentBinding, ResolvedMemoryBinding, ResolvedModelBinding, ResolvedToolBinding,
-    ResolvedVoiceBinding, TrustedHostRunState,
+    CredentialAvailability, LocalBindingState, OpaqueHostBindingCrossLink,
+    ResolvedComponentBinding, ResolvedHostSlotBinding, ResolvedLLMBinding, ResolvedMemoryBinding,
+    ResolvedModelBinding, ResolvedToolBinding, ResolvedVoiceBinding, TrustedHostRunState,
 };
-use crate::user_customization::{AgentProfileId, AgentProfileVersion};
+use crate::security::PermissionState;
+use crate::user_customization::{AgentProfileId, AgentProfileVersion, AgentSlotId, AgentSlotKind};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RunSnapshotId(u64);
@@ -32,11 +40,10 @@ pub struct ResolvedRunSnapshot {
     user_intent: RunUserIntent,
     profile_version: AgentProfileVersion,
     component_versions: Vec<ResolvedComponentBinding>,
-    model_binding: ResolvedModelBinding,
+    llm_binding: ResolvedLLMBinding,
     tool_bindings: Vec<ResolvedToolBinding>,
     memory_binding: Option<ResolvedMemoryBinding>,
     voice_binding: Option<ResolvedVoiceBinding>,
-    trusted_host_state: TrustedHostRunState,
     readiness_report: RunSnapshotReadinessReport,
     conversation_run_frame_ref: ConversationRunFrameRef,
     created_at_millis: u64,
@@ -58,6 +65,131 @@ pub struct RunSnapshotReadinessIssue {
     code: String,
     message: String,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedResolvedRunSnapshotV2 {
+    schema_version: u32,
+    snapshot_id: u64,
+    agent_profile_id: String,
+    user_intent: String,
+    profile_version: u64,
+    component_versions: Vec<PersistedComponentBinding>,
+    llm_binding: PersistedResolvedLLMBinding,
+    tool_bindings: Vec<PersistedToolBinding>,
+    memory_binding: Option<PersistedSlotComponentBinding>,
+    voice_binding: Option<PersistedSlotComponentBinding>,
+    readiness_issues: Vec<PersistedReadinessIssue>,
+    conversation_frame: PersistedConversationFrameRef,
+    created_at_millis: u64,
+    host_attestation: Option<PersistedHostAttestation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "binding_schema",
+    content = "binding",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PersistedResolvedLLMBinding {
+    LegacyV1 {
+        model_binding: PersistedLegacyModelBinding,
+        permission_state: String,
+        local_credential_refs: BTreeMap<String, String>,
+        credential_availability: BTreeMap<String, String>,
+    },
+    HostSlotV2 {
+        requirements: AgentLLMRequirements,
+        requirements_hash: String,
+        binding_id: String,
+        binding_revision: u64,
+        binding_hash: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedLegacyModelBinding {
+    binding_id: String,
+    provider_account_id: String,
+    provider_id: String,
+    model_id: String,
+    catalog_version: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedComponentBinding {
+    slot_id: String,
+    slot_kind: String,
+    version_id: String,
+    entity_version: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedToolBinding {
+    slot_id: String,
+    component: PersistedComponentBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedSlotComponentBinding {
+    slot_id: String,
+    component: PersistedComponentBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedReadinessIssue {
+    code: String,
+    message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedConversationFrameRef {
+    frame_id: String,
+    session_id: String,
+    branch_head_id: String,
+    user_turn_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedHostAttestation {
+    document: HostAttestationV1Document,
+    egress_attestation_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PersistedRunSnapshotError {
+    code: &'static str,
+    message: String,
+}
+
+impl PersistedRunSnapshotError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        self.code
+    }
+}
+
+impl fmt::Display for PersistedRunSnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PersistedRunSnapshotError {}
 
 impl RunSnapshotId {
     pub fn new(value: u64) -> Self {
@@ -159,12 +291,47 @@ impl ResolvedRunSnapshot {
             user_intent: request.user_intent().clone(),
             profile_version,
             component_versions,
-            model_binding,
+            llm_binding: ResolvedLLMBinding::LegacyV1 {
+                model: model_binding,
+                trusted_host_state,
+            },
             tool_bindings,
             memory_binding,
             voice_binding,
-            trusted_host_state,
             readiness_report,
+            conversation_run_frame_ref: request.conversation_run_frame_ref().clone(),
+            created_at_millis,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_host_slot_v2(
+        request: StartRunRequest,
+        profile_version: AgentProfileVersion,
+        component_versions: Vec<ResolvedComponentBinding>,
+        requirements: crate::llm_contracts::AgentLLMRequirements,
+        requirements_hash: impl Into<String>,
+        host_cross_link: OpaqueHostBindingCrossLink,
+        tool_bindings: Vec<ResolvedToolBinding>,
+        memory_binding: Option<ResolvedMemoryBinding>,
+        voice_binding: Option<ResolvedVoiceBinding>,
+        created_at_millis: u64,
+    ) -> Self {
+        Self {
+            snapshot_id: RunSnapshotId::unpersisted(),
+            agent_profile_id: request.agent_profile_id().clone(),
+            user_intent: request.user_intent().clone(),
+            profile_version,
+            component_versions,
+            llm_binding: ResolvedLLMBinding::HostSlotV2(ResolvedHostSlotBinding::new(
+                requirements,
+                requirements_hash,
+                host_cross_link,
+            )),
+            tool_bindings,
+            memory_binding,
+            voice_binding,
+            readiness_report: RunSnapshotReadinessReport::ready(),
             conversation_run_frame_ref: request.conversation_run_frame_ref().clone(),
             created_at_millis,
         }
@@ -195,8 +362,20 @@ impl ResolvedRunSnapshot {
         &self.component_versions
     }
 
-    pub fn model_binding(&self) -> &ResolvedModelBinding {
-        &self.model_binding
+    pub fn llm_binding(&self) -> &ResolvedLLMBinding {
+        &self.llm_binding
+    }
+
+    pub fn legacy_model_binding(&self) -> Option<&ResolvedModelBinding> {
+        self.llm_binding.as_legacy_v1().map(|(model, _)| model)
+    }
+
+    pub fn legacy_trusted_host_state(&self) -> Option<&TrustedHostRunState> {
+        self.llm_binding.as_legacy_v1().map(|(_, trusted)| trusted)
+    }
+
+    pub fn host_slot_binding(&self) -> Option<&ResolvedHostSlotBinding> {
+        self.llm_binding.as_host_slot_v2()
     }
 
     pub fn tool_bindings(&self) -> &[ResolvedToolBinding] {
@@ -211,10 +390,6 @@ impl ResolvedRunSnapshot {
         self.voice_binding.as_ref()
     }
 
-    pub fn trusted_host_state(&self) -> &TrustedHostRunState {
-        &self.trusted_host_state
-    }
-
     pub fn readiness_report(&self) -> &RunSnapshotReadinessReport {
         &self.readiness_report
     }
@@ -225,6 +400,312 @@ impl ResolvedRunSnapshot {
 
     pub fn created_at_millis(&self) -> u64 {
         self.created_at_millis
+    }
+
+    pub(crate) fn host_v2_json(
+        &self,
+        run_id: &str,
+        swift_snapshot_id: &str,
+        attestation: &HostAttestation,
+    ) -> Result<String, PersistedRunSnapshotError> {
+        if self.host_slot_binding().is_none()
+            || attestation.document().proposed_run_id() != run_id
+            || attestation.document().swift_snapshot_id() != swift_snapshot_id
+        {
+            return Err(PersistedRunSnapshotError::new(
+                "snapshot.host_identity_mismatch",
+                "host snapshot binding, run ID, or Swift snapshot ID does not match attestation",
+            ));
+        }
+        let persisted =
+            PersistedResolvedRunSnapshotV2::try_from(self)?.with_host_attestation(attestation);
+        serde_json::to_string(&persisted).map_err(|error| {
+            PersistedRunSnapshotError::new(
+                "snapshot.serialization_failed",
+                format!("persisted run snapshot serialization failed: {error}"),
+            )
+        })
+    }
+}
+
+impl TryFrom<&ResolvedRunSnapshot> for PersistedResolvedRunSnapshotV2 {
+    type Error = PersistedRunSnapshotError;
+
+    fn try_from(snapshot: &ResolvedRunSnapshot) -> Result<Self, Self::Error> {
+        let llm_binding = match snapshot.llm_binding() {
+            ResolvedLLMBinding::LegacyV1 {
+                model,
+                trusted_host_state,
+            } => PersistedResolvedLLMBinding::LegacyV1 {
+                model_binding: PersistedLegacyModelBinding {
+                    binding_id: model.binding_id().to_string(),
+                    provider_account_id: model.provider_account_id().to_string(),
+                    provider_id: model.provider_id().to_string(),
+                    model_id: model.model_id().as_str().to_string(),
+                    catalog_version: model.catalog_version().as_u64(),
+                },
+                permission_state: permission_state_name(trusted_host_state.permission_state())
+                    .to_string(),
+                local_credential_refs: trusted_host_state.local_bindings().persisted_refs(),
+                credential_availability: trusted_host_state
+                    .credential_availability()
+                    .persisted_refs(),
+            },
+            ResolvedLLMBinding::HostSlotV2(binding) => PersistedResolvedLLMBinding::HostSlotV2 {
+                requirements: binding.requirements().clone(),
+                requirements_hash: binding.requirements_hash().to_string(),
+                binding_id: binding.host_cross_link().binding_id().to_string(),
+                binding_revision: binding.host_cross_link().binding_revision(),
+                binding_hash: binding.host_cross_link().binding_hash().to_string(),
+            },
+        };
+        Ok(Self {
+            schema_version: 2,
+            snapshot_id: snapshot.snapshot_id().as_u64(),
+            agent_profile_id: snapshot.agent_profile_id().as_str().to_string(),
+            user_intent: snapshot.user_intent().as_str().to_string(),
+            profile_version: snapshot.profile_version().as_u64(),
+            component_versions: snapshot
+                .component_versions()
+                .iter()
+                .map(persist_component)
+                .collect(),
+            llm_binding,
+            tool_bindings: snapshot
+                .tool_bindings()
+                .iter()
+                .map(|tool| PersistedToolBinding {
+                    slot_id: tool.slot_id().as_str().to_string(),
+                    component: persist_component(tool.component_version()),
+                })
+                .collect(),
+            memory_binding: snapshot
+                .memory_binding()
+                .map(|memory| PersistedSlotComponentBinding {
+                    slot_id: memory.slot_id().as_str().to_string(),
+                    component: persist_component(memory.component_version()),
+                }),
+            voice_binding: snapshot
+                .voice_binding()
+                .map(|voice| PersistedSlotComponentBinding {
+                    slot_id: voice.slot_id().as_str().to_string(),
+                    component: persist_component(voice.component_version()),
+                }),
+            readiness_issues: snapshot
+                .readiness_report()
+                .issues()
+                .iter()
+                .map(|issue| PersistedReadinessIssue {
+                    code: issue.code().to_string(),
+                    message: issue.message().to_string(),
+                })
+                .collect(),
+            conversation_frame: PersistedConversationFrameRef {
+                frame_id: snapshot
+                    .conversation_run_frame_ref()
+                    .frame_id()
+                    .as_str()
+                    .to_string(),
+                session_id: snapshot.conversation_run_frame_ref().session_id().0.clone(),
+                branch_head_id: snapshot
+                    .conversation_run_frame_ref()
+                    .branch_head_id()
+                    .0
+                    .clone(),
+                user_turn_id: snapshot
+                    .conversation_run_frame_ref()
+                    .user_turn_id()
+                    .0
+                    .clone(),
+            },
+            created_at_millis: snapshot.created_at_millis(),
+            host_attestation: None,
+        })
+    }
+}
+
+impl TryFrom<PersistedResolvedRunSnapshotV2> for ResolvedRunSnapshot {
+    type Error = PersistedRunSnapshotError;
+
+    fn try_from(persisted: PersistedResolvedRunSnapshotV2) -> Result<Self, Self::Error> {
+        if persisted.schema_version != 2 {
+            return Err(PersistedRunSnapshotError::new(
+                "snapshot.schema_version_unsupported",
+                format!(
+                    "persisted run snapshot schema {} is unsupported",
+                    persisted.schema_version
+                ),
+            ));
+        }
+        let llm_binding = match persisted.llm_binding {
+            PersistedResolvedLLMBinding::LegacyV1 {
+                model_binding,
+                permission_state,
+                local_credential_refs,
+                credential_availability,
+            } => ResolvedLLMBinding::LegacyV1 {
+                model: ResolvedModelBinding::from_persisted(
+                    model_binding.binding_id,
+                    model_binding.provider_account_id,
+                    model_binding.provider_id,
+                    model_binding.model_id,
+                    model_binding.catalog_version,
+                ),
+                trusted_host_state: TrustedHostRunState::new(
+                    parse_permission_state(&permission_state)?,
+                    LocalBindingState::from_persisted(local_credential_refs),
+                    CredentialAvailability::from_persisted(credential_availability),
+                ),
+            },
+            PersistedResolvedLLMBinding::HostSlotV2 {
+                requirements,
+                requirements_hash,
+                binding_id,
+                binding_revision,
+                binding_hash,
+            } => ResolvedLLMBinding::HostSlotV2(ResolvedHostSlotBinding::new(
+                requirements,
+                requirements_hash,
+                OpaqueHostBindingCrossLink::new(binding_id, binding_revision, binding_hash),
+            )),
+        };
+        Ok(Self {
+            snapshot_id: RunSnapshotId::new(persisted.snapshot_id),
+            agent_profile_id: AgentProfileId::new(persisted.agent_profile_id),
+            user_intent: RunUserIntent::new(persisted.user_intent),
+            profile_version: AgentProfileVersion::new(persisted.profile_version),
+            component_versions: persisted
+                .component_versions
+                .into_iter()
+                .map(resolve_component)
+                .collect::<Result<_, _>>()?,
+            llm_binding,
+            tool_bindings: persisted
+                .tool_bindings
+                .into_iter()
+                .map(|tool| {
+                    Ok(ResolvedToolBinding::new(
+                        AgentSlotId::new(tool.slot_id),
+                        resolve_component(tool.component)?,
+                    ))
+                })
+                .collect::<Result<_, PersistedRunSnapshotError>>()?,
+            memory_binding: persisted
+                .memory_binding
+                .map(|memory| {
+                    Ok(ResolvedMemoryBinding::new(
+                        AgentSlotId::new(memory.slot_id),
+                        resolve_component(memory.component)?,
+                    ))
+                })
+                .transpose()?,
+            voice_binding: persisted
+                .voice_binding
+                .map(|voice| {
+                    Ok(ResolvedVoiceBinding::new(
+                        AgentSlotId::new(voice.slot_id),
+                        resolve_component(voice.component)?,
+                    ))
+                })
+                .transpose()?,
+            readiness_report: RunSnapshotReadinessReport {
+                issues: persisted
+                    .readiness_issues
+                    .into_iter()
+                    .map(|issue| RunSnapshotReadinessIssue {
+                        code: issue.code,
+                        message: issue.message,
+                    })
+                    .collect(),
+            },
+            conversation_run_frame_ref: ConversationRunFrameRef::new(
+                ConversationFrameId::new(persisted.conversation_frame.frame_id),
+                SessionId(persisted.conversation_frame.session_id),
+                EntryId(persisted.conversation_frame.branch_head_id),
+                EntryId(persisted.conversation_frame.user_turn_id),
+            ),
+            created_at_millis: persisted.created_at_millis,
+        })
+    }
+}
+
+impl PersistedResolvedRunSnapshotV2 {
+    fn with_host_attestation(mut self, attestation: &HostAttestation) -> Self {
+        self.host_attestation = Some(PersistedHostAttestation {
+            document: attestation.document().clone(),
+            egress_attestation_digest: attestation.egress_attestation_digest().to_string(),
+        });
+        self
+    }
+}
+
+fn persist_component(component: &ResolvedComponentBinding) -> PersistedComponentBinding {
+    PersistedComponentBinding {
+        slot_id: component.slot_id().as_str().to_string(),
+        slot_kind: slot_kind_name(component.slot_kind()).to_string(),
+        version_id: component.version_id().as_str().to_string(),
+        entity_version: component.entity_version().as_u64(),
+    }
+}
+
+fn resolve_component(
+    component: PersistedComponentBinding,
+) -> Result<ResolvedComponentBinding, PersistedRunSnapshotError> {
+    Ok(ResolvedComponentBinding::new(
+        AgentSlotId::new(component.slot_id),
+        parse_slot_kind(&component.slot_kind)?,
+        component.version_id,
+        component.entity_version,
+    ))
+}
+
+fn slot_kind_name(kind: AgentSlotKind) -> &'static str {
+    match kind {
+        AgentSlotKind::Brain => "brain",
+        AgentSlotKind::Persona => "persona",
+        AgentSlotKind::Instruction => "instruction",
+        AgentSlotKind::Model => "model",
+        AgentSlotKind::Toolset => "toolset",
+        AgentSlotKind::Memory => "memory",
+        AgentSlotKind::Voice => "voice",
+    }
+}
+
+fn parse_slot_kind(value: &str) -> Result<AgentSlotKind, PersistedRunSnapshotError> {
+    match value {
+        "brain" => Ok(AgentSlotKind::Brain),
+        "persona" => Ok(AgentSlotKind::Persona),
+        "instruction" => Ok(AgentSlotKind::Instruction),
+        "model" => Ok(AgentSlotKind::Model),
+        "toolset" => Ok(AgentSlotKind::Toolset),
+        "memory" => Ok(AgentSlotKind::Memory),
+        "voice" => Ok(AgentSlotKind::Voice),
+        other => Err(PersistedRunSnapshotError::new(
+            "snapshot.slot_kind_invalid",
+            format!("persisted slot kind {other:?} is invalid"),
+        )),
+    }
+}
+
+fn permission_state_name(state: &PermissionState) -> &'static str {
+    match state {
+        PermissionState::NotDetermined => "not_determined",
+        PermissionState::Granted => "granted",
+        PermissionState::Denied => "denied",
+        PermissionState::Restricted => "restricted",
+    }
+}
+
+fn parse_permission_state(value: &str) -> Result<PermissionState, PersistedRunSnapshotError> {
+    match value {
+        "not_determined" => Ok(PermissionState::NotDetermined),
+        "granted" => Ok(PermissionState::Granted),
+        "denied" => Ok(PermissionState::Denied),
+        "restricted" => Ok(PermissionState::Restricted),
+        other => Err(PersistedRunSnapshotError::new(
+            "snapshot.permission_state_invalid",
+            format!("persisted permission state {other:?} is invalid"),
+        )),
     }
 }
 

@@ -74,6 +74,12 @@
       "excluded": "raw token value"
     },
     {
+      "domain": "resolved-run-snapshot:v1",
+      "computing_authority": "rust",
+      "required_coverage": "run and snapshot identity, profile and source revisions, provider-neutral LLM binding, tools, readiness, frame and creation time",
+      "excluded": "provider account, provider ID, model ID, credential, origin, local path and adapter details"
+    },
+    {
       "domain": "saga-token:v1",
       "computing_authority": "rust_and_swift",
       "required_coverage": "operation kind and ID, token generation, random token bytes",

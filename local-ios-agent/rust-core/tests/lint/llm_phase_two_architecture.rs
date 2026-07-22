@@ -79,8 +79,13 @@ fn rust_agent_core_does_not_gain_swift_owned_concrete_model_details() {
 
     let resolver = fs::read_to_string(rust_root.join("run_snapshot/resolver.rs")).unwrap();
     let preparation = fs::read_to_string(rust_root.join("run_snapshot/snapshot_service.rs")).unwrap();
+    // The legacy resolver remains non-runnable for a V2 route until the Phase 4
+    // production switch. The authoritative preparation path now commits V2
+    // through the provider-neutral unified host runtime instead of this guard.
     assert!(resolver.contains("execution.host_slot_v2_not_runnable"));
-    assert!(preparation.contains("execution.host_slot_v2_not_runnable"));
+    assert!(!preparation.contains("execution.host_slot_v2_not_runnable"));
+    assert!(preparation.contains("pub fn with_host_runtime"));
+    assert!(preparation.contains("commit_prepared_host_run(PreparedHostRunCommit"));
 }
 
 #[test]

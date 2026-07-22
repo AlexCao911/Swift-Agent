@@ -19,9 +19,11 @@ pub use host_binding::{
 };
 pub use host_binding_service::{AgentHostBindingService, HostBindingSubjectCatalog};
 pub use host_command::{
-    GenerationDisclosureDocument, HostCommandAcknowledgement,
-    HostCommandAcknowledgementDisposition, HostCommandCopyReceipt, HostCommandEnvelope,
-    HostCommandKind, HostCommandPayload, HostContractError, HostDispatchEnvelope, HostDispatchKind,
+    EgressDataClassCountDocument, GenerationDisclosureDocument, HostAttachmentReference,
+    HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
+    HostCommandEnvelope, HostCommandKind, HostCommandPayload, HostContractError,
+    HostDispatchEnvelope, HostDispatchKind, HostSemanticContent, HostSemanticMessage,
+    HostSourceRevision, SafeDisplaySummaryDocument,
 };
 pub use host_worker::{
     HostExecutionPhase, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,

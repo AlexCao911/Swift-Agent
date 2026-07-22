@@ -607,7 +607,7 @@ git commit -m "feat: unify host llm runtime state"
 - Adds `RunPreparationService::reconcile_preparation(preparationID, proposedRunID, tokenDigest) -> PreparationReconciliation` backed by the same aggregate authority. Phase C persists the consumed token digest with the committed run so a lost FFI result can recover the exact `HostRunHandle` without reopening or aborting the session.
 - Exposes the same operation through `RuntimeJsonBridge::reconcile_preparation_json`; the C/Swift wrappers are added in Task 7 without changing its outcome semantics.
 
-- [ ] **Step 1: Write failing authoritative binding and Phase C tests**
+- [x] **Step 1: Write failing authoritative binding and Phase C tests**
 
 Add tests that mutate the real frame, tool schema, component/source revision, attachment reference, model input, registration tuple, capability, parameter digest, opaque subject, host cross-link, lease revision, profile route revision, or epoch after preview and require commit rejection plus prepared-session cleanup. Inject a crash after every aggregate row write and prove reopen sees either the entire Phase C aggregate or the unchanged preparation—never a partial run. Add successful tagged-snapshot and reconciliation assertions:
 
@@ -647,7 +647,7 @@ Assert the persisted outbox payload canonicalizes to `host-command-payload:v1` a
 
 Add reconciliation tests for exact committed replay, still-pending proof, already-aborting cleanup identity, wrong preparation/run/token digest, concurrent commit/reconcile serialization, concurrent late-commit versus pending-abort CAS, and reopen. Reconciliation is read-only and must not enqueue start/cleanup commands or change lease state. `begin_abort_preparation` must CAS only an uncommitted preparation to aborting; if Phase C wins first it returns `preparation.already_committed` without creating cleanup.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_worker -- --nocapture
@@ -659,7 +659,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test in
 
 Expected: successful commit still returns `execution.host_slot_v2_not_runnable`; `ResolvedRunSnapshot` cannot construct a host binding; reconciliation is absent; preview does not expose a complete disclosure/payload.
 
-- [ ] **Step 3: Build one canonical frozen turn and use it at commit**
+- [x] **Step 3: Build one canonical frozen turn and use it at commit**
 
 Introduce:
 
@@ -788,7 +788,7 @@ Define the commit return boundary so a decoded Rust error is authoritative: ever
 
 Create the Phase 4 architecture lint now, rather than at the production switch. It serializes a real `host_slot_v2` snapshot from the SQLite aggregate, recursively scans structured key names, and scans only the `llm_binding` subtree for seeded legacy secret/model values; free-form user text is excluded. It separately permits the unchanged legacy variant and rejects a synthetic V2 fixture if any forbidden field is injected.
 
-- [ ] **Step 4: Run GREEN and preparation regressions**
+- [x] **Step 4: Run GREEN and preparation regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_worker -- --nocapture
@@ -802,7 +802,7 @@ git diff --check
 
 Expected: exact attestation commits one provider-neutral tagged V2 snapshot/worker/command; lost replies reconcile without cleanup; every mismatch cleans up without a runnable partial run; legacy snapshots and Phase 1 contracts remain green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/run_snapshot rust-core/src/llm_contracts rust-core/src/ffi_bridge.rs \

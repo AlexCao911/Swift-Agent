@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
+
 use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
@@ -47,11 +49,23 @@ pub struct RunSnapshotSourceCatalog {
     component_entity_versions: Arc<Mutex<BTreeMap<UserComponentVersionId, u64>>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HostSlotPreparationSources {
+    pub(crate) profile_version: AgentProfileVersion,
     pub(crate) requirements: AgentLLMRequirements,
     pub(crate) component_versions: Vec<ResolvedComponentBinding>,
     pub(crate) tool_bindings: Vec<ResolvedToolBinding>,
+    pub(crate) memory_binding: Option<ResolvedMemoryBinding>,
+    pub(crate) voice_binding: Option<ResolvedVoiceBinding>,
+    pub(crate) tool_schema_sources: Vec<ToolSchemaSourceDocument>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ToolSchemaSourceDocument {
+    slot_id: String,
+    component_version: String,
+    entity_version: String,
+    content: ComponentContent,
 }
 
 #[derive(Debug)]
@@ -65,6 +79,7 @@ struct ComponentSnapshotSource {
     version_id: String,
     entity_version: u64,
     kind: ComponentKind,
+    content: ComponentContent,
 }
 
 struct PendingRunSnapshotWrite {
@@ -148,10 +163,32 @@ impl RunSnapshotResolver {
         })?;
         let component_versions = self.resolve_components(profile.bindings())?;
         let tool_bindings = self.resolve_tool_bindings(&component_versions);
+        let memory_binding = self.resolve_memory_binding(&component_versions);
+        let voice_binding = self.resolve_voice_binding(&component_versions);
+        let tool_schema_sources = profile
+            .bindings()
+            .iter()
+            .filter(|binding| binding.slot_kind() == AgentSlotKind::Toolset)
+            .map(|binding| {
+                let source = self
+                    .sources
+                    .component_source(binding.component_version_id())?;
+                Ok(ToolSchemaSourceDocument {
+                    slot_id: binding.slot_id().as_str().to_string(),
+                    component_version: source.version_id,
+                    entity_version: source.entity_version.to_string(),
+                    content: source.content,
+                })
+            })
+            .collect::<RunSnapshotResult<Vec<_>>>()?;
         Ok(HostSlotPreparationSources {
+            profile_version: profile.version(),
             requirements: slot.requirements().clone(),
             component_versions,
             tool_bindings,
+            memory_binding,
+            voice_binding,
+            tool_schema_sources,
         })
     }
 
@@ -500,6 +537,7 @@ impl RunSnapshotSourceCatalog {
             version_id: component_snapshot_version_id(kind, version_id),
             entity_version,
             kind,
+            content: version.content().clone(),
         })
     }
 

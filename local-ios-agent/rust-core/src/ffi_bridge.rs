@@ -49,7 +49,9 @@ use crate::security::{
     PermissionState, RiskLevel,
 };
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
-use crate::storage::{InMemoryRuntimeStateStore, SqliteRuntimeStateStore};
+use crate::storage::{
+    InMemoryRuntimeStateStore, SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
+};
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
@@ -229,12 +231,16 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
 impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
         let runtime_state = InMemoryRuntimeStateStore::new();
+        let event_log = ExecutionEventLog::new(runtime_state.clone());
+        let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
+            Arc::new(runtime_state.clone());
         Self::try_new(
             runtime,
             app_services,
             runtime_state.agent_os_state(),
             TEST_HOST_PROCESS_EPOCH.to_string(),
-            ExecutionEventLog::new(runtime_state),
+            event_log,
+            runtime_state_authority,
         )
         .expect("in-memory Agent OS state initialization must succeed")
     }
@@ -245,6 +251,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         agent_os_state: SharedAgentOSStateStore,
         host_process_epoch: String,
         event_log: ExecutionEventLog,
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     ) -> Result<Self, AgentError> {
         agent_os_state
             .with_preparation_mut(|store| {
@@ -271,10 +278,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             host_process_epoch.clone(),
         );
-        let run_preparation = RunPreparationService::with_authoritative_preview(
+        let run_preparation = RunPreparationService::with_host_runtime(
             agent_os_state.clone(),
             host_process_epoch,
             snapshot_service,
+            runtime_state,
         );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
         let conversation_commits = ConversationCommitService::new(completed_runs);
@@ -551,10 +559,24 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn commit_prepared_start_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: CommitPreparedStartJson = from_json(request_json)?;
-        self.run_preparation
+        let handle = self
+            .run_preparation
             .commit_start(&request.token, request.attestation, request.now_millis)
             .map_err(preparation_agent_error)?;
-        Ok("null".to_string())
+        to_json(&handle)
+    }
+
+    fn reconcile_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ReconcilePreparationJson = from_json(request_json)?;
+        let outcome = self
+            .run_preparation
+            .reconcile_preparation(
+                &request.preparation_id,
+                &request.proposed_run_id,
+                &request.token_digest,
+            )
+            .map_err(preparation_agent_error)?;
+        to_json(&outcome)
     }
 
     fn begin_abort_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -830,6 +852,9 @@ impl RuntimeJsonBridge {
         match config.store {
             StoreConfigJson::InMemory { .. } => {
                 let runtime_state = InMemoryRuntimeStateStore::new();
+                let event_log = ExecutionEventLog::new(runtime_state.clone());
+                let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
+                    Arc::new(runtime_state.clone());
                 Ok(Self::InMemory(BridgeRuntime::try_new(
                     AgentRuntime::with_store_and_registry(
                         runtime_config,
@@ -839,7 +864,8 @@ impl RuntimeJsonBridge {
                     app_services,
                     runtime_state.agent_os_state(),
                     host_process_epoch,
-                    ExecutionEventLog::new(runtime_state),
+                    event_log,
+                    runtime_state_authority,
                 )?))
             }
             StoreConfigJson::Sqlite { path, .. } => {
@@ -847,6 +873,9 @@ impl RuntimeJsonBridge {
                     .map_err(|error| AgentError::Storage(error.to_string()))?;
                 let agent_os_state = runtime_state.agent_os_state();
                 let conversation_event_store = runtime_state.conversation_event_store()?;
+                let event_log = ExecutionEventLog::new(runtime_state.clone());
+                let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
+                    Arc::new(runtime_state.clone());
                 Ok(Self::Sqlite(BridgeRuntime::try_new(
                     AgentRuntime::with_store_and_registry(
                         runtime_config,
@@ -856,7 +885,8 @@ impl RuntimeJsonBridge {
                     app_services,
                     agent_os_state,
                     host_process_epoch,
-                    ExecutionEventLog::new(runtime_state),
+                    event_log,
+                    runtime_state_authority,
                 )?))
             }
         }
@@ -1258,6 +1288,12 @@ impl RuntimeJsonBridge {
         match self {
             Self::InMemory(runtime) => runtime.commit_prepared_start_json(request_json),
             Self::Sqlite(runtime) => runtime.commit_prepared_start_json(request_json),
+        }
+    }
+    pub fn reconcile_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.reconcile_preparation_json(request_json),
+            Self::Sqlite(runtime) => runtime.reconcile_preparation_json(request_json),
         }
     }
     pub fn begin_abort_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -2270,6 +2306,13 @@ struct CommitPreparedStartJson {
     token: String,
     attestation: HostAttestation,
     now_millis: u64,
+}
+
+#[derive(Deserialize)]
+struct ReconcilePreparationJson {
+    preparation_id: String,
+    proposed_run_id: String,
+    token_digest: String,
 }
 
 #[derive(Deserialize)]

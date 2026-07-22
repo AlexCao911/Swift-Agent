@@ -27,6 +27,8 @@ mod host_binding_saga;
 mod host_llm_contracts;
 #[path = "contract/host_llm_outbox.rs"]
 mod host_llm_outbox;
+#[path = "contract/host_llm_worker.rs"]
+mod host_llm_worker;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
 #[path = "contract/llm_slot_v2.rs"]

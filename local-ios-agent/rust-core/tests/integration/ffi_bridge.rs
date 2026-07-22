@@ -4,14 +4,12 @@ use local_ios_agent_runtime::core::{
     ModelProvider, ModelProviderOutput,
 };
 use local_ios_agent_runtime::ffi_bridge::{
-    local_agent_runtime_bridge_ack_prepared_session_cleanup,
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
     local_agent_runtime_bridge_begin_abort_preparation, local_agent_runtime_bridge_build_agent,
     local_agent_runtime_bridge_commit_assistant_result,
     local_agent_runtime_bridge_commit_prepared_start,
     local_agent_runtime_bridge_commit_profile_publish,
     local_agent_runtime_bridge_confirm_host_binding_activation,
-    local_agent_runtime_bridge_confirm_prepared_session_closed,
     local_agent_runtime_bridge_create_session, local_agent_runtime_bridge_fork_session,
     local_agent_runtime_bridge_free, local_agent_runtime_bridge_list_agent_profiles,
     local_agent_runtime_bridge_load_debug_archive, local_agent_runtime_bridge_new_with_config,
@@ -424,14 +422,26 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
             .to_string(),
         )
         .unwrap();
-        let commit_error = decode(&take_bridge_string(
+        let handle = decode(&take_bridge_string(
             local_agent_runtime_bridge_commit_prepared_start(runtime, commit_start.as_ptr()),
         ));
-        assert_eq!(commit_error["error"]["kind"], "storage");
-        assert!(commit_error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("execution.host_slot_v2_not_runnable"));
+        assert_eq!(handle["run_id"], renewed["proposed_run_id"]);
+        assert_eq!(handle["session_handle"], registration["session_handle"]);
+        assert!(handle["first_command_id"].as_str().is_some_and(|id| !id.is_empty()));
+        let reconciled = decode(
+            &(&*runtime)
+                .reconcile_preparation_json(
+                    &json!({
+                        "preparation_id":renewed["preparation_id"],
+                        "proposed_run_id":renewed["proposed_run_id"],
+                        "token_digest":renewed["token_digest"]
+                    })
+                    .to_string(),
+                )
+                .unwrap(),
+        );
+        assert_eq!(reconciled["status"], "committed");
+        assert_eq!(reconciled["handle"], handle);
 
         let abort = CString::new(
             json!({
@@ -441,51 +451,13 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
             .to_string(),
         )
         .unwrap();
-        let aborting = decode(&take_bridge_string(
+        let late_abort = decode(&take_bridge_string(
             local_agent_runtime_bridge_begin_abort_preparation(runtime, abort.as_ptr()),
         ));
-        let cleanup = &aborting["cleanup"];
-        assert_eq!(aborting["state"], "aborting");
-
-        let acknowledgement = CString::new(
-            json!({
-                "cleanup_command_id":cleanup["cleanup_command_id"],
-                "preparation_id":cleanup["preparation_id"],
-                "preparation_cleanup_sequence":cleanup["preparation_cleanup_sequence"],
-                "cleanup_command_digest":cleanup["cleanup_command_digest"]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let acknowledged = decode(&take_bridge_string(
-            local_agent_runtime_bridge_ack_prepared_session_cleanup(
-                runtime,
-                acknowledgement.as_ptr(),
-            ),
-        ));
-        assert_eq!(acknowledged["state"], "aborting");
-
-        let close_digest = cleanup_close_digest(cleanup, "closed");
-
-        let closed = CString::new(
-            json!({
-                "cleanup_command_id":cleanup["cleanup_command_id"],
-                "preparation_id":cleanup["preparation_id"],
-                "proposed_run_id":cleanup["proposed_run_id"],
-                "session_handle":cleanup["session_handle"],
-                "host_process_epoch":cleanup["host_process_epoch"],
-                "preparation_cleanup_sequence":cleanup["preparation_cleanup_sequence"],
-                "close_disposition":"closed",
-                "receipt_digest":close_digest
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let closed_record = decode(&take_bridge_string(
-            local_agent_runtime_bridge_confirm_prepared_session_closed(runtime, closed.as_ptr()),
-        ));
-        assert_eq!(closed_record["state"], "closed");
-        assert_provider_neutral(&closed_record);
+        assert!(late_abort["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("preparation.already_committed"));
 
         local_agent_runtime_bridge_free(runtime);
     }
@@ -528,26 +500,6 @@ fn c_abi_preparation_preview_rejects_swift_supplied_digest_binding() {
             .contains("unknown field"));
         local_agent_runtime_bridge_free(runtime);
     }
-}
-
-fn cleanup_close_digest(cleanup: &Value, disposition: &str) -> String {
-    local_ios_agent_runtime::canonical_digest::CanonicalDigestV1::digest(
-        "prepared-session-closed-receipt:v1",
-        &json!({
-            "cleanup_command_id":cleanup["cleanup_command_id"],
-            "preparation_id":cleanup["preparation_id"],
-            "proposed_run_id":cleanup["proposed_run_id"],
-            "session_handle":cleanup["session_handle"],
-            "host_process_epoch":cleanup["host_process_epoch"],
-            "cleanup_sequence":cleanup["preparation_cleanup_sequence"],
-            "prepared_session_registration_digest":cleanup["prepared_session_registration_digest"],
-            "cleanup_command_digest":cleanup["cleanup_command_digest"],
-            "close_disposition":disposition
-        }),
-    )
-    .unwrap()
-    .as_str()
-    .to_string()
 }
 
 fn registration_digest(registration: &Value) -> String {

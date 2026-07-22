@@ -4,13 +4,15 @@ mod resolver;
 mod snapshot;
 mod snapshot_service;
 
-pub(crate) use preparation_preview::derive_authoritative_preparation;
+pub(crate) use preparation_preview::{derive_authoritative_preparation, FrozenGenerationTurn};
 pub use resolved_bindings::{
-    CredentialAvailability, LocalBindingState, ResolvedComponentBinding, ResolvedMemoryBinding,
+    CredentialAvailability, LocalBindingState, OpaqueHostBindingCrossLink,
+    ResolvedComponentBinding, ResolvedHostSlotBinding, ResolvedLLMBinding, ResolvedMemoryBinding,
     ResolvedModelBinding, ResolvedToolBinding, ResolvedVoiceBinding, TrustedHostRunState,
 };
 pub use resolver::{RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog};
 pub use snapshot::{
+    PersistedResolvedLLMBinding, PersistedResolvedRunSnapshotV2, PersistedRunSnapshotError,
     ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview, RunSnapshotReadinessIssue,
     RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent, StartRunRequest,
 };

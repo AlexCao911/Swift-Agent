@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::llm_contracts::AgentLLMRequirements;
 use crate::model::ModelSelection;
 use crate::security::PermissionState;
 use crate::user_customization::{AgentProfileLocalBindings, AgentSlotId, AgentSlotKind};
@@ -25,6 +26,29 @@ pub struct ResolvedModelBinding {
     provider_id: String,
     model_id: SnapshotModelId,
     catalog_version: SnapshotEntityVersion,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedLLMBinding {
+    LegacyV1 {
+        model: ResolvedModelBinding,
+        trusted_host_state: TrustedHostRunState,
+    },
+    HostSlotV2(ResolvedHostSlotBinding),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHostSlotBinding {
+    requirements: AgentLLMRequirements,
+    requirements_hash: String,
+    host_cross_link: OpaqueHostBindingCrossLink,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpaqueHostBindingCrossLink {
+    binding_id: String,
+    binding_revision: u64,
+    binding_hash: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -120,6 +144,22 @@ impl ResolvedModelBinding {
         }
     }
 
+    pub(in crate::run_snapshot) fn from_persisted(
+        binding_id: impl Into<String>,
+        provider_account_id: impl Into<String>,
+        provider_id: impl Into<String>,
+        model_id: impl Into<String>,
+        catalog_version: u64,
+    ) -> Self {
+        Self {
+            binding_id: binding_id.into(),
+            provider_account_id: provider_account_id.into(),
+            provider_id: provider_id.into(),
+            model_id: SnapshotModelId(model_id.into()),
+            catalog_version: SnapshotEntityVersion(catalog_version),
+        }
+    }
+
     pub fn binding_id(&self) -> &str {
         &self.binding_id
     }
@@ -138,6 +178,77 @@ impl ResolvedModelBinding {
 
     pub fn catalog_version(&self) -> SnapshotEntityVersion {
         self.catalog_version
+    }
+}
+
+impl ResolvedLLMBinding {
+    pub fn as_host_slot_v2(&self) -> Option<&ResolvedHostSlotBinding> {
+        match self {
+            Self::HostSlotV2(binding) => Some(binding),
+            Self::LegacyV1 { .. } => None,
+        }
+    }
+
+    pub fn as_legacy_v1(&self) -> Option<(&ResolvedModelBinding, &TrustedHostRunState)> {
+        match self {
+            Self::LegacyV1 {
+                model,
+                trusted_host_state,
+            } => Some((model, trusted_host_state)),
+            Self::HostSlotV2(_) => None,
+        }
+    }
+}
+
+impl ResolvedHostSlotBinding {
+    pub(crate) fn new(
+        requirements: AgentLLMRequirements,
+        requirements_hash: impl Into<String>,
+        host_cross_link: OpaqueHostBindingCrossLink,
+    ) -> Self {
+        Self {
+            requirements,
+            requirements_hash: requirements_hash.into(),
+            host_cross_link,
+        }
+    }
+
+    pub fn requirements(&self) -> &AgentLLMRequirements {
+        &self.requirements
+    }
+
+    pub fn requirements_hash(&self) -> &str {
+        &self.requirements_hash
+    }
+
+    pub fn host_cross_link(&self) -> &OpaqueHostBindingCrossLink {
+        &self.host_cross_link
+    }
+}
+
+impl OpaqueHostBindingCrossLink {
+    pub(crate) fn new(
+        binding_id: impl Into<String>,
+        binding_revision: u64,
+        binding_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            binding_id: binding_id.into(),
+            binding_revision,
+            binding_hash: binding_hash.into(),
+        }
+    }
+
+    pub fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+
+    pub fn binding_revision(&self) -> u64 {
+        self.binding_revision
+    }
+
+    pub fn binding_hash(&self) -> &str {
+        &self.binding_hash
     }
 }
 
@@ -182,6 +293,16 @@ impl LocalBindingState {
         }
     }
 
+    pub(in crate::run_snapshot) fn from_persisted(
+        credential_refs: BTreeMap<String, String>,
+    ) -> Self {
+        Self { credential_refs }
+    }
+
+    pub(in crate::run_snapshot) fn persisted_refs(&self) -> BTreeMap<String, String> {
+        self.credential_refs.clone()
+    }
+
     pub fn credential_ref_for(&self, binding_key: &str) -> Option<&str> {
         self.credential_refs.get(binding_key).map(String::as_str)
     }
@@ -196,6 +317,16 @@ impl CredentialAvailability {
         self.credential_refs
             .insert(binding_key.into(), credential_ref.into());
         self
+    }
+
+    pub(in crate::run_snapshot) fn from_persisted(
+        credential_refs: BTreeMap<String, String>,
+    ) -> Self {
+        Self { credential_refs }
+    }
+
+    pub(in crate::run_snapshot) fn persisted_refs(&self) -> BTreeMap<String, String> {
+        self.credential_refs.clone()
     }
 
     pub fn credential_ref_for(&self, binding_key: &str) -> Option<&str> {

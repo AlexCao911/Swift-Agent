@@ -74,6 +74,12 @@ fn authoritative_preview_derives_model_input_and_source_digests_from_rust_source
         first.binding().model_input_digest(),
         second.binding().model_input_digest()
     );
+    assert_eq!(
+        first.initial_disclosure().expected_digest().unwrap(),
+        first.binding().initial_disclosure_digest()
+    );
+    let public_preview = serde_json::to_string(&first).unwrap();
+    assert!(!public_preview.contains("first input"));
     let bytes = first_service
         .frozen_model_input(first.binding().model_input_id())
         .unwrap()
@@ -408,7 +414,7 @@ fn preview_freezes_binding_and_renewal_rotates_with_total_ceiling() {
 }
 
 #[test]
-fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
+fn registration_is_exact_and_missing_host_runtime_begins_one_cleanup() {
     let state = SharedAgentOSStateStore::in_memory();
     let service = test_service(state.clone(), "epoch-1");
     let preview = preview_fixture(&service, "1", 0);
@@ -448,7 +454,7 @@ fn registration_is_exact_and_phase_one_commit_begins_one_cleanup() {
             .commit_start(preview.token(), attestation, 90_000)
             .unwrap_err()
             .code(),
-        "execution.host_slot_v2_not_runnable"
+        "execution.host_runtime_unavailable"
     );
     let record = service
         .preparation(preview.preparation_id())

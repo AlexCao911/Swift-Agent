@@ -5,7 +5,10 @@ use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
-use local_ios_agent_runtime::run_snapshot::{RunSnapshotId, RunSnapshotService, StartRunRequest};
+use local_ios_agent_runtime::run_snapshot::{
+    PersistedResolvedRunSnapshotV2, ResolvedRunSnapshot, RunSnapshotId, RunSnapshotService,
+    StartRunRequest,
+};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
@@ -89,6 +92,39 @@ fn resolved_snapshot_pins_conversation_run_frame_ref() {
 }
 
 #[test]
+fn legacy_snapshot_round_trips_with_an_explicit_tagged_llm_binding() {
+    let snapshot = RunSnapshotService::fixture()
+        .resolve_and_persist(StartRunRequest::new(
+            "profile_1",
+            AgentProfileVersion::initial(),
+            "hello",
+            frame_ref_fixture(),
+        ))
+        .unwrap();
+
+    let persisted = PersistedResolvedRunSnapshotV2::try_from(&snapshot).unwrap();
+    let document = serde_json::to_value(&persisted).unwrap();
+    assert_eq!(document["llm_binding"]["binding_schema"], "legacy_v1");
+    assert!(document["llm_binding"]["binding"]["model_binding"].is_object());
+    assert!(document["llm_binding"]["binding"]["permission_state"].is_string());
+
+    let persisted: PersistedResolvedRunSnapshotV2 = serde_json::from_value(document).unwrap();
+    let decoded = ResolvedRunSnapshot::try_from(persisted).unwrap();
+    assert_eq!(decoded, snapshot);
+    assert_eq!(
+        decoded.legacy_model_binding().unwrap().model_id().as_str(),
+        "gpt-4.1-mini"
+    );
+    assert_eq!(
+        decoded
+            .legacy_trusted_host_state()
+            .unwrap()
+            .permission_state(),
+        &PermissionState::Granted
+    );
+}
+
+#[test]
 fn snapshot_preview_pins_component_versions_and_model_binding() {
     let service = RunSnapshotService::fixture();
     let preview = service
@@ -111,17 +147,31 @@ fn snapshot_preview_pins_component_versions_and_model_binding() {
         snapshot.component_versions()[0].entity_version().as_u64(),
         1
     );
-    assert_eq!(snapshot.model_binding().model_id().as_str(), "gpt-4.1-mini");
-    assert_eq!(snapshot.model_binding().catalog_version().as_u64(), 7);
+    assert_eq!(
+        snapshot.legacy_model_binding().unwrap().model_id().as_str(),
+        "gpt-4.1-mini"
+    );
     assert_eq!(
         snapshot
-            .trusted_host_state()
+            .legacy_model_binding()
+            .unwrap()
+            .catalog_version()
+            .as_u64(),
+        7
+    );
+    assert_eq!(
+        snapshot
+            .legacy_trusted_host_state()
+            .unwrap()
             .credential_availability()
             .credential_ref_for("account.openai.default"),
         Some("credential.openai.default")
     );
     assert_eq!(
-        snapshot.trusted_host_state().permission_state(),
+        snapshot
+            .legacy_trusted_host_state()
+            .unwrap()
+            .permission_state(),
         &PermissionState::Granted
     );
     assert!(snapshot.tool_bindings().is_empty());
@@ -208,7 +258,10 @@ fn snapshot_service_consumes_published_profile_from_real_repositories() {
         snapshot.component_versions()[0].version_id().as_str(),
         "persona_v1"
     );
-    assert_eq!(snapshot.model_binding().model_id().as_str(), "gpt-4.1-mini");
+    assert_eq!(
+        snapshot.legacy_model_binding().unwrap().model_id().as_str(),
+        "gpt-4.1-mini"
+    );
 }
 
 #[test]
@@ -350,7 +403,11 @@ fn snapshot_service_captures_denied_permission_from_security_service() {
         .unwrap();
 
     assert_eq!(
-        snapshot.snapshot().trusted_host_state().permission_state(),
+        snapshot
+            .snapshot()
+            .legacy_trusted_host_state()
+            .unwrap()
+            .permission_state(),
         &PermissionState::Denied
     );
     assert!(!snapshot.snapshot().readiness_report().is_ready());
@@ -515,7 +572,14 @@ fn snapshot_service_pins_versions_inside_one_transaction() {
         snapshot.component_versions()[0].entity_version().as_u64(),
         1
     );
-    assert_eq!(snapshot.model_binding().catalog_version().as_u64(), 7);
+    assert_eq!(
+        snapshot
+            .legacy_model_binding()
+            .unwrap()
+            .catalog_version()
+            .as_u64(),
+        7
+    );
 }
 
 fn service_from_repositories(

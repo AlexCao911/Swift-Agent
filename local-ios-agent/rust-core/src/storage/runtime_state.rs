@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use crate::execution::{ExecutionEvent, ExecutionEventRepository};
 use crate::llm_contracts::{
     HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
-    HostCommandEnvelope, HostSessionCloseDisposition, HostSessionRecord, HostWorkerRecord,
-    LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition, LLMEventSubmissionResult,
-    LogicalRunOutcome, PreparationError, ResourceLifecycle,
+    HostCommandEnvelope, HostRunHandle, HostSessionCloseDisposition, HostSessionRecord,
+    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
+    LLMEventSubmissionResult, LogicalRunOutcome, PreparationError, PreparationReconciliation,
+    PreparedSessionCleanupIdentity, ResourceLifecycle, RunPreparationState,
 };
 use crate::storage::agent_os_state::{PreparedRunConsumption, SharedAgentOSStateStore};
 
@@ -229,7 +230,7 @@ impl fmt::Display for RuntimeStateError {
 
 impl std::error::Error for RuntimeStateError {}
 
-pub trait UnifiedRuntimeStateRepository: Clone + Send + Sync + 'static {
+pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
     fn insert_worker_and_session(
         &self,
         worker: HostWorkerRecord,
@@ -273,6 +274,18 @@ pub trait UnifiedRuntimeStateRepository: Clone + Send + Sync + 'static {
         &self,
         session_handle: &str,
     ) -> Result<Option<HostSessionRecord>, RuntimeStateError>;
+    fn run_snapshot_json(&self, run_id: &str) -> Result<Option<String>, RuntimeStateError>;
+    fn committed_run_handle(
+        &self,
+        preparation_id: &str,
+        token_digest: &str,
+    ) -> Result<Option<HostRunHandle>, RuntimeStateError>;
+    fn reconcile_preparation(
+        &self,
+        preparation_id: &str,
+        proposed_run_id: &str,
+        token_digest: &str,
+    ) -> Result<PreparationReconciliation, RuntimeStateError>;
     fn host_command(
         &self,
         command_id: &str,
@@ -588,6 +601,94 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .cloned())
     }
 
+    fn run_snapshot_json(&self, run_id: &str) -> Result<Option<String>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .snapshots
+            .get(run_id)
+            .map(|(_, json)| json.clone()))
+    }
+
+    fn committed_run_handle(
+        &self,
+        preparation_id: &str,
+        token_digest: &str,
+    ) -> Result<Option<HostRunHandle>, RuntimeStateError> {
+        let state = self.inner.lock().map_err(|_| poisoned())?;
+        let Some((consumed_digest, _, run_id)) = state.committed_preparations.get(preparation_id)
+        else {
+            return Ok(None);
+        };
+        if consumed_digest != token_digest {
+            return Err(reconciliation_conflict());
+        }
+        let command = state
+            .commands
+            .values()
+            .find(|row| row.run_id() == run_id && row.command_sequence() == 1)
+            .ok_or_else(not_found)?;
+        Ok(Some(HostRunHandle::new(
+            run_id,
+            command.session_handle(),
+            command.command_id(),
+        )))
+    }
+
+    fn reconcile_preparation(
+        &self,
+        preparation_id: &str,
+        proposed_run_id: &str,
+        token_digest: &str,
+    ) -> Result<PreparationReconciliation, RuntimeStateError> {
+        let committed = {
+            let state = self.inner.lock().map_err(|_| poisoned())?;
+            state
+                .committed_preparations
+                .get(preparation_id)
+                .cloned()
+                .map(|(consumed_digest, _, run_id)| {
+                    let command = state
+                        .commands
+                        .values()
+                        .find(|row| row.run_id() == run_id && row.command_sequence() == 1)
+                        .cloned();
+                    (consumed_digest, run_id, command)
+                })
+        };
+        if let Some((consumed_digest, run_id, command)) = committed {
+            if run_id != proposed_run_id || consumed_digest != token_digest {
+                return Err(reconciliation_conflict());
+            }
+            let command = command.ok_or_else(not_found)?;
+            return Ok(PreparationReconciliation::Committed {
+                handle: HostRunHandle::new(run_id, command.session_handle(), command.command_id()),
+            });
+        }
+
+        let record = self
+            .agent_os_state
+            .with_preparation(|repository| repository.run_preparation(preparation_id))
+            .map_err(preparation_commit_error)?
+            .ok_or_else(reconciliation_conflict)?;
+        if record.preview().proposed_run_id() != proposed_run_id
+            || record.preview().token_digest() != token_digest
+        {
+            return Err(reconciliation_conflict());
+        }
+        match record.state() {
+            RunPreparationState::Pending | RunPreparationState::Registered => {
+                Ok(PreparationReconciliation::Pending)
+            }
+            RunPreparationState::Aborting | RunPreparationState::Closed => record
+                .cleanup()
+                .map(PreparedSessionCleanupIdentity::from_cleanup)
+                .map(|cleanup_identity| PreparationReconciliation::Aborting { cleanup_identity })
+                .ok_or_else(not_found),
+        }
+    }
+
     fn host_command(
         &self,
         command_id: &str,
@@ -877,6 +978,13 @@ pub(crate) fn not_found() -> RuntimeStateError {
     RuntimeStateError::new(
         "runtime_state.not_found",
         "runtime aggregate record was not found",
+    )
+}
+
+pub(crate) fn reconciliation_conflict() -> RuntimeStateError {
+    RuntimeStateError::new(
+        "preparation.reconciliation_identity_mismatch",
+        "preparation reconciliation identity or consumed token digest does not match",
     )
 }
 

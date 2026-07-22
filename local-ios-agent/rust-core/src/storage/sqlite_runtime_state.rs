@@ -12,10 +12,11 @@ use crate::execution::{ExecutionEvent, ExecutionEventRepository};
 use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, HostBindingActivationConfirmation, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingOperation, HostCommandAcknowledgement,
-    HostCommandCopyReceipt, HostSessionCloseDisposition, HostSessionRecord, HostWorkerRecord,
-    LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition, LLMEventSubmissionResult,
-    LogicalRunOutcome, PackageBindingPreparation, PreparationError,
-    PreparedSessionCleanupAcknowledgement, ProfilePublishPreparation, ResourceLifecycle,
+    HostCommandCopyReceipt, HostRunHandle, HostSessionCloseDisposition, HostSessionRecord,
+    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
+    LLMEventSubmissionResult, LogicalRunOutcome, PackageBindingPreparation, PreparationError,
+    PreparationReconciliation, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionCleanupIdentity, ProfilePublishPreparation, ResourceLifecycle,
     RunPreparationRecord, RunPreparationState,
 };
 
@@ -24,8 +25,8 @@ use super::agent_os_state::{
     RunPreparationRepository, SharedAgentOSStateStore, SqliteAgentOSStateStore,
 };
 use super::runtime_state::{
-    conflict, contract_error, not_found, poisoned, transaction_failed, validate_ack,
-    validate_command_for_worker, validate_transition, validate_worker_session,
+    conflict, contract_error, not_found, poisoned, reconciliation_conflict, transaction_failed,
+    validate_ack, validate_command_for_worker, validate_transition, validate_worker_session,
 };
 use super::{
     HostCommandOutboxRow, PreparedHostRunCommit, RuntimeAggregateFailurePoint,
@@ -508,6 +509,105 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
     ) -> Result<Option<HostSessionRecord>, RuntimeStateError> {
         let store = self.inner.lock().map_err(|_| poisoned())?;
         load_session(store.connection(), session_handle)
+    }
+
+    fn run_snapshot_json(&self, run_id: &str) -> Result<Option<String>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        store
+            .connection()
+            .query_row(
+                "select snapshot_json from host_run_snapshots where run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_error)
+    }
+
+    fn committed_run_handle(
+        &self,
+        preparation_id: &str,
+        token_digest: &str,
+    ) -> Result<Option<HostRunHandle>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let committed: Option<(String, String, String, String)> = store
+            .connection()
+            .query_row(
+                "select committed.consumed_token_digest, committed.run_id,
+                        outbox.session_handle, outbox.command_id
+                 from host_committed_preparations committed
+                 join host_command_outbox outbox on outbox.run_id = committed.run_id
+                 where committed.preparation_id = ?1 and outbox.command_sequence = '1'",
+                params![preparation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        let Some((consumed_digest, run_id, session_handle, command_id)) = committed else {
+            return Ok(None);
+        };
+        if consumed_digest != token_digest {
+            return Err(reconciliation_conflict());
+        }
+        Ok(Some(HostRunHandle::new(run_id, session_handle, command_id)))
+    }
+
+    fn reconcile_preparation(
+        &self,
+        preparation_id: &str,
+        proposed_run_id: &str,
+        token_digest: &str,
+    ) -> Result<PreparationReconciliation, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let connection = store.connection();
+        let committed: Option<(String, String, String, String)> = connection
+            .query_row(
+                "select committed.consumed_token_digest, committed.run_id,
+                        outbox.session_handle, outbox.command_id
+                 from host_committed_preparations committed
+                 join host_command_outbox outbox on outbox.run_id = committed.run_id
+                 where committed.preparation_id = ?1 and outbox.command_sequence = '1'",
+                params![preparation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        if let Some((consumed_digest, run_id, session_handle, command_id)) = committed {
+            if run_id != proposed_run_id || consumed_digest != token_digest {
+                return Err(reconciliation_conflict());
+            }
+            return Ok(PreparationReconciliation::Committed {
+                handle: HostRunHandle::new(run_id, session_handle, command_id),
+            });
+        }
+
+        let record_json: Option<String> = connection
+            .query_row(
+                "select record_json from run_preparations where preparation_id = ?1",
+                params![preparation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        let record: RunPreparationRecord = record_json
+            .map(|json| decode(&json))
+            .transpose()?
+            .ok_or_else(reconciliation_conflict)?;
+        if record.preview().proposed_run_id() != proposed_run_id
+            || record.preview().token_digest() != token_digest
+        {
+            return Err(reconciliation_conflict());
+        }
+        match record.state() {
+            RunPreparationState::Pending | RunPreparationState::Registered => {
+                Ok(PreparationReconciliation::Pending)
+            }
+            RunPreparationState::Aborting | RunPreparationState::Closed => record
+                .cleanup()
+                .map(PreparedSessionCleanupIdentity::from_cleanup)
+                .map(|cleanup_identity| PreparationReconciliation::Aborting { cleanup_identity })
+                .ok_or_else(not_found),
+        }
     }
 
     fn host_command(

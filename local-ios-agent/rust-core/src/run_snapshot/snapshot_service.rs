@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::conversation::ConversationRunFrame;
 use crate::llm_contracts::{
-    HostAttestation, PreparationAbortReason, PreparationError,
+    HostAttestation, HostCommandEnvelope, HostExecutionPhase, HostRunHandle, HostSessionRecord,
+    HostWorkerRecord, PreparationAbortReason, PreparationError, PreparationReconciliation,
     PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
     PreparedSessionClosedReceipt, PreparedSessionRegistration, PreparedStartValidator,
     RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationRequest,
@@ -13,15 +14,15 @@ use crate::llm_contracts::{
 };
 use crate::model::InMemoryModelBindingCatalog;
 use crate::run_snapshot::{
-    derive_authoritative_preparation, ResolvedRunSnapshot, RunSnapshotPreview,
-    RunSnapshotRepository, RunSnapshotResolveInput, RunSnapshotResolver, RunSnapshotSourceCatalog,
-    StartRunRequest,
+    derive_authoritative_preparation, FrozenGenerationTurn, OpaqueHostBindingCrossLink,
+    ResolvedRunSnapshot, RunSnapshotPreview, RunSnapshotRepository, RunSnapshotResolveInput,
+    RunSnapshotResolver, RunSnapshotSourceCatalog, StartRunRequest,
 };
 use crate::security::{CredentialRefResolver, PermissionState, SecurityPermissionService};
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
 use crate::storage::{
-    InMemoryTransactionRunner, StorageError, TransactionName, TransactionOperation,
-    TransactionRunner, UnitOfWork,
+    InMemoryTransactionRunner, PreparedHostRunCommit, StorageError, TransactionName,
+    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
 };
 use crate::user_customization::{ComponentCatalogService, InMemoryAgentProfileRepository};
 
@@ -46,7 +47,8 @@ pub struct RunPreparationService {
     state_store: SharedAgentOSStateStore,
     host_process_epoch: String,
     snapshot_service: Option<Arc<RunSnapshotService>>,
-    frozen_inputs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    frozen_inputs: Arc<Mutex<BTreeMap<String, FrozenGenerationTurn>>>,
+    runtime_state: Option<Arc<dyn UnifiedRuntimeStateRepository>>,
 }
 
 struct SnapshotPersistOperation<'a> {
@@ -257,6 +259,7 @@ impl RunPreparationService {
             host_process_epoch: host_process_epoch.into(),
             snapshot_service: None,
             frozen_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_state: None,
         }
     }
 
@@ -270,6 +273,22 @@ impl RunPreparationService {
             host_process_epoch: host_process_epoch.into(),
             snapshot_service: Some(snapshot_service),
             frozen_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_state: None,
+        }
+    }
+
+    pub fn with_host_runtime(
+        state_store: SharedAgentOSStateStore,
+        host_process_epoch: impl Into<String>,
+        snapshot_service: Arc<RunSnapshotService>,
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+    ) -> Self {
+        Self {
+            state_store,
+            host_process_epoch: host_process_epoch.into(),
+            snapshot_service: Some(snapshot_service),
+            frozen_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_state: Some(runtime_state),
         }
     }
 
@@ -299,14 +318,14 @@ impl RunPreparationService {
         self.frozen_inputs
             .lock()
             .map_err(|_| preparation_vault_poisoned())?
-            .insert(input_id.clone(), derived.canonical_model_input);
+            .insert(input_id.clone(), derived.frozen_turn.clone());
         let request = RunPreparationRequest::new(
             idempotency_key,
             preparation_id,
             proposed_run_id,
             derived.binding,
         );
-        match self.preview_derived(request, now_millis) {
+        match self.preview_derived(request, derived.frozen_turn.disclosure, now_millis) {
             Ok(preview) => Ok(preview),
             Err(error) => {
                 self.frozen_inputs
@@ -321,6 +340,20 @@ impl RunPreparationService {
     pub fn frozen_model_input(&self, input_id: &str) -> Result<Option<Vec<u8>>, PreparationError> {
         self.frozen_inputs
             .lock()
+            .map(|inputs| {
+                inputs
+                    .get(input_id)
+                    .map(|turn| turn.canonical_model_input.clone())
+            })
+            .map_err(|_| preparation_vault_poisoned())
+    }
+
+    fn frozen_turn(
+        &self,
+        input_id: &str,
+    ) -> Result<Option<FrozenGenerationTurn>, PreparationError> {
+        self.frozen_inputs
+            .lock()
             .map(|inputs| inputs.get(input_id).cloned())
             .map_err(|_| preparation_vault_poisoned())
     }
@@ -328,6 +361,7 @@ impl RunPreparationService {
     fn preview_derived(
         &self,
         request: RunPreparationRequest,
+        initial_disclosure: crate::llm_contracts::GenerationDisclosureDocument,
         now_millis: u64,
     ) -> Result<RunPreparationPreview, PreparationError> {
         if let Some(existing) = self.state_store.with_preparation(|store| {
@@ -367,6 +401,7 @@ impl RunPreparationService {
                 token,
                 token_digest,
                 binding_digest,
+                initial_disclosure,
                 self.host_process_epoch.clone(),
                 0,
                 expiration,
@@ -502,7 +537,7 @@ impl RunPreparationService {
         token: &str,
         attestation: HostAttestation,
         now_millis: u64,
-    ) -> Result<(), PreparationError> {
+    ) -> Result<HostRunHandle, PreparationError> {
         let record = self
             .state_store
             .with_preparation(|store| store.active_run_preparation())?
@@ -569,19 +604,190 @@ impl RunPreparationService {
             )?;
             return Err(error);
         }
-        self.begin_abort_preparation(
-            record.preview().preparation_id(),
-            Some(token),
-            &format!(
-                "phase-one-nonrunnable:{}",
-                record.preview().preparation_id()
+        let Some(runtime_state) = self.runtime_state.as_ref() else {
+            self.begin_abort_preparation(
+                record.preview().preparation_id(),
+                Some(token),
+                &format!(
+                    "host-runtime-unavailable:{}",
+                    record.preview().preparation_id()
+                ),
+                PreparationAbortReason::PreparationFailed,
+            )?;
+            return Err(PreparationError::new(
+                "execution.host_runtime_unavailable",
+                "host-backed LLM execution requires the unified runtime aggregate",
+            ));
+        };
+        let frozen_turn = self.frozen_turn(binding.model_input_id())?.ok_or_else(|| {
+            PreparationError::new(
+                "preparation.frozen_turn_missing",
+                "Rust-frozen generation turn is unavailable",
+            )
+        })?;
+        let current_sources = self
+            .snapshot_service
+            .as_ref()
+            .ok_or_else(|| {
+                PreparationError::new(
+                    "preparation.authoritative_preview_unavailable",
+                    "host commit cannot revalidate authoritative snapshot sources",
+                )
+            })?
+            .resolver
+            .resolve_host_slot_preparation(&frozen_turn.start_request)
+            .map_err(preparation_snapshot_error)?;
+        if current_sources != frozen_turn.sources {
+            self.begin_abort_preparation(
+                record.preview().preparation_id(),
+                Some(token),
+                &format!("source-conflict:{}", record.preview().preparation_id()),
+                PreparationAbortReason::CommitConflict,
+            )?;
+            return Err(PreparationError::new(
+                "preparation.source_revision_conflict",
+                "profile, component, tool schema, or requirement source changed after preview",
+            ));
+        }
+        if frozen_turn.payload_digest
+            != frozen_turn.payload.expected_digest().map_err(|error| {
+                PreparationError::new("preparation.host_payload_invalid", error.to_string())
+            })?
+            || frozen_turn.disclosure_digest
+                != frozen_turn.disclosure.expected_digest().map_err(|error| {
+                    PreparationError::new("preparation.disclosure_invalid", error.to_string())
+                })?
+            || frozen_turn.disclosure_digest != binding.initial_disclosure_digest()
+        {
+            return Err(PreparationError::new(
+                "preparation.frozen_turn_digest_mismatch",
+                "frozen host payload or disclosure changed before commit",
+            ));
+        }
+        let snapshot = ResolvedRunSnapshot::new_host_slot_v2(
+            frozen_turn.start_request.clone(),
+            frozen_turn.sources.profile_version,
+            frozen_turn.sources.component_versions.clone(),
+            frozen_turn.sources.requirements.clone(),
+            binding.requirements_hash(),
+            OpaqueHostBindingCrossLink::new(
+                registration.binding_id(),
+                registration.binding_revision(),
+                registration.binding_hash(),
             ),
-            PreparationAbortReason::CommitRejected,
-        )?;
-        Err(PreparationError::new(
-            "execution.host_slot_v2_not_runnable",
-            "host-backed LLM execution remains disabled in Phase 1",
+            frozen_turn.sources.tool_bindings.clone(),
+            frozen_turn.sources.memory_binding.clone(),
+            frozen_turn.sources.voice_binding.clone(),
+            now_millis,
+        );
+        let snapshot_json = snapshot
+            .host_v2_json(
+                record.preview().proposed_run_id(),
+                registration.swift_snapshot_id(),
+                &attestation,
+            )
+            .map_err(|error| {
+                PreparationError::new(
+                    "preparation.snapshot_serialization_failed",
+                    error.to_string(),
+                )
+            })?;
+        let snapshot_value: serde_json::Value =
+            serde_json::from_str(&snapshot_json).map_err(|error| {
+                PreparationError::new(
+                    "preparation.snapshot_serialization_failed",
+                    error.to_string(),
+                )
+            })?;
+        let snapshot_digest =
+            CanonicalDigestV1::digest("resolved-run-snapshot:v1", &snapshot_value)
+                .map_err(|error| {
+                    PreparationError::new("preparation.snapshot_digest_failed", error.to_string())
+                })?
+                .as_str()
+                .to_string();
+        let command_id = crate::llm_contracts::BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| {
+                PreparationError::new("preparation.command_id_failed", error.to_string())
+            })?
+            .raw()
+            .to_string();
+        let command = HostCommandEnvelope::start_generation(
+            command_id.clone(),
+            record.preview().proposed_run_id(),
+            registration.session_handle(),
+            &self.host_process_epoch,
+            frozen_turn.payload,
+            frozen_turn.disclosure,
+        )
+        .map_err(|error| {
+            PreparationError::new("preparation.host_command_invalid", error.to_string())
+        })?;
+        let worker = HostWorkerRecord::new(
+            record.preview().proposed_run_id(),
+            registration.session_handle(),
+            &self.host_process_epoch,
+        )
+        .with_execution_phase(Some(HostExecutionPhase::AwaitingStartCommandAck));
+        let session = HostSessionRecord::new(
+            record.preview().proposed_run_id(),
+            registration.session_handle(),
+            &self.host_process_epoch,
+            registration.binding_id(),
+            registration.binding_revision(),
+            registration.binding_hash(),
+        );
+        runtime_state
+            .commit_prepared_host_run(PreparedHostRunCommit {
+                preparation_id: record.preview().preparation_id().to_string(),
+                consumed_token_digest: record.preview().token_digest().to_string(),
+                lease_generation: record.preview().lease_generation(),
+                snapshot_digest,
+                snapshot_json,
+                initial_event_code: "run.started".into(),
+                initial_event_payload: record.preview().binding_digest().to_string(),
+                worker,
+                session,
+                first_command: command,
+            })
+            .map_err(runtime_state_error)?;
+        self.frozen_inputs
+            .lock()
+            .map_err(|_| preparation_vault_poisoned())?
+            .remove(binding.model_input_id());
+        Ok(HostRunHandle::new(
+            record.preview().proposed_run_id(),
+            registration.session_handle(),
+            command_id,
         ))
+    }
+
+    pub fn reconcile_preparation(
+        &self,
+        preparation_id: &str,
+        proposed_run_id: &str,
+        token_digest: &str,
+    ) -> Result<PreparationReconciliation, PreparationError> {
+        self.runtime_state
+            .as_ref()
+            .ok_or_else(|| {
+                PreparationError::new(
+                    "execution.host_runtime_unavailable",
+                    "preparation reconciliation requires the unified runtime aggregate",
+                )
+            })?
+            .reconcile_preparation(preparation_id, proposed_run_id, token_digest)
+            .map_err(|error| {
+                if error.code() == "preparation.reconciliation_identity_mismatch" {
+                    PreparationError::new(
+                        "preparation.reconciliation_identity_mismatch",
+                        error.to_string(),
+                    )
+                } else {
+                    runtime_state_error(error)
+                }
+            })
     }
 
     pub fn begin_abort_preparation(
@@ -591,7 +797,7 @@ impl RunPreparationService {
         idempotency_key: &str,
         reason: PreparationAbortReason,
     ) -> Result<RunPreparationRecord, PreparationError> {
-        self.state_store.with_preparation_mut(|store| {
+        let result = self.state_store.with_preparation_mut(|store| {
             let mut record = store
                 .run_preparation(preparation_id)?
                 .ok_or_else(preparation_not_found)?;
@@ -619,7 +825,26 @@ impl RunPreparationService {
             let has_session = cleanup.is_some();
             record.abort(idempotency_key.to_string(), cleanup);
             store.abort_run_preparation(record, has_session)
-        })
+        });
+        if result
+            .as_ref()
+            .is_err_and(|error| error.code() == "preparation.not_found")
+        {
+            if let (Some(runtime_state), Some(token)) = (&self.runtime_state, token) {
+                let token_digest = preparation_token_digest(token)?;
+                if runtime_state
+                    .committed_run_handle(preparation_id, &token_digest)
+                    .map_err(runtime_state_error)?
+                    .is_some()
+                {
+                    return Err(PreparationError::new(
+                        "preparation.already_committed",
+                        "preparation already committed to an active host run",
+                    ));
+                }
+            }
+        }
+        result
     }
 
     pub fn confirm_prepared_session_closed(
@@ -866,6 +1091,12 @@ fn preparation_vault_poisoned() -> PreparationError {
         "prepared model input vault lock was poisoned",
     )
 }
+fn runtime_state_error(error: crate::storage::RuntimeStateError) -> PreparationError {
+    PreparationError::new(
+        "preparation.runtime_state_failed",
+        format!("{}: {error}", error.code()),
+    )
+}
 fn token_expired() -> PreparationError {
     PreparationError::new("preparation.token_expired", "preparation token expired")
 }
@@ -936,7 +1167,7 @@ fn ensure_preview_still_current(
         ));
     }
 
-    if preview.model_binding() != current.model_binding() {
+    if preview.legacy_model_binding() != current.legacy_model_binding() {
         return Err(RunSnapshotError::new(
             "snapshot.model_version_conflict",
             "model binding changed between snapshot preview and persist",

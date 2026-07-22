@@ -86,7 +86,7 @@ impl HostCommandPayload {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GenerationDisclosureDocument {
     pub schema_version: String,
@@ -98,7 +98,7 @@ pub struct GenerationDisclosureDocument {
     pub safe_display_summary: SafeDisplaySummaryDocument,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SafeDisplaySummaryDocument {
     pub source_kinds: Vec<String>,
@@ -107,7 +107,7 @@ pub struct SafeDisplaySummaryDocument {
     pub triggering_tool_display_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressDataClassCountDocument {
     pub data_class: String,
@@ -161,6 +161,35 @@ struct HostCommandEnvelopeDigestDocument<'a> {
 }
 
 impl HostCommandEnvelope {
+    pub fn start_generation(
+        command_id: impl Into<String>,
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        payload: HostCommandPayload,
+        disclosure: GenerationDisclosureDocument,
+    ) -> Result<Self, HostContractError> {
+        let payload_digest = payload.expected_digest()?;
+        let disclosure_digest = disclosure.expected_digest()?;
+        let mut envelope = Self {
+            schema_version: 1,
+            command_id: command_id.into(),
+            run_id: run_id.into(),
+            session_handle: session_handle.into(),
+            host_process_epoch: host_process_epoch.into(),
+            command_sequence: 1,
+            generation_turn_id: Some(disclosure.generation_turn_id.clone()),
+            kind: HostCommandKind::StartGeneration,
+            payload_digest,
+            disclosure_digest: Some(disclosure_digest),
+            command_envelope_digest: String::new(),
+            disclosure: Some(disclosure),
+            payload,
+        };
+        envelope.command_envelope_digest = envelope.expected_digest()?;
+        Ok(envelope)
+    }
+
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
         if self.payload.expected_digest()? != self.payload_digest {
             return Err(HostContractError::new(
