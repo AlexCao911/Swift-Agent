@@ -8,6 +8,21 @@ package struct GeminiInteractionsAdapter: CloudProviderAdapter {
 
     package init() {}
 
+    package func makeDiscoveryRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.modelDiscovery(encoderID: "gemini_interactions")
+    }
+
+    package func makeAccountValidationRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.accountValidation(encoderID: "gemini_interactions")
+    }
+
+    package func makeModelValidationRequest(modelID: String) throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.geminiModelValidation(
+            encoderID: "gemini_interactions",
+            modelID: modelID
+        )
+    }
+
     package func makeSession(
         _ context: CloudProviderSessionContext
     ) throws -> any CloudProviderSession {

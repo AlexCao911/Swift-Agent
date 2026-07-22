@@ -7,6 +7,16 @@ import Testing
 @Suite("Cloud model discovery and capability authority")
 struct CloudModelDiscoveryTests {
     @Test
+    func anthropicDiscoveryCarriesRequiredVersionHeader() throws {
+        let wire = try AnthropicMessagesAdapter().makeDiscoveryRequest()
+
+        #expect(wire.method == "GET")
+        #expect(wire.path == "/models")
+        #expect(wire.headers["anthropic-version"] == "2023-06-01")
+        #expect(wire.headers["x-api-key"] == nil)
+    }
+
+    @Test
     func providerListAndManualIDsCannotOverclaimSemanticCapabilities() throws {
         let catalog = try verifiedDiscoveryCatalog()
         let now = Date(timeIntervalSince1970: 1_800_000_000)

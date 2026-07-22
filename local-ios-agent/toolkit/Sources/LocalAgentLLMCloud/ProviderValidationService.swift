@@ -343,7 +343,7 @@ public actor ProviderValidationService {
     ) async throws -> ProviderValidationResult {
         let discovery = CloudModelDiscoveryService(clock: clock, validity: validity)
         let discoveryRequest = try await egressPolicy.sealValidationRequest(
-            discovery.discoveryWire(preset: preset),
+            try adapter.makeDiscoveryRequest(),
             profileID: profile.revision.profileID,
             profileRevision: profile.revision.revision,
             originApprovalRevision: originApprovalRevision,
@@ -354,7 +354,7 @@ public actor ProviderValidationService {
         let liveModelIDs = try discovery.decodeLiveModelIDs(discoveryData, presetID: preset.id)
 
         let accountRequest = try await egressPolicy.sealValidationRequest(
-            try ProviderValidationWireFactory.accountProbe(preset: preset),
+            try adapter.makeAccountValidationRequest(),
             profileID: profile.revision.profileID,
             profileRevision: profile.revision.revision,
             originApprovalRevision: originApprovalRevision,
@@ -364,7 +364,7 @@ public actor ProviderValidationService {
         _ = try await transport.json(accountRequest)
 
         let probeRequest = try await egressPolicy.sealValidationRequest(
-            try ProviderValidationWireFactory.modelProbe(preset: preset, modelID: modelID),
+            try adapter.makeModelValidationRequest(modelID: modelID),
             profileID: profile.revision.profileID,
             profileRevision: profile.revision.revision,
             originApprovalRevision: originApprovalRevision,
@@ -602,77 +602,6 @@ public actor ProviderValidationService {
             }
             return (revision, digest)
         }
-    }
-}
-
-package enum ProviderValidationWireFactory {
-    package static func accountProbe(preset: ProviderPreset) throws -> CloudWireRequest {
-        try CloudWireRequest(
-            method: "GET",
-            path: "/models",
-            queryItems: [URLQueryItem(name: "limit", value: "1")],
-            headers: ["accept": "application/json"],
-            body: nil,
-            dataProvenance: .noUserData(
-                presetEncoderID: preset.codecID,
-                requestClass: .accountValidation
-            )
-        )
-    }
-
-    package static func modelProbe(
-        preset: ProviderPreset,
-        modelID: String
-    ) throws -> CloudWireRequest {
-        let path: String
-        let body: [String: Any]
-        switch preset.id {
-        case .openAI, .xAI:
-            path = "/responses"
-            body = [
-                "model": modelID,
-                "input": "Reply with OK.",
-                "max_output_tokens": 8,
-                "stream": true,
-                "store": false,
-            ]
-        case .anthropic, .miniMax:
-            path = "/messages"
-            body = [
-                "model": modelID,
-                "messages": [["role": "user", "content": "Reply with OK."]],
-                "max_tokens": 8,
-                "stream": true,
-            ]
-        case .gemini:
-            path = "/interactions"
-            body = [
-                "model": modelID,
-                "input": "Reply with OK.",
-                "stream": true,
-                "store": false,
-                "generation_config": ["max_output_tokens": 8],
-            ]
-        default:
-            path = "/chat/completions"
-            body = [
-                "model": modelID,
-                "messages": [["role": "user", "content": "Reply with OK."]],
-                "max_tokens": 8,
-                "stream": true,
-            ]
-        }
-        return try CloudWireRequest(
-            method: "POST",
-            path: path,
-            queryItems: [],
-            headers: ["content-type": "application/json"],
-            body: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]),
-            dataProvenance: .noUserData(
-                presetEncoderID: preset.codecID,
-                requestClass: .modelValidation
-            )
-        )
     }
 }
 

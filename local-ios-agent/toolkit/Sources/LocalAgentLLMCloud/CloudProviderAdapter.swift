@@ -5,6 +5,9 @@ package protocol CloudProviderAdapter: Sendable {
     var adapterVersion: String { get }
     var presetID: ProviderPresetID { get }
 
+    func makeDiscoveryRequest() throws -> CloudWireRequest
+    func makeAccountValidationRequest() throws -> CloudWireRequest
+    func makeModelValidationRequest(modelID: String) throws -> CloudWireRequest
     func makeSession(
         _ context: CloudProviderSessionContext
     ) throws -> any CloudProviderSession

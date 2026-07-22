@@ -8,6 +8,21 @@ package struct OpenAIResponsesAdapter: CloudProviderAdapter {
 
     package init() {}
 
+    package func makeDiscoveryRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.modelDiscovery(encoderID: "openai_responses")
+    }
+
+    package func makeAccountValidationRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.accountValidation(encoderID: "openai_responses")
+    }
+
+    package func makeModelValidationRequest(modelID: String) throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.responsesModelValidation(
+            encoderID: "openai_responses",
+            modelID: modelID
+        )
+    }
+
     package func makeSession(
         _ context: CloudProviderSessionContext
     ) throws -> any CloudProviderSession {

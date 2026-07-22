@@ -836,6 +836,18 @@ private struct RuntimeSpyAdapter: CloudProviderAdapter {
     let adapterID = "openai.responses"
     let adapterVersion = "1"
 
+    func makeDiscoveryRequest() throws -> CloudWireRequest {
+        try OpenAIResponsesAdapter().makeDiscoveryRequest()
+    }
+
+    func makeAccountValidationRequest() throws -> CloudWireRequest {
+        try OpenAIResponsesAdapter().makeAccountValidationRequest()
+    }
+
+    func makeModelValidationRequest(modelID: String) throws -> CloudWireRequest {
+        try OpenAIResponsesAdapter().makeModelValidationRequest(modelID: modelID)
+    }
+
     func makeSession(
         _ context: CloudProviderSessionContext
     ) throws -> any CloudProviderSession {

@@ -8,7 +8,7 @@ import Testing
 @Suite("Provider validation service")
 struct ProviderValidationServiceTests {
     @Test
-    func everyShippedPresetUsesFixedSyntheticMinimalValidationWire() throws {
+    func everyShippedAdapterOwnsItsProbeWire() throws {
         let expectedPaths: [ProviderPresetID: String] = [
             .openAI: "/responses",
             .anthropic: "/messages",
@@ -18,27 +18,41 @@ struct ProviderValidationServiceTests {
             .miniMax: "/messages",
             .glm: "/chat/completions",
         ]
+        let adapters: [any CloudProviderAdapter] = [
+            OpenAIResponsesAdapter(),
+            AnthropicMessagesAdapter(),
+            GeminiInteractionsAdapter(),
+            XAIAdapter(),
+            DeepSeekAdapter(),
+            MiniMaxAdapter(),
+            GLMAdapter(),
+        ]
 
-        #expect(ProviderPreset.shipped.count == 7)
-        for preset in ProviderPreset.shipped {
-            let wire = try ProviderValidationWireFactory.modelProbe(
-                preset: preset,
-                modelID: "fixture-model"
-            )
-            #expect(wire.method == "POST")
-            #expect(wire.path == expectedPaths[preset.id])
-            #expect(wire.queryItems.isEmpty)
-            #expect(wire.headers.keys.allSatisfy {
-                !["authorization", "x-api-key", "x-goog-api-key"].contains($0.lowercased())
-            })
-            guard case let .noUserData(encoderID, requestClass) = wire.dataProvenance else {
-                Issue.record("validation wire was not tagged as no-user-data")
-                continue
+        #expect(adapters.count == 7)
+        #expect(Set(adapters.map(\.presetID)) == Set(ProviderPreset.shipped.map(\.id)))
+        for adapter in adapters {
+            let preset = try #require(ProviderPreset.shipped.first { $0.id == adapter.presetID })
+            let discovery = try adapter.makeDiscoveryRequest()
+            let account = try adapter.makeAccountValidationRequest()
+            let model = try adapter.makeModelValidationRequest(modelID: "fixture-model")
+
+            #expect(discovery.method == "GET")
+            #expect(discovery.path == "/models")
+            #expect(account.method == "GET")
+            #expect(account.path == "/models")
+            #expect(model.method == "POST")
+            #expect(model.path == expectedPaths[preset.id])
+            #expect(model.queryItems.isEmpty)
+            for wire in [discovery, account, model] {
+                #expect(wire.headers.keys.allSatisfy {
+                    !["authorization", "x-api-key", "x-goog-api-key"].contains($0.lowercased())
+                })
             }
-            #expect(encoderID == preset.codecID)
-            #expect(requestClass == .modelValidation)
+            expectProbeIdentity(discovery, encoderID: preset.codecID, requestClass: .discovery)
+            expectProbeIdentity(account, encoderID: preset.codecID, requestClass: .accountValidation)
+            expectProbeIdentity(model, encoderID: preset.codecID, requestClass: .modelValidation)
 
-            let body = try #require(wire.body)
+            let body = try #require(model.body)
             let json = try #require(
                 JSONSerialization.jsonObject(with: body) as? [String: Any]
             )
@@ -52,6 +66,21 @@ struct ProviderValidationServiceTests {
                 #expect(json["store"] as? Bool == false)
             }
         }
+    }
+
+    @Test
+    func anthropicValidationCarriesRequiredVersionHeader() throws {
+        let anthropic = AnthropicMessagesAdapter()
+        for wire in [
+            try anthropic.makeDiscoveryRequest(),
+            try anthropic.makeAccountValidationRequest(),
+            try anthropic.makeModelValidationRequest(modelID: "claude-fixture"),
+        ] {
+            #expect(wire.headers["anthropic-version"] == "2023-06-01")
+            #expect(wire.headers["x-api-key"] == nil)
+        }
+        #expect(try MiniMaxAdapter().makeDiscoveryRequest()
+            .headers["anthropic-version"] == nil)
     }
 
     @Test
@@ -279,6 +308,19 @@ struct ProviderValidationServiceTests {
             "SELECT COUNT(*) AS value FROM cloud_capability_observations"
         ).first?.integer("value") == 0)
     }
+}
+
+private func expectProbeIdentity(
+    _ wire: CloudWireRequest,
+    encoderID: String,
+    requestClass: CloudRequestClass
+) {
+    guard case let .noUserData(actualEncoderID, actualRequestClass) = wire.dataProvenance else {
+        Issue.record("probe wire was not tagged as no-user-data")
+        return
+    }
+    #expect(actualEncoderID == encoderID)
+    #expect(actualRequestClass == requestClass)
 }
 
 private func validationPrompt(in json: [String: Any]) -> String? {

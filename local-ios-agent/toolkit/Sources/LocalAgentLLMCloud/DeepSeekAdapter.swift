@@ -5,6 +5,21 @@ package struct DeepSeekAdapter: CloudProviderAdapter {
 
     package init() {}
 
+    package func makeDiscoveryRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.modelDiscovery(encoderID: "openai_chat_completions")
+    }
+
+    package func makeAccountValidationRequest() throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.accountValidation(encoderID: "openai_chat_completions")
+    }
+
+    package func makeModelValidationRequest(modelID: String) throws -> CloudWireRequest {
+        try ProviderProbeWireEncoder.chatModelValidation(
+            encoderID: "openai_chat_completions",
+            modelID: modelID
+        )
+    }
+
     package func makeSession(
         _ context: CloudProviderSessionContext
     ) throws -> any CloudProviderSession {

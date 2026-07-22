@@ -98,27 +98,6 @@ package struct CloudModelDiscoveryService: Sendable {
         }
     }
 
-    package func discoveryWire(preset: ProviderPreset) throws -> CloudWireRequest {
-        let path: String
-        switch preset.id {
-        case .gemini:
-            path = "/models"
-        default:
-            path = "/models"
-        }
-        return try CloudWireRequest(
-            method: "GET",
-            path: path,
-            queryItems: [],
-            headers: ["accept": "application/json"],
-            body: nil,
-            dataProvenance: .noUserData(
-                presetEncoderID: preset.codecID,
-                requestClass: .discovery
-            )
-        )
-    }
-
     package func decodeLiveModelIDs(_ data: Data, presetID: ProviderPresetID) throws -> [String] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw discoveryFailure("cloud_discovery.response_invalid", "provider model list is invalid")
