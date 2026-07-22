@@ -17,13 +17,90 @@ struct CloudLLMRuntimeTests {
     }
 
     @Test
+    func emptyToolsObjectDoesNotRequireToolCalling() throws {
+        let snapshot = runtimeCapabilitySnapshot(
+            streaming: .supported,
+            toolCalling: .unknown
+        )
+        let emptySchemas: [CanonicalJSONValue] = [
+            .array([]),
+            try .object(entries: []),
+            try .object(entries: [
+                .init(name: "tools", value: .array([])),
+            ]),
+        ]
+        for schema in emptySchemas {
+            try CloudRuntimeCapabilityGate.require(
+                snapshot,
+                toolSchema: schema
+            )
+        }
+
+        let nonEmptySchemas: [CanonicalJSONValue] = [
+            .array([.string("contacts.search")]),
+            try .object(entries: [
+                .init(name: "tools", value: .array([.string("contacts.search")])),
+            ]),
+        ]
+        for schema in nonEmptySchemas {
+            expectRuntimeGateFailure("runtime.cloud_capability_unsatisfied") {
+                try CloudRuntimeCapabilityGate.require(
+                    snapshot,
+                    toolSchema: schema
+                )
+            }
+        }
+    }
+
+    @Test
+    func malformedToolSchemaFailsClosed() throws {
+        let snapshot = runtimeCapabilitySnapshot(
+            streaming: .supported,
+            toolCalling: .supported
+        )
+        let malformed: [CanonicalJSONValue] = [
+            try .object(entries: [
+                .init(name: "tools", value: .string("contacts.search")),
+            ]),
+            try .object(entries: [
+                .init(name: "functions", value: .array([])),
+            ]),
+            .string("contacts.search"),
+        ]
+        for schema in malformed {
+            expectRuntimeGateFailure("runtime.cloud_tool_schema_invalid") {
+                try CloudRuntimeCapabilityGate.require(
+                    snapshot,
+                    toolSchema: schema
+                )
+            }
+        }
+    }
+
+    @Test
+    func streamingIsRequiredForEveryCloudGeneration() {
+        let snapshot = runtimeCapabilitySnapshot(
+            streaming: .unknown,
+            toolCalling: .supported
+        )
+        expectRuntimeGateFailure("runtime.cloud_capability_unsatisfied") {
+            try CloudRuntimeCapabilityGate.require(
+                snapshot,
+                toolSchema: .array([])
+            )
+        }
+    }
+
+    @Test
     func probedManualModelRunsOnlyConservativeStatelessText() async throws {
         let transport = RuntimeGenerationTransport(scripts: [runtimeFinalEvents()])
         let harness = try await CloudRuntimeHarness.make(
             generationTransport: transport,
             localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
             modelID: "manual-openai-model",
-            toolSchema: .array([])
+            toolSchema: try .object(entries: [
+                .init(name: "tools", value: .array([])),
+            ])
         )
         defer { harness.cleanup() }
 
@@ -1426,6 +1503,31 @@ private func expectRuntimeFailure(
     do {
         try await operation()
         Issue.record("expected runtime failure \(code)")
+    } catch let failure as LLMFailure {
+        #expect(failure.code == code)
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+}
+
+private func runtimeCapabilitySnapshot(
+    streaming: SupportState,
+    toolCalling: SupportState
+) -> CapabilitySnapshot {
+    CapabilitySnapshot(capabilities: [
+        "text_generation": .init(support: .supported, verifiedUpperBound: nil),
+        "streaming": .init(support: streaming, verifiedUpperBound: nil),
+        "tool_calling": .init(support: toolCalling, verifiedUpperBound: nil),
+    ])
+}
+
+private func expectRuntimeGateFailure(
+    _ code: String,
+    operation: () throws -> Void
+) {
+    do {
+        try operation()
+        Issue.record("expected runtime capability gate failure \(code)")
     } catch let failure as LLMFailure {
         #expect(failure.code == code)
     } catch {

@@ -247,7 +247,7 @@ public actor CloudLLMRuntime {
                 targetRevision: target.revision
             )
             try requireValidationSource(validation, route: route)
-            try requireCapabilities(
+            try CloudRuntimeCapabilityGate.require(
                 validation.snapshot,
                 toolSchema: context.initialTurn.canonicalToolSchema
             )
@@ -1047,7 +1047,10 @@ public actor CloudLLMRuntime {
         )
     }
 
-    private func requireCapabilities(
+}
+
+package enum CloudRuntimeCapabilityGate {
+    package static func require(
         _ snapshot: CapabilitySnapshot,
         toolSchema: CanonicalJSONValue
     ) throws {
@@ -1057,14 +1060,44 @@ public actor CloudLLMRuntime {
                 "validated cloud route does not support text generation"
             )
         }
-        let hasTools: Bool
-        if case let .array(values) = toolSchema { hasTools = !values.isEmpty }
-        else if case .object = toolSchema { hasTools = !(toolSchema.objectKeys?.isEmpty ?? true) }
-        else { hasTools = true }
-        guard !hasTools || snapshot.support(for: "tool_calling") == .supported else {
+        guard snapshot.support(for: "streaming") == .supported else {
+            throw cloudRuntimeFailure(
+                "runtime.cloud_capability_unsatisfied",
+                "validated cloud route does not support streaming"
+            )
+        }
+        guard try requestedToolCount(in: toolSchema) == 0
+                || snapshot.support(for: "tool_calling") == .supported
+        else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_capability_unsatisfied",
                 "validated cloud route does not support the requested tools"
+            )
+        }
+    }
+
+    package static func requestedToolCount(
+        in schema: CanonicalJSONValue
+    ) throws -> Int {
+        switch schema {
+        case let .array(values):
+            return values.count
+        case .object:
+            let keys = schema.objectKeys ?? []
+            if keys.isEmpty { return 0 }
+            guard keys == Set(["tools"]),
+                  case let .array(values)? = schema.objectValue(forKey: "tools")
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_tool_schema_invalid",
+                    "canonical tool schema has an unsupported shape"
+                )
+            }
+            return values.count
+        default:
+            throw cloudRuntimeFailure(
+                "runtime.cloud_tool_schema_invalid",
+                "canonical tool schema has an unsupported shape"
             )
         }
     }
