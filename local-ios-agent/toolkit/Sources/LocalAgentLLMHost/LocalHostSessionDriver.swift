@@ -123,10 +123,45 @@ package struct LocalHostSessionDriver: LLMHostSessionDriver {
         for turn: HostGenerationTurn,
         mode: HostGenerationMode
     ) async throws -> AuthorizedHostGenerationLaunch {
-        throw LLMHostFailure(
-            code: "llm.host.generation_not_connected",
-            message: "generation dispatch is installed by Phase 4 Task 8"
-        )
+        let decoded = try decodeHostGenerationTurn(turn)
+        guard turn.payload.attachments.isEmpty,
+              decoded.input.messages.allSatisfy({ message in
+                  message.content.allSatisfy { content in
+                      if case .attachment = content { return false }
+                      return true
+                  }
+              })
+        else {
+            throw LLMHostFailure(
+                code: "unsupported_capability",
+                message: "local attachment byte resolution is unavailable"
+            )
+        }
+        let runtime = runtime
+        let sessionID = sessionID
+        return AuthorizedHostGenerationLaunch {
+            let sequence: LLMBackendEventSequence
+            switch mode {
+            case .start:
+                sequence = try await runtime.startGeneration(
+                    sessionID: sessionID,
+                    input: decoded.input,
+                    attachments: [],
+                    toolSchema: decoded.toolSchema
+                )
+            case .resume:
+                sequence = try await runtime.resumeGeneration(
+                    sessionID: sessionID,
+                    input: decoded.input,
+                    attachments: [],
+                    toolSchema: decoded.toolSchema
+                )
+            }
+            return HostGenerationOperation(
+                opaqueOperationID: try HostSessionHandleGenerator.generate(),
+                events: stream(sequence)
+            )
+        }
     }
 
     package func cancel() async throws {
@@ -135,5 +170,23 @@ package struct LocalHostSessionDriver: LLMHostSessionDriver {
 
     package func close() async throws {
         try await runtime.closeSession(sessionID: sessionID)
+    }
+}
+
+private func stream(
+    _ sequence: LLMBackendEventSequence
+) -> LLMBackendEventStream {
+    AsyncThrowingStream { continuation in
+        let task = Task {
+            do {
+                for try await event in sequence {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { @Sendable _ in task.cancel() }
     }
 }

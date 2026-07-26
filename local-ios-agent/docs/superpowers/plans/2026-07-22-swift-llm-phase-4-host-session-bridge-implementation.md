@@ -1412,7 +1412,7 @@ git commit -m "feat: register llm sessions before opening resources"
 - The same semantic command drives local or cloud solely according to the pre-registered opaque Swift session; Rust cannot select a backend.
 - Converts a thrown Swift `AgentLLMFailure` into a normalized `failed` event containing only `not_ready | unsupported_capability | context_exceeded | egress_denied | rate_limited | generation_failed | stream_interrupted | cancelled`; Rust bridge protocol errors keep their `llm.*`/`execution.*` codes and are never disguised as provider failures.
 
-- [ ] **Step 1: Write failing local/cloud parity and lifecycle tests**
+- [x] **Step 1: Write failing local/cloud parity and lifecycle tests**
 
 Run the same test vector through fake local and cloud drivers. Assert `ack` precedes approval, no `generation_started` appears before a live operation, start/resume use the exact turn ID, and approval wait does not trip the operation timer:
 
@@ -1438,7 +1438,7 @@ func startEmitsTheSameNormalizedLifecycle(route: HostRouteFixture) async throws 
 
 Add a backend-start hang after authorization and require one terminal failure without falsely emitting `generation_started`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostGenerationTests
@@ -1446,7 +1446,7 @@ swift test --package-path toolkit --filter LLMHostGenerationTests
 
 Expected: the host actor cannot dispatch semantic commands or emit explicit start lifecycle events.
 
-- [ ] **Step 3: Add route adapters and an approval-excluding launch boundary**
+- [x] **Step 3: Add route adapters and an approval-excluding launch boundary**
 
 Split driver work:
 
@@ -1468,7 +1468,7 @@ package struct HostGenerationOperation: Sendable {
 
 Cloud `makeAuthorizedLaunch` reuses `CloudSemanticTurnValidator` and `ProviderEgressPolicy`; only the returned one-shot closure reaches adapter encoding/transport. Split cloud transport creation so invoking that closure returns only after the `URLSessionTask` has been created/resumed and owns a live stream. Local validates the same semantic input/source/tool-result identities, resolves attachments locally, then returns a closure that starts C++. The actor awaits approval without a timeout, applies the ten-second timeout only around `launch.run()`, submits `generation_started`, converts thrown backend failures to the limited public taxonomy, and pumps events without an intermediate dropping buffer.
 
-- [ ] **Step 4: Run GREEN and backend regressions**
+- [x] **Step 4: Run GREEN and backend regressions**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostGenerationTests
@@ -1480,7 +1480,7 @@ git diff --check
 
 Expected: local/cloud parity, exact disclosure failure, approval timing, live-operation start, and no-drop pump tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMHost toolkit/Sources/LocalAgentLLMLocal/LocalModelRuntime.swift \

@@ -16,13 +16,15 @@ public final class LLMHostRuntime: @unchecked Sendable {
 
     package init(
         hostProcessEpoch: HostProcessEpoch,
-        rustSink: any LLMHostRustSink
+        rustSink: any LLMHostRustSink,
+        operationStartTimeout: Duration = .seconds(10)
     ) {
         let inbox = BoundedHostCommandInbox()
         let bridgeActor = LLMBridgeActor(
             inbox: inbox,
             hostProcessEpoch: hostProcessEpoch,
-            rustSink: rustSink
+            rustSink: rustSink,
+            operationStartTimeout: operationStartTimeout
         )
         self.hostProcessEpoch = hostProcessEpoch
         commandInbox = inbox
@@ -49,6 +51,12 @@ public final class LLMHostRuntime: @unchecked Sendable {
 }
 
 private struct UnavailableRustSink: LLMHostRustSink {
+    func submit(
+        _ envelope: LLMEventEnvelope
+    ) async throws -> LLMEventSubmissionResult {
+        .staleSession
+    }
+
     func submitCommandAcknowledgement(
         _ acknowledgement: HostCommandAcknowledgement
     ) async -> Bool {

@@ -108,7 +108,8 @@ package struct CloudHostSessionReserver: LLMHostSessionReserving {
                     ),
                     driver: CloudHostSessionDriver(
                         runtime: runtime,
-                        sessionID: opened.sessionID
+                        sessionID: opened.sessionID,
+                        resolvedParameters: context.initialTurn.resolvedParameters
                     )
                 )
             }
@@ -119,20 +120,43 @@ package struct CloudHostSessionReserver: LLMHostSessionReserving {
 package struct CloudHostSessionDriver: LLMHostSessionDriver {
     private let runtime: CloudLLMRuntime
     private let sessionID: String
+    private let resolvedParameters: GenerationConfiguration
 
-    package init(runtime: CloudLLMRuntime, sessionID: String) {
+    package init(
+        runtime: CloudLLMRuntime,
+        sessionID: String,
+        resolvedParameters: GenerationConfiguration
+    ) {
         self.runtime = runtime
         self.sessionID = sessionID
+        self.resolvedParameters = resolvedParameters
     }
 
     package func makeAuthorizedLaunch(
         for turn: HostGenerationTurn,
         mode: HostGenerationMode
     ) async throws -> AuthorizedHostGenerationLaunch {
-        throw LLMHostFailure(
-            code: "llm.host.generation_not_connected",
-            message: "generation dispatch is installed by Phase 4 Task 8"
+        let decoded = try decodeHostGenerationTurn(turn)
+        let launch = try await runtime.makeAuthorizedGenerationLaunch(
+            sessionID: sessionID,
+            turn: CloudGenerationTurnRequest(
+                input: decoded.input,
+                canonicalToolSchema: decoded.toolSchema,
+                sourceRevisionDocument: decoded.sourceRevisions,
+                toolResults: decoded.toolResults,
+                providerRequiredSemanticHistory: decoded.semanticHistory,
+                disclosure: turn.disclosure,
+                resolvedParameters: resolvedParameters
+            ),
+            resume: mode == .resume
         )
+        return AuthorizedHostGenerationLaunch {
+            let operation = try await launch.run()
+            return HostGenerationOperation(
+                opaqueOperationID: operation.opaqueOperationID,
+                events: operation.events
+            )
+        }
     }
 
     package func cancel() async throws {

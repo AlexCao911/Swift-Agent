@@ -334,6 +334,12 @@ private actor RecordingRustSink: LLMHostRustSink {
         self.acceptsCleanupAcknowledgement = acceptsCleanupAcknowledgement
     }
 
+    func submit(
+        _ envelope: LLMEventEnvelope
+    ) async throws -> LLMEventSubmissionResult {
+        .accepted
+    }
+
     func submitCommandAcknowledgement(_ acknowledgement: HostCommandAcknowledgement) async -> Bool {
         acknowledgements.append(acknowledgement)
         return true

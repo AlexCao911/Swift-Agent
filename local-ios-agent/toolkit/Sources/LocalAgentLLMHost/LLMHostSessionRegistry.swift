@@ -75,7 +75,7 @@ package struct AllocatedHostSession: Sendable {
     }
 }
 
-package protocol LLMHostRustSink: Sendable {
+package protocol LLMHostRustSink: LLMEventSubmitting {
     func submitCommandAcknowledgement(
         _ acknowledgement: HostCommandAcknowledgement
     ) async -> Bool
@@ -163,7 +163,8 @@ private struct HostSessionEntry {
     var lifecycle: HostSessionLifecycle
     var driver: (any LLMHostSessionDriver)?
     var commandLedger = HostCommandLedger()
-    var nextEventSequence: UInt64 = 1
+    let eventSequencer: LLMEventSequencer
+    var generationTask: Task<Void, Never>?
     var cleanupOperation: CleanupOperation?
 }
 
@@ -178,6 +179,7 @@ package actor LLMBridgeActor {
     private let inbox: BoundedHostCommandInbox
     private let hostProcessEpoch: HostProcessEpoch
     private let rustSink: any LLMHostRustSink
+    private let operationStartTimeout: Duration
     private var sessions: [String: HostSessionEntry] = [:]
     private var tombstones: [String: ClosedSessionTombstone] = [:]
     private var drainTask: Task<Void, Never>?
@@ -185,11 +187,13 @@ package actor LLMBridgeActor {
     package init(
         inbox: BoundedHostCommandInbox,
         hostProcessEpoch: HostProcessEpoch,
-        rustSink: any LLMHostRustSink
+        rustSink: any LLMHostRustSink,
+        operationStartTimeout: Duration
     ) {
         self.inbox = inbox
         self.hostProcessEpoch = hostProcessEpoch
         self.rustSink = rustSink
+        self.operationStartTimeout = operationStartTimeout
     }
 
     package func allocate(_ session: AllocatedHostSession) throws {
@@ -220,7 +224,13 @@ package actor LLMBridgeActor {
         sessions[session.sessionHandle] = HostSessionEntry(
             allocation: session,
             lifecycle: .allocated,
-            driver: nil
+            driver: nil,
+            eventSequencer: LLMEventSequencer(
+                runID: session.proposedRunID,
+                sessionHandle: session.sessionHandle,
+                hostProcessEpoch: session.hostProcessEpoch,
+                submitter: rustSink
+            )
         )
     }
 
@@ -533,29 +543,47 @@ package actor LLMBridgeActor {
             return Task { rejectedAcknowledgement(command, code: rejection) }
         }
 
+        if command.kind == .startGeneration || command.kind == .resumeGeneration {
+            guard let driver,
+                  let generationTurnID = command.generationTurnID,
+                  let disclosure = command.disclosure
+            else {
+                return Task {
+                    rejectedAcknowledgement(
+                        command,
+                        code: "llm.command.missing_generation_disclosure"
+                    )
+                }
+            }
+            let turn = HostGenerationTurn(
+                commandID: command.commandID,
+                generationTurnID: generationTurnID,
+                payload: command.payload,
+                disclosure: disclosure
+            )
+            let mode: HostGenerationMode = command.kind == .startGeneration
+                ? .start
+                : .resume
+            let sequencer = entry.eventSequencer
+            let operationStartTimeout = operationStartTimeout
+            entry.generationTask = Task {
+                await driveGeneration(
+                    driver: driver,
+                    sequencer: sequencer,
+                    turn: turn,
+                    mode: mode,
+                    operationStartTimeout: operationStartTimeout
+                )
+            }
+            return Task { acceptedAcknowledgement(command) }
+        }
+
+        let eventSequencer = entry.eventSequencer
         return Task {
             do {
                 switch command.kind {
                 case .startGeneration, .resumeGeneration:
-                    guard let driver,
-                          let generationTurnID = command.generationTurnID,
-                          let disclosure = command.disclosure
-                    else {
-                        return rejectedAcknowledgement(
-                            command,
-                            code: "llm.command.missing_generation_disclosure"
-                        )
-                    }
-                    let turn = HostGenerationTurn(
-                        commandID: command.commandID,
-                        generationTurnID: generationTurnID,
-                        payload: command.payload,
-                        disclosure: disclosure
-                    )
-                    _ = try await driver.makeAuthorizedLaunch(
-                        for: turn,
-                        mode: command.kind == .startGeneration ? .start : .resume
-                    )
+                    break
 
                 case .cancelGeneration:
                     try await driver?.cancel()
@@ -564,7 +592,7 @@ package actor LLMBridgeActor {
                     try await driver?.close()
 
                 case .capacityAvailable:
-                    break
+                    await eventSequencer.notifyCapacityAvailable()
                 }
                 return acceptedAcknowledgement(command)
             } catch {
@@ -809,6 +837,171 @@ private func rejectedAcknowledgement(
         disposition: .rejected,
         rejectionCode: code
     )
+}
+
+private enum HostGenerationStartTimeout: Error {
+    case elapsed
+}
+
+private func driveGeneration(
+    driver: any LLMHostSessionDriver,
+    sequencer: LLMEventSequencer,
+    turn: HostGenerationTurn,
+    mode: HostGenerationMode,
+    operationStartTimeout: Duration
+) async {
+    do {
+        let launch = try await driver.makeAuthorizedLaunch(for: turn, mode: mode)
+        let operation = try await startOperation(
+            launch,
+            timeout: operationStartTimeout
+        )
+        _ = try await sequencer.submit(
+            kind: .generationStarted,
+            payload: LLMEventPayload(
+                commandID: turn.commandID,
+                opaqueOperationID: operation.opaqueOperationID
+            ),
+            generationTurnID: turn.generationTurnID
+        )
+        for try await backendEvent in operation.events {
+            guard let normalized = normalizedEvent(backendEvent) else { continue }
+            _ = try await sequencer.submit(
+                kind: normalized.kind,
+                payload: normalized.payload,
+                generationTurnID: turn.generationTurnID
+            )
+        }
+    } catch {
+        _ = try? await sequencer.submit(
+            kind: .failed,
+            payload: LLMEventPayload(failureCode: publicFailureCode(error)),
+            generationTurnID: turn.generationTurnID
+        )
+    }
+}
+
+private func startOperation(
+    _ launch: AuthorizedHostGenerationLaunch,
+    timeout: Duration
+) async throws -> HostGenerationOperation {
+    try await withThrowingTaskGroup(of: HostGenerationOperation.self) { group in
+        group.addTask { try await launch.run() }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw HostGenerationStartTimeout.elapsed
+        }
+        guard let operation = try await group.next() else {
+            throw HostGenerationStartTimeout.elapsed
+        }
+        group.cancelAll()
+        return operation
+    }
+}
+
+private func normalizedEvent(
+    _ event: LLMBackendEvent
+) -> (kind: LLMEventKind, payload: LLMEventPayload)? {
+    switch event {
+    case .generationStarted:
+        return nil
+    case let .textDelta(text):
+        return (.textDelta, LLMEventPayload(text: text))
+    case let .reasoningSummaryDelta(text):
+        return (.reasoningSummaryDelta, LLMEventPayload(text: text))
+    case let .toolCallStarted(callID, name):
+        return (
+            .toolCallStarted,
+            LLMEventPayload(callID: callID, name: name)
+        )
+    case let .toolCallArgumentsDelta(callID, delta):
+        return (
+            .toolCallArgumentsDelta,
+            LLMEventPayload(callID: callID, argumentsJSON: delta)
+        )
+    case let .toolCallCompleted(call):
+        return (
+            .toolCallCompleted,
+            LLMEventPayload(
+                callID: call.callID,
+                name: call.name,
+                argumentsJSON: call.argumentsJSON
+            )
+        )
+    case let .usageUpdated(usage):
+        return (
+            .usageUpdated,
+            LLMEventPayload(
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens
+            )
+        )
+    case let .generationCompleted(completion):
+        return (
+            .generationCompleted,
+            LLMEventPayload(
+                completion: LLMBackendCompletionWire(
+                    outcome: completion.outcome.rawValue,
+                    orderedCallIDs: completion.orderedCallIDs,
+                    finishReason: completion.finishReason.rawValue
+                )
+            )
+        )
+    case let .failed(failure):
+        return (
+            .failed,
+            LLMEventPayload(failureCode: failure.code.rawValue)
+        )
+    case .cancelled:
+        return (.cancelled, LLMEventPayload())
+    case let .sessionClosed(commandID, disposition):
+        return (
+            .sessionClosed,
+            LLMEventPayload(
+                commandID: commandID,
+                closeDisposition: disposition.rawValue
+            )
+        )
+    }
+}
+
+private func publicFailureCode(_ error: Error) -> String {
+    if let failure = error as? LLMHostFailure {
+        return failure.code
+    }
+    if error is CancellationError {
+        return LLMBackendFailureCode.cancelled.rawValue
+    }
+    guard let failure = error as? LLMFailure else {
+        return LLMBackendFailureCode.generationFailed.rawValue
+    }
+    let code = failure.code.lowercased()
+    if code.contains("egress") {
+        return LLMBackendFailureCode.egressDenied.rawValue
+    }
+    if code.contains("rate") {
+        return LLMBackendFailureCode.rateLimited.rawValue
+    }
+    if code.contains("context") {
+        return LLMBackendFailureCode.contextExceeded.rawValue
+    }
+    if code.contains("capability") || code.contains("unsupported") {
+        return LLMBackendFailureCode.unsupportedCapability.rawValue
+    }
+    if code.contains("stream") || code.contains("transport") {
+        return LLMBackendFailureCode.streamInterrupted.rawValue
+    }
+    if code.contains("not_ready")
+        || code.contains("state_invalid")
+        || code.contains("not_runnable")
+        || code.contains("unavailable")
+    {
+        return LLMBackendFailureCode.notReady.rawValue
+    }
+    if code.contains("cancel") {
+        return LLMBackendFailureCode.cancelled.rawValue
+    }
+    return LLMBackendFailureCode.generationFailed.rawValue
 }
 
 private struct PreparedCleanupDigestDocument: Encodable {

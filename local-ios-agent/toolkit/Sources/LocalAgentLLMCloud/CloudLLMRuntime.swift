@@ -57,6 +57,15 @@ public struct CloudGenerationTurnRequest: Equatable, Sendable {
     }
 }
 
+package struct CloudGenerationOperation: Sendable {
+    package let opaqueOperationID: String
+    package let events: LLMBackendEventStream
+}
+
+package struct AuthorizedCloudGenerationLaunch: Sendable {
+    package let run: @Sendable () async throws -> CloudGenerationOperation
+}
+
 package struct CloudProviderAdapterRegistry: Sendable {
     private let adapters: [ProviderPresetID: any CloudProviderAdapter]
 
@@ -443,62 +452,72 @@ public actor CloudLLMRuntime {
         sessionID: String,
         turn: CloudGenerationTurnRequest
     ) async throws -> LLMBackendEventStream {
-        guard let active,
-              active.prepared.sessionID == sessionID,
-              active.lifecycle == .prepared,
-              active.generationTask == nil,
-              state == .prepared,
-              turn == active.initialTurn
-        else {
-            throw cloudRuntimeFailure(
-                "runtime.cloud_generation_state_invalid",
-                "cloud session is not ready for its frozen initial turn"
-            )
-        }
-        let authorized = try await authorize(turn: turn, active: active)
-        guard authorized.scopeGrant.grantID == active.prepared.scopeGrantID,
-              authorized.authorization.authorizationID
-                == active.prepared.generationAuthorizationID,
-              authorized.egressSubjectDigest == active.prepared.opaqueEgressSubjectDigest,
-              authorized.authorization.disclosureDigest
-                == active.prepared.initialDisclosureDigest
-        else {
-            throw cloudRuntimeFailure(
-                "runtime.cloud_initial_authorization_changed",
-                "initial cloud authorization changed after preparation"
-            )
-        }
-        let wire = try active.providerSession.encodeStart(authorized)
-        return try await beginGeneration(
-            active: active,
-            authorized: authorized,
-            wire: wire
+        let launch = try await makeAuthorizedGenerationLaunch(
+            sessionID: sessionID,
+            turn: turn,
+            resume: false
         )
+        return try await launch.run().events
     }
 
     public func resumeGeneration(
         sessionID: String,
         turn: CloudGenerationTurnRequest
     ) async throws -> LLMBackendEventStream {
+        let launch = try await makeAuthorizedGenerationLaunch(
+            sessionID: sessionID,
+            turn: turn,
+            resume: true
+        )
+        return try await launch.run().events
+    }
+
+    package func makeAuthorizedGenerationLaunch(
+        sessionID: String,
+        turn: CloudGenerationTurnRequest,
+        resume: Bool
+    ) async throws -> AuthorizedCloudGenerationLaunch {
         guard let active,
               active.prepared.sessionID == sessionID,
-              active.lifecycle == .awaitingToolResult,
+              active.lifecycle == (resume ? .awaitingToolResult : .prepared),
               active.generationTask == nil,
-              state == .awaitingToolResult,
-              !turn.toolResults.isEmpty
+              state == (resume ? .awaitingToolResult : .prepared),
+              resume ? !turn.toolResults.isEmpty : turn == active.initialTurn
         else {
             throw cloudRuntimeFailure(
-                "runtime.cloud_resume_state_invalid",
-                "cloud session is not awaiting a complete tool-result batch"
+                "runtime.cloud_generation_state_invalid",
+                "cloud session is not ready for the requested generation turn"
             )
         }
         let authorized = try await authorize(turn: turn, active: active)
-        let wire = try active.providerSession.encodeResume(authorized)
-        return try await beginGeneration(
-            active: active,
-            authorized: authorized,
-            wire: wire
-        )
+        if !resume {
+            guard authorized.scopeGrant.grantID == active.prepared.scopeGrantID,
+                  authorized.authorization.authorizationID
+                    == active.prepared.generationAuthorizationID,
+                  authorized.egressSubjectDigest
+                    == active.prepared.opaqueEgressSubjectDigest,
+                  authorized.authorization.disclosureDigest
+                    == active.prepared.initialDisclosureDigest
+            else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_initial_authorization_changed",
+                    "initial cloud authorization changed after preparation"
+                )
+            }
+        }
+        return AuthorizedCloudGenerationLaunch { [weak self] in
+            guard let self else {
+                throw cloudRuntimeFailure(
+                    "runtime.cloud_session_released",
+                    "cloud runtime was released before generation started"
+                )
+            }
+            return try await self.launchAuthorizedGeneration(
+                sessionID: sessionID,
+                authorized: authorized,
+                resume: resume
+            )
+        }
     }
 
     public func cancel(sessionID: String) async throws {
@@ -956,11 +975,36 @@ public actor CloudLLMRuntime {
         )
     }
 
+    private func launchAuthorizedGeneration(
+        sessionID: String,
+        authorized: AuthorizedCloudGenerationTurn,
+        resume: Bool
+    ) async throws -> CloudGenerationOperation {
+        guard let active,
+              active.prepared.sessionID == sessionID,
+              active.generationTask == nil,
+              active.lifecycle == (resume ? .awaitingToolResult : .prepared)
+        else {
+            throw cloudRuntimeFailure(
+                "runtime.cloud_generation_state_invalid",
+                "cloud session changed before generation launch"
+            )
+        }
+        let wire = try resume
+            ? active.providerSession.encodeResume(authorized)
+            : active.providerSession.encodeStart(authorized)
+        return try await beginGeneration(
+            active: active,
+            authorized: authorized,
+            wire: wire
+        )
+    }
+
     private func beginGeneration(
         active current: ActiveSession,
         authorized: AuthorizedCloudGenerationTurn,
         wire: CloudWireRequest
-    ) async throws -> LLMBackendEventStream {
+    ) async throws -> CloudGenerationOperation {
         let sealed = try await egressPolicy.sealGenerationRequest(
             wire,
             authorizedTurn: authorized
@@ -970,6 +1014,24 @@ public actor CloudLLMRuntime {
             from: current.lifecycle,
             to: .generating
         )
+        let openedTransport: (
+            events: AsyncThrowingStream<SSEEvent, Error>,
+            attemptCount: Int
+        )
+        do {
+            openedTransport = try await openInitialTransport(sealed)
+        } catch {
+            try? sessionStore.transition(
+                sessionID: current.prepared.sessionID,
+                from: .generating,
+                to: .terminal
+            )
+            var terminal = current
+            terminal.lifecycle = .terminal
+            active = terminal
+            state = .terminal
+            throw error
+        }
         let streamPair = LLMBackendEventStream.makeStream(
             bufferingPolicy: .bufferingOldest(32)
         )
@@ -989,6 +1051,8 @@ public actor CloudLLMRuntime {
                 sessionID: sessionID,
                 generationID: generationID,
                 request: sealed,
+                initialEvents: openedTransport.events,
+                initialAttemptCount: openedTransport.attemptCount,
                 providerSession: providerSession,
                 transport: transport,
                 continuation: streamPair.continuation
@@ -1012,23 +1076,44 @@ public actor CloudLLMRuntime {
                 )
             }
         }
-        return streamPair.stream
+        return CloudGenerationOperation(
+            opaqueOperationID: generationID,
+            events: streamPair.stream
+        )
+    }
+
+    private func openInitialTransport(
+        _ request: AuthorizedCloudHTTPRequest
+    ) async throws -> (
+        events: AsyncThrowingStream<SSEEvent, Error>,
+        attemptCount: Int
+    ) {
+        do {
+            return (try await transport.stream(request), 1)
+        } catch let failure as LLMFailure where failure.retryable {
+            await Task.yield()
+            return (try await transport.stream(request), 2)
+        }
     }
 
     private func pumpGeneration(
         sessionID: String,
         generationID: String,
         request: AuthorizedCloudHTTPRequest,
+        initialEvents: AsyncThrowingStream<SSEEvent, Error>,
+        initialAttemptCount: Int,
         providerSession: any CloudProviderSession,
         transport: any CloudHTTPTransport,
         continuation: LLMBackendEventStream.Continuation
     ) async {
         var emittedOutput = false
-        var attempts = 0
+        var attempts = initialAttemptCount - 1
         while attempts < 2 {
             attempts += 1
             do {
-                let events = try await transport.stream(request)
+                let events = attempts == initialAttemptCount
+                    ? initialEvents
+                    : try await transport.stream(request)
                 var sawTerminal = false
                 for try await event in providerSession.decode(events) {
                     emittedOutput = true

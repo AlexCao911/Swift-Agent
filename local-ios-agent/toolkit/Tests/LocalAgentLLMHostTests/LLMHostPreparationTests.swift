@@ -405,6 +405,10 @@ private struct PreparationDriver: LLMHostSessionDriver {
 }
 
 private actor PreparationRustSink: LLMHostRustSink {
+    func submit(
+        _ envelope: LLMEventEnvelope
+    ) async throws -> LLMEventSubmissionResult { .accepted }
+
     func submitCommandAcknowledgement(
         _ acknowledgement: HostCommandAcknowledgement
     ) async -> Bool { true }
