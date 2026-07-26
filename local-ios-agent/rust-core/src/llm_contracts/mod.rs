@@ -23,7 +23,7 @@ pub use host_command::{
     HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
     HostCommandEnvelope, HostCommandKind, HostCommandPayload, HostContractError,
     HostDispatchEnvelope, HostDispatchKind, HostSemanticContent, HostSemanticMessage,
-    HostSourceRevision, SafeDisplaySummaryDocument,
+    HostSourceRevision, HostToolResult, SafeDisplaySummaryDocument,
 };
 pub use host_worker::{
     HostExecutionPhase, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,

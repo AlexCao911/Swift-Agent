@@ -1,13 +1,26 @@
 use std::sync::Arc;
 
 use crate::llm_contracts::{
-    HostExecutionPhase, LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult,
-    LogicalRunOutcome, ResourceLifecycle,
+    BearerTokenIssuer, EgressDataClassCountDocument, GenerationDisclosureDocument,
+    HostCommandEnvelope, HostCommandKind, HostExecutionPhase, HostToolResult, LLMEventEnvelope,
+    LLMEventKind, LLMEventSubmissionResult, LogicalRunOutcome, ResourceLifecycle,
+    SafeDisplaySummaryDocument,
 };
 use crate::storage::{
-    EventQueueUsage, RuntimeStateError, UnifiedRuntimeStateRepository, HOST_EVENT_LOW_WATER_BYTES,
-    HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS,
+    EventQueueUsage, RuntimeStateError, RuntimeTransition, UnifiedRuntimeStateRepository,
+    HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES,
+    HOST_EVENT_MAX_EVENTS,
 };
+
+use super::{ExecutionToolCall, ExecutionToolOutcome};
+
+pub trait HostToolBatchExecutor: Send + Sync + 'static {
+    fn execute_tool(
+        &self,
+        run_id: &str,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostLLMWorkerServiceConfig {
@@ -31,6 +44,7 @@ impl Default for HostLLMWorkerServiceConfig {
 pub struct HostLLMWorkerService<R: UnifiedRuntimeStateRepository + ?Sized> {
     repository: Arc<R>,
     config: HostLLMWorkerServiceConfig,
+    tools: Option<Arc<dyn HostToolBatchExecutor>>,
 }
 
 impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
@@ -38,6 +52,15 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
         Self {
             repository,
             config: HostLLMWorkerServiceConfig::default(),
+            tools: None,
+        }
+    }
+
+    pub fn with_tools(repository: Arc<R>, tools: Arc<dyn HostToolBatchExecutor>) -> Self {
+        Self {
+            repository,
+            config: HostLLMWorkerServiceConfig::default(),
+            tools: Some(tools),
         }
     }
 
@@ -139,6 +162,15 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
 
         self.repository
             .apply_event_transactionally(event, LLMEventSubmissionResult::Accepted)?;
+        if event.kind() == LLMEventKind::GenerationCompleted
+            && event
+                .payload
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.outcome == "tool_calls_ready")
+        {
+            self.process_tool_batch(event)?;
+        }
         Ok(LLMEventSubmissionResult::Accepted)
     }
 
@@ -161,6 +193,198 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
         {
             self.repository.apply_event_transactionally(event, result)?;
         }
+        Ok(())
+    }
+
+    fn process_tool_batch(&self, terminal: &LLMEventEnvelope) -> Result<(), RuntimeStateError> {
+        let Some(tools) = &self.tools else {
+            return Ok(());
+        };
+        let mut worker = self
+            .repository
+            .host_worker(terminal.run_id())?
+            .ok_or_else(|| {
+                RuntimeStateError::new("llm.turn.worker_missing", "host worker is missing")
+            })?;
+        if worker.execution_phase() != Some(HostExecutionPhase::ExecutingToolBatch) {
+            return Ok(());
+        }
+        let turn_id = terminal.generation_turn_id.as_deref().ok_or_else(|| {
+            RuntimeStateError::new("llm.turn.identity_missing", "tool turn identity is missing")
+        })?;
+        let events = self
+            .repository
+            .turn_accumulator_events(terminal.session_handle(), turn_id)?;
+        let completion = terminal.payload.completion.as_ref().ok_or_else(|| {
+            RuntimeStateError::new("llm.turn.completion_missing", "tool completion is missing")
+        })?;
+        let mut results = worker.tool_results().to_vec();
+
+        for call_id in &completion.ordered_call_ids {
+            if results.iter().any(|result| result.call_id == *call_id) {
+                continue;
+            }
+            let event = events
+                .iter()
+                .find(|event| {
+                    event.kind() == LLMEventKind::ToolCallCompleted
+                        && event.payload.call_id.as_deref() == Some(call_id)
+                })
+                .ok_or_else(|| {
+                    RuntimeStateError::new(
+                        "llm.turn.invalid_tool_batch",
+                        "completed tool call is missing",
+                    )
+                })?;
+            let call = ExecutionToolCall {
+                call_id: call_id.clone(),
+                name: event.payload.name.clone().ok_or_else(|| {
+                    RuntimeStateError::new("llm.turn.invalid_tool_batch", "tool name is missing")
+                })?,
+                arguments_json: event.payload.arguments_json.clone().ok_or_else(|| {
+                    RuntimeStateError::new(
+                        "llm.turn.invalid_tool_batch",
+                        "tool arguments are missing",
+                    )
+                })?,
+            };
+            match tools.execute_tool(terminal.run_id(), &call) {
+                Ok(ExecutionToolOutcome::Observation(observation)) => {
+                    results.push(HostToolResult {
+                        call_id: call.call_id,
+                        tool_name: call.name,
+                        result: serde_json::json!({
+                            "model_text": observation.model_text,
+                        }),
+                        is_error: false,
+                        data_classes: vec!["unknown_data".into()],
+                        highest_sensitivity: "unknown".into(),
+                    });
+                    let next = worker
+                        .clone()
+                        .with_revision(worker.revision() + 1)
+                        .with_tool_results(results.clone());
+                    worker = self
+                        .repository
+                        .update_host_worker(worker.revision(), next)?;
+                }
+                Ok(ExecutionToolOutcome::PendingHostTool { .. })
+                | Ok(ExecutionToolOutcome::ApprovalRequired { .. }) => {
+                    let next = worker
+                        .clone()
+                        .with_revision(worker.revision() + 1)
+                        .with_execution_phase(Some(HostExecutionPhase::SuspendedForToolApproval))
+                        .with_tool_results(results);
+                    self.repository
+                        .update_host_worker(worker.revision(), next)?;
+                    return Ok(());
+                }
+                Err(_) => {
+                    self.fail_tool_batch(worker, "llm.tool.execution_failed")?;
+                    return Ok(());
+                }
+            }
+        }
+        self.enqueue_resume(worker, results)
+    }
+
+    fn enqueue_resume(
+        &self,
+        worker: crate::llm_contracts::HostWorkerRecord,
+        results: Vec<HostToolResult>,
+    ) -> Result<(), RuntimeStateError> {
+        let mut payload = worker.generation_payload().cloned().ok_or_else(|| {
+            RuntimeStateError::new(
+                "llm.turn.payload_missing",
+                "frozen generation payload is missing",
+            )
+        })?;
+        payload.tool_results = results.clone();
+        let payload_digest = payload.expected_digest().map_err(|error| {
+            RuntimeStateError::new("llm.turn.payload_invalid", error.to_string())
+        })?;
+        let prior_disclosure = worker.generation_disclosure().cloned().ok_or_else(|| {
+            RuntimeStateError::new(
+                "llm.turn.disclosure_missing",
+                "frozen generation disclosure is missing",
+            )
+        })?;
+        let disclosure = GenerationDisclosureDocument {
+            schema_version: "1".into(),
+            generation_turn_id: format!("generation-turn:{payload_digest}"),
+            content_digest: payload_digest,
+            source_revision_digest: payload.source_revisions_digest.clone(),
+            data_classes: vec!["unknown_data".into()],
+            highest_sensitivity: "unknown".into(),
+            safe_display_summary: SafeDisplaySummaryDocument {
+                source_kinds: vec!["tool_result".into()],
+                added_item_counts: vec![EgressDataClassCountDocument {
+                    data_class: "unknown_data".into(),
+                    count: results.len().to_string(),
+                }],
+                approximate_added_size: prior_disclosure
+                    .safe_display_summary
+                    .approximate_added_size,
+                triggering_tool_display_keys: results
+                    .iter()
+                    .map(|result| result.tool_name.clone())
+                    .collect(),
+            },
+        };
+        let command_id = BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| RuntimeStateError::new("llm.command.id_failed", error.to_string()))?
+            .raw()
+            .to_string();
+        let command = HostCommandEnvelope::resume_generation(
+            command_id,
+            worker.run_id(),
+            worker.session_handle(),
+            worker.host_process_epoch(),
+            worker.expected_command_sequence(),
+            payload.clone(),
+            disclosure.clone(),
+        )
+        .map_err(|error| RuntimeStateError::new("llm.command.resume_invalid", error.to_string()))?;
+        let next = worker
+            .clone()
+            .with_revision(worker.revision() + 1)
+            .with_execution_phase(Some(HostExecutionPhase::AwaitingResumeCommandAck))
+            .with_generation_turn_id(Some(disclosure.generation_turn_id.clone()))
+            .with_generation_request(payload, disclosure)
+            .with_tool_results(results);
+        self.repository
+            .transition_and_enqueue(RuntimeTransition::new(worker.revision(), next, command))?;
+        Ok(())
+    }
+
+    fn fail_tool_batch(
+        &self,
+        worker: crate::llm_contracts::HostWorkerRecord,
+        code: &str,
+    ) -> Result<(), RuntimeStateError> {
+        let command_id = BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| RuntimeStateError::new("llm.command.id_failed", error.to_string()))?
+            .raw()
+            .to_string();
+        let command = HostCommandEnvelope::lifecycle(
+            command_id,
+            worker.run_id(),
+            worker.session_handle(),
+            worker.host_process_epoch(),
+            worker.expected_command_sequence(),
+            HostCommandKind::CloseSession,
+        )
+        .map_err(|error| RuntimeStateError::new("llm.command.close_invalid", error.to_string()))?;
+        let next = worker
+            .clone()
+            .with_revision(worker.revision() + 1)
+            .with_execution_phase(None)
+            .with_logical_outcome(LogicalRunOutcome::Failed { code: code.into() })
+            .with_resource_lifecycle(ResourceLifecycle::AwaitingCloseCommandAck);
+        self.repository
+            .transition_and_enqueue(RuntimeTransition::new(worker.revision(), next, command))?;
         Ok(())
     }
 }

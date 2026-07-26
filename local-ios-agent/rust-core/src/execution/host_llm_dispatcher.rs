@@ -162,6 +162,7 @@ struct DispatcherControl {
 struct DispatcherShared {
     repository: Arc<dyn UnifiedRuntimeStateRepository>,
     preparation_store: Option<SharedAgentOSStateStore>,
+    tools: Option<Arc<dyn super::HostToolBatchExecutor>>,
     config: HostLLMDispatcherConfig,
     control: Mutex<DispatcherControl>,
     condition: Condvar,
@@ -186,9 +187,19 @@ impl HostLLMDispatcherRuntime {
         preparation_store: Option<SharedAgentOSStateStore>,
         config: HostLLMDispatcherConfig,
     ) -> Self {
+        Self::new_with_preparations_and_tools(repository, preparation_store, None, config)
+    }
+
+    pub fn new_with_preparations_and_tools(
+        repository: Arc<dyn UnifiedRuntimeStateRepository>,
+        preparation_store: Option<SharedAgentOSStateStore>,
+        tools: Option<Arc<dyn super::HostToolBatchExecutor>>,
+        config: HostLLMDispatcherConfig,
+    ) -> Self {
         let shared = Arc::new(DispatcherShared {
             repository,
             preparation_store,
+            tools,
             config,
             control: Mutex::new(DispatcherControl {
                 stopped: false,
@@ -294,8 +305,14 @@ impl HostLLMDispatcherRuntime {
         &self,
         event: &LLMEventEnvelope,
     ) -> Result<LLMEventSubmissionResult, RuntimeStateError> {
-        let result =
-            super::HostLLMWorkerService::new(self.shared.repository.clone()).submit_event(event)?;
+        let worker = match &self.shared.tools {
+            Some(tools) => super::HostLLMWorkerService::with_tools(
+                self.shared.repository.clone(),
+                tools.clone(),
+            ),
+            None => super::HostLLMWorkerService::new(self.shared.repository.clone()),
+        };
+        let result = worker.submit_event(event)?;
         self.wake();
         Ok(result)
     }

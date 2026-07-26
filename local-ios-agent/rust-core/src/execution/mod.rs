@@ -34,7 +34,9 @@ pub use host_llm_dispatcher::{
     LocalAgentLLMHostCopyReceipt, LocalAgentLLMHostReleaseContextFn, LocalAgentLLMHostVTable,
     LOCAL_AGENT_LLM_HOST_ABI_VERSION,
 };
-pub use host_llm_worker::{HostLLMWorkerService, HostLLMWorkerServiceConfig};
+pub use host_llm_worker::{
+    HostLLMWorkerService, HostLLMWorkerServiceConfig, HostToolBatchExecutor,
+};
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use react_worker::{
     ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker, ExecutionToolCall,

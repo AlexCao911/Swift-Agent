@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use local_ios_agent_runtime::execution::{HostLLMWorkerService, HostLLMWorkerServiceConfig};
+use local_ios_agent_runtime::execution::{
+    ExecutionEventRepository, ExecutionToolCall, ExecutionToolObservation, ExecutionToolOutcome,
+    HostLLMWorkerService, HostLLMWorkerServiceConfig, HostToolBatchExecutor,
+};
 use local_ios_agent_runtime::llm_contracts::{
-    HostExecutionPhase, HostSessionRecord, HostWorkerRecord, LLMBackendCompletionWire,
-    LLMEventEnvelope, LLMEventKind, LLMEventPayload, LLMEventReceiptDisposition,
-    LLMEventSubmissionResult, LogicalRunOutcome, ResourceLifecycle, SequenceEffect,
+    EgressDataClassCountDocument, GenerationDisclosureDocument, HostExecutionPhase,
+    HostSessionRecord, HostWorkerRecord, LLMBackendCompletionWire, LLMEventEnvelope, LLMEventKind,
+    LLMEventPayload, LLMEventReceiptDisposition, LLMEventSubmissionResult, LogicalRunOutcome,
+    ResourceLifecycle, SafeDisplaySummaryDocument, SequenceEffect,
 };
 use local_ios_agent_runtime::storage::{
     RuntimeAggregateFailurePoint, SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
@@ -320,6 +324,233 @@ fn configured_limits_are_not_allowed_to_weaken_product_limits() {
     assert_eq!(limits.max_bytes, 2 * 1024 * 1024);
     assert_eq!(limits.low_water_events, 128);
     assert_eq!(limits.low_water_bytes, 1024 * 1024);
+}
+
+#[test]
+fn final_response_commits_one_readable_output_and_close_command() {
+    let store = Arc::new(SqliteRuntimeStateStore::open_in_memory().unwrap());
+    store
+        .insert_worker_and_session(consuming_worker(), session_fixture())
+        .unwrap();
+    let service = HostLLMWorkerService::new(store.clone());
+    let text = event(
+        1,
+        "text",
+        LLMEventKind::TextDelta,
+        text_payload("answer"),
+        Some("turn-1"),
+    );
+    let terminal = event(
+        2,
+        "terminal",
+        LLMEventKind::GenerationCompleted,
+        LLMEventPayload {
+            completion: Some(LLMBackendCompletionWire {
+                outcome: "final_response".into(),
+                ordered_call_ids: vec![],
+                finish_reason: "length".into(),
+            }),
+            ..Default::default()
+        },
+        Some("turn-1"),
+    );
+
+    assert_eq!(
+        service.submit_event(&text).unwrap(),
+        LLMEventSubmissionResult::Accepted
+    );
+    assert_eq!(
+        service.submit_event(&terminal).unwrap(),
+        LLMEventSubmissionResult::Accepted
+    );
+    assert_eq!(
+        service.submit_event(&terminal).unwrap(),
+        LLMEventSubmissionResult::Duplicate
+    );
+
+    let worker = store.host_worker("run-1").unwrap().unwrap();
+    assert!(matches!(
+        worker.logical_outcome(),
+        LogicalRunOutcome::Succeeded { finish_reason } if finish_reason == "length"
+    ));
+    assert_eq!(
+        worker.resource_lifecycle(),
+        &ResourceLifecycle::AwaitingCloseCommandAck
+    );
+    let output = store
+        .replay_after("run-1", 0)
+        .into_iter()
+        .filter(|event| event.code() == "assistant.output")
+        .collect::<Vec<_>>();
+    assert_eq!(output.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(output[0].payload()).unwrap();
+    assert_eq!(payload["message_id"], "assistant:run-1:turn-1");
+    assert_eq!(payload["text"], "answer");
+    assert_eq!(store.pending_host_commands().unwrap().len(), 1);
+}
+
+#[test]
+fn incomplete_tool_batch_fails_before_any_tool_execution() {
+    let store = Arc::new(SqliteRuntimeStateStore::open_in_memory().unwrap());
+    store
+        .insert_worker_and_session(consuming_worker(), session_fixture())
+        .unwrap();
+    let service = HostLLMWorkerService::new(store.clone());
+    let started = event(
+        1,
+        "started-call",
+        LLMEventKind::ToolCallStarted,
+        LLMEventPayload {
+            call_id: Some("call-a".into()),
+            name: Some("contacts.search".into()),
+            ..Default::default()
+        },
+        Some("turn-1"),
+    );
+    let terminal = event(
+        2,
+        "tool-terminal",
+        LLMEventKind::GenerationCompleted,
+        LLMEventPayload {
+            completion: Some(LLMBackendCompletionWire {
+                outcome: "tool_calls_ready".into(),
+                ordered_call_ids: vec!["call-a".into()],
+                finish_reason: "tool_calls".into(),
+            }),
+            ..Default::default()
+        },
+        Some("turn-1"),
+    );
+
+    service.submit_event(&started).unwrap();
+    service.submit_event(&terminal).unwrap();
+
+    assert!(matches!(
+        store.host_worker("run-1").unwrap().unwrap().logical_outcome(),
+        LogicalRunOutcome::Failed { code } if code == "llm.turn.invalid_tool_batch"
+    ));
+    assert_eq!(store.pending_host_commands().unwrap().len(), 1);
+}
+
+#[test]
+fn complete_tool_batch_executes_in_order_and_enqueues_one_resume() {
+    let store = Arc::new(SqliteRuntimeStateStore::open_in_memory().unwrap());
+    let payload = local_ios_agent_runtime::llm_contracts::HostCommandPayload::lifecycle();
+    let disclosure = GenerationDisclosureDocument {
+        schema_version: "1".into(),
+        generation_turn_id: "turn-1".into(),
+        content_digest: payload.expected_digest().unwrap(),
+        source_revision_digest: payload.source_revisions_digest.clone(),
+        data_classes: vec!["text".into()],
+        highest_sensitivity: "routine".into(),
+        safe_display_summary: SafeDisplaySummaryDocument {
+            source_kinds: vec!["conversation".into()],
+            added_item_counts: vec![EgressDataClassCountDocument {
+                data_class: "text".into(),
+                count: "1".into(),
+            }],
+            approximate_added_size: "1".into(),
+            triggering_tool_display_keys: vec![],
+        },
+    };
+    let worker = consuming_worker().with_generation_request(payload, disclosure);
+    store
+        .insert_worker_and_session(worker, session_fixture())
+        .unwrap();
+    let tools = Arc::new(RecordingTools::default());
+    let service = HostLLMWorkerService::with_tools(store.clone(), tools.clone());
+
+    for (sequence, call_id, name) in [
+        (1, "call-a", "contacts.search"),
+        (3, "call-b", "calendar.list"),
+    ] {
+        service
+            .submit_event(&event(
+                sequence,
+                &format!("started-{call_id}"),
+                LLMEventKind::ToolCallStarted,
+                LLMEventPayload {
+                    call_id: Some(call_id.into()),
+                    name: Some(name.into()),
+                    ..Default::default()
+                },
+                Some("turn-1"),
+            ))
+            .unwrap();
+        service
+            .submit_event(&event(
+                sequence + 1,
+                &format!("completed-{call_id}"),
+                LLMEventKind::ToolCallCompleted,
+                LLMEventPayload {
+                    call_id: Some(call_id.into()),
+                    name: Some(name.into()),
+                    arguments_json: Some("{}".into()),
+                    ..Default::default()
+                },
+                Some("turn-1"),
+            ))
+            .unwrap();
+    }
+    service
+        .submit_event(&event(
+            5,
+            "tool-terminal",
+            LLMEventKind::GenerationCompleted,
+            LLMEventPayload {
+                completion: Some(LLMBackendCompletionWire {
+                    outcome: "tool_calls_ready".into(),
+                    ordered_call_ids: vec!["call-a".into(), "call-b".into()],
+                    finish_reason: "tool_calls".into(),
+                }),
+                ..Default::default()
+            },
+            Some("turn-1"),
+        ))
+        .unwrap();
+
+    assert_eq!(tools.calls.lock().unwrap().as_slice(), ["call-a", "call-b"]);
+    let commands = store.pending_host_commands().unwrap();
+    assert_eq!(commands.len(), 1);
+    let resume = commands[0].payload().unwrap();
+    assert_eq!(
+        resume
+            .payload()
+            .tool_results
+            .iter()
+            .map(|result| result.call_id.as_str())
+            .collect::<Vec<_>>(),
+        ["call-a", "call-b"]
+    );
+    assert_eq!(
+        store
+            .host_worker("run-1")
+            .unwrap()
+            .unwrap()
+            .execution_phase(),
+        Some(HostExecutionPhase::AwaitingResumeCommandAck)
+    );
+}
+
+#[derive(Default)]
+struct RecordingTools {
+    calls: Mutex<Vec<String>>,
+}
+
+impl HostToolBatchExecutor for RecordingTools {
+    fn execute_tool(
+        &self,
+        _run_id: &str,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        self.calls.lock().unwrap().push(call.call_id.clone());
+        Ok(ExecutionToolOutcome::Observation(
+            ExecutionToolObservation {
+                call_id: call.call_id.clone(),
+                model_text: format!("result:{}", call.call_id),
+            },
+        ))
+    }
 }
 
 fn consuming_worker() -> HostWorkerRecord {

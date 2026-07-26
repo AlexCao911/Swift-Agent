@@ -288,7 +288,13 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             )
             .map_err(sqlite_error)?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterAgentEventWrite)?;
-        insert_worker(&transaction, &commit.worker)?;
+        insert_worker(
+            &transaction,
+            &commit
+                .worker
+                .clone()
+                .with_expected_command_sequence(commit.first_command.command_sequence() + 1),
+        )?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterWorkerWrite)?;
         insert_session(&transaction, &commit.session)?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterSessionWrite)?;
@@ -323,6 +329,21 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         self.take_failure(RuntimeAggregateFailurePoint::AfterOutboxWrite)?;
         transaction.commit().map_err(sqlite_error)?;
         Ok(row)
+    }
+
+    fn update_host_worker(
+        &self,
+        expected_revision: u64,
+        worker: HostWorkerRecord,
+    ) -> Result<HostWorkerRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        update_worker(&transaction, expected_revision, &worker)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(worker)
     }
 
     fn record_copy_receipt_at(
@@ -515,8 +536,12 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         insert_event_receipt(&transaction, &receipt)?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterEventReceiptWrite)?;
 
-        let (next_worker, next_session, close) =
-            accepted_event_state(&worker, &session, event, result)?;
+        let prior_events = match event.generation_turn_id.as_deref() {
+            Some(turn_id) => load_turn_accumulator(&transaction, event.session_handle(), turn_id)?,
+            None => Vec::new(),
+        };
+        let (next_worker, next_session, close, terminal_events) =
+            accepted_event_state(&worker, &session, event, result, &prior_events)?;
         update_worker(&transaction, worker.revision(), &next_worker)?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterExpectedSequenceWrite)?;
 
@@ -539,6 +564,9 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             &format!("llm.event.{}", event_kind_name(event.kind())),
             event.event_id(),
         )?;
+        for (code, payload) in terminal_events {
+            insert_agent_event(&transaction, event.run_id(), &code, &payload)?;
+        }
         self.take_failure(RuntimeAggregateFailurePoint::AfterEventAgentWrite)?;
 
         if let Some(close) = close {
@@ -2149,20 +2177,7 @@ fn append_turn_accumulator(
     generation_turn_id: &str,
     event: &LLMEventEnvelope,
 ) -> Result<(), RuntimeStateError> {
-    let existing: Option<String> = transaction
-        .query_row(
-            "select record_json from host_llm_turn_accumulators
-             where session_handle = ?1 and generation_turn_id = ?2",
-            params![session_handle, generation_turn_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(sqlite_error)?;
-    let mut events: Vec<LLMEventEnvelope> = existing
-        .as_deref()
-        .map(decode)
-        .transpose()?
-        .unwrap_or_default();
+    let mut events = load_turn_accumulator(transaction, session_handle, generation_turn_id)?;
     events.push(event.clone());
     transaction
         .execute(
@@ -2175,6 +2190,27 @@ fn append_turn_accumulator(
         )
         .map_err(sqlite_error)?;
     Ok(())
+}
+
+fn load_turn_accumulator(
+    transaction: &Transaction<'_>,
+    session_handle: &str,
+    generation_turn_id: &str,
+) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+    let existing: Option<String> = transaction
+        .query_row(
+            "select record_json from host_llm_turn_accumulators
+             where session_handle = ?1 and generation_turn_id = ?2",
+            params![session_handle, generation_turn_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    Ok(existing
+        .as_deref()
+        .map(decode)
+        .transpose()?
+        .unwrap_or_default())
 }
 
 fn insert_agent_event(

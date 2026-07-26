@@ -15,7 +15,7 @@ pub enum HostCommandKind {
     CapacityAvailable,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostSemanticContent {
     pub kind: String,
@@ -29,14 +29,14 @@ pub struct HostSemanticContent {
     pub media_type: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostSemanticMessage {
     pub role: String,
     pub content: Vec<HostSemanticContent>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostSourceRevision {
     pub source_id: String,
@@ -44,7 +44,7 @@ pub struct HostSourceRevision {
     pub digest: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostAttachmentReference {
     pub attachment_id: String,
@@ -54,7 +54,7 @@ pub struct HostAttachmentReference {
     pub content_digest: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostToolResult {
     pub call_id: String,
@@ -65,7 +65,7 @@ pub struct HostToolResult {
     pub highest_sensitivity: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostCommandPayload {
     pub schema_version: String,
@@ -137,7 +137,7 @@ impl GenerationDisclosureDocument {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostCommandEnvelope {
     pub schema_version: u32,
@@ -197,6 +197,37 @@ impl HostCommandEnvelope {
             command_sequence: 1,
             generation_turn_id: Some(disclosure.generation_turn_id.clone()),
             kind: HostCommandKind::StartGeneration,
+            payload_digest,
+            disclosure_digest: Some(disclosure_digest),
+            command_envelope_digest: String::new(),
+            disclosure: Some(disclosure),
+            payload,
+        };
+        envelope.command_envelope_digest = envelope.expected_digest()?;
+        Ok(envelope)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume_generation(
+        command_id: impl Into<String>,
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        command_sequence: u64,
+        payload: HostCommandPayload,
+        disclosure: GenerationDisclosureDocument,
+    ) -> Result<Self, HostContractError> {
+        let payload_digest = payload.expected_digest()?;
+        let disclosure_digest = disclosure.expected_digest()?;
+        let mut envelope = Self {
+            schema_version: 1,
+            command_id: command_id.into(),
+            run_id: run_id.into(),
+            session_handle: session_handle.into(),
+            host_process_epoch: host_process_epoch.into(),
+            command_sequence,
+            generation_turn_id: Some(disclosure.generation_turn_id.clone()),
+            kind: HostCommandKind::ResumeGeneration,
             payload_digest,
             disclosure_digest: Some(disclosure_digest),
             command_envelope_digest: String::new(),

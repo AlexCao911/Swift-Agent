@@ -1519,7 +1519,7 @@ git commit -m "feat: drive local and cloud sessions through host commands"
 - A valid `final_response` atomically writes one formal assistant output with stable identity `assistant:<runID>:<generationTurnID>`, records `finishReason`, changes `logicalOutcome` to `succeeded`, moves the global lease to `releasing`, and inserts one `close_session` command. The output is immediately observable while `resourceLifecycle` remains `awaitingCloseCommandAck`/`awaitingSessionClosed`/`quarantined`.
 - `final_response` is valid only when no tool call was started or accumulated. Empty text is a valid formal output. `length`, `content_filtered`, and provider-neutral `other` finish reasons are preserved in the logical outcome/output metadata; duplicate terminal replay cannot duplicate output or run events.
 
-- [ ] **Step 1: Write failing terminal, batch, and incremental-egress tests**
+- [x] **Step 1: Write failing terminal, batch, and incremental-egress tests**
 
 Cover incomplete/duplicate/reordered/unknown call IDs, text plus tools, two sequential tools with one host-pending result, one resume batch, denial, and restart-expired results. Also cover final text, empty final text, every finish reason, duplicate final terminal, conflict between final and any started tool call, and a close timeout after a readable answer:
 
@@ -1563,7 +1563,7 @@ fn duplicate_final_and_close_timeout_do_not_hide_or_duplicate_output() {
 
 Swift integration must prove a sensitive result waits for incremental approval, denial yields `egress_denied`, and transport request count remains unchanged.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration host_llm_product_path -- --nocapture
@@ -1572,7 +1572,7 @@ swift test --package-path toolkit --filter LLMHostToolLoopTests
 
 Expected: the current synchronous worker supports one tool call at a time and cannot persist/emit a complete V2 batch.
 
-- [ ] **Step 3: Advance only on the structured generation terminal**
+- [x] **Step 3: Advance only on the structured generation terminal**
 
 Add a durable accumulator and stable formal-output identity:
 
@@ -1589,7 +1589,7 @@ On a valid `tool_calls_ready` terminal, persist the assistant preamble once as t
 
 On a valid `final_response`, call `apply_event_transactionally` once to persist the exact accumulated assistant text under its stable output ID, append the formal output and `run.completed` Agent execution events, record finish reason and `logicalOutcome = succeeded`, clear the execution phase, transition the lease/resource lifecycle into release, and enqueue exactly one close command. This transaction is the public answer commit point; session cleanup is a later physical lifecycle. Observation APIs return the answer even if close acknowledgement/receipt times out. Failure/cancellation use the same separation without creating a success output.
 
-- [ ] **Step 4: Run GREEN and tool regressions**
+- [x] **Step 4: Run GREEN and tool regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration -- --nocapture
@@ -1599,7 +1599,7 @@ git diff --check
 
 Expected: valid batches resume once; invalid batches never execute; final output commits exactly once and remains readable through cleanup timeout; sensitive denial sends no request; existing legacy tool tests remain green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/execution rust-core/src/ffi_bridge.rs rust-core/src/storage \

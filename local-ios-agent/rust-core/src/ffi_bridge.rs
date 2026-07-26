@@ -35,7 +35,8 @@ use crate::execution::{
     ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionStartError, ExecutionToolCall,
     ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
     ExecutionWorkerDependencies, HostLLMDispatcherConfig, HostLLMDispatcherRuntime,
-    LocalAgentLLMHostVTable, RunHandle, RuntimeOptions, StartExecutionRequest,
+    HostToolBatchExecutor, LocalAgentLLMHostVTable, RunHandle, RuntimeOptions,
+    StartExecutionRequest,
 };
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
@@ -44,7 +45,9 @@ use crate::llm_contracts::{
     PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
-use crate::run_snapshot::{RunPreparationService, StartRunRequest};
+use crate::run_snapshot::{
+    PersistedResolvedRunSnapshotV2, ResolvedRunSnapshot, RunPreparationService, StartRunRequest,
+};
 use crate::security::{
     ApprovalProtocolRequest, ApprovalProtocolResponse, CredentialPurpose, PermissionScope,
     PermissionState, RiskLevel,
@@ -159,6 +162,12 @@ struct BridgeExecutionToolExecutor<S: EventStore + Send + 'static> {
     runtime: Arc<Mutex<AgentRuntime<S>>>,
 }
 
+#[derive(Clone)]
+struct BridgeHostToolBatchExecutor<S: EventStore + Send + 'static> {
+    runtime: Arc<Mutex<AgentRuntime<S>>>,
+    runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+}
+
 impl<S: EventStore + Send + 'static> BridgeExecutionModelClient<S> {
     fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
         Self { runtime }
@@ -198,6 +207,37 @@ impl<S: EventStore + Send + 'static> ExecutionToolExecutor for BridgeExecutionTo
             .route_execution_tool_call(
                 &RunId(run_id.to_string()),
                 frame_ref.session_id(),
+                ToolCall {
+                    id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments_json: call.arguments_json.clone(),
+                },
+            )
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl<S: EventStore + Send + 'static> HostToolBatchExecutor for BridgeHostToolBatchExecutor<S> {
+    fn execute_tool(
+        &self,
+        run_id: &str,
+        call: &ExecutionToolCall,
+    ) -> Result<ExecutionToolOutcome, String> {
+        let snapshot_json = self
+            .runtime_state
+            .run_snapshot_json(run_id)
+            .map_err(|error| format!("{}: {error}", error.code()))?
+            .ok_or_else(|| "host run snapshot is missing".to_string())?;
+        let persisted: PersistedResolvedRunSnapshotV2 =
+            serde_json::from_str(&snapshot_json).map_err(|error| error.to_string())?;
+        let snapshot =
+            ResolvedRunSnapshot::try_from(persisted).map_err(|error| error.to_string())?;
+        self.runtime
+            .lock()
+            .map_err(|_| "runtime bridge mutex poisoned".to_string())?
+            .route_execution_tool_call(
+                &RunId(run_id.to_string()),
+                snapshot.conversation_run_frame_ref().session_id(),
                 ToolCall {
                     id: call.call_id.clone(),
                     name: call.name.clone(),
@@ -266,9 +306,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let completed_runs = CompletedRunRegistry::default();
         let snapshot_service = app_services.snapshot_service();
+        let execution_tools = Arc::new(BridgeExecutionToolExecutor::new(runtime.clone()));
         let worker_dependencies = ExecutionWorkerDependencies::new(
             Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
-            Arc::new(BridgeExecutionToolExecutor::new(runtime.clone())),
+            execution_tools,
         );
         let execution = ExecutionService::with_runtime_parts_and_agent_os_state(
             frames.clone(),
@@ -280,9 +321,14 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             host_process_epoch.clone(),
         );
-        let host_llm_dispatcher = HostLLMDispatcherRuntime::new_with_preparations(
+        let host_tools = Arc::new(BridgeHostToolBatchExecutor {
+            runtime: runtime.clone(),
+            runtime_state: runtime_state.clone(),
+        });
+        let host_llm_dispatcher = HostLLMDispatcherRuntime::new_with_preparations_and_tools(
             runtime_state.clone(),
             Some(agent_os_state.clone()),
+            Some(host_tools),
             HostLLMDispatcherConfig::default(),
         );
         let run_preparation = RunPreparationService::with_host_runtime(

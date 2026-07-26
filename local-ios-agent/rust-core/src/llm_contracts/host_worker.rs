@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::{GenerationDisclosureDocument, HostCommandPayload, HostToolResult};
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostExecutionPhase {
@@ -77,6 +79,12 @@ pub struct HostWorkerRecord {
     generation_turn_id: Option<String>,
     watchdog_kind: Option<HostWatchdogKind>,
     watchdog_deadline_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generation_payload: Option<HostCommandPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generation_disclosure: Option<GenerationDisclosureDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tool_results: Vec<HostToolResult>,
 }
 
 impl HostWorkerRecord {
@@ -99,6 +107,9 @@ impl HostWorkerRecord {
             generation_turn_id: None,
             watchdog_kind: None,
             watchdog_deadline_millis: None,
+            generation_payload: None,
+            generation_disclosure: None,
+            tool_results: Vec::new(),
         }
     }
 
@@ -136,6 +147,15 @@ impl HostWorkerRecord {
         !matches!(self.logical_outcome, LogicalRunOutcome::Pending)
             && matches!(self.resource_lifecycle, ResourceLifecycle::Closed { .. })
     }
+    pub fn generation_payload(&self) -> Option<&HostCommandPayload> {
+        self.generation_payload.as_ref()
+    }
+    pub fn generation_disclosure(&self) -> Option<&GenerationDisclosureDocument> {
+        self.generation_disclosure.as_ref()
+    }
+    pub fn tool_results(&self) -> &[HostToolResult] {
+        &self.tool_results
+    }
 
     pub fn with_revision(mut self, revision: u64) -> Self {
         self.revision = revision;
@@ -172,6 +192,19 @@ impl HostWorkerRecord {
     ) -> Self {
         self.watchdog_kind = kind;
         self.watchdog_deadline_millis = deadline_millis;
+        self
+    }
+    pub fn with_generation_request(
+        mut self,
+        payload: HostCommandPayload,
+        disclosure: GenerationDisclosureDocument,
+    ) -> Self {
+        self.generation_payload = Some(payload);
+        self.generation_disclosure = Some(disclosure);
+        self
+    }
+    pub fn with_tool_results(mut self, results: Vec<HostToolResult>) -> Self {
+        self.tool_results = results;
         self
     }
 }

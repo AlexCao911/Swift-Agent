@@ -729,7 +729,16 @@ impl RunPreparationService {
             registration.session_handle(),
             &self.host_process_epoch,
         )
-        .with_execution_phase(Some(HostExecutionPhase::AwaitingStartCommandAck));
+        .with_execution_phase(Some(HostExecutionPhase::AwaitingStartCommandAck))
+        .with_generation_request(
+            command.payload.clone(),
+            command.disclosure.clone().ok_or_else(|| {
+                PreparationError::new(
+                    "preparation.host_command_invalid",
+                    "start command disclosure is missing",
+                )
+            })?,
+        );
         let session = HostSessionRecord::new(
             record.preview().proposed_run_id(),
             registration.session_handle(),

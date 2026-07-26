@@ -425,6 +425,11 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
         &self,
         transition: RuntimeTransition,
     ) -> Result<HostCommandOutboxRow, RuntimeStateError>;
+    fn update_host_worker(
+        &self,
+        expected_revision: u64,
+        worker: HostWorkerRecord,
+    ) -> Result<HostWorkerRecord, RuntimeStateError>;
     fn record_copy_receipt(
         &self,
         command_id: &str,
@@ -631,8 +636,13 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
                     commit.initial_event_payload.clone(),
                 ));
             self.take_failure(RuntimeAggregateFailurePoint::AfterAgentEventWrite)?;
-            next.workers
-                .insert(commit.worker.run_id().to_string(), commit.worker.clone());
+            next.workers.insert(
+                commit.worker.run_id().to_string(),
+                commit
+                    .worker
+                    .clone()
+                    .with_expected_command_sequence(commit.first_command.command_sequence() + 1),
+            );
             self.take_failure(RuntimeAggregateFailurePoint::AfterWorkerWrite)?;
             next.sessions.insert(
                 commit.session.session_handle().to_string(),
@@ -707,6 +717,26 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             return Err(error);
         }
         Ok(row)
+    }
+
+    fn update_host_worker(
+        &self,
+        expected_revision: u64,
+        worker: HostWorkerRecord,
+    ) -> Result<HostWorkerRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let current = state.workers.get(worker.run_id()).ok_or_else(not_found)?;
+        if current.revision() != expected_revision
+            || worker.revision() != expected_revision + 1
+            || current.session_handle() != worker.session_handle()
+            || current.host_process_epoch() != worker.host_process_epoch()
+        {
+            return Err(conflict());
+        }
+        state
+            .workers
+            .insert(worker.run_id().to_string(), worker.clone());
+        Ok(worker)
     }
 
     fn record_copy_receipt_at(
@@ -1277,8 +1307,18 @@ fn apply_event_in_memory_mutation(
         RuntimeAggregateFailurePoint::AfterEventReceiptWrite,
     )?;
 
-    let (next_worker, next_session, close) =
-        accepted_event_state(&worker, &session, event, result)?;
+    let prior_events = event
+        .generation_turn_id
+        .as_deref()
+        .and_then(|turn_id| {
+            state
+                .turn_accumulators
+                .get(&(event.session_handle().to_string(), turn_id.to_string()))
+        })
+        .cloned()
+        .unwrap_or_default();
+    let (next_worker, next_session, close, terminal_events) =
+        accepted_event_state(&worker, &session, event, result, &prior_events)?;
     state
         .workers
         .insert(event.run_id().to_string(), next_worker);
@@ -1323,6 +1363,11 @@ fn apply_event_in_memory_mutation(
             format!("llm.event.{}", event_kind_name(event.kind())),
             event.event_id().to_string(),
         ));
+    state
+        .agent_events
+        .entry(event.run_id().to_string())
+        .or_default()
+        .extend(terminal_events);
     take_event_failure(failure, RuntimeAggregateFailurePoint::AfterEventAgentWrite)?;
 
     if let Some(close) = close {
@@ -1377,11 +1422,13 @@ pub(crate) fn accepted_event_state(
     session: &HostSessionRecord,
     event: &LLMEventEnvelope,
     result: LLMEventSubmissionResult,
+    prior_events: &[LLMEventEnvelope],
 ) -> Result<
     (
         HostWorkerRecord,
         HostSessionRecord,
         Option<HostCommandEnvelope>,
+        Vec<(String, String)>,
     ),
     RuntimeStateError,
 > {
@@ -1391,6 +1438,7 @@ pub(crate) fn accepted_event_state(
         .with_expected_event_sequence(worker.expected_event_sequence() + 1);
     let mut lifecycle = worker.resource_lifecycle().clone();
     let mut close = None;
+    let mut terminal_events = Vec::new();
 
     if result == LLMEventSubmissionResult::PayloadTooLarge {
         let code = "llm.event.payload_too_large".to_string();
@@ -1415,15 +1463,60 @@ pub(crate) fn accepted_event_state(
                         "generation completion payload is missing",
                     )
                 })?;
-                if completion.outcome == "tool_calls_ready" {
+                if completion.outcome == "tool_calls_ready"
+                    && valid_tool_batch(completion, prior_events)
+                {
                     next_worker = next_worker
                         .with_execution_phase(Some(HostExecutionPhase::ExecutingToolBatch));
-                } else {
-                    next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
-                        LogicalRunOutcome::Succeeded {
+                } else if completion.outcome == "final_response"
+                    && valid_final_response(completion, prior_events)
+                {
+                    let turn_id = event.generation_turn_id.as_deref().ok_or_else(|| {
+                        RuntimeStateError::new(
+                            "llm.event.invalid_envelope",
+                            "generation completion turn identity is missing",
+                        )
+                    })?;
+                    let text = prior_events
+                        .iter()
+                        .filter(|event| event.kind() == LLMEventKind::TextDelta)
+                        .filter_map(|event| event.payload.text.as_deref())
+                        .collect::<String>();
+                    let output_id = format!("assistant:{}:{turn_id}", worker.run_id());
+                    terminal_events.push((
+                        "assistant.output".into(),
+                        serde_json::json!({
+                            "finish_reason": completion.finish_reason,
+                            "generation_turn_id": turn_id,
+                            "message_id": output_id,
+                            "text": text,
+                        })
+                        .to_string(),
+                    ));
+                    terminal_events.push((
+                        "run.completed".into(),
+                        serde_json::json!({
+                            "finish_reason": completion.finish_reason,
+                            "message_id": output_id,
+                        })
+                        .to_string(),
+                    ));
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_logical_outcome(LogicalRunOutcome::Succeeded {
                             finish_reason: completion.finish_reason.clone(),
-                        },
-                    );
+                        })
+                        .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+                    lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                    close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
+                } else {
+                    let code = "llm.turn.invalid_tool_batch".to_string();
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_logical_outcome(LogicalRunOutcome::Failed { code })
+                        .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+                    lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                    close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
                 }
             }
             LLMEventKind::Failed => {
@@ -1455,7 +1548,75 @@ pub(crate) fn accepted_event_state(
         next_worker,
         session.clone().with_resource_lifecycle(lifecycle),
         close,
+        terminal_events,
     ))
+}
+
+fn valid_final_response(
+    completion: &crate::llm_contracts::LLMBackendCompletionWire,
+    events: &[LLMEventEnvelope],
+) -> bool {
+    completion.ordered_call_ids.is_empty()
+        && matches!(
+            completion.finish_reason.as_str(),
+            "stop" | "length" | "content_filtered" | "other"
+        )
+        && !events.iter().any(|event| {
+            matches!(
+                event.kind(),
+                crate::llm_contracts::LLMEventKind::ToolCallStarted
+                    | crate::llm_contracts::LLMEventKind::ToolCallArgumentsDelta
+                    | crate::llm_contracts::LLMEventKind::ToolCallCompleted
+            )
+        })
+}
+
+fn valid_tool_batch(
+    completion: &crate::llm_contracts::LLMBackendCompletionWire,
+    events: &[LLMEventEnvelope],
+) -> bool {
+    if completion.finish_reason != "tool_calls" || completion.ordered_call_ids.is_empty() {
+        return false;
+    }
+    let mut started = Vec::new();
+    let mut completed = Vec::new();
+    for event in events {
+        match event.kind() {
+            crate::llm_contracts::LLMEventKind::ToolCallStarted => {
+                let Some(call_id) = event.payload.call_id.as_ref() else {
+                    return false;
+                };
+                if call_id.is_empty()
+                    || event.payload.name.as_deref().is_none_or(str::is_empty)
+                    || started.contains(call_id)
+                {
+                    return false;
+                }
+                started.push(call_id.clone());
+            }
+            crate::llm_contracts::LLMEventKind::ToolCallCompleted => {
+                let Some(call_id) = event.payload.call_id.as_ref() else {
+                    return false;
+                };
+                if event.payload.name.as_deref().is_none_or(str::is_empty)
+                    || event.payload.arguments_json.is_none()
+                    || completed.contains(call_id)
+                {
+                    return false;
+                }
+                completed.push(call_id.clone());
+            }
+            _ => {}
+        }
+    }
+    started == completed
+        && completed == completion.ordered_call_ids
+        && completion
+            .ordered_call_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == completion.ordered_call_ids.len()
 }
 
 pub(crate) fn is_protocol_failure(result: LLMEventSubmissionResult) -> bool {
