@@ -283,6 +283,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             TEST_HOST_PROCESS_EPOCH.to_string(),
             event_log,
             runtime_state_authority,
+            false,
         )
         .expect("in-memory Agent OS state initialization must succeed")
     }
@@ -294,12 +295,17 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         host_process_epoch: String,
         event_log: ExecutionEventLog,
         runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+        replay_provider_independent_state: bool,
     ) -> Result<Self, AgentError> {
         agent_os_state
             .with_preparation_mut(|store| {
                 store.recover_preparations_for_new_epoch(&host_process_epoch)
             })
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        let mut runtime = runtime;
+        if replay_provider_independent_state {
+            runtime.replay_provider_independent_state()?;
+        }
         let frames = InMemoryConversationFrameRepository::default();
         let cancellations = runtime.provider_cancellation_registry();
         let runtime = Arc::new(Mutex::new(runtime));
@@ -957,11 +963,14 @@ impl RuntimeJsonBridge {
         match config.store {
             StoreConfigJson::InMemory { .. } => {
                 let runtime_state = InMemoryRuntimeStateStore::new();
+                runtime_state
+                    .reconcile_for_host_epoch(&host_process_epoch)
+                    .map_err(|error| AgentError::Storage(error.to_string()))?;
                 let event_log = ExecutionEventLog::new(runtime_state.clone());
                 let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
                     Arc::new(runtime_state.clone());
                 Ok(Self::InMemory(BridgeRuntime::try_new(
-                    AgentRuntime::with_store_and_registry(
+                    AgentRuntime::open_without_replay(
                         runtime_config,
                         InMemoryEventStore::new(),
                         registry,
@@ -971,10 +980,14 @@ impl RuntimeJsonBridge {
                     host_process_epoch,
                     event_log,
                     runtime_state_authority,
+                    true,
                 )?))
             }
             StoreConfigJson::Sqlite { path, .. } => {
                 let runtime_state = SqliteRuntimeStateStore::open(&path)
+                    .map_err(|error| AgentError::Storage(error.to_string()))?;
+                runtime_state
+                    .reconcile_for_host_epoch(&host_process_epoch)
                     .map_err(|error| AgentError::Storage(error.to_string()))?;
                 let agent_os_state = runtime_state.agent_os_state();
                 let conversation_event_store = runtime_state.conversation_event_store()?;
@@ -982,7 +995,7 @@ impl RuntimeJsonBridge {
                 let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
                     Arc::new(runtime_state.clone());
                 Ok(Self::Sqlite(BridgeRuntime::try_new(
-                    AgentRuntime::with_store_and_registry(
+                    AgentRuntime::open_without_replay(
                         runtime_config,
                         conversation_event_store,
                         registry,
@@ -992,6 +1005,7 @@ impl RuntimeJsonBridge {
                     host_process_epoch,
                     event_log,
                     runtime_state_authority,
+                    true,
                 )?))
             }
         }

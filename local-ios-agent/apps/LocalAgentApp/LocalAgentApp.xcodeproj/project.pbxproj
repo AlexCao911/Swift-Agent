@@ -30,6 +30,7 @@
 		0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000304 /* LocalAgentLLMContracts */; };
 		0D0000010000000000000001 /* CloudCredentialKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */; };
 		0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 0D0000010000000000000301 /* LocalAgentLLMCloud */; };
+		0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */ = {isa = PBXBuildFile; productRef = 0E0000010000000000000301 /* LocalAgentLLMHost */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -236,6 +237,7 @@
 				0A00000100000000000000F1 /* LocalAgentLLMLocal in Frameworks */,
 				0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */,
 				0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */,
+				0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -666,6 +668,7 @@
 				0A0000010000000000000303 /* LocalAgentLLMLocal */,
 				0A0000010000000000000304 /* LocalAgentLLMContracts */,
 				0D0000010000000000000301 /* LocalAgentLLMCloud */,
+				0E0000010000000000000301 /* LocalAgentLLMHost */,
 			);
 			productName = LocalAgentApp;
 			productReference = 0A0000010000000000000022 /* LocalAgentApp.app */;
@@ -1144,6 +1147,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
 			productName = LocalAgentLLMCloud;
+		};
+		0E0000010000000000000301 /* LocalAgentLLMHost */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalAgentLLMHost;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

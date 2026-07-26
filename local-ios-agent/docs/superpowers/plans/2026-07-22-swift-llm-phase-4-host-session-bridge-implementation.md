@@ -1737,7 +1737,7 @@ git commit -m "feat: separate host llm lifecycle watchdogs"
 - Swift recovery deletes an old-epoch cloud credential-use lease only after proving that no current-epoch provider task/session owns it; local old-epoch active-session leases reconcile without unloading a current-epoch model.
 - Produces a Swift SQLite effect ledger with `prepared | committed | outcome_unknown`, stable effect ID `runID + callID + toolName`, and `host-tool-effect-result:v1` result digest.
 
-- [ ] **Step 1: Write failing restart and effect-idempotency tests**
+- [x] **Step 1: Write failing restart and effect-idempotency tests**
 
 Crash/reopen every V2 record whose `resourceLifecycle != closed`, including `logicalOutcome = succeeded/failed/cancelled` while awaiting close, plus legacy starting/running/waiting-tool/approval states. Add the exact crash window after a legacy model request starts but before any terminal response. Assert recovery occurs before pending action enumeration, late ack/event/tool/approval returns `execution.continuation_expired`, no outbox dispatch happens for the old epoch, active legacy state is cleared, and the old lease is released in the same transaction as the interruption event.
 
@@ -1762,7 +1762,7 @@ For tools:
 }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_recovery -- --nocapture
@@ -1775,7 +1775,7 @@ swift test --package-path toolkit --filter LLMHostRecoveryTests
 
 Expected: current runtime replays waiting runs during construction and the host tool path has no durable effect identity.
 
-- [ ] **Step 3: Gate bootstrap on epoch reconciliation and wrap side effects**
+- [x] **Step 3: Gate bootstrap on epoch reconciliation and wrap side effects**
 
 Refactor construction so the unified repository—not separate event and Agent OS stores—owns invalidation:
 
@@ -1790,7 +1790,7 @@ runtime.replay_provider_independent_state()?;
 
 Persist effect `prepared` before invoking a side-effecting tool. On successful normalized result, atomically store the canonical result digest and safe replay envelope. During startup, any `prepared` row without a committed result becomes `outcome_unknown`. Read-only tools may retry only when their manifest declares idempotency; other effects require reconciliation/user action.
 
-- [ ] **Step 4: Run GREEN and runtime replay regressions**
+- [x] **Step 4: Run GREEN and runtime replay regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_recovery -- --nocapture
@@ -1805,7 +1805,7 @@ git diff --check
 
 Expected: legacy starting/running and every unclosed V2 resource lifecycle are atomically interrupted before replay; committed assistant output remains readable with interruption status; committed/outcome-unknown effects never execute twice.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/core/runtime.rs rust-core/src/ffi_bridge.rs rust-core/src/execution \

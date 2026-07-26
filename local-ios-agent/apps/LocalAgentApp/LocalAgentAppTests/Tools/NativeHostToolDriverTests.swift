@@ -20,15 +20,16 @@ struct NativeHostToolDriverTests {
     }
 
     @Test
-    func duplicateToolCallReturnsNil() async throws {
+    func committedToolCallReplaysTheStoredResult() async throws {
         let toolkit = StubNativeToolkitClient(result: .success(toolName: "native.permission_status"))
         let driver = NativeHostToolDriver(toolkit: toolkit)
         let request = toolRequest(toolName: "native.permission_status", toolCallId: "call_dup")
 
-        _ = await driver.execute(request, continuationIndex: 0)
+        let first = await driver.execute(request, continuationIndex: 0)
         let second = await driver.execute(request, continuationIndex: 1)
 
-        #expect(second == nil)
+        #expect(second == first)
+        #expect(await toolkit.executionCount() == 1)
     }
 
     @Test
@@ -88,6 +89,7 @@ private actor StubNativeToolkitClient: NativeToolkitClientProtocol {
 
     private let snapshot: NativeToolkitRegistrationSnapshot
     private let result: ResultShape
+    private var executions = 0
 
     init(
         snapshot: NativeToolkitRegistrationSnapshot = NativeToolkitRegistrationSnapshot(schemas: [], toolNames: []),
@@ -102,7 +104,8 @@ private actor StubNativeToolkitClient: NativeToolkitClientProtocol {
     }
 
     func execute(_ request: ToolExecutionRequestDTO) async -> ToolResultDTO {
-        switch result {
+        executions += 1
+        return switch result {
         case .success(let toolName):
             NativeToolResultBuilder.success(
                 manifestId: "native.\(toolName).v1",
@@ -135,4 +138,6 @@ private actor StubNativeToolkitClient: NativeToolkitClientProtocol {
             )
         }
     }
+
+    func executionCount() -> Int { executions }
 }

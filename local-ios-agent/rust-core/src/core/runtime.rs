@@ -142,6 +142,16 @@ impl<S: EventStore> AgentRuntime<S> {
     }
 
     pub fn with_store_and_registry(
+        config: AgentRuntimeConfig,
+        store: S,
+        provider_registry: ProviderRegistry,
+    ) -> Result<Self, AgentError> {
+        let mut runtime = Self::open_without_replay(config, store, provider_registry)?;
+        runtime.replay_provider_independent_state()?;
+        Ok(runtime)
+    }
+
+    pub(crate) fn open_without_replay(
         mut config: AgentRuntimeConfig,
         store: S,
         provider_registry: ProviderRegistry,
@@ -165,7 +175,7 @@ impl<S: EventStore> AgentRuntime<S> {
         }
 
         let context_controller = build_context_controller(&config);
-        let mut runtime = Self {
+        Ok(Self {
             config,
             context_controller,
             ids: IdGenerator::starting_at(next_id),
@@ -178,9 +188,11 @@ impl<S: EventStore> AgentRuntime<S> {
             latest_prompt_debug_snapshot: None,
             latest_runtime_execution_trace: None,
             pending_tool_requests: Vec::new(),
-        };
-        runtime.replay_waiting_runs()?;
-        Ok(runtime)
+        })
+    }
+
+    pub(crate) fn replay_provider_independent_state(&mut self) -> Result<(), AgentError> {
+        self.replay_waiting_runs()
     }
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {

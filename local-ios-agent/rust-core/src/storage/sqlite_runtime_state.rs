@@ -693,6 +693,43 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         Ok(Some(receipt))
     }
 
+    fn reconcile_for_host_epoch(
+        &self,
+        current_epoch: &str,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let worker_json = {
+            let mut statement = transaction
+                .prepare("select record_json from host_workers")
+                .map_err(sqlite_error)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(sqlite_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_error)?;
+            rows
+        };
+        let mut recovered = Vec::new();
+        for json in worker_json {
+            let worker: HostWorkerRecord = decode(&json)?;
+            if worker.host_process_epoch() == current_epoch
+                || matches!(
+                    worker.resource_lifecycle(),
+                    ResourceLifecycle::Closed { .. }
+                )
+            {
+                continue;
+            }
+            recovered.push(recover_sqlite_worker(&transaction, worker)?);
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(recovered)
+    }
+
     fn recover_run_for_epoch(
         &self,
         run_id: &str,
@@ -708,66 +745,7 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             transaction.commit().map_err(sqlite_error)?;
             return Ok(worker);
         }
-        let recovered = worker
-            .clone()
-            .with_revision(worker.revision() + 1)
-            .with_execution_phase(None)
-            .with_logical_outcome(LogicalRunOutcome::Interrupted {
-                code: "host_epoch_ended".into(),
-            })
-            .with_resource_lifecycle(ResourceLifecycle::Closed {
-                disposition: HostSessionCloseDisposition::EpochEnded,
-            });
-        update_worker(&transaction, worker.revision(), &recovered)?;
-        let session = load_session(&transaction, worker.session_handle())?.ok_or_else(not_found)?;
-        update_session(
-            &transaction,
-            &session
-                .clone()
-                .with_resource_lifecycle(ResourceLifecycle::Closed {
-                    disposition: HostSessionCloseDisposition::EpochEnded,
-                }),
-        )?;
-        let next_event_sequence: u64 = transaction
-            .query_row(
-                "select coalesce(max(cast(sequence as integer)), 0) + 1
-                 from host_agent_events where run_id = ?1",
-                params![run_id],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_error)?;
-        transaction
-            .execute(
-                "insert into host_agent_events(run_id, sequence, code, payload)
-                 values (?1, ?2, 'run.interrupted', 'host_epoch_ended')",
-                params![run_id, next_event_sequence.to_string()],
-            )
-            .map_err(sqlite_error)?;
-        let pending_json = {
-            let mut statement = transaction
-                .prepare(
-                    "select record_json from host_command_outbox
-                     where run_id = ?1 and status in ('pending_copy', 'copied')",
-                )
-                .map_err(sqlite_error)?;
-            let rows = statement
-                .query_map(params![run_id], |row| row.get::<_, String>(0))
-                .map_err(sqlite_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_error)?;
-            rows
-        };
-        for json in pending_json {
-            let row: HostCommandOutboxRow = decode(&json)?;
-            update_outbox(&transaction, &row.cancelled())?;
-        }
-        transaction
-            .execute(
-                "delete from global_run_lease where singleton_id = 1 and owner_run_id = ?1
-                 and host_process_epoch = ?2",
-                params![run_id, worker.host_process_epoch()],
-            )
-            .map_err(sqlite_error)?;
+        let recovered = recover_sqlite_worker(&transaction, worker)?;
         transaction.commit().map_err(sqlite_error)?;
         Ok(recovered)
     }
@@ -2011,6 +1989,74 @@ fn insert_worker(
         )
         .map_err(sqlite_error)?;
     Ok(())
+}
+
+fn recover_sqlite_worker(
+    transaction: &Transaction<'_>,
+    worker: HostWorkerRecord,
+) -> Result<HostWorkerRecord, RuntimeStateError> {
+    let recovered = worker
+        .clone()
+        .with_revision(worker.revision() + 1)
+        .with_execution_phase(None)
+        .with_logical_outcome(LogicalRunOutcome::Interrupted {
+            code: "execution.llm_continuation_lost".into(),
+        })
+        .with_watchdog(None, None, None)
+        .with_resource_lifecycle(ResourceLifecycle::Closed {
+            disposition: HostSessionCloseDisposition::EpochEnded,
+        });
+    update_worker(transaction, worker.revision(), &recovered)?;
+    let session = load_session(transaction, worker.session_handle())?.ok_or_else(not_found)?;
+    update_session(
+        transaction,
+        &session
+            .clone()
+            .with_resource_lifecycle(ResourceLifecycle::Closed {
+                disposition: HostSessionCloseDisposition::EpochEnded,
+            }),
+    )?;
+    let next_event_sequence: u64 = transaction
+        .query_row(
+            "select coalesce(max(cast(sequence as integer)), 0) + 1
+             from host_agent_events where run_id = ?1",
+            params![worker.run_id()],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    transaction
+        .execute(
+            "insert into host_agent_events(run_id, sequence, code, payload)
+             values (?1, ?2, 'run.interrupted', 'execution.llm_continuation_lost')",
+            params![worker.run_id(), next_event_sequence.to_string()],
+        )
+        .map_err(sqlite_error)?;
+    let pending_json = {
+        let mut statement = transaction
+            .prepare(
+                "select record_json from host_command_outbox
+                 where run_id = ?1 and status in ('pending_copy', 'copied')",
+            )
+            .map_err(sqlite_error)?;
+        let rows = statement
+            .query_map(params![worker.run_id()], |row| row.get::<_, String>(0))
+            .map_err(sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_error)?;
+        rows
+    };
+    for json in pending_json {
+        let row: HostCommandOutboxRow = decode(&json)?;
+        update_outbox(transaction, &row.cancelled())?;
+    }
+    transaction
+        .execute(
+            "delete from global_run_lease where singleton_id = 1 and owner_run_id = ?1
+             and host_process_epoch = ?2",
+            params![worker.run_id(), worker.host_process_epoch()],
+        )
+        .map_err(sqlite_error)?;
+    Ok(recovered)
 }
 
 fn update_worker(

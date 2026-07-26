@@ -330,7 +330,7 @@ fn old_epoch_recovery_closes_resources_cancels_outbox_and_releases_lease_atomica
 
     assert!(matches!(
         recovered.logical_outcome(),
-        LogicalRunOutcome::Interrupted { code } if code == "host_epoch_ended"
+        LogicalRunOutcome::Interrupted { code } if code == "execution.llm_continuation_lost"
     ));
     assert_eq!(
         recovered.resource_lifecycle(),

@@ -494,6 +494,10 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
     ) -> Result<HostCommandOutboxRow, RuntimeStateError> {
         self.transition_and_enqueue(transition)
     }
+    fn reconcile_for_host_epoch(
+        &self,
+        current_epoch: &str,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError>;
     fn recover_run_for_epoch(
         &self,
         run_id: &str,
@@ -1017,8 +1021,9 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .with_revision(worker.revision() + 1)
             .with_execution_phase(None)
             .with_logical_outcome(LogicalRunOutcome::Interrupted {
-                code: "host_epoch_ended".into(),
+                code: "execution.llm_continuation_lost".into(),
             })
+            .with_watchdog(None, None, None)
             .with_resource_lifecycle(ResourceLifecycle::Closed {
                 disposition: HostSessionCloseDisposition::EpochEnded,
             });
@@ -1034,7 +1039,10 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .agent_events
             .entry(run_id.to_string())
             .or_default()
-            .push(("run.interrupted".into(), "host_epoch_ended".into()));
+            .push((
+                "run.interrupted".into(),
+                "execution.llm_continuation_lost".into(),
+            ));
         for row in state
             .commands
             .values_mut()
@@ -1042,7 +1050,38 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         {
             *row = row.clone().cancelled();
         }
+        drop(state);
+        self.agent_os_state
+            .with_mut(|repository| repository.recover_old_epoch(current_epoch).map(|_| ()))
+            .map_err(|error| {
+                RuntimeStateError::new("llm.recovery.lease_failed", error.to_string())
+            })?;
         Ok(recovered)
+    }
+
+    fn reconcile_for_host_epoch(
+        &self,
+        current_epoch: &str,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError> {
+        let run_ids = self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .workers
+            .values()
+            .filter(|worker| {
+                worker.host_process_epoch() != current_epoch
+                    && !matches!(
+                        worker.resource_lifecycle(),
+                        ResourceLifecycle::Closed { .. }
+                    )
+            })
+            .map(|worker| worker.run_id().to_string())
+            .collect::<Vec<_>>();
+        run_ids
+            .iter()
+            .map(|run_id| self.recover_run_for_epoch(run_id, current_epoch))
+            .collect()
     }
 
     fn host_worker(&self, run_id: &str) -> Result<Option<HostWorkerRecord>, RuntimeStateError> {

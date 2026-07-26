@@ -29,6 +29,8 @@ mod host_llm_contracts;
 mod host_llm_event_ingress;
 #[path = "contract/host_llm_outbox.rs"]
 mod host_llm_outbox;
+#[path = "contract/host_llm_recovery.rs"]
+mod host_llm_recovery;
 #[path = "contract/host_llm_worker.rs"]
 mod host_llm_worker;
 #[path = "contract/inference_backend_agent_os.rs"]

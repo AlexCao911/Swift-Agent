@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMHost
 import LocalAgentLLMLocal
 import LocalNativeToolkit
 
@@ -232,7 +233,13 @@ enum AppBootstrapper {
         ))
         catalogBox.catalog = nativeCatalog
         let nativeToolkitClient = NativeToolkitClient(catalog: nativeCatalog)
-        let toolDriver = NativeHostToolDriver(toolkit: nativeToolkitClient)
+        let effectLedger = try HostToolEffectLedger(
+            fileURL: try hostToolEffectsURL()
+        )
+        let toolDriver = NativeHostToolDriver(
+            toolkit: nativeToolkitClient,
+            effectLedger: effectLedger
+        )
         let builderToolCatalogClient = NativeManifestToolCatalogClient(catalogProvider: {
             nativeCatalog
         })
@@ -347,6 +354,12 @@ enum AppBootstrapper {
             .appendingPathComponent("PendingInteractions", isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    static func hostToolEffectsURL(fileManager: FileManager = .default) throws -> URL {
+        try sqliteURL(fileManager: fileManager)
+            .deletingLastPathComponent()
+            .appendingPathComponent("host-tool-effects.sqlite")
     }
 
     private static func recoverSQLiteStore(
