@@ -78,6 +78,8 @@ pub struct HostWorkerRecord {
     expected_event_sequence: u64,
     generation_turn_id: Option<String>,
     watchdog_kind: Option<HostWatchdogKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    watchdog_command_id: Option<String>,
     watchdog_deadline_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     generation_payload: Option<HostCommandPayload>,
@@ -106,6 +108,7 @@ impl HostWorkerRecord {
             expected_event_sequence: 1,
             generation_turn_id: None,
             watchdog_kind: None,
+            watchdog_command_id: None,
             watchdog_deadline_millis: None,
             generation_payload: None,
             generation_disclosure: None,
@@ -142,6 +145,15 @@ impl HostWorkerRecord {
     }
     pub fn generation_turn_id(&self) -> Option<&str> {
         self.generation_turn_id.as_deref()
+    }
+    pub fn watchdog_kind(&self) -> Option<HostWatchdogKind> {
+        self.watchdog_kind
+    }
+    pub fn watchdog_command_id(&self) -> Option<&str> {
+        self.watchdog_command_id.as_deref()
+    }
+    pub fn watchdog_deadline_millis(&self) -> Option<u64> {
+        self.watchdog_deadline_millis
     }
     pub fn is_fully_terminal(&self) -> bool {
         !matches!(self.logical_outcome, LogicalRunOutcome::Pending)
@@ -188,9 +200,11 @@ impl HostWorkerRecord {
     pub fn with_watchdog(
         mut self,
         kind: Option<HostWatchdogKind>,
+        command_id: Option<String>,
         deadline_millis: Option<u64>,
     ) -> Self {
         self.watchdog_kind = kind;
+        self.watchdog_command_id = command_id;
         self.watchdog_deadline_millis = deadline_millis;
         self
     }

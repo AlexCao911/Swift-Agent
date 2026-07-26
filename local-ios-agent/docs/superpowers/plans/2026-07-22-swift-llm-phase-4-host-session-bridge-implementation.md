@@ -1633,7 +1633,7 @@ git commit -m "feat: resume host llm runs with ordered tool batches"
 - Rejected close/prepared-cleanup acknowledgement, missing close receipt, or close backend failure moves resources to `quarantined` and keeps the lease `releasing`; it never overwrites an already committed success output with a generic run failure. The lifecycle diagnostic remains separately observable.
 - Local close releases generation/session only; loaded model may remain in RAM. Cloud close releases provider session and exact credential-use lease.
 
-- [ ] **Step 1: Write failing race and watchdog tests**
+- [x] **Step 1: Write failing race and watchdog tests**
 
 Cover terminal-first, cancel-first, simultaneous cancel/terminal, callback-blocked local cancel, backend-blocked local cancel, provider cancel-once, missing cancelled, rejected close/prepared-cleanup acknowledgement, missing close, late exact close, duplicate close, and logical success while physical cleanup is quarantined:
 
@@ -1666,7 +1666,7 @@ Cover terminal-first, cancel-first, simultaneous cancel/terminal, callback-block
 }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostCancellationTests
@@ -1675,7 +1675,7 @@ CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test co
 
 Expected: lifecycle acknowledgements are not yet separated from backend terminal/close confirmation.
 
-- [ ] **Step 3: Add independent persisted watchdogs and cancel-once arbitration**
+- [x] **Step 3: Add independent persisted watchdogs and cancel-once arbitration**
 
 Persist deadlines as `(kind, command_id, deadline_millis, state_revision)`. A deadline handler performs a CAS against the same state/command before transitioning the resource axis. Use these stable lifecycle diagnostics:
 
@@ -1687,7 +1687,7 @@ llm.session.close_timeout
 
 The Swift actor claims a cancel/close command ID before calling the backend. Duplicate claimants await the same task. It submits `cancelled(cancelCommandID)` only after backend confirmation and `session_closed(closeCommandID)` only after all session resources are released. Rust applies each through the unified event transaction; accepted `session_closed` changes only the resource axis to `closed`, completes lease release, and derives fully-terminal status from both axes. Swift tombstones the handle only after Rust accepts the close event. A rejected acknowledgement/timeout keeps the registry entry quarantined for epoch recovery.
 
-- [ ] **Step 4: Run GREEN and native/cloud cancel regressions**
+- [x] **Step 4: Run GREEN and native/cloud cancel regressions**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostCancellationTests
@@ -1699,7 +1699,7 @@ git diff --check
 
 Expected: races have one deterministic logical outcome, backend cancel/close are once-only, quarantined cleanup cannot release a lease or hide output, and the exact close gate is enforced.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/execution rust-core/src/storage \

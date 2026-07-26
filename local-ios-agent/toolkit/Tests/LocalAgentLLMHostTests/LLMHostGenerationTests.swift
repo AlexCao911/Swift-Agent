@@ -50,6 +50,56 @@ struct LLMHostGenerationTests {
         #expect(await sink.eventKinds() == [.failed])
         #expect(await sink.events().only?.payload.failureCode == "generation_failed")
     }
+
+    @Test
+    func cancelAndCloseAcknowledgeClaimsBeforeBackendTerminalAndRunOnce() async throws {
+        let driver = LifecycleGenerationDriver()
+        let sink = GenerationRustSink()
+        let harness = try await GenerationHarness.make(driver: driver, sink: sink)
+
+        #expect(harness.runtime.copy(try harness.dispatch()) == .copied)
+        await eventually { await sink.eventKinds() == [.generationStarted] }
+
+        let cancel = try lifecycleCommand(
+            from: harness.command,
+            commandID: "cancel-1",
+            sequence: 2,
+            kind: .cancelGeneration
+        )
+        let cancelDispatch = try dispatch(cancel)
+        #expect(harness.runtime.copy(cancelDispatch) == .copied)
+        await eventually { await sink.acknowledgementCount() == 2 }
+        #expect(await sink.acknowledgementCount() == 2)
+        #expect(await driver.cancelCount() == 1)
+        #expect(await sink.eventKinds() == [.generationStarted])
+
+        #expect(harness.runtime.copy(cancelDispatch) == .copied)
+        await driver.confirmCancel()
+        await eventually { await sink.eventKinds().last == .cancelled }
+        #expect(await driver.cancelCount() == 1)
+
+        let close = try lifecycleCommand(
+            from: harness.command,
+            commandID: "close-1",
+            sequence: 3,
+            kind: .closeSession
+        )
+        #expect(harness.runtime.copy(try dispatch(close)) == .copied)
+        await eventually { await sink.acknowledgementCount() == 3 }
+        #expect(await sink.acknowledgementCount() == 3)
+        await eventually { await driver.closeCount() == 1 }
+        #expect(await driver.closeCount() == 1)
+        #expect(await sink.eventKinds().last == .cancelled)
+
+        await driver.confirmClose()
+        await eventually { await sink.eventKinds().last == .sessionClosed }
+        await eventually {
+            await harness.runtime.bridgeActor.lifecycle(
+                for: harness.command.sessionHandle
+            ) == .closed
+        }
+        #expect(await driver.closeCount() == 1)
+    }
 }
 
 private struct GenerationHarness {
@@ -161,6 +211,55 @@ private struct HangingGenerationDriver: LLMHostSessionDriver {
     func close() async throws {}
 }
 
+private actor LifecycleGenerationDriver: LLMHostSessionDriver {
+    private var stream: AsyncThrowingStream<LLMBackendEvent, Error>.Continuation?
+    private var cancelCalls = 0
+    private var closeCalls = 0
+    private var cancelConfirmation: CheckedContinuation<Void, Never>?
+    private var closeConfirmation: CheckedContinuation<Void, Never>?
+
+    func makeAuthorizedLaunch(
+        for turn: HostGenerationTurn,
+        mode: HostGenerationMode
+    ) async throws -> AuthorizedHostGenerationLaunch {
+        let (events, continuation) = AsyncThrowingStream<
+            LLMBackendEvent,
+            Error
+        >.makeStream()
+        stream = continuation
+        return AuthorizedHostGenerationLaunch {
+            return HostGenerationOperation(
+                opaqueOperationID: "lifecycle-operation",
+                events: events
+            )
+        }
+    }
+
+    func cancel() async throws {
+        cancelCalls += 1
+        await withCheckedContinuation { cancelConfirmation = $0 }
+        stream?.finish()
+    }
+
+    func close() async throws {
+        closeCalls += 1
+        await withCheckedContinuation { closeConfirmation = $0 }
+    }
+
+    func confirmCancel() {
+        cancelConfirmation?.resume()
+        cancelConfirmation = nil
+    }
+
+    func confirmClose() {
+        closeConfirmation?.resume()
+        closeConfirmation = nil
+    }
+
+    func cancelCount() -> Int { cancelCalls }
+    func closeCount() -> Int { closeCalls }
+}
+
 private actor GenerationDriver: LLMHostSessionDriver {
     private var authorizationRequests = 0
     private var launches = 0
@@ -247,6 +346,54 @@ private struct GenerationDispatchEnvelope: Encodable {
         case dispatchKind = "dispatch_kind"
         case command
     }
+}
+
+private func lifecycleCommand(
+    from source: HostCommandEnvelope,
+    commandID: String,
+    sequence: UInt64,
+    kind: HostCommandKind
+) throws -> HostCommandEnvelope {
+    let draft = HostCommandEnvelope(
+        schemaVersion: 1,
+        commandID: commandID,
+        runID: source.runID,
+        sessionHandle: source.sessionHandle,
+        hostProcessEpoch: source.hostProcessEpoch,
+        commandSequence: sequence,
+        generationTurnID: nil,
+        kind: kind,
+        payloadDigest: source.payloadDigest,
+        disclosureDigest: nil,
+        commandEnvelopeDigest: "",
+        disclosure: nil,
+        payload: source.payload
+    )
+    return HostCommandEnvelope(
+        schemaVersion: draft.schemaVersion,
+        commandID: draft.commandID,
+        runID: draft.runID,
+        sessionHandle: draft.sessionHandle,
+        hostProcessEpoch: draft.hostProcessEpoch,
+        commandSequence: draft.commandSequence,
+        generationTurnID: nil,
+        kind: draft.kind,
+        payloadDigest: draft.payloadDigest,
+        disclosureDigest: nil,
+        commandEnvelopeDigest: try draft.recomputedDigest().hex,
+        disclosure: nil,
+        payload: draft.payload
+    )
+}
+
+private func dispatch(_ command: HostCommandEnvelope) throws -> Data {
+    try JSONEncoder().encode(
+        GenerationDispatchEnvelope(
+            schemaVersion: 1,
+            dispatchKind: "command",
+            command: command
+        )
+    )
 }
 
 private func loadGenerationCommandFixture() throws -> HostCommandEnvelope {

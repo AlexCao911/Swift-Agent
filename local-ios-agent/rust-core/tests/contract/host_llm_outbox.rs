@@ -7,12 +7,13 @@ use local_ios_agent_runtime::conversation::{
     ConversationRunFrameRef,
 };
 use local_ios_agent_runtime::core::{EntryId, SessionId};
-use local_ios_agent_runtime::execution::ExecutionEventLog;
+use local_ios_agent_runtime::execution::{ExecutionEventLog, HostLLMWorkerService};
 use local_ios_agent_runtime::llm_contracts::{
     GlobalRunLeaseState, HostCommandAcknowledgement, HostCommandAcknowledgementDisposition,
     HostCommandEnvelope, HostExecutionPhase, HostSessionCloseDisposition, HostSessionRecord,
-    HostWorkerRecord, LLMEventEnvelope, LLMEventReceiptDisposition, LLMEventSubmissionResult,
-    LogicalRunOutcome, PreparedSessionRegistration, ResourceLifecycle,
+    HostWatchdogKind, HostWorkerRecord, LLMBackendCompletionWire, LLMEventEnvelope, LLMEventKind,
+    LLMEventPayload, LLMEventReceiptDisposition, LLMEventSubmissionResult, LogicalRunOutcome,
+    PreparedSessionRegistration, ResourceLifecycle,
 };
 use local_ios_agent_runtime::run_snapshot::{
     RunPreparationService, RunSnapshotService, StartRunRequest,
@@ -363,6 +364,139 @@ fn old_epoch_recovery_closes_resources_cancels_outbox_and_releases_lease_atomica
         .any(|event| event.code() == "run.interrupted"));
 }
 
+#[test]
+fn lifecycle_watchdogs_preserve_logical_outcome_and_schedule_at_most_one_close() {
+    let store = SqliteRuntimeStateStore::open_in_memory().unwrap();
+    let worker = worker_fixture()
+        .with_execution_phase(None)
+        .with_logical_outcome(LogicalRunOutcome::Succeeded {
+            finish_reason: "stop".into(),
+        })
+        .with_resource_lifecycle(ResourceLifecycle::AwaitingSessionClosed)
+        .with_watchdog(
+            Some(HostWatchdogKind::SessionClose),
+            Some("close-command".into()),
+            Some(5),
+        );
+    let session =
+        session_fixture().with_resource_lifecycle(ResourceLifecycle::AwaitingSessionClosed);
+    store.insert_worker_and_session(worker, session).unwrap();
+
+    assert_eq!(store.fail_expired_host_watchdogs(6).unwrap().len(), 1);
+    assert!(matches!(
+        store.host_worker("run-1").unwrap().unwrap().logical_outcome(),
+        LogicalRunOutcome::Succeeded { finish_reason } if finish_reason == "stop"
+    ));
+    assert!(matches!(
+        store
+            .host_worker("run-1")
+            .unwrap()
+            .unwrap()
+            .resource_lifecycle(),
+        ResourceLifecycle::Quarantined { code } if code == "llm.session.close_timeout"
+    ));
+    assert!(store.fail_expired_host_watchdogs(7).unwrap().is_empty());
+    assert!(store.pending_host_commands().unwrap().is_empty());
+}
+
+#[test]
+fn exact_session_closed_is_the_only_normal_lease_release_gate() {
+    let store = SqliteRuntimeStateStore::open_in_memory().unwrap();
+    let commit = prepared_commit_fixture(&store);
+    store.commit_prepared_host_run(commit).unwrap();
+    let start = store.pending_host_commands().unwrap()[0]
+        .payload()
+        .unwrap()
+        .clone();
+    acknowledge(
+        &store,
+        &start,
+        HostCommandAcknowledgementDisposition::Accepted,
+    );
+    let service = HostLLMWorkerService::new(Arc::new(store.clone()));
+    assert_eq!(
+        service
+            .submit_event(&host_event(
+                1,
+                "started",
+                LLMEventKind::GenerationStarted,
+                LLMEventPayload {
+                    command_id: Some(start.command_id().into()),
+                    opaque_operation_id: Some("operation-1".into()),
+                    ..Default::default()
+                },
+                Some("turn-1"),
+            ))
+            .unwrap(),
+        LLMEventSubmissionResult::Accepted
+    );
+    assert_eq!(
+        service
+            .submit_event(&host_event(
+                2,
+                "completed",
+                LLMEventKind::GenerationCompleted,
+                LLMEventPayload {
+                    completion: Some(LLMBackendCompletionWire {
+                        outcome: "final_response".into(),
+                        ordered_call_ids: vec![],
+                        finish_reason: "stop".into(),
+                    }),
+                    ..Default::default()
+                },
+                Some("turn-1"),
+            ))
+            .unwrap(),
+        LLMEventSubmissionResult::Accepted
+    );
+    assert_eq!(
+        store
+            .agent_os_state()
+            .with(|repository| repository.current_global_run_lease())
+            .unwrap()
+            .unwrap()
+            .state(),
+        GlobalRunLeaseState::Releasing
+    );
+
+    let close = store.pending_host_commands().unwrap()[0]
+        .payload()
+        .unwrap()
+        .clone();
+    acknowledge(
+        &store,
+        &close,
+        HostCommandAcknowledgementDisposition::Accepted,
+    );
+    assert_eq!(
+        service
+            .submit_event(&host_event(
+                3,
+                "closed",
+                LLMEventKind::SessionClosed,
+                LLMEventPayload {
+                    command_id: Some(close.command_id().into()),
+                    close_disposition: Some("closed".into()),
+                    ..Default::default()
+                },
+                None,
+            ))
+            .unwrap(),
+        LLMEventSubmissionResult::Accepted
+    );
+
+    assert!(store
+        .host_worker("run-1")
+        .unwrap()
+        .unwrap()
+        .is_fully_terminal());
+    assert!(store
+        .agent_os_state()
+        .with(|repository| repository.current_global_run_lease())
+        .unwrap()
+        .is_none());
+}
+
 fn worker_fixture() -> HostWorkerRecord {
     HostWorkerRecord::new(
         "run-1",
@@ -392,6 +526,46 @@ fn transition_fixture() -> RuntimeTransition {
             .with_execution_phase(Some(HostExecutionPhase::AwaitingGenerationStarted)),
         command,
     )
+}
+
+fn acknowledge(
+    store: &SqliteRuntimeStateStore,
+    command: &HostCommandEnvelope,
+    disposition: HostCommandAcknowledgementDisposition,
+) {
+    store
+        .acknowledge_command(&HostCommandAcknowledgement {
+            command_id: command.command_id().into(),
+            session_handle: command.session_handle().into(),
+            command_sequence: command.command_sequence(),
+            command_envelope_digest: command.command_envelope_digest().into(),
+            disposition,
+            rejection_code: None,
+        })
+        .unwrap();
+}
+
+fn host_event(
+    sequence: u64,
+    id: &str,
+    kind: LLMEventKind,
+    payload: LLMEventPayload,
+    generation_turn_id: Option<&str>,
+) -> LLMEventEnvelope {
+    let mut event = LLMEventEnvelope {
+        schema_version: 1,
+        event_id: id.into(),
+        run_id: "run-1".into(),
+        session_handle: "session-1".into(),
+        host_process_epoch: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        generation_turn_id: generation_turn_id.map(str::to_string),
+        event_sequence: sequence,
+        kind,
+        payload,
+        event_envelope_digest: String::new(),
+    };
+    event.event_envelope_digest = event.expected_digest().unwrap();
+    event
 }
 
 fn prepared_commit_fixture(store: &SqliteRuntimeStateStore) -> PreparedHostRunCommit {
@@ -457,7 +631,7 @@ fn prepared_commit_fixture_for_state(
         snapshot_json: r#"{"schema_version":2,"run_id":"run-1"}"#.into(),
         initial_event_code: "run.started".into(),
         initial_event_payload: "run.started".into(),
-        worker: worker_fixture(),
+        worker: worker_fixture().with_generation_turn_id(Some("turn-1".into())),
         session: session_fixture(),
         first_command: wire_fixture("host-command-envelope-v1.json"),
     }

@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution::{ExecutionEvent, ExecutionEventRepository};
 use crate::llm_contracts::{
-    HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
-    HostCommandEnvelope, HostCommandKind, HostExecutionPhase, HostRunHandle,
-    HostSessionCloseDisposition, HostSessionRecord, HostWorkerRecord, LLMEventEnvelope,
-    LLMEventReceipt, LLMEventReceiptDisposition, LLMEventSubmissionResult, LogicalRunOutcome,
-    PreparationError, PreparationReconciliation, PreparedSessionCleanupIdentity, ResourceLifecycle,
-    RunPreparationState,
+    GlobalRunLeaseState, HostCommandAcknowledgement, HostCommandAcknowledgementDisposition,
+    HostCommandCopyReceipt, HostCommandEnvelope, HostCommandKind, HostExecutionPhase,
+    HostRunHandle, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,
+    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
+    LLMEventSubmissionResult, LogicalRunOutcome, PreparationError, PreparationReconciliation,
+    PreparedSessionCleanupIdentity, ResourceLifecycle, RunPreparationState,
 };
 use crate::storage::agent_os_state::{PreparedRunConsumption, SharedAgentOSStateStore};
 
@@ -62,6 +62,7 @@ pub const HOST_EVENT_MAX_EVENTS: usize = 256;
 pub const HOST_EVENT_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const HOST_EVENT_LOW_WATER_EVENTS: usize = 128;
 pub const HOST_EVENT_LOW_WATER_BYTES: usize = 1024 * 1024;
+pub const HOST_LIFECYCLE_TIMEOUT_MILLIS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EventQueueUsage {
@@ -270,13 +271,28 @@ pub(crate) fn apply_command_acknowledgement_state(
         HostCommandAcknowledgementDisposition::Accepted => match kind {
             HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration => {
                 next_worker = next_worker
-                    .with_execution_phase(Some(HostExecutionPhase::AwaitingGenerationStarted));
+                    .with_execution_phase(Some(HostExecutionPhase::AwaitingGenerationStarted))
+                    .with_watchdog(
+                        Some(HostWatchdogKind::GenerationStart),
+                        Some(acknowledgement.command_id().to_string()),
+                        Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                    );
             }
             HostCommandKind::CancelGeneration => {
                 lifecycle = ResourceLifecycle::AwaitingCancelledTerminal;
+                next_worker = next_worker.with_watchdog(
+                    Some(HostWatchdogKind::CancelTerminal),
+                    Some(acknowledgement.command_id().to_string()),
+                    Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                );
             }
             HostCommandKind::CloseSession => {
                 lifecycle = ResourceLifecycle::AwaitingSessionClosed;
+                next_worker = next_worker.with_watchdog(
+                    Some(HostWatchdogKind::SessionClose),
+                    Some(acknowledgement.command_id().to_string()),
+                    Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                );
             }
             HostCommandKind::CapacityAvailable => {}
         },
@@ -287,7 +303,11 @@ pub(crate) fn apply_command_acknowledgement_state(
                 .to_string();
             next_worker = next_worker
                 .with_execution_phase(None)
-                .with_logical_outcome(LogicalRunOutcome::Failed { code: code.clone() });
+                .with_watchdog(None, None, None);
+            if matches!(worker.logical_outcome(), LogicalRunOutcome::Pending) {
+                next_worker = next_worker
+                    .with_logical_outcome(LogicalRunOutcome::Failed { code: code.clone() });
+            }
             match kind {
                 HostCommandKind::CloseSession | HostCommandKind::CapacityAvailable => {
                     lifecycle = ResourceLifecycle::Quarantined { code };
@@ -455,6 +475,10 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
         &self,
         command_id: &str,
     ) -> Result<HostWorkerRecord, RuntimeStateError>;
+    fn fail_expired_host_watchdogs(
+        &self,
+        now_millis: u64,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError>;
     fn acknowledge_command(
         &self,
         acknowledgement: &HostCommandAcknowledgement,
@@ -716,6 +740,18 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             *state = original;
             return Err(error);
         }
+        let worker = state
+            .workers
+            .get(row.run_id())
+            .cloned()
+            .ok_or_else(not_found)?;
+        drop(state);
+        sync_in_memory_global_lease(
+            &self.agent_os_state,
+            worker.run_id(),
+            worker.host_process_epoch(),
+            worker.resource_lifecycle(),
+        )?;
         Ok(row)
     }
 
@@ -806,17 +842,30 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
                 code: "llm.command.ack_timeout".into(),
             }
         };
-        let failed = worker
+        let logical_outcome = if matches!(worker.logical_outcome(), LogicalRunOutcome::Pending) {
+            LogicalRunOutcome::Failed {
+                code: "llm.command.ack_timeout".into(),
+            }
+        } else {
+            worker.logical_outcome().clone()
+        };
+        let mut failed = worker
             .clone()
             .with_revision(worker.revision() + 1)
             .with_execution_phase(None)
-            .with_logical_outcome(LogicalRunOutcome::Failed {
-                code: "llm.command.ack_timeout".into(),
-            })
+            .with_logical_outcome(logical_outcome)
             .with_resource_lifecycle(lifecycle.clone())
             .with_expected_command_sequence(
                 worker.expected_command_sequence() + u64::from(close_command.is_some()),
+            )
+            .with_watchdog(None, None, None);
+        if let Some(close) = close_command.as_ref() {
+            failed = failed.with_watchdog(
+                Some(HostWatchdogKind::CloseCommandAck),
+                Some(close.command_id().to_string()),
+                Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
             );
+        }
         state
             .workers
             .insert(row.run_id().to_string(), failed.clone());
@@ -833,6 +882,65 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
                 .insert(close_row.command_id().to_string(), close_row);
         }
         Ok(failed)
+    }
+
+    fn fail_expired_host_watchdogs(
+        &self,
+        now_millis: u64,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let run_ids = state
+            .workers
+            .values()
+            .filter(|worker| {
+                worker
+                    .watchdog_deadline_millis()
+                    .is_some_and(|deadline| deadline <= now_millis)
+            })
+            .map(|worker| worker.run_id().to_string())
+            .collect::<Vec<_>>();
+        let mut expired = Vec::with_capacity(run_ids.len());
+        for run_id in run_ids {
+            let worker = state.workers.get(&run_id).cloned().ok_or_else(not_found)?;
+            let session = state
+                .sessions
+                .get(worker.session_handle())
+                .cloned()
+                .ok_or_else(not_found)?;
+            let Some((next_worker, next_session, close)) =
+                expired_watchdog_state(&worker, &session, now_millis)?
+            else {
+                continue;
+            };
+            if let Some(command_id) = worker.watchdog_command_id() {
+                if let Some(row) = state.commands.get_mut(command_id) {
+                    *row = row.clone().timed_out();
+                }
+            }
+            state
+                .workers
+                .insert(next_worker.run_id().to_string(), next_worker.clone());
+            state
+                .sessions
+                .insert(next_session.session_handle().to_string(), next_session);
+            if let Some(close) = close {
+                state.commands.insert(
+                    close.command_id().to_string(),
+                    HostCommandOutboxRow::pending(close),
+                );
+            }
+            expired.push(next_worker);
+        }
+        drop(state);
+        for worker in &expired {
+            sync_in_memory_global_lease(
+                &self.agent_os_state,
+                worker.run_id(),
+                worker.host_process_epoch(),
+                worker.resource_lifecycle(),
+            )?;
+        }
+        Ok(expired)
     }
 
     fn acknowledge_command(
@@ -885,7 +993,13 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         event: &LLMEventEnvelope,
         result: LLMEventSubmissionResult,
     ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
-        apply_event_in_memory(&self.inner, &self.failure, event, result)
+        apply_event_in_memory(
+            &self.inner,
+            &self.failure,
+            &self.agent_os_state,
+            event,
+            result,
+        )
     }
 
     fn recover_run_for_epoch(
@@ -1206,6 +1320,7 @@ impl ExecutionEventRepository for InMemoryRuntimeStateStore {
 fn apply_event_in_memory(
     state: &Mutex<InMemoryRuntimeState>,
     failure: &Mutex<Option<RuntimeAggregateFailurePoint>>,
+    agent_os_state: &SharedAgentOSStateStore,
     event: &LLMEventEnvelope,
     result: LLMEventSubmissionResult,
 ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
@@ -1226,10 +1341,62 @@ fn apply_event_in_memory(
     }
     let original = state.clone();
     let outcome = apply_event_in_memory_mutation(&mut state, failure, event, result);
+    if outcome.is_ok() {
+        let lifecycle = state
+            .workers
+            .get(event.run_id())
+            .map(HostWorkerRecord::resource_lifecycle)
+            .cloned();
+        if let Some(lifecycle) = lifecycle {
+            if let Err(error) = sync_in_memory_global_lease(
+                agent_os_state,
+                event.run_id(),
+                event.host_process_epoch(),
+                &lifecycle,
+            ) {
+                *state = original;
+                return Err(error);
+            }
+        }
+    }
     if outcome.is_err() {
         *state = original;
     }
     outcome
+}
+
+fn sync_in_memory_global_lease(
+    state: &SharedAgentOSStateStore,
+    run_id: &str,
+    host_epoch: &str,
+    lifecycle: &ResourceLifecycle,
+) -> Result<(), RuntimeStateError> {
+    state
+        .with_mut(|repository| {
+            let Some(lease) = repository.current_global_run_lease()? else {
+                return Ok(());
+            };
+            if lease.owner_run_id() != Some(run_id) || lease.host_process_epoch() != host_epoch {
+                return Ok(());
+            }
+            match lifecycle {
+                ResourceLifecycle::AwaitingCloseCommandAck
+                | ResourceLifecycle::AwaitingSessionClosed
+                    if lease.state() == GlobalRunLeaseState::Active =>
+                {
+                    repository
+                        .begin_release(lease.generation(), run_id, host_epoch)
+                        .map(|_| ())
+                }
+                ResourceLifecycle::Closed { .. }
+                    if lease.state() == GlobalRunLeaseState::Releasing =>
+                {
+                    repository.complete_release(lease.generation(), host_epoch)
+                }
+                _ => Ok(()),
+            }
+        })
+        .map_err(|error| RuntimeStateError::new("llm.lease.transition_failed", error.to_string()))
 }
 
 fn apply_event_in_memory_mutation(
@@ -1444,16 +1611,18 @@ pub(crate) fn accepted_event_state(
         let code = "llm.event.payload_too_large".to_string();
         next_worker = next_worker
             .with_execution_phase(None)
-            .with_logical_outcome(LogicalRunOutcome::Failed { code })
-            .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+            .with_logical_outcome(LogicalRunOutcome::Failed { code });
         lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
-        close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
+        let (armed, command) = arm_terminal_close(worker, next_worker)?;
+        next_worker = armed;
+        close = Some(command);
     } else if result == LLMEventSubmissionResult::Accepted {
         use crate::llm_contracts::LLMEventKind;
         match event.kind() {
             LLMEventKind::GenerationStarted => {
-                next_worker =
-                    next_worker.with_execution_phase(Some(HostExecutionPhase::ConsumingLlmTurn));
+                next_worker = next_worker
+                    .with_execution_phase(Some(HostExecutionPhase::ConsumingLlmTurn))
+                    .with_watchdog(None, None, None);
                 lifecycle = ResourceLifecycle::Generating;
             }
             LLMEventKind::GenerationCompleted => {
@@ -1501,22 +1670,24 @@ pub(crate) fn accepted_event_state(
                         })
                         .to_string(),
                     ));
-                    next_worker = next_worker
-                        .with_execution_phase(None)
-                        .with_logical_outcome(LogicalRunOutcome::Succeeded {
+                    next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
+                        LogicalRunOutcome::Succeeded {
                             finish_reason: completion.finish_reason.clone(),
-                        })
-                        .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+                        },
+                    );
                     lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
-                    close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
+                    let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                    next_worker = armed;
+                    close = Some(command);
                 } else {
                     let code = "llm.turn.invalid_tool_batch".to_string();
                     next_worker = next_worker
                         .with_execution_phase(None)
-                        .with_logical_outcome(LogicalRunOutcome::Failed { code })
-                        .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+                        .with_logical_outcome(LogicalRunOutcome::Failed { code });
                     lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
-                    close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
+                    let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                    next_worker = armed;
+                    close = Some(command);
                 }
             }
             LLMEventKind::Failed => {
@@ -1529,16 +1700,25 @@ pub(crate) fn accepted_event_state(
                             .unwrap_or_else(|| "llm.generation.failed".into()),
                     },
                 );
+                lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                next_worker = armed;
+                close = Some(command);
             }
             LLMEventKind::Cancelled => {
                 next_worker = next_worker
                     .with_execution_phase(None)
                     .with_logical_outcome(LogicalRunOutcome::Cancelled);
+                lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                next_worker = armed;
+                close = Some(command);
             }
             LLMEventKind::SessionClosed => {
                 lifecycle = ResourceLifecycle::Closed {
                     disposition: HostSessionCloseDisposition::Closed,
                 };
+                next_worker = next_worker.with_watchdog(None, None, None);
             }
             _ => {}
         }
@@ -1658,8 +1838,9 @@ pub(crate) fn protocol_failure_state(
         .with_logical_outcome(LogicalRunOutcome::Interrupted { code })
         .with_resource_lifecycle(lifecycle.clone());
     let close = if matches!(lifecycle, ResourceLifecycle::AwaitingCloseCommandAck) {
-        next = next.with_expected_command_sequence(worker.expected_command_sequence() + 1);
-        Some(lifecycle_command(worker, HostCommandKind::CloseSession)?)
+        let (armed, command) = arm_terminal_close(worker, next)?;
+        next = armed;
+        Some(command)
     } else {
         None
     };
@@ -1688,6 +1869,99 @@ pub(crate) fn lifecycle_command(
         kind,
     )
     .map_err(|error| RuntimeStateError::new("llm.command.invalid", error.to_string()))
+}
+
+fn arm_terminal_close(
+    worker: &HostWorkerRecord,
+    next: HostWorkerRecord,
+) -> Result<(HostWorkerRecord, HostCommandEnvelope), RuntimeStateError> {
+    let command = lifecycle_command(worker, HostCommandKind::CloseSession)?;
+    let next = next
+        .with_expected_command_sequence(worker.expected_command_sequence() + 1)
+        .with_watchdog(
+            Some(HostWatchdogKind::CloseCommandAck),
+            Some(command.command_id().to_string()),
+            Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+        );
+    Ok((next, command))
+}
+
+pub(crate) fn expired_watchdog_state(
+    worker: &HostWorkerRecord,
+    session: &HostSessionRecord,
+    now_millis: u64,
+) -> Result<
+    Option<(
+        HostWorkerRecord,
+        HostSessionRecord,
+        Option<HostCommandEnvelope>,
+    )>,
+    RuntimeStateError,
+> {
+    let Some(kind) = worker.watchdog_kind() else {
+        return Ok(None);
+    };
+    if worker
+        .watchdog_deadline_millis()
+        .is_none_or(|deadline| deadline > now_millis)
+    {
+        return Ok(None);
+    }
+
+    let mut next = worker
+        .clone()
+        .with_revision(worker.revision() + 1)
+        .with_execution_phase(None)
+        .with_watchdog(None, None, None);
+    let (lifecycle, close) = match kind {
+        HostWatchdogKind::SessionClose => (
+            ResourceLifecycle::Quarantined {
+                code: "llm.session.close_timeout".into(),
+            },
+            None,
+        ),
+        HostWatchdogKind::CloseCommandAck => (
+            ResourceLifecycle::Quarantined {
+                code: "llm.command.ack_timeout".into(),
+            },
+            None,
+        ),
+        HostWatchdogKind::CancelTerminal => {
+            if matches!(worker.logical_outcome(), LogicalRunOutcome::Pending) {
+                next = next.with_logical_outcome(LogicalRunOutcome::Cancelled);
+            }
+            let (armed, command) = arm_terminal_close(worker, next)?;
+            next = armed;
+            (ResourceLifecycle::AwaitingCloseCommandAck, Some(command))
+        }
+        HostWatchdogKind::GenerationStart
+        | HostWatchdogKind::StreamIdle
+        | HostWatchdogKind::ToolBatch => {
+            let code = match kind {
+                HostWatchdogKind::GenerationStart => "llm.generation.start_timeout",
+                HostWatchdogKind::StreamIdle => "llm.stream.idle_timeout",
+                HostWatchdogKind::ToolBatch => "llm.tool.batch_timeout",
+                _ => unreachable!(),
+            };
+            if matches!(worker.logical_outcome(), LogicalRunOutcome::Pending) {
+                next = next.with_logical_outcome(LogicalRunOutcome::Failed { code: code.into() });
+            }
+            let (armed, command) = arm_terminal_close(worker, next)?;
+            next = armed;
+            (ResourceLifecycle::AwaitingCloseCommandAck, Some(command))
+        }
+        HostWatchdogKind::StartCommandAck
+        | HostWatchdogKind::ResumeCommandAck
+        | HostWatchdogKind::CancelCommandAck => {
+            return Ok(None);
+        }
+    };
+    next = next.with_resource_lifecycle(lifecycle.clone());
+    Ok(Some((
+        next,
+        session.clone().with_resource_lifecycle(lifecycle),
+        close,
+    )))
 }
 
 fn submission_result_name(result: LLMEventSubmissionResult) -> &'static str {

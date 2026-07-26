@@ -386,7 +386,74 @@ fn final_response_commits_one_readable_output_and_close_command() {
     let payload: serde_json::Value = serde_json::from_str(output[0].payload()).unwrap();
     assert_eq!(payload["message_id"], "assistant:run-1:turn-1");
     assert_eq!(payload["text"], "answer");
-    assert_eq!(store.pending_host_commands().unwrap().len(), 1);
+    let commands = store.pending_host_commands().unwrap();
+    assert_eq!(commands.len(), 1);
+    let close = commands[0].payload().unwrap();
+    store
+        .acknowledge_command(
+            &local_ios_agent_runtime::llm_contracts::HostCommandAcknowledgement {
+                command_id: close.command_id().into(),
+                session_handle: close.session_handle().into(),
+                command_sequence: close.command_sequence(),
+                command_envelope_digest: close.command_envelope_digest().into(),
+                disposition: local_ios_agent_runtime::llm_contracts::HostCommandAcknowledgementDisposition::Rejected,
+                rejection_code: Some("llm.command.backend_failed".into()),
+            },
+        )
+        .unwrap();
+    let worker = store.host_worker("run-1").unwrap().unwrap();
+    assert!(matches!(
+        worker.logical_outcome(),
+        LogicalRunOutcome::Succeeded { finish_reason } if finish_reason == "length"
+    ));
+    assert!(matches!(
+        worker.resource_lifecycle(),
+        ResourceLifecycle::Quarantined { code } if code == "llm.command.backend_failed"
+    ));
+}
+
+#[test]
+fn backend_cancelled_and_failed_terminals_each_schedule_one_close() {
+    for (kind, payload, expected) in [
+        (
+            LLMEventKind::Cancelled,
+            LLMEventPayload::default(),
+            LogicalRunOutcome::Cancelled,
+        ),
+        (
+            LLMEventKind::Failed,
+            LLMEventPayload {
+                failure_code: Some("stream_interrupted".into()),
+                ..Default::default()
+            },
+            LogicalRunOutcome::Failed {
+                code: "stream_interrupted".into(),
+            },
+        ),
+    ] {
+        let store = Arc::new(SqliteRuntimeStateStore::open_in_memory().unwrap());
+        store
+            .insert_worker_and_session(consuming_worker(), session_fixture())
+            .unwrap();
+        let service = HostLLMWorkerService::new(store.clone());
+        let terminal = event(1, "terminal", kind, payload, Some("turn-1"));
+
+        assert_eq!(
+            service.submit_event(&terminal).unwrap(),
+            LLMEventSubmissionResult::Accepted
+        );
+        assert_eq!(
+            service.submit_event(&terminal).unwrap(),
+            LLMEventSubmissionResult::Duplicate
+        );
+        let worker = store.host_worker("run-1").unwrap().unwrap();
+        assert_eq!(worker.logical_outcome(), &expected);
+        assert_eq!(
+            worker.resource_lifecycle(),
+            &ResourceLifecycle::AwaitingCloseCommandAck
+        );
+        assert_eq!(store.pending_host_commands().unwrap().len(), 1);
+    }
 }
 
 #[test]

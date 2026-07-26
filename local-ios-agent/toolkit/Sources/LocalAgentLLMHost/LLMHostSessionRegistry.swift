@@ -165,6 +165,7 @@ private struct HostSessionEntry {
     var commandLedger = HostCommandLedger()
     let eventSequencer: LLMEventSequencer
     var generationTask: Task<Void, Never>?
+    var activeGenerationTurnID: String?
     var cleanupOperation: CleanupOperation?
 }
 
@@ -575,33 +576,91 @@ package actor LLMBridgeActor {
                     operationStartTimeout: operationStartTimeout
                 )
             }
+            entry.activeGenerationTurnID = generationTurnID
             return Task { acceptedAcknowledgement(command) }
         }
 
         let eventSequencer = entry.eventSequencer
-        return Task {
-            do {
-                switch command.kind {
-                case .startGeneration, .resumeGeneration:
-                    break
-
-                case .cancelGeneration:
-                    try await driver?.cancel()
-
-                case .closeSession:
-                    try await driver?.close()
-
-                case .capacityAvailable:
-                    await eventSequencer.notifyCapacityAvailable()
-                }
-                return acceptedAcknowledgement(command)
-            } catch {
-                return rejectedAcknowledgement(
+        guard let driver else {
+            return Task {
+                rejectedAcknowledgement(
                     command,
-                    code: "llm.command.backend_failed"
+                    code: "llm.command.invalid_lifecycle"
                 )
             }
         }
+        let generationTask = entry.generationTask
+        let activeGenerationTurnID = entry.activeGenerationTurnID
+        return Task {
+            switch command.kind {
+            case .startGeneration, .resumeGeneration:
+                break
+
+            case .cancelGeneration:
+                Task {
+                    do {
+                        try await driver.cancel()
+                        _ = try await eventSequencer.submit(
+                            kind: .cancelled,
+                            payload: LLMEventPayload(commandID: command.commandID),
+                            generationTurnID: activeGenerationTurnID
+                        )
+                    } catch {
+                        _ = try? await eventSequencer.submit(
+                            kind: .failed,
+                            payload: LLMEventPayload(
+                                failureCode: publicFailureCode(error)
+                            ),
+                            generationTurnID: activeGenerationTurnID
+                        )
+                    }
+                }
+
+            case .closeSession:
+                Task { [weak self] in
+                    await generationTask?.value
+                    do {
+                        try await driver.close()
+                        let result = try await eventSequencer.submit(
+                            kind: .sessionClosed,
+                            payload: LLMEventPayload(
+                                commandID: command.commandID,
+                                closeDisposition:
+                                    LLMBackendSessionCloseDisposition.closed.rawValue
+                            ),
+                            generationTurnID: nil
+                        )
+                        await self?.finishCommittedClose(
+                            command.sessionHandle,
+                            result: result
+                        )
+                    } catch {
+                        await self?.quarantine(command.sessionHandle)
+                    }
+                }
+
+            case .capacityAvailable:
+                await eventSequencer.notifyCapacityAvailable()
+            }
+            return acceptedAcknowledgement(command)
+        }
+    }
+
+    private func finishCommittedClose(
+        _ handle: String,
+        result: LLMEventSubmissionResult?
+    ) {
+        guard result == .accepted || result == .duplicate,
+              let entry = sessions[handle],
+              entry.lifecycle == .closing
+        else { return }
+        sessions.removeValue(forKey: handle)
+        tombstones[handle] = ClosedSessionTombstone(
+            allocation: entry.allocation,
+            cleanupCommand: nil,
+            cleanupAcknowledgement: nil,
+            closeReceipt: nil
+        )
     }
 
     private func generationRejection(

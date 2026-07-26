@@ -376,6 +376,9 @@ fn scheduler_loop(shared: Arc<DispatcherShared>) {
 
 fn drive_once(shared: &DispatcherShared) -> Result<(), RuntimeStateError> {
     let _serial = shared.drive_serial.lock().map_err(|_| poisoned())?;
+    let _ = shared
+        .repository
+        .fail_expired_host_watchdogs(runtime_now_millis())?;
     let (host, suspended) = {
         let control = shared.control.lock().map_err(|_| poisoned())?;
         if control.stopped {

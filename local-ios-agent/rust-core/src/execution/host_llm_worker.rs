@@ -352,7 +352,15 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
             .with_execution_phase(Some(HostExecutionPhase::AwaitingResumeCommandAck))
             .with_generation_turn_id(Some(disclosure.generation_turn_id.clone()))
             .with_generation_request(payload, disclosure)
-            .with_tool_results(results);
+            .with_tool_results(results)
+            .with_watchdog(
+                Some(crate::llm_contracts::HostWatchdogKind::ResumeCommandAck),
+                Some(command.command_id().to_string()),
+                Some(
+                    crate::storage::runtime_now_millis()
+                        + crate::storage::HOST_LIFECYCLE_TIMEOUT_MILLIS,
+                ),
+            );
         self.repository
             .transition_and_enqueue(RuntimeTransition::new(worker.revision(), next, command))?;
         Ok(())
@@ -382,7 +390,15 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
             .with_revision(worker.revision() + 1)
             .with_execution_phase(None)
             .with_logical_outcome(LogicalRunOutcome::Failed { code: code.into() })
-            .with_resource_lifecycle(ResourceLifecycle::AwaitingCloseCommandAck);
+            .with_resource_lifecycle(ResourceLifecycle::AwaitingCloseCommandAck)
+            .with_watchdog(
+                Some(crate::llm_contracts::HostWatchdogKind::CloseCommandAck),
+                Some(command.command_id().to_string()),
+                Some(
+                    crate::storage::runtime_now_millis()
+                        + crate::storage::HOST_LIFECYCLE_TIMEOUT_MILLIS,
+                ),
+            );
         self.repository
             .transition_and_enqueue(RuntimeTransition::new(worker.revision(), next, command))?;
         Ok(())

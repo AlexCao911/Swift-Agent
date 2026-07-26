@@ -25,11 +25,12 @@ use super::agent_os_state::{
 };
 use super::runtime_state::{
     accepted_event_state, apply_command_acknowledgement_state, close_command_for, conflict,
-    contract_error, event_kind_name, event_receipt_disposition, is_protocol_failure,
-    lifecycle_command, not_found, poisoned, protocol_failure_state, queues_inbound_event,
-    reconciliation_conflict, transaction_failed, validate_ack, validate_command_for_worker,
-    validate_transition, validate_worker_session, EventQueueUsage, HOST_EVENT_LOW_WATER_BYTES,
-    HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS,
+    contract_error, event_kind_name, event_receipt_disposition, expired_watchdog_state,
+    is_protocol_failure, lifecycle_command, not_found, poisoned, protocol_failure_state,
+    queues_inbound_event, reconciliation_conflict, transaction_failed, validate_ack,
+    validate_command_for_worker, validate_transition, validate_worker_session, EventQueueUsage,
+    HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES,
+    HOST_EVENT_MAX_EVENTS,
 };
 use super::{
     HostCommandOutboxRow, HostCommandOutboxStatus, PreparedHostRunCommit,
@@ -327,6 +328,19 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         let row = HostCommandOutboxRow::pending(transition.command().clone());
         insert_outbox(&transaction, &row)?;
         self.take_failure(RuntimeAggregateFailurePoint::AfterOutboxWrite)?;
+        if matches!(
+            next.resource_lifecycle(),
+            ResourceLifecycle::AwaitingCloseCommandAck
+        ) {
+            transaction
+                .execute(
+                    "update global_run_lease set state = 'releasing'
+                     where singleton_id = 1 and owner_run_id = ?1
+                       and host_process_epoch = ?2 and state = 'active'",
+                    params![next.run_id(), next.host_process_epoch()],
+                )
+                .map_err(sqlite_error)?;
+        }
         transaction.commit().map_err(sqlite_error)?;
         Ok(row)
     }
@@ -411,17 +425,36 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
                 code: "llm.command.ack_timeout".into(),
             }
         };
-        let failed = worker
+        let logical_outcome = if matches!(
+            worker.logical_outcome(),
+            crate::llm_contracts::LogicalRunOutcome::Pending
+        ) {
+            crate::llm_contracts::LogicalRunOutcome::Failed {
+                code: "llm.command.ack_timeout".into(),
+            }
+        } else {
+            worker.logical_outcome().clone()
+        };
+        let mut failed = worker
             .clone()
             .with_revision(worker.revision() + 1)
             .with_execution_phase(None)
-            .with_logical_outcome(LogicalRunOutcome::Failed {
-                code: "llm.command.ack_timeout".into(),
-            })
+            .with_logical_outcome(logical_outcome)
             .with_resource_lifecycle(lifecycle.clone())
             .with_expected_command_sequence(
                 worker.expected_command_sequence() + u64::from(close_command.is_some()),
+            )
+            .with_watchdog(None, None, None);
+        if let Some(close) = close_command.as_ref() {
+            failed = failed.with_watchdog(
+                Some(crate::llm_contracts::HostWatchdogKind::CloseCommandAck),
+                Some(close.command_id().to_string()),
+                Some(
+                    crate::storage::runtime_now_millis()
+                        + crate::storage::HOST_LIFECYCLE_TIMEOUT_MILLIS,
+                ),
             );
+        }
         update_worker(&transaction, worker.revision(), &failed)?;
         let session = load_session(&transaction, row.session_handle())?.ok_or_else(not_found)?;
         update_session(&transaction, &session.with_resource_lifecycle(lifecycle))?;
@@ -431,6 +464,61 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         }
         transaction.commit().map_err(sqlite_error)?;
         Ok(failed)
+    }
+
+    fn fail_expired_host_watchdogs(
+        &self,
+        now_millis: u64,
+    ) -> Result<Vec<HostWorkerRecord>, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let worker_json = {
+            let mut statement = transaction
+                .prepare("select record_json from host_workers")
+                .map_err(sqlite_error)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(sqlite_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_error)?;
+            rows
+        };
+        let mut expired = Vec::new();
+        for json in worker_json {
+            let worker: HostWorkerRecord = decode(&json)?;
+            let Some(session) = load_session(&transaction, worker.session_handle())? else {
+                continue;
+            };
+            let Some((next_worker, next_session, close)) =
+                expired_watchdog_state(&worker, &session, now_millis)?
+            else {
+                continue;
+            };
+            if let Some(command_id) = worker.watchdog_command_id() {
+                if let Some(row) = load_outbox(&transaction, command_id)? {
+                    update_outbox(&transaction, &row.timed_out())?;
+                }
+            }
+            update_worker(&transaction, worker.revision(), &next_worker)?;
+            update_session(&transaction, &next_session)?;
+            if let Some(close) = close {
+                insert_outbox(&transaction, &HostCommandOutboxRow::pending(close))?;
+                transaction
+                    .execute(
+                        "update global_run_lease set state = 'releasing'
+                         where singleton_id = 1 and owner_run_id = ?1
+                           and host_process_epoch = ?2 and state = 'active'",
+                        params![worker.run_id(), worker.host_process_epoch()],
+                    )
+                    .map_err(sqlite_error)?;
+            }
+            expired.push(next_worker);
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(expired)
     }
 
     fn acknowledge_command(
@@ -508,6 +596,14 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             if let Some(close) = close {
                 insert_outbox(&transaction, &HostCommandOutboxRow::pending(close))?;
                 self.take_failure(RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+                transaction
+                    .execute(
+                        "update global_run_lease set state = 'releasing'
+                         where singleton_id = 1 and owner_run_id = ?1
+                           and host_process_epoch = ?2 and state = 'active'",
+                        params![event.run_id(), event.host_process_epoch()],
+                    )
+                    .map_err(sqlite_error)?;
             }
             transaction.commit().map_err(sqlite_error)?;
             return Ok(None);
@@ -569,9 +665,29 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         }
         self.take_failure(RuntimeAggregateFailurePoint::AfterEventAgentWrite)?;
 
+        let begins_lease_release = close.is_some();
         if let Some(close) = close {
             insert_outbox(&transaction, &HostCommandOutboxRow::pending(close))?;
             self.take_failure(RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+        }
+        if begins_lease_release {
+            transaction
+                .execute(
+                    "update global_run_lease set state = 'releasing'
+                     where singleton_id = 1 and owner_run_id = ?1
+                       and host_process_epoch = ?2 and state = 'active'",
+                    params![event.run_id(), event.host_process_epoch()],
+                )
+                .map_err(sqlite_error)?;
+        } else if event.kind() == crate::llm_contracts::LLMEventKind::SessionClosed {
+            transaction
+                .execute(
+                    "delete from global_run_lease
+                     where singleton_id = 1 and owner_run_id = ?1
+                       and host_process_epoch = ?2 and state = 'releasing'",
+                    params![event.run_id(), event.host_process_epoch()],
+                )
+                .map_err(sqlite_error)?;
         }
         transaction.commit().map_err(sqlite_error)?;
         Ok(Some(receipt))

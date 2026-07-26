@@ -18,7 +18,7 @@ pub use runtime_state::{
     InMemoryRuntimeStateStore, PreparedHostRunCommit, RuntimeAggregateFailurePoint,
     RuntimeAggregateInspection, RuntimeStateError, RuntimeTransition,
     UnifiedRuntimeStateRepository, HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS,
-    HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS,
+    HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS, HOST_LIFECYCLE_TIMEOUT_MILLIS,
 };
 pub use sqlite_runtime_state::{
     MigrationState, RuntimeStateMigrationFailurePoint, SqliteRuntimeStateStore,
