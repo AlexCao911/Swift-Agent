@@ -965,7 +965,7 @@ git commit -m "feat: add durable host llm ffi port"
 - Command ledger accepts only the next sequence, replays exact duplicates, rejects identity conflicts/gaps, and retains entries until `session_closed`.
 - Prepared cleanup is admissible from `registrationInFlight` onward. A valid Rust cleanup envelope received while registration FFI is returning proves Rust accepted registration and atomically advances the entry into `closing`; this removes the last post-registration cleanup gap. Start is admissible in `commitInFlight`, `commitOutcomeUnknown`, or `committed`, because a committed outbox may dispatch before—or after loss of—the `commit_start` FFI response; a valid start atomically proves and records `committed`. No other pre-commit state may start a backend.
 
-- [ ] **Step 1: Write failing actor/ledger/tombstone tests**
+- [x] **Step 1: Write failing actor/ledger/tombstone tests**
 
 Cover 256-bit random handles, exact duplicate replay, sequence gap/conflict, wrong epoch/run, queue overflow, close tombstones, ABA attempts, cleanup during opening, start while commit FFI is returning, and quarantine on rejected cleanup acknowledgement:
 
@@ -1006,7 +1006,7 @@ Cover 256-bit random handles, exact duplicate replay, sequence gap/conflict, wro
 }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostRuntimeTests
@@ -1014,7 +1014,7 @@ swift test --package-path toolkit --filter LLMHostRuntimeTests
 
 Expected: fail because the target, actor, registry, and ledger do not exist.
 
-- [ ] **Step 3: Add the host target and actor-isolated registries**
+- [x] **Step 3: Add the host target and actor-isolated registries**
 
 Define the backend-neutral seam:
 
@@ -1070,7 +1070,7 @@ Use `SecRandomCopyBytes` for handles. Allocation installs the cleanup owner firs
 
 The C trampoline owns the first `Data(bytes:count:)` copy and calls only `BoundedHostCommandInbox.copyAndEnqueue`; it never awaits an actor. The inbox uses `NSLock` only around its fixed-capacity FIFO, signals the actor after insertion, and performs no Rust call or main-actor hop. A command is acknowledged only after the actor's schema/digest/session/epoch/sequence/lifecycle checks and ledger claim. A duplicate returns the stored acknowledgement and never invokes the driver. Do not persist command payload, provider state, or the in-process ledger.
 
-- [ ] **Step 4: Run GREEN and target-boundary regressions**
+- [x] **Step 4: Run GREEN and target-boundary regressions**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostRuntimeTests
@@ -1081,7 +1081,7 @@ git diff --check
 
 Expected: host actor tests pass; Local/Cloud boundary tests prove no reverse import or ownership drift.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Package.swift toolkit/Sources/LocalAgentLLMHost \

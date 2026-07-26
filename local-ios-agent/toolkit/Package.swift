@@ -63,6 +63,19 @@ var packageTargets: [Target] = [
         ]
     ),
     .target(
+        name: "LocalAgentLLMHost",
+        dependencies: [
+            "LocalAgentBridge",
+            "LocalAgentLLMContracts",
+            "LocalAgentLLMCore",
+            "LocalAgentLLMLocal",
+            "LocalAgentLLMCloud",
+        ],
+        linkerSettings: [
+            .linkedFramework("Security"),
+        ]
+    ),
+    .target(
         name: "LocalNativeToolkit",
         dependencies: ["LocalAgentBridge"]
     ),
@@ -95,6 +108,14 @@ var packageTargets: [Target] = [
             "LocalAgentLLMCloud",
         ],
         resources: [.process("Fixtures")]
+    ),
+    .testTarget(
+        name: "LocalAgentLLMHostTests",
+        dependencies: [
+            "LocalAgentBridge",
+            "LocalAgentLLMContracts",
+            "LocalAgentLLMHost",
+        ]
     ),
     .testTarget(
         name: "LocalNativeToolkitTests",
@@ -146,6 +167,10 @@ let package = Package(
         .library(
             name: "LocalAgentLLMCloud",
             targets: ["LocalAgentLLMCloud"]
+        ),
+        .library(
+            name: "LocalAgentLLMHost",
+            targets: ["LocalAgentLLMHost"]
         ),
         .library(
             name: "LocalNativeToolkit",

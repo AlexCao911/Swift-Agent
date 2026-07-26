@@ -1,0 +1,69 @@
+import Foundation
+import LocalAgentBridge
+import LocalAgentLLMContracts
+
+public final class LLMHostRuntime: @unchecked Sendable {
+    public let hostProcessEpoch: HostProcessEpoch
+    package let bridgeActor: LLMBridgeActor
+    private let commandInbox: BoundedHostCommandInbox
+
+    public convenience init(hostProcessEpoch: HostProcessEpoch) {
+        self.init(
+            hostProcessEpoch: hostProcessEpoch,
+            rustSink: UnavailableRustSink()
+        )
+    }
+
+    package init(
+        hostProcessEpoch: HostProcessEpoch,
+        rustSink: any LLMHostRustSink
+    ) {
+        let inbox = BoundedHostCommandInbox()
+        let bridgeActor = LLMBridgeActor(
+            inbox: inbox,
+            hostProcessEpoch: hostProcessEpoch,
+            rustSink: rustSink
+        )
+        self.hostProcessEpoch = hostProcessEpoch
+        commandInbox = inbox
+        self.bridgeActor = bridgeActor
+
+        inbox.setSignal { [weak bridgeActor] in
+            Task {
+                await bridgeActor?.signalInbox()
+            }
+        }
+    }
+
+    public func copy(_ ownedBytes: Data) -> HostCommandCopyReceipt {
+        commandInbox.copyAndEnqueue(ownedBytes)
+    }
+
+    package func drain() async {
+        await bridgeActor.drainAvailable()
+    }
+
+    public func beginQuiescing() {
+        commandInbox.beginQuiescing()
+    }
+}
+
+private struct UnavailableRustSink: LLMHostRustSink {
+    func submitCommandAcknowledgement(
+        _ acknowledgement: HostCommandAcknowledgement
+    ) async -> Bool {
+        false
+    }
+
+    func acknowledgePreparedSessionCleanup(
+        _ acknowledgement: PreparedSessionCleanupAcknowledgementDTO
+    ) async -> Bool {
+        false
+    }
+
+    func confirmPreparedSessionClosed(
+        _ receipt: PreparedSessionClosedReceiptDTO
+    ) async -> Bool {
+        false
+    }
+}
