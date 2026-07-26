@@ -7,6 +7,33 @@ import Testing
 @Suite("Single-model local runtime")
 struct LocalModelRuntimeTests {
     @Test
+    func reservationDoesNotLoadModelUntilRegisteredOpen() async throws {
+        let fixture = try await RuntimeFixture.make()
+        let reserved = try await fixture.runtime.reserveSession(
+            context: LocalSessionPreparationContext(
+                preparationID: "preparation-1",
+                proposedRunID: "run-1",
+                initialDisclosureDigest: String(repeating: "8", count: 64),
+                capabilityAttestationDigest: String(repeating: "7", count: 64),
+                attestationExpiresAt: "2030-01-01T00:00:00.000Z"
+            ),
+            hostConfiguration: fixture.configuration,
+            target: fixture.target
+        )
+
+        #expect(fixture.inference.loadCount == 0)
+        #expect(await fixture.runtime.state == .reserved)
+        #expect(try fixture.store.reservedLocalSession(sessionID: reserved.sessionID) == reserved)
+
+        let opened = try await fixture.runtime.openReservedSession(reserved)
+
+        #expect(fixture.inference.loadCount == 1)
+        #expect(opened.sessionID == reserved.sessionID)
+        #expect(try fixture.store.reservedLocalSession(sessionID: reserved.sessionID) == nil)
+        try await fixture.runtime.closeSession(sessionID: opened.sessionID)
+    }
+
+    @Test
     func preparationLoadsOnFirstUseReusesRAMAndEnforcesOneSessionAndGeneration() async throws {
         let fixture = try await RuntimeFixture.make()
 

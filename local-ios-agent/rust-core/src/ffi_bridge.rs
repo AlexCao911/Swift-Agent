@@ -1919,6 +1919,10 @@ json_bridge_function!(
     commit_prepared_start_json
 );
 json_bridge_function!(
+    local_agent_runtime_bridge_reconcile_preparation,
+    reconcile_preparation_json
+);
+json_bridge_function!(
     local_agent_runtime_bridge_begin_abort_preparation,
     begin_abort_preparation_json
 );

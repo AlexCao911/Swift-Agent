@@ -21,6 +21,7 @@ public enum RustAgentOSOperation: String, Hashable, Sendable {
     case renewRunPreparation = "renew_run_preparation"
     case registerPreparedSession = "register_prepared_session"
     case commitPreparedStart = "commit_prepared_start"
+    case reconcilePreparation = "reconcile_preparation"
     case beginAbortPreparation = "begin_abort_preparation"
     case ackPreparedSessionCleanup = "ack_prepared_session_cleanup"
     case confirmPreparedSessionClosed = "confirm_prepared_session_closed"

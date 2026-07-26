@@ -1233,7 +1233,7 @@ git commit -m "feat: add sequenced host llm event ingress"
 - Immediately after Rust registration succeeds, cleanup is possible even if opening has not started, is blocked between substeps, has just installed the driver, or Rust commit has succeeded while its FFI return is blocked.
 - Produces `reconcilePreparation(_:) -> PreparationReconciliationDTO` over `local_agent_runtime_bridge_reconcile_preparation`. Only an explicit Rust commit rejection or a reconciled `pending` result proves that abort is safe; transport/copy/decode/cancellation errors after entering `commit_start` are outcome-unknown and never directly call `begin_abort_preparation`.
 
-- [ ] **Step 1: Write failing ordering and compensation tests**
+- [x] **Step 1: Write failing ordering and compensation tests**
 
 Use spies to assert exact call order and crash points:
 
@@ -1263,7 +1263,7 @@ Cover pre-registration failure (no Rust cleanup command), duplicate abort/cleanu
 
 Add three mandatory ambiguous-commit tests: the start callback already arrived before the lost FFI reply, the callback is delayed until after reconciliation, and the command inbox returns backpressure before accepting the start. In all three cases reconciliation returns the exact committed handle, `begin_abort_preparation` is never called, the driver/cleanup owner stays registered, and the single persisted start command is eventually accepted. Add a fourth test where reconciliation returns `pending`; only that path may attempt the pending→aborting CAS. Race that CAS against a delayed Phase C commit and prove exactly one wins: abort winner closes the prepared session and commit fails, while commit winner returns `preparation.already_committed`, reconciles the handle, and never calls cleanup. If reconciliation itself is unavailable, assert state remains `commitOutcomeUnknown`, no backend close occurs, and the stable `execution.commit_outcome_unknown` diagnostic is exposed for retry/restart recovery.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostPreparationTests
@@ -1274,7 +1274,7 @@ swift test --package-path toolkit --filter RustRuntimeClientContractTests
 
 Expected: current local/cloud `prepareSession` opens resources without a Rust registration boundary, the bridge has no reconciliation entry, and an ambiguous commit result cannot be distinguished from a safe-to-abort failure.
 
-- [ ] **Step 3: Split reserve/open and implement the coordinator**
+- [x] **Step 3: Split reserve/open and implement the coordinator**
 
 Use separate reservation and opened-session types so resource readiness cannot be forged:
 
@@ -1363,7 +1363,7 @@ do {
 
 `markCommitOutcomeUnknown` is a CAS from `commitInFlight`; it is a no-op if a start callback already advanced the entry to `committed`, so the lost FFI response cannot regress known committed state. `abortRegisteredPreparationOnlyIfStillPending` waits for Rust's pending→aborting CAS before invoking any cleanup owner. If a delayed commit wins, `preparation.already_committed` forces another reconciliation and no cleanup. An error calling reconciliation leaves `commitOutcomeUnknown`/`committed` intact and returns `execution.commit_outcome_unknown`; it never performs local cleanup speculatively. Retry uses the same three identities. A valid start callback may independently upgrade the registry to committed, but reconciliation is still used to recover the exact `HostRunHandle`. The registry remains until an exact close receipt is accepted, or remains quarantined with the lease releasing after timeout/rejected acknowledgement.
 
-- [ ] **Step 4: Run GREEN and Phase 2/3 preparation regressions**
+- [x] **Step 4: Run GREEN and Phase 2/3 preparation regressions**
 
 ```bash
 swift test --package-path toolkit --filter LLMHostPreparationTests
@@ -1376,7 +1376,7 @@ git diff --check
 
 Expected: ordering, every open-substep failure, all registration/open/commit race windows, callback-arrived/delayed/backpressured reconciliation, and all proven compensation paths pass; no ambiguous commit is aborted; local/cloud snapshots remain sanitized and exact-revision-bound.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add toolkit/Sources/LocalAgentLLMHost toolkit/Sources/LocalAgentLLMCore \

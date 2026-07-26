@@ -1034,7 +1034,8 @@ public final class LocalModelStore: @unchecked Sendable {
 
     package func persistPreparedLocalSession(
         _ session: PreparedLocalSession,
-        activeSessionLease: LocalModelUseLease
+        activeSessionLease: LocalModelUseLease,
+        consumesReservation: Bool = false
     ) throws {
         try lock.withLock {
             do {
@@ -1135,6 +1136,18 @@ public final class LocalModelStore: @unchecked Sendable {
                             .text(session.hostProcessEpoch.rawValue), .blob(snapshot),
                         ]
                     )
+                    if consumesReservation {
+                        let deleted = try database.executeChanges(
+                            "DELETE FROM reserved_local_sessions WHERE session_id = ?1",
+                            bindings: [.text(session.sessionID)]
+                        )
+                        guard deleted == 1 else {
+                            throw storeFailure(
+                                "runtime.local_reservation_missing",
+                                "local reservation disappeared before opening"
+                            )
+                        }
+                    }
                 }
             } catch let failure as LLMFailure {
                 throw failure
@@ -1144,6 +1157,65 @@ public final class LocalModelStore: @unchecked Sendable {
                     "could not atomically persist the prepared local session"
                 )
             }
+        }
+    }
+
+    package func persistReservedLocalSession(
+        _ reservation: ReservedLocalSession
+    ) throws {
+        try lock.withLock {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let snapshot = try encoder.encode(reservation)
+            do {
+                try database.execute(
+                    """
+                    INSERT INTO reserved_local_sessions(
+                      session_id, preparation_id, proposed_run_id,
+                      host_process_epoch, snapshot_blob
+                    ) VALUES (?1, ?2, ?3, ?4, ?5)
+                    """,
+                    bindings: [
+                        .text(reservation.sessionID),
+                        .text(reservation.preparationID),
+                        .text(reservation.proposedRunID),
+                        .text(reservation.hostProcessEpoch.rawValue),
+                        .blob(snapshot),
+                    ]
+                )
+            } catch {
+                throw storeFailure(
+                    "runtime.local_reservation_persistence_failed",
+                    "could not persist the allocated local reservation"
+                )
+            }
+        }
+    }
+
+    package func reservedLocalSession(
+        sessionID: String
+    ) throws -> ReservedLocalSession? {
+        try lock.withLock {
+            guard let blob = try database.queryRows(
+                "SELECT snapshot_blob FROM reserved_local_sessions WHERE session_id = ?1",
+                bindings: [.text(sessionID)]
+            ).first?.blob("snapshot_blob") else {
+                return nil
+            }
+            do {
+                return try JSONDecoder().decode(ReservedLocalSession.self, from: blob)
+            } catch {
+                throw storeCorrupt()
+            }
+        }
+    }
+
+    package func deleteReservedLocalSession(sessionID: String) throws {
+        try lock.withLock {
+            _ = try database.executeChanges(
+                "DELETE FROM reserved_local_sessions WHERE session_id = ?1",
+                bindings: [.text(sessionID)]
+            )
         }
     }
 
@@ -1686,6 +1758,17 @@ public final class LocalModelStore: @unchecked Sendable {
                   requirements_hash TEXT NOT NULL,
                   host_process_epoch TEXT NOT NULL,
                   state TEXT NOT NULL,
+                  snapshot_blob BLOB NOT NULL
+                )
+                """
+            )
+            try database.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reserved_local_sessions(
+                  session_id TEXT PRIMARY KEY,
+                  preparation_id TEXT NOT NULL,
+                  proposed_run_id TEXT NOT NULL,
+                  host_process_epoch TEXT NOT NULL,
                   snapshot_blob BLOB NOT NULL
                 )
                 """

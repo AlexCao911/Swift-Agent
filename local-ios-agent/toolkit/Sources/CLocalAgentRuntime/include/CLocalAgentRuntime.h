@@ -147,6 +147,7 @@ char *local_agent_runtime_bridge_preview_run_preparation(LocalAgentRuntimeBridge
 char *local_agent_runtime_bridge_renew_run_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_register_prepared_session(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_commit_prepared_start(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_reconcile_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_begin_abort_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_ack_prepared_session_cleanup(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_confirm_prepared_session_closed(LocalAgentRuntimeBridge *runtime, const char *request_json);

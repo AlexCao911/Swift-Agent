@@ -157,6 +157,13 @@ public struct RunPreparationPreviewDTO: Codable, Equatable, Sendable {
     public let preparationId: String; public let proposedRunId: String; public let token: String; public let tokenDigest: String
     public let tokenGeneration: UInt64; public let binding: PreparationBindingDTO; public let bindingDigest: String
     public let hostProcessEpoch: String; public let leaseGeneration: UInt64; public let expirationMillis: UInt64; public let totalDeadlineMillis: UInt64
+    public init(preparationId: String, proposedRunId: String, token: String, tokenDigest: String, tokenGeneration: UInt64, binding: PreparationBindingDTO, bindingDigest: String, hostProcessEpoch: String, leaseGeneration: UInt64, expirationMillis: UInt64, totalDeadlineMillis: UInt64) {
+        self.preparationId = preparationId; self.proposedRunId = proposedRunId
+        self.token = token; self.tokenDigest = tokenDigest; self.tokenGeneration = tokenGeneration
+        self.binding = binding; self.bindingDigest = bindingDigest; self.hostProcessEpoch = hostProcessEpoch
+        self.leaseGeneration = leaseGeneration; self.expirationMillis = expirationMillis
+        self.totalDeadlineMillis = totalDeadlineMillis
+    }
     private enum CodingKeys: String, CodingKey { case preparationId = "preparation_id", proposedRunId = "proposed_run_id", token, tokenDigest = "token_digest", tokenGeneration = "token_generation", binding, bindingDigest = "binding_digest", hostProcessEpoch = "host_process_epoch", leaseGeneration = "lease_generation", expirationMillis = "expiration_millis", totalDeadlineMillis = "total_deadline_millis" }
 }
 
@@ -337,22 +344,51 @@ public struct PreparedSessionCleanupIdentityDTO: Codable, Equatable, Sendable {
 
 public enum PreparationReconciliationStatusDTO: String, Codable, Sendable { case committed, pending, aborting }
 
+public struct ReconcilePreparationRequestDTO: Codable, Equatable, Sendable {
+    public let preparationID: String
+    public let proposedRunID: String
+    public let tokenDigest: String
+
+    public init(preparationID: String, proposedRunID: String, tokenDigest: String) {
+        self.preparationID = preparationID
+        self.proposedRunID = proposedRunID
+        self.tokenDigest = tokenDigest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case preparationID = "preparation_id"
+        case proposedRunID = "proposed_run_id"
+        case tokenDigest = "token_digest"
+    }
+}
+
 public struct PreparationReconciliationDTO: Codable, Equatable, Sendable {
     public let status: PreparationReconciliationStatusDTO
     public let handle: HostRunHandleDTO?
     public let cleanupIdentity: PreparedSessionCleanupIdentityDTO?
+
+    public init(
+        status: PreparationReconciliationStatusDTO,
+        handle: HostRunHandleDTO?,
+        cleanupIdentity: PreparedSessionCleanupIdentityDTO?
+    ) throws {
+        self.status = status
+        self.handle = handle
+        self.cleanupIdentity = cleanupIdentity
+        guard Self.valid(status, handle: handle, cleanupIdentity: cleanupIdentity) else {
+            throw RuntimeBridgeError(
+                kind: "preparation.reconciliation_payload_invalid",
+                message: "reconciliation payload does not match status"
+            )
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         status = try container.decode(PreparationReconciliationStatusDTO.self, forKey: .status)
         handle = try container.decodeIfPresent(HostRunHandleDTO.self, forKey: .handle)
         cleanupIdentity = try container.decodeIfPresent(PreparedSessionCleanupIdentityDTO.self, forKey: .cleanupIdentity)
-        let valid = switch status {
-        case .committed: handle != nil && cleanupIdentity == nil
-        case .pending: handle == nil && cleanupIdentity == nil
-        case .aborting: handle == nil && cleanupIdentity != nil
-        }
-        guard valid else {
+        guard Self.valid(status, handle: handle, cleanupIdentity: cleanupIdentity) else {
             throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "reconciliation payload does not match status")
         }
     }
@@ -365,6 +401,18 @@ public struct PreparationReconciliationDTO: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey { case status, handle, cleanupIdentity = "cleanup_identity" }
+
+    private static func valid(
+        _ status: PreparationReconciliationStatusDTO,
+        handle: HostRunHandleDTO?,
+        cleanupIdentity: PreparedSessionCleanupIdentityDTO?
+    ) -> Bool {
+        switch status {
+        case .committed: handle != nil && cleanupIdentity == nil
+        case .pending: handle == nil && cleanupIdentity == nil
+        case .aborting: handle == nil && cleanupIdentity != nil
+        }
+    }
 }
 
 public struct CommitPreparedStartRequestDTO: Codable, Equatable, Sendable {

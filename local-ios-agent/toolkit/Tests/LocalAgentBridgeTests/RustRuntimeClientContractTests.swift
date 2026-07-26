@@ -777,6 +777,9 @@ struct RustRuntimeClientContractTests {
         """
         probe.llmContractResponses[.previewRunPreparation] = previewJSON
         probe.llmContractResponses[.renewRunPreparation] = previewJSON.replacingOccurrences(of: "token-1", with: "token-2")
+        probe.llmContractResponses[.reconcilePreparation] = """
+        {"status":"pending"}
+        """
         probe.llmContractResponses[.prepareProfilePublish] = """
         {"kind":"profile_publish","idempotency_key":"publish-1","token":"publish-token",
          "token_digest":"publish-token-digest","subject_id":"profile-1","agent_profile_id":"profile-1",
@@ -826,6 +829,15 @@ struct RustRuntimeClientContractTests {
             ),
             as: RunPreparationPreviewDTO.self
         )
+        let reconciliation: PreparationReconciliationDTO = try await client.request(
+            .reconcilePreparation,
+            ReconcilePreparationRequestDTO(
+                preparationID: preview.preparationId,
+                proposedRunID: preview.proposedRunId,
+                tokenDigest: preview.tokenDigest
+            ),
+            as: PreparationReconciliationDTO.self
+        )
         let active: HostBindingCrossLinkDTO = try await client.request(
             .confirmHostBindingActivation,
             HostBindingActivationConfirmationDTO(
@@ -843,9 +855,11 @@ struct RustRuntimeClientContractTests {
         #expect(operation.state == "pending")
         #expect(preview.preparationId == "preparation-1")
         #expect(renewed.token == "token-2")
+        #expect(reconciliation.status == .pending)
         #expect(active.state == "active")
         #expect(probe.llmContractRequests.map(\.0) == [
             .prepareProfilePublish, .previewRunPreparation, .renewRunPreparation,
+            .reconcilePreparation,
             .confirmHostBindingActivation
         ])
         for (_, requestJSON) in probe.llmContractRequests {

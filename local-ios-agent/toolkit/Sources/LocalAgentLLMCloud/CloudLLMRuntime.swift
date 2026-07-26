@@ -124,23 +124,27 @@ public struct CloudSessionPreparationContext: Equatable, Sendable {
     public let proposedRunID: String
     public let initialTurn: CloudGenerationTurnRequest
     public let signedToolDisplayKeys: Set<String>
+    public let capabilityAttestationDigest: String?
 
     public init(
         preparationID: String,
         proposedRunID: String,
         initialTurn: CloudGenerationTurnRequest,
-        signedToolDisplayKeys: Set<String>
+        signedToolDisplayKeys: Set<String>,
+        capabilityAttestationDigest: String? = nil
     ) {
         self.preparationID = preparationID
         self.proposedRunID = proposedRunID
         self.initialTurn = initialTurn
         self.signedToolDisplayKeys = signedToolDisplayKeys
+        self.capabilityAttestationDigest = capabilityAttestationDigest
     }
 }
 
 package enum CloudLLMRuntimeState: Equatable, Sendable {
     case idle
     case preparing
+    case reserved
     case prepared
     case generating
     case awaitingToolResult
@@ -148,6 +152,15 @@ package enum CloudLLMRuntimeState: Equatable, Sendable {
     case terminal
     case closing
     case quarantined
+}
+
+public struct ReservedCloudSession: Equatable, Sendable {
+    public let sessionID: String
+    public let snapshotID: String
+    public let prepared: PreparedCloudSession
+    public let capabilitySnapshot: CapabilitySnapshot
+    public let registrationDigest: String
+    public let hostAttestation: HostAttestationV1Document
 }
 
 public actor CloudLLMRuntime {
@@ -168,6 +181,16 @@ public actor CloudLLMRuntime {
         var cancelRequested: Bool
     }
 
+    private struct Reservation {
+        let publicValue: ReservedCloudSession
+        let context: CloudSessionPreparationContext
+        let target: LLMTargetRevision
+        let hostConfiguration: AgentHostConfiguration
+        let route: Route
+        let scopeGrant: EgressScopeGrant
+        let leaseRevision: UInt64
+    }
+
     private let profileStore: ProviderProfileStore
     private let catalogStore: CloudCapabilityCatalogStore
     private let credentialStore: ProviderCredentialStore
@@ -181,6 +204,7 @@ public actor CloudLLMRuntime {
     private let adapters: CloudProviderAdapterRegistry
     private let hostProcessEpoch: HostProcessEpoch
     private let clock: @Sendable () -> Date
+    private var reservation: Reservation?
     private var active: ActiveSession?
     package private(set) var state: CloudLLMRuntimeState = .idle
 
@@ -219,7 +243,20 @@ public actor CloudLLMRuntime {
         hostConfiguration: AgentHostConfiguration,
         target: LLMTargetRevision
     ) async throws -> PreparedCloudSession {
-        guard active == nil, state == .idle else {
+        let reserved = try await reserveSession(
+            context: context,
+            hostConfiguration: hostConfiguration,
+            target: target
+        )
+        return try await openReservedSession(reserved)
+    }
+
+    public func reserveSession(
+        context: CloudSessionPreparationContext,
+        hostConfiguration: AgentHostConfiguration,
+        target: LLMTargetRevision
+    ) async throws -> ReservedCloudSession {
+        guard active == nil, reservation == nil, state == .idle else {
             throw cloudRuntimeFailure(
                 "runtime.cloud_session_busy",
                 "close the current cloud session before preparing another"
@@ -280,7 +317,7 @@ public actor CloudLLMRuntime {
                 )
             }
             do {
-                return try await finishPreparation(
+                return try await finishReservation(
                     context: context,
                     hostConfiguration: hostConfiguration,
                     target: target,
@@ -302,6 +339,103 @@ public actor CloudLLMRuntime {
         } catch {
             if state != .quarantined { state = .idle }
             throw error
+        }
+    }
+
+    public func openReservedSession(
+        _ expected: ReservedCloudSession
+    ) async throws -> PreparedCloudSession {
+        guard let reservation,
+              reservation.publicValue == expected,
+              active == nil,
+              state == .reserved
+        else {
+            throw cloudRuntimeFailure(
+                "runtime.cloud_reservation_changed",
+                "cloud reservation is missing or changed"
+            )
+        }
+        let prepared = expected.prepared
+        let route = reservation.route
+        var providerSession: (any CloudProviderSession)?
+        do {
+            try await localUnloader.unloadForCloudRouteSwitch()
+            let opened = try route.adapter.makeSession(
+                CloudProviderSessionContext(
+                    targetID: reservation.target.targetID,
+                    targetRevision: reservation.target.revision,
+                    providerProfileID: route.profile.revision.profileID,
+                    providerProfileRevision: route.profile.revision.revision,
+                    modelID: reservation.target.modelID,
+                    retentionMode: route.profile.revision.retentionMode,
+                    retentionApprovalRevision: route.state.retentionApprovalRevision,
+                    retentionApprovalDigest: route.state.retentionApprovalDigest,
+                    hostProcessEpoch: hostProcessEpoch
+                )
+            )
+            providerSession = opened
+            let bound = try await credentialStore.bindPreparationLease(
+                prepared.credentialUseLeaseID,
+                expectedRevision: reservation.leaseRevision
+            )
+            active = ActiveSession(
+                prepared: prepared,
+                snapshotID: expected.snapshotID,
+                target: reservation.target,
+                hostConfiguration: reservation.hostConfiguration,
+                profile: route.profile,
+                providerSession: opened,
+                initialTurn: reservation.context.initialTurn,
+                signedToolDisplayKeys: reservation.context.signedToolDisplayKeys,
+                scopeGrant: reservation.scopeGrant,
+                leaseRevision: bound.revision,
+                lifecycle: .prepared,
+                generationID: nil,
+                generationTask: nil,
+                cancelRequested: false
+            )
+            self.reservation = nil
+            state = .prepared
+            return prepared
+        } catch {
+            await providerSession?.close()
+            do {
+                try sessionStore.abortBeforeSessionBinding(
+                    sessionID: prepared.sessionID,
+                    expectedLeaseRevision: reservation.leaseRevision
+                )
+                self.reservation = nil
+                state = .idle
+            } catch {
+                state = .quarantined
+                throw error
+            }
+            throw error
+        }
+    }
+
+    public func abortReservedSession(_ expected: ReservedCloudSession) async throws {
+        guard let reservation, reservation.publicValue == expected else { return }
+        do {
+            try sessionStore.abortBeforeSessionBinding(
+                sessionID: expected.sessionID,
+                expectedLeaseRevision: reservation.leaseRevision
+            )
+            self.reservation = nil
+            state = .idle
+        } catch {
+            state = .quarantined
+            throw error
+        }
+    }
+
+    public func cleanupReservedOrOpenedSession(
+        _ expected: ReservedCloudSession
+    ) async {
+        if reservation?.publicValue == expected {
+            try? await abortReservedSession(expected)
+        } else if active?.prepared.sessionID == expected.sessionID {
+            try? await closeSession(sessionID: expected.sessionID)
         }
     }
 
@@ -588,7 +722,7 @@ public actor CloudLLMRuntime {
         }
     }
 
-    private func finishPreparation(
+    private func finishReservation(
         context: CloudSessionPreparationContext,
         hostConfiguration: AgentHostConfiguration,
         target: LLMTargetRevision,
@@ -598,7 +732,7 @@ public actor CloudLLMRuntime {
         resolved: ResolvedCloudGenerationConfiguration,
         validated: ValidatedCloudGenerationTurn,
         lease: CredentialUseLease
-    ) async throws -> PreparedCloudSession {
+    ) async throws -> ReservedCloudSession {
         let egressContext = CloudEgressSessionContext(
             runID: context.proposedRunID,
             targetID: target.targetID,
@@ -647,15 +781,16 @@ public actor CloudLLMRuntime {
         let snapshotID = "cloud-snapshot-\(sessionID)"
         let leaseDigest = try credentialUseLeaseDigest(lease).hex
         let disclosureDigest = try context.initialTurn.disclosure.computedDigest().hex
-        let registrationDigest = try preparedRegistrationDigest(
+        let registrationDigest = try PreparedSessionRegistrationV1Document(
             preparationID: context.preparationID,
             proposedRunID: context.proposedRunID,
-            sessionID: sessionID,
-            snapshotID: snapshotID,
-            hostProcessEpoch: hostProcessEpoch,
-            binding: binding,
-            credentialUseLeaseDigest: leaseDigest
-        )
+            sessionHandle: sessionID,
+            swiftSnapshotID: snapshotID,
+            hostProcessEpoch: hostProcessEpoch.rawValue,
+            bindingID: binding.bindingID,
+            bindingRevision: binding.bindingRevision,
+            bindingHash: binding.bindingHash
+        ).computedDigest().hex
         let hostAttestation = HostAttestationV1Document(
             preparationID: context.preparationID,
             proposedRunID: context.proposedRunID,
@@ -667,7 +802,8 @@ public actor CloudLLMRuntime {
             bindingHash: binding.bindingHash,
             requirementsHash: hostConfiguration.requirementsHash,
             disclosureDigest: disclosureDigest,
-            capabilitySnapshotDigest: currentValidation.evidenceDigest,
+            capabilitySnapshotDigest: context.capabilityAttestationDigest
+                ?? currentValidation.evidenceDigest,
             resolvedParametersDigest: resolved.digest,
             hostProcessEpoch: hostProcessEpoch.rawValue,
             expiresAt: try cloudRuntimeTimestamp(authorized.authorization.expiresAt),
@@ -720,58 +856,25 @@ public actor CloudLLMRuntime {
             snapshot: snapshot,
             credentialLease: lease
         )
-        var providerSession: (any CloudProviderSession)?
-        do {
-            try await localUnloader.unloadForCloudRouteSwitch()
-            let opened = try route.adapter.makeSession(
-                CloudProviderSessionContext(
-                    targetID: target.targetID,
-                    targetRevision: target.revision,
-                    providerProfileID: route.profile.revision.profileID,
-                    providerProfileRevision: route.profile.revision.revision,
-                    modelID: target.modelID,
-                    retentionMode: route.profile.revision.retentionMode,
-                    retentionApprovalRevision: route.state.retentionApprovalRevision,
-                    retentionApprovalDigest: route.state.retentionApprovalDigest,
-                    hostProcessEpoch: hostProcessEpoch
-                )
-            )
-            providerSession = opened
-            let bound = try await credentialStore.bindPreparationLease(
-                lease.leaseID,
-                expectedRevision: lease.revision
-            )
-            active = ActiveSession(
-                prepared: prepared,
-                snapshotID: snapshotID,
-                target: target,
-                hostConfiguration: hostConfiguration,
-                profile: route.profile,
-                providerSession: opened,
-                initialTurn: context.initialTurn,
-                signedToolDisplayKeys: context.signedToolDisplayKeys,
-                scopeGrant: authorized.scopeGrant,
-                leaseRevision: bound.revision,
-                lifecycle: .prepared,
-                generationID: nil,
-                generationTask: nil,
-                cancelRequested: false
-            )
-            state = .prepared
-            return prepared
-        } catch {
-            await providerSession?.close()
-            do {
-                try sessionStore.abortBeforeSessionBinding(
-                    sessionID: sessionID,
-                    expectedLeaseRevision: lease.revision
-                )
-            } catch {
-                state = .quarantined
-                throw error
-            }
-            throw error
-        }
+        let publicValue = ReservedCloudSession(
+            sessionID: sessionID,
+            snapshotID: snapshotID,
+            prepared: prepared,
+            capabilitySnapshot: currentValidation.snapshot,
+            registrationDigest: registrationDigest,
+            hostAttestation: hostAttestation
+        )
+        reservation = Reservation(
+            publicValue: publicValue,
+            context: context,
+            target: target,
+            hostConfiguration: hostConfiguration,
+            route: route,
+            scopeGrant: authorized.scopeGrant,
+            leaseRevision: lease.revision
+        )
+        state = .reserved
+        return publicValue
     }
 
     private func validate(
@@ -1126,33 +1229,6 @@ private func yieldRuntimeEvent(
             "cloud generation consumer state is unknown"
         )
     }
-}
-
-private func preparedRegistrationDigest(
-    preparationID: String,
-    proposedRunID: String,
-    sessionID: String,
-    snapshotID: String,
-    hostProcessEpoch: HostProcessEpoch,
-    binding: HostBindingTuple,
-    credentialUseLeaseDigest: String
-) throws -> String {
-    let document = try CanonicalJSONValue.object(entries: [
-        .init(name: "binding_hash", value: .string(binding.bindingHash)),
-        .init(name: "binding_id", value: .string(binding.bindingID)),
-        .init(name: "binding_revision", value: .string(String(binding.bindingRevision))),
-        .init(name: "credential_use_lease_digest", value: .string(credentialUseLeaseDigest)),
-        .init(name: "host_process_epoch", value: .string(hostProcessEpoch.rawValue)),
-        .init(name: "preparation_id", value: .string(preparationID)),
-        .init(name: "proposed_run_id", value: .string(proposedRunID)),
-        .init(name: "schema_version", value: .string("1")),
-        .init(name: "session_handle", value: .string(sessionID)),
-        .init(name: "swift_snapshot_id", value: .string(snapshotID)),
-    ])
-    return try CanonicalDigestV1.digest(
-        domain: "prepared-session-registration:v1",
-        document: document
-    ).hex
 }
 
 private func cloudRuntimeTimestamp(_ date: Date) throws -> String {

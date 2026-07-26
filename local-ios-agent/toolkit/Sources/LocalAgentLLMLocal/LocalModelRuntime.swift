@@ -4,6 +4,7 @@ import LocalAgentLLMCore
 
 package enum LocalModelRuntimeState: Equatable, Sendable {
     case idle
+    case reserved
     case loading
     case ready
     case prepared
@@ -13,6 +14,47 @@ package enum LocalModelRuntimeState: Equatable, Sendable {
     case sessionTerminal
     case unloading
     case quarantined
+}
+
+public struct LocalSessionPreparationContext: Equatable, Sendable {
+    public let preparationID: String
+    public let proposedRunID: String
+    public let initialDisclosureDigest: String
+    public let capabilityAttestationDigest: String
+    public let attestationExpiresAt: String
+
+    public init(
+        preparationID: String,
+        proposedRunID: String,
+        initialDisclosureDigest: String,
+        capabilityAttestationDigest: String,
+        attestationExpiresAt: String
+    ) {
+        self.preparationID = preparationID
+        self.proposedRunID = proposedRunID
+        self.initialDisclosureDigest = initialDisclosureDigest
+        self.capabilityAttestationDigest = capabilityAttestationDigest
+        self.attestationExpiresAt = attestationExpiresAt
+    }
+}
+
+public struct ReservedLocalSession: Codable, Equatable, Sendable {
+    public let sessionID: String
+    public let snapshotID: String
+    public let preparationID: String
+    public let proposedRunID: String
+    public let targetID: LLMTargetID
+    public let targetRevision: UInt64
+    public let binding: HostBindingTuple
+    public let requirementsHash: String
+    public let capabilitySnapshot: CapabilitySnapshot
+    public let capabilitySnapshotDigest: String
+    public let resolvedConfiguration: GenerationConfiguration
+    public let resolvedParametersDigest: String
+    public let registrationDigest: String
+    public let hostAttestation: HostAttestationV1Document
+    public let egressSubjectDigest: String
+    public let hostProcessEpoch: HostProcessEpoch
 }
 
 public actor LocalModelRuntime {
@@ -36,6 +78,14 @@ public actor LocalModelRuntime {
         var generation: ActiveGeneration?
     }
 
+    private struct Reservation {
+        let publicValue: ReservedLocalSession
+        let installation: LocalInstallationRecord
+        let manifest: LocalModelRevisionManifest
+        let descriptor: CppEngineDescriptor
+        let concreteOptions: [String: CanonicalJSONValue]
+    }
+
     private let store: LocalModelStore
     private let paths: LocalModelPaths
     private let bindingSaga: AgentHostBindingSaga
@@ -45,6 +95,7 @@ public actor LocalModelRuntime {
     private let devicePolicy: LocalDeviceGenerationPolicy
     private var catalog: AcceptedLocalModelCatalog
     private var loaded: LoadedModel?
+    private var reservation: Reservation?
     private var active: ActiveSession?
     package private(set) var state: LocalModelRuntimeState = .idle
 
@@ -72,11 +123,34 @@ public actor LocalModelRuntime {
         hostConfiguration: AgentHostConfiguration,
         target: LLMTargetRevision
     ) async throws -> PreparedLocalSession {
-        guard active == nil else {
+        let identity = try PreparedLocalSession.generateSessionID()
+        let reserved = try await reserveSession(
+            context: LocalSessionPreparationContext(
+                preparationID: "legacy-\(identity)",
+                proposedRunID: "legacy-run-\(identity)",
+                initialDisclosureDigest: String(repeating: "0", count: 64),
+                capabilityAttestationDigest: String(repeating: "0", count: 64),
+                attestationExpiresAt: "2100-01-01T00:00:00.000Z"
+            ),
+            hostConfiguration: hostConfiguration,
+            target: target
+        )
+        return try await openReservedSession(reserved)
+    }
+
+    public func reserveSession(
+        context: LocalSessionPreparationContext,
+        hostConfiguration: AgentHostConfiguration,
+        target: LLMTargetRevision
+    ) async throws -> ReservedLocalSession {
+        guard active == nil, reservation == nil else {
             throw failure("runtime.local_session_busy", "close the current local session before preparing another")
         }
         guard state != .quarantined else {
             throw failure("runtime.local_runtime_quarantined", "local runtime cleanup is incomplete")
+        }
+        guard !context.preparationID.isEmpty, !context.proposedRunID.isEmpty else {
+            throw failure("runtime.local_preparation_invalid", "local preparation identity is empty")
         }
         let binding: HostBindingTuple
         do {
@@ -150,7 +224,90 @@ public actor LocalModelRuntime {
             engineParameters: descriptor.capabilities.backendParameters,
             devicePolicy: devicePolicy
         )
+        let sessionID = try PreparedLocalSession.generateSessionID()
+        let snapshotID = "local-snapshot-\(sessionID)"
+        let capabilityDigest = try capabilitySnapshotDigest(capabilitySnapshot)
+        let parametersDigest = try resolvedParametersDigest(
+            semantic: resolved.semantic,
+            concrete: resolved.concreteOptions,
+            descriptor: descriptor
+        )
+        let registrationDigest = try PreparedSessionRegistrationV1Document(
+            preparationID: context.preparationID,
+            proposedRunID: context.proposedRunID,
+            sessionHandle: sessionID,
+            swiftSnapshotID: snapshotID,
+            hostProcessEpoch: hostProcessEpoch.rawValue,
+            bindingID: binding.bindingID,
+            bindingRevision: binding.bindingRevision,
+            bindingHash: binding.bindingHash
+        ).computedDigest().hex
+        let egressSubjectDigest = try LocalEgressSubjectV1.notApplicableDigest().hex
+        let hostAttestation = HostAttestationV1Document(
+            preparationID: context.preparationID,
+            proposedRunID: context.proposedRunID,
+            sessionID: sessionID,
+            swiftSnapshotID: snapshotID,
+            preparedSessionRegistrationDigest: registrationDigest,
+            bindingID: binding.bindingID,
+            bindingRevision: String(binding.bindingRevision),
+            bindingHash: binding.bindingHash,
+            requirementsHash: hostConfiguration.requirementsHash,
+            disclosureDigest: context.initialDisclosureDigest,
+            capabilitySnapshotDigest: context.capabilityAttestationDigest,
+            resolvedParametersDigest: parametersDigest,
+            hostProcessEpoch: hostProcessEpoch.rawValue,
+            expiresAt: context.attestationExpiresAt,
+            opaqueEgressSubjectDigest: egressSubjectDigest
+        )
+        let reserved = ReservedLocalSession(
+            sessionID: sessionID,
+            snapshotID: snapshotID,
+            preparationID: context.preparationID,
+            proposedRunID: context.proposedRunID,
+            targetID: target.targetID,
+            targetRevision: target.revision,
+            binding: binding,
+            requirementsHash: hostConfiguration.requirementsHash,
+            capabilitySnapshot: capabilitySnapshot,
+            capabilitySnapshotDigest: capabilityDigest,
+            resolvedConfiguration: resolved.semantic,
+            resolvedParametersDigest: parametersDigest,
+            registrationDigest: registrationDigest,
+            hostAttestation: hostAttestation,
+            egressSubjectDigest: egressSubjectDigest,
+            hostProcessEpoch: hostProcessEpoch
+        )
+        let pending = Reservation(
+            publicValue: reserved,
+            installation: installation,
+            manifest: manifest,
+            descriptor: descriptor,
+            concreteOptions: resolved.concreteOptions
+        )
+        try store.persistReservedLocalSession(reserved)
+        reservation = pending
+        state = .reserved
+        return reserved
+    }
 
+    public func openReservedSession(
+        _ expected: ReservedLocalSession
+    ) async throws -> PreparedLocalSession {
+        guard let reservation,
+              reservation.publicValue == expected,
+              active == nil,
+              state == .reserved
+        else {
+            throw failure(
+                "runtime.local_reservation_changed",
+                "local reservation is missing or changed"
+            )
+        }
+        let installation = reservation.installation
+        let installationID = installation.installationID
+        let manifest = reservation.manifest
+        let descriptor = reservation.descriptor
         var loadedDuringPreparation = false
         if let loaded, loaded.installationID != installationID {
             try unloadLoadedModel()
@@ -189,26 +346,22 @@ public actor LocalModelRuntime {
             throw failure("runtime.local_load_failed", "local model was not retained after loading")
         }
 
-        let sessionID = try PreparedLocalSession.generateSessionID()
+        let sessionID = expected.sessionID
         let activeLeaseID = "session-\(try PreparedLocalSession.generateSessionID())"
-        let prepared = try PreparedLocalSession(
+        let prepared = PreparedLocalSession(
             sessionID: sessionID,
-            targetID: target.targetID,
-            targetRevision: target.revision,
-            binding: binding,
-            requirementsHash: hostConfiguration.requirementsHash,
+            targetID: expected.targetID,
+            targetRevision: expected.targetRevision,
+            binding: expected.binding,
+            requirementsHash: expected.requirementsHash,
             installationID: installationID,
             installationStateRevision: installation.stateRevision,
             modelRevision: manifest.id,
             catalogRevision: catalog.verified.catalogRevision,
-            capabilitySnapshot: capabilitySnapshot,
-            capabilitySnapshotDigest: capabilitySnapshotDigest(capabilitySnapshot),
-            resolvedConfiguration: resolved.semantic,
-            resolvedParametersDigest: resolvedParametersDigest(
-                semantic: resolved.semantic,
-                concrete: resolved.concreteOptions,
-                descriptor: descriptor
-            ),
+            capabilitySnapshot: expected.capabilitySnapshot,
+            capabilitySnapshotDigest: expected.capabilitySnapshotDigest,
+            resolvedConfiguration: expected.resolvedConfiguration,
+            resolvedParametersDigest: expected.resolvedParametersDigest,
             template: manifest.chatTemplate,
             toolCallCodecID: manifest.toolCallCodecID,
             hostProcessEpoch: hostProcessEpoch,
@@ -224,7 +377,11 @@ public actor LocalModelRuntime {
             leaseRevision: 1
         )
         do {
-            try store.persistPreparedLocalSession(prepared, activeSessionLease: activeLease)
+            try store.persistPreparedLocalSession(
+                prepared,
+                activeSessionLease: activeLease,
+                consumesReservation: true
+            )
         } catch {
             if loadedDuringPreparation {
                 do {
@@ -240,12 +397,30 @@ public actor LocalModelRuntime {
         }
         active = ActiveSession(
             prepared: prepared,
-            concreteOptions: resolved.concreteOptions,
+            concreteOptions: reservation.concreteOptions,
             storeState: .prepared,
             generation: nil
         )
+        self.reservation = nil
         state = .prepared
         return prepared
+    }
+
+    public func abortReservedSession(_ expected: ReservedLocalSession) async {
+        guard reservation?.publicValue == expected else { return }
+        try? store.deleteReservedLocalSession(sessionID: expected.sessionID)
+        reservation = nil
+        state = loaded == nil ? .idle : .ready
+    }
+
+    public func cleanupReservedOrOpenedSession(
+        _ expected: ReservedLocalSession
+    ) async {
+        if reservation?.publicValue == expected {
+            await abortReservedSession(expected)
+        } else if active?.prepared.sessionID == expected.sessionID {
+            try? await closeSession(sessionID: expected.sessionID)
+        }
     }
 
     public func startGeneration(

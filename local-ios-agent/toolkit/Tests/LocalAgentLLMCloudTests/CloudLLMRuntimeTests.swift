@@ -8,6 +8,38 @@ import Testing
 @Suite("Direct Swift cloud runtime", .serialized)
 struct CloudLLMRuntimeTests {
     @Test
+    func reservationPersistsLeaseButDoesNotOpenProviderUntilRegisteredOpen() async throws {
+        let order = RuntimeRouteOrder()
+        let harness = try await CloudRuntimeHarness.make(
+            generationTransport: RuntimeGenerationTransport(scripts: []),
+            localUnloader: RuntimeLocalUnloader(order: order)
+        )
+        defer { harness.cleanup() }
+
+        let reserved = try await harness.runtime.reserveSession(
+            context: .init(
+                preparationID: "preparation-reserved",
+                proposedRunID: "run-reserved",
+                initialTurn: harness.initialTurn,
+                signedToolDisplayKeys: []
+            ),
+            hostConfiguration: harness.hostConfiguration,
+            target: harness.target
+        )
+
+        #expect(await order.unloadCount == 0)
+        #expect(await harness.runtime.state == .reserved)
+        #expect(try harness.sessionStore.session(reserved.sessionID) != nil)
+
+        let opened = try await harness.runtime.openReservedSession(reserved)
+
+        #expect(opened.sessionID == reserved.sessionID)
+        #expect(await order.unloadCount == 1)
+        #expect(await harness.runtime.state == .prepared)
+        try await harness.runtime.closeSession(sessionID: opened.sessionID)
+    }
+
+    @Test
     func shippedRuntimeRegistryContainsEveryReleaseProviderExactlyOnce() throws {
         let registry = try CloudProviderAdapterRegistry.shipped()
 

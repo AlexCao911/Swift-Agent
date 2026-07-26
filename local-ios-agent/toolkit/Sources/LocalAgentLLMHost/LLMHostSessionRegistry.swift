@@ -258,10 +258,16 @@ package actor LLMBridgeActor {
     }
 
     package func markCommitOutcomeUnknown(_ handle: String) throws {
+        if try session(handle).lifecycle == .committed {
+            return
+        }
         try transition(handle, from: [.commitInFlight], to: .commitOutcomeUnknown)
     }
 
     package func markCommitted(_ handle: String) throws {
+        if try session(handle).lifecycle == .committed {
+            return
+        }
         try transition(
             handle,
             from: [.commitInFlight, .commitOutcomeUnknown],
@@ -290,7 +296,10 @@ package actor LLMBridgeActor {
         to handle: String
     ) throws {
         var entry = try session(handle)
-        guard entry.lifecycle == .commitOutcomeUnknown else {
+        let admissible: Set<HostSessionLifecycle> = outcome.status == .committed
+            ? [.commitOutcomeUnknown, .openedAwaitingCommit, .committed]
+            : [.commitOutcomeUnknown]
+        guard admissible.contains(entry.lifecycle) else {
             throw invalidTransition(entry.lifecycle, to: entry.lifecycle)
         }
 
