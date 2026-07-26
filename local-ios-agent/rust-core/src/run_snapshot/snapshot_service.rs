@@ -15,8 +15,8 @@ use crate::llm_contracts::{
 use crate::model::InMemoryModelBindingCatalog;
 use crate::run_snapshot::{
     derive_authoritative_preparation, FrozenGenerationTurn, OpaqueHostBindingCrossLink,
-    ResolvedRunSnapshot, RunSnapshotPreview, RunSnapshotRepository, RunSnapshotResolveInput,
-    RunSnapshotResolver, RunSnapshotSourceCatalog, StartRunRequest,
+    ProfileExecutionRoute, ResolvedRunSnapshot, RunSnapshotPreview, RunSnapshotRepository,
+    RunSnapshotResolveInput, RunSnapshotResolver, RunSnapshotSourceCatalog, StartRunRequest,
 };
 use crate::security::{CredentialRefResolver, PermissionState, SecurityPermissionService};
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
@@ -24,7 +24,9 @@ use crate::storage::{
     InMemoryTransactionRunner, PreparedHostRunCommit, StorageError, TransactionName,
     TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
 };
-use crate::user_customization::{ComponentCatalogService, InMemoryAgentProfileRepository};
+use crate::user_customization::{
+    AgentProfileId, AgentProfileVersion, ComponentCatalogService, InMemoryAgentProfileRepository,
+};
 
 pub type RunSnapshotResult<T> = Result<T, RunSnapshotError>;
 
@@ -239,6 +241,15 @@ impl RunSnapshotService {
 
     pub fn repository(&self) -> RunSnapshotRepository {
         self.repository.clone()
+    }
+
+    pub fn profile_execution_route(
+        &self,
+        profile_id: &AgentProfileId,
+        profile_revision: AgentProfileVersion,
+    ) -> RunSnapshotResult<ProfileExecutionRoute> {
+        self.resolver
+            .profile_execution_route(profile_id, profile_revision)
     }
 
     pub fn runtime_was_started(&self) -> bool {

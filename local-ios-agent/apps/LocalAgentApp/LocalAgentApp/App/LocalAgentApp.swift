@@ -4,6 +4,7 @@ import SwiftUI
 
 @main
 struct LocalAgentApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     private let hostProcessEpoch: HostProcessEpoch
     @State private var container: AppContainer?
     @State private var shellViewModel: AppShellViewModel?
@@ -27,6 +28,16 @@ struct LocalAgentApp: App {
                     ProgressView("Preparing local runtime…")
                         .task { await bootstrap() }
                 }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                container?.resumeLLMHost()
+            case .inactive, .background:
+                container?.suspendLLMHost()
+            @unknown default:
+                container?.suspendLLMHost()
             }
         }
     }

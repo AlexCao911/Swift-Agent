@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMCloud
 import LocalAgentLLMHost
 import LocalAgentLLMLocal
 import LocalNativeToolkit
@@ -14,7 +15,8 @@ enum AppBootstrapper {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         store: RustRuntimeStoreConfiguration? = nil,
         localAppSupportRoot: URL? = nil,
-        remoteCatalog: Data? = nil
+        remoteCatalog: Data? = nil,
+        remoteCloudCatalog: Data? = nil
     ) async throws -> AppContainer {
         let container = try makeContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -27,12 +29,36 @@ enum AppBootstrapper {
             appropriateFor: nil,
             create: true
         )
-        let subsystem = try await LocalLLMSubsystem.bootstrap(
+        let local = try await LocalLLMSubsystem.bootstrap(
             appSupportRoot: appSupportRoot,
             hostProcessEpoch: hostProcessEpoch,
             remoteCatalog: remoteCatalog
         )
-        return container.attaching(localLLMSubsystem: subsystem)
+        let cloud = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: appSupportRoot,
+            hostProcessEpoch: hostProcessEpoch,
+            remoteCatalog: remoteCloudCatalog,
+            approvalPrompt: FailClosedCloudApprovalPrompt(),
+            localUnloader: AppLocalRouteUnloader(runtime: local.runtime)
+        )
+        guard let rust = container.rustRuntimeClient,
+              let starter = container.hostRunStarter
+        else {
+            throw LLMHostFailure(
+                code: "execution.host_composition_unavailable",
+                message: "production Rust host composition is unavailable"
+            )
+        }
+        let host = try await LLMHostProductRuntime.bootstrap(
+            rust: rust,
+            hostProcessEpoch: hostProcessEpoch
+        )
+        await starter.install(host: host, local: local, cloud: cloud)
+        return container.attaching(
+            localLLMSubsystem: local,
+            cloudLLMSubsystem: cloud,
+            llmHostRuntime: host
+        )
     }
 
     static func makeContainer(
@@ -56,11 +82,13 @@ enum AppBootstrapper {
         )
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
         let nativeBundle = try makeNativeToolkitBundle()
+        let selections = AppLLMHostSelectionRegistry()
+        let hostStarter = AppHostRunStarter(selections: selections)
         let coordinator = conversationExecutionCoordinator(
-            environment: environment,
             client: client,
             executionBridge: executionBridge,
-            toolDriver: nativeBundle.toolDriver
+            toolDriver: nativeBundle.toolDriver,
+            hostStarter: hostStarter
         )
 
         return AppContainer(
@@ -81,7 +109,12 @@ enum AppBootstrapper {
                 approvalResponder: ExecutionBridgeToolApprovalResponder(bridge: executionBridge)
             ),
             modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
-            localLLMSubsystem: nil
+            rustRuntimeClient: client,
+            hostRunStarter: hostStarter,
+            llmHostSelections: selections,
+            localLLMSubsystem: nil,
+            cloudLLMSubsystem: nil,
+            llmHostRuntime: nil
         )
     }
 
@@ -123,7 +156,12 @@ enum AppBootstrapper {
                 broker: nativeBundle.interactionBroker
             ),
             modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
-            localLLMSubsystem: nil
+            rustRuntimeClient: nil,
+            hostRunStarter: nil,
+            llmHostSelections: nil,
+            localLLMSubsystem: nil,
+            cloudLLMSubsystem: nil,
+            llmHostRuntime: nil
         )
     }
 
@@ -157,7 +195,12 @@ enum AppBootstrapper {
                 )
             ),
             modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
-            localLLMSubsystem: nil
+            rustRuntimeClient: nil,
+            hostRunStarter: nil,
+            llmHostSelections: nil,
+            localLLMSubsystem: nil,
+            cloudLLMSubsystem: nil,
+            llmHostRuntime: nil
         )
     }
 
@@ -180,7 +223,7 @@ enum AppBootstrapper {
                 hostProcessEpoch: hostProcessEpoch,
                 store: store,
                 providers: providers,
-                agentOS: agentOSConfiguration(environment: environment)
+                agentOS: agentOSConfiguration()
             ))
         }
 
@@ -261,17 +304,11 @@ enum AppBootstrapper {
     }
 
     private static func conversationExecutionCoordinator(
-        environment: [String: String],
         client: RustRuntimeClient,
         executionBridge: RustExecutionBridgeClient,
-        toolDriver: any HostToolDriving
-    ) -> ChatInteractionCoordinator? {
-        // Keep this feature gated until Rust execution uses the verified ReAct worker path.
-        // The migration adapter must not become the default app path.
-        guard environment["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR"] == "1" else {
-            return nil
-        }
-
+        toolDriver: any HostToolDriving,
+        hostStarter: AppHostRunStarter
+    ) -> ChatInteractionCoordinator {
         let conversationBridge = RustConversationBridgeClient(gateway: client, legacyClient: client)
         let conversationDomain = ConversationDomainAdapter(bridge: conversationBridge)
         let executionDomain = ExecutionDomainAdapter(
@@ -286,19 +323,18 @@ enum AppBootstrapper {
         let coordinator = ChatInteractionCoordinator(
             conversation: conversationDomain,
             execution: executionDomain,
-            toolDriver: toolDriver
+            toolDriver: toolDriver,
+            runStarter: LLMProductRunRouter(
+                routes: client,
+                legacy: executionBridge,
+                host: hostStarter
+            )
         )
         return coordinator
     }
 
-    private static func agentOSConfiguration(
-        environment: [String: String]
-    ) -> RustAgentOSConfiguration? {
-        guard environment["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR"] == "1" else {
-            return nil
-        }
-
-        return RustAgentOSConfiguration(seedDevelopmentProfile: true)
+    private static func agentOSConfiguration() -> RustAgentOSConfiguration {
+        RustAgentOSConfiguration(seedDevelopmentProfile: true)
     }
 
     private static func nativeTools(
@@ -498,6 +534,38 @@ private struct NativeToolkitBundle {
     let permissionGateway: any NativePermissionGateway
     let builderToolCatalogClient: NativeManifestToolCatalogClient
     let interactionBroker: NativeInteractionBroker
+}
+
+private actor FailClosedCloudApprovalPrompt: CloudLLMApprovalPrompting {
+    func requestOriginApproval(
+        _ origin: EgressOrigin,
+        profileName: String
+    ) async -> EgressDecision {
+        .deny
+    }
+
+    func requestScopeApproval(
+        origin: EgressOrigin,
+        summary: EgressApprovalDisplaySummary
+    ) async -> EgressDecision {
+        .deny
+    }
+
+    func requestProviderStateApproval(
+        profileName: String,
+        origin: EgressOrigin,
+        disclosure: ProviderRetentionDisclosure
+    ) async -> EgressDecision {
+        .deny
+    }
+}
+
+private struct AppLocalRouteUnloader: LocalRouteUnloading {
+    let runtime: LocalModelRuntime
+
+    func unloadForCloudRouteSwitch() async throws {
+        try await runtime.unloadForRouteSwitch()
+    }
 }
 
 private actor LastResortNativeToolkitClient: NativeToolkitClientProtocol {

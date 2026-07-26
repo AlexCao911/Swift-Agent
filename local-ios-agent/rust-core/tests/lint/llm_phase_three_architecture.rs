@@ -66,7 +66,8 @@ fn llm_phase_three_architecture_keeps_rust_v2_provider_neutral() {
         "Phase 3 must not grow the temporary legacy Rust LLM allowlist"
     );
     let resolver = fs::read_to_string(root.join("rust-core/src/run_snapshot/resolver.rs")).unwrap();
-    assert!(resolver.contains("execution.host_slot_v2_not_runnable"));
+    assert!(resolver.contains("execution.host_slot_v2_requires_preparation"));
+    assert!(!resolver.contains("execution.host_slot_v2_not_runnable"));
 }
 
 #[test]

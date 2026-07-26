@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
+use crate::llm_contracts::{
+    AgentLLMRequirements, LLMBindingSchema, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
+};
 use crate::model::{
     InMemoryModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection,
 };
@@ -47,6 +49,32 @@ pub struct RunSnapshotSourceCatalog {
     security: Arc<dyn SecurityPermissionService>,
     credential_resolver: Arc<dyn CredentialRefResolver>,
     component_entity_versions: Arc<Mutex<BTreeMap<UserComponentVersionId, u64>>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProfileExecutionRoute {
+    schema_version: u32,
+    profile_id: String,
+    profile_revision: u64,
+    llm_binding_schema: LLMBindingSchema,
+}
+
+impl ProfileExecutionRoute {
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    pub fn profile_revision(&self) -> u64 {
+        self.profile_revision
+    }
+
+    pub fn llm_binding_schema(&self) -> LLMBindingSchema {
+        self.llm_binding_schema
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,8 +150,8 @@ impl RunSnapshotResolver {
             .profile(request.agent_profile_id(), request.profile_revision_id())?;
         if profile.llm_slot().is_some() {
             return Err(RunSnapshotError::new(
-                "execution.host_slot_v2_not_runnable",
-                "host-backed LLM slots are not executable until the Phase 4 worker route is enabled",
+                "execution.host_slot_v2_requires_preparation",
+                "host-backed LLM slots must enter through authoritative preparation",
             ));
         }
         let component_versions = self.resolve_components(profile.bindings())?;
@@ -146,6 +174,26 @@ impl RunSnapshotResolver {
             readiness_report,
             0,
         ))
+    }
+
+    pub fn profile_execution_route(
+        &self,
+        profile_id: &AgentProfileId,
+        profile_revision: AgentProfileVersion,
+    ) -> RunSnapshotResult<ProfileExecutionRoute> {
+        let profile = self.sources.profile(profile_id, profile_revision)?;
+        let llm_binding_schema = profile.llm_binding_schema().ok_or_else(|| {
+            RunSnapshotError::new(
+                "execution.llm_binding_missing",
+                "agent profile revision does not declare an LLM binding schema",
+            )
+        })?;
+        Ok(ProfileExecutionRoute {
+            schema_version: 1,
+            profile_id: profile.id().as_str().to_string(),
+            profile_revision: profile.version().as_u64(),
+            llm_binding_schema,
+        })
     }
 
     pub(crate) fn resolve_host_slot_preparation(

@@ -8,6 +8,25 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
+fn rust_sources(root: &Path) -> Vec<PathBuf> {
+    fn visit(path: &Path, output: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, output);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                output.push(path);
+            }
+        }
+    }
+    let mut output = Vec::new();
+    visit(root, &mut output);
+    output
+}
+
 #[test]
 fn v2_snapshot_binding_is_tagged_and_provider_neutral() {
     let root = root();
@@ -74,4 +93,68 @@ fn production_bridge_uses_unified_phase_c_and_reconciliation_authority() {
     assert!(preparation.contains("commit_prepared_host_run(PreparedHostRunCommit"));
     assert!(preparation.contains("resolved-run-snapshot:v1"));
     assert!(!preparation.contains("execution.host_slot_v2_not_runnable"));
+}
+
+#[test]
+fn production_route_is_enabled_without_growing_the_legacy_allowlist() {
+    let root = root();
+    let rust_root = root.join("rust-core/src");
+    for path in rust_sources(&rust_root) {
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("execution.host_slot_v2_not_runnable"),
+            "obsolete Phase 3 blocker remains in {}",
+            path.display()
+        );
+    }
+
+    let resolver = fs::read_to_string(rust_root.join("run_snapshot/resolver.rs")).unwrap();
+    let bridge = fs::read_to_string(rust_root.join("ffi_bridge.rs")).unwrap();
+    assert!(resolver.contains("pub struct ProfileExecutionRoute"));
+    assert!(resolver.contains("execution.host_slot_v2_requires_preparation"));
+    assert!(bridge.contains("profile_execution_route_json"));
+    assert!(bridge.contains("local_agent_runtime_bridge_profile_execution_route"));
+
+    let allowlist = fs::read_to_string(
+        root.join("rust-core/tests/fixtures/architecture/legacy_llm_allowlist.txt"),
+    )
+    .unwrap();
+    assert_eq!(
+        allowlist
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .count(),
+        16,
+        "Phase 4 must not grow the temporary legacy Rust LLM allowlist"
+    );
+}
+
+#[test]
+fn phase_four_runner_is_deterministic_and_secret_free() {
+    let runner =
+        fs::read_to_string(root().join("scripts/run-llm-phase-4-contracts.sh")).unwrap();
+    for required in [
+        "run-llm-phase-3-contracts.sh",
+        "--test contract",
+        "--test integration",
+        "llm_phase_four_architecture",
+        "LOCAL_AGENT_PHASE4_IPHONE_UDID",
+        "LOCAL_AGENT_PHASE4_IPAD_UDID",
+        "LLMHostCompositionTests",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MINIMAX_API_KEY",
+        "ZHIPUAI_API_KEY",
+    ] {
+        assert!(runner.contains(required), "Phase 4 runner is missing {required}");
+    }
+    assert!(
+        runner.find("run-llm-phase-3-contracts.sh")
+            < runner.find("--test contract"),
+        "Phase 4 must run the Phase 3 gate first"
+    );
+    assert!(!runner.contains("run-llm-phase-3-live-smoke.sh"));
 }

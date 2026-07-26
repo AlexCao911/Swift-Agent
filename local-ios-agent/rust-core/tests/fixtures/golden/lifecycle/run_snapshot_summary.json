@@ -1,7 +1,7 @@
 {
   "execution": {
-    "code": "execution.host_slot_v2_not_runnable",
-    "message": "host-backed LLM slots are not executable until the Phase 4 worker route is enabled"
+    "code": "execution.host_slot_v2_requires_preparation",
+    "message": "host-backed LLM slots must enter through authoritative preparation"
   },
   "profile_id": "profile:agent.fixture",
   "profile_version": 1,

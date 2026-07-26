@@ -10,8 +10,8 @@ use crate::conversation::ConversationRunFrameRef;
 use crate::core::{
     AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
     ModelProviderOutput, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
-    ProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent, SessionCursor, SessionId,
-    StreamBatcher,
+    ProviderRegistry as LegacyProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent,
+    SessionCursor, SessionId, StreamBatcher,
 };
 use crate::execution::{
     ExecutionModelTurn, ExecutionPlan, ExecutionToolObservation, ExecutionToolOutcome,
@@ -119,7 +119,7 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     context_controller: ContextController,
     ids: IdGenerator,
     store: S,
-    provider_registry: ProviderRegistry,
+    provider_registry: LegacyProviderRegistry,
     active_provider_profile: ProviderProfile,
     sessions: HashMap<SessionId, SessionCursor>,
     runs: HashMap<RunId, RunRecord>,
@@ -138,13 +138,13 @@ impl AgentRuntime<InMemoryEventStore> {
 
 impl<S: EventStore> AgentRuntime<S> {
     pub fn with_store(config: AgentRuntimeConfig, store: S) -> Result<Self, AgentError> {
-        Self::with_store_and_registry(config, store, ProviderRegistry::with_mock())
+        Self::with_store_and_registry(config, store, LegacyProviderRegistry::with_mock())
     }
 
     pub fn with_store_and_registry(
         config: AgentRuntimeConfig,
         store: S,
-        provider_registry: ProviderRegistry,
+        provider_registry: LegacyProviderRegistry,
     ) -> Result<Self, AgentError> {
         let mut runtime = Self::open_without_replay(config, store, provider_registry)?;
         runtime.replay_provider_independent_state()?;
@@ -154,7 +154,7 @@ impl<S: EventStore> AgentRuntime<S> {
     pub(crate) fn open_without_replay(
         mut config: AgentRuntimeConfig,
         store: S,
-        provider_registry: ProviderRegistry,
+        provider_registry: LegacyProviderRegistry,
     ) -> Result<Self, AgentError> {
         let mut sessions = HashMap::new();
         for session_id in store.list_all_sessions()? {
@@ -1805,7 +1805,7 @@ fn persisted_provider_id<S: EventStore>(store: &S) -> Result<Option<String>, Age
 
 fn active_profile_for_config(
     config: &AgentRuntimeConfig,
-    registry: &ProviderRegistry,
+    registry: &LegacyProviderRegistry,
 ) -> ProviderProfile {
     registry
         .profile(config.provider.id())

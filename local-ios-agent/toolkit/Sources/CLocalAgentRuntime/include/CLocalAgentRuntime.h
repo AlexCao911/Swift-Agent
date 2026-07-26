@@ -138,6 +138,7 @@ char *local_agent_runtime_bridge_start_run(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json
 );
+char *local_agent_runtime_bridge_profile_execution_route(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_prepare_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_commit_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_begin_package_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);

@@ -40,7 +40,7 @@ use crate::execution::{
 };
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
-    HostBindingSubjectCatalog, HostCommandAcknowledgement, LLMEventEnvelope,
+    HostBindingSubjectCatalog, HostCommandAcknowledgement, LLMBindingSchema, LLMEventEnvelope,
     PackageBindingPreparation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
     PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
 };
@@ -60,7 +60,7 @@ use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
 };
-use crate::user_customization::{AgentProfile, AgentProfileVersion};
+use crate::user_customization::{AgentProfile, AgentProfileId, AgentProfileVersion};
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
@@ -469,6 +469,19 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         to_json(&profiles)
     }
 
+    fn profile_execution_route_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ProfileExecutionRouteRequestJson = from_json(request_json)?;
+        let route = self
+            .app_services
+            .snapshot_service()
+            .profile_execution_route(
+                &AgentProfileId::new(request.profile_id),
+                AgentProfileVersion::new(request.profile_revision),
+            )
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        to_json(&route)
+    }
+
     fn build_agent_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: BuildAgentRequestJson = from_json(request_json)?;
         let profile = self
@@ -524,6 +537,19 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 
     fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: StartRunRequestJson = from_json(request_json)?;
+        let route = self
+            .app_services
+            .snapshot_service()
+            .profile_execution_route(
+                &AgentProfileId::new(&request.agent_profile_id),
+                AgentProfileVersion::new(request.profile_revision_id),
+            )
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        if route.llm_binding_schema() == LLMBindingSchema::HostSlotV2 {
+            return Err(AgentError::Storage(
+                "execution.host_slot_v2_requires_preparation: host-backed LLM slots must enter through authoritative preparation".into(),
+            ));
+        }
         let options = self.runtime_options_for_start_run(request.options)?;
         self.execution()
             .update_runtime_options(options)
@@ -1401,6 +1427,13 @@ impl RuntimeJsonBridge {
         Ok(handle)
     }
 
+    pub fn profile_execution_route_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.profile_execution_route_json(request_json),
+            Self::Sqlite(runtime) => runtime.profile_execution_route_json(request_json),
+        }
+    }
+
     pub fn prepare_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.prepare_profile_publish_json(request_json),
@@ -1963,6 +1996,10 @@ json_bridge_function!(
     confirm_host_binding_activation_json
 );
 json_bridge_function!(
+    local_agent_runtime_bridge_profile_execution_route,
+    profile_execution_route_json
+);
+json_bridge_function!(
     local_agent_runtime_bridge_preview_run_preparation,
     preview_run_preparation_json
 );
@@ -2413,6 +2450,13 @@ struct StartRunRequestJson {
     conversation_run_frame_ref: ConversationRunFrameRefJson,
     #[serde(default)]
     options: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileExecutionRouteRequestJson {
+    profile_id: String,
+    profile_revision: u64,
 }
 
 #[derive(Default, Deserialize)]

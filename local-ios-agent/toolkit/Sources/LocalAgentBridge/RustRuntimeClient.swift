@@ -621,6 +621,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_attach_host_binding(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.confirmHostBindingActivation.rawValue:
                     return local_agent_runtime_bridge_confirm_host_binding_activation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.profileExecutionRoute.rawValue:
+                    return local_agent_runtime_bridge_profile_execution_route(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.previewRunPreparation.rawValue:
                     return local_agent_runtime_bridge_preview_run_preparation(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.renewRunPreparation.rawValue:
@@ -645,7 +647,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, RustAgentOSBridgeGateway, @unchecked Sendable {
+public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, RustAgentOSBridgeGateway, ProfileExecutionRouteClient, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 
@@ -685,6 +687,20 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
         return try json.withCString { pointer in
             try decode(functions.startRun(handle, pointer), as: RunHandleDTO.self)
         }
+    }
+
+    public func profileExecutionRoute(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws -> ProfileExecutionRouteDTO {
+        try await request(
+            .profileExecutionRoute,
+            ProfileExecutionRouteRequestDTO(
+                profileID: profileID,
+                profileRevision: profileRevision
+            ),
+            as: ProfileExecutionRouteDTO.self
+        )
     }
 
     public func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
@@ -735,7 +751,8 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                  .attachHostBinding, .confirmHostBindingActivation, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .reconcilePreparation,
                  .beginAbortPreparation,
-                 .ackPreparedSessionCleanup, .confirmPreparedSessionClosed:
+                 .ackPreparedSessionCleanup, .confirmPreparedSessionClosed,
+                 .profileExecutionRoute:
                 result = operation.rawValue.withCString { operationPointer in
                     functions.llmContractRequest(handle, operationPointer, pointer)
                 }

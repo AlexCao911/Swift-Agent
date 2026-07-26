@@ -1851,7 +1851,7 @@ git commit -m "feat: recover host llm epochs and tool effects"
 - Architecture lint forbids provider/credential/model-path/adapter/C++ concepts in new Rust V2 code and forbids growth of the exact legacy allowlist.
 - `scripts/run-llm-phase-4-contracts.sh` is the deterministic release gate and invokes Phase 3 first.
 
-- [ ] **Step 1: Write failing local/cloud/legacy production-path tests and lint**
+- [x] **Step 1: Write failing local/cloud/legacy production-path tests and lint**
 
 Add product tests for:
 
@@ -1872,7 +1872,7 @@ persisted host_slot_v2 snapshot has no legacy provider/model/credential/path key
 
 Extend the Task 3 lint across all new Rust V2 files, keep its real persisted-snapshot scan, and assert `execution.host_slot_v2_not_runnable` is absent from production code after the switch while the legacy allowlist count never increases. The lint permits provider fields only inside the tagged `LegacyV1` payload and never in `HostSlotV2`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test lint llm_phase_four_architecture -- --nocapture
@@ -1886,7 +1886,7 @@ swift test --package-path toolkit --filter LLMHostProductPathTests
 
 Expected: V2 remains blocked/non-composed; the existing Phase 4 lint fails its production-switch assertions; exact route DTO/revalidation, App dispatcher composition, and the release runner do not exist.
 
-- [ ] **Step 3: Compose one App-owned host and switch only the V2 route**
+- [x] **Step 3: Compose one App-owned host and switch only the V2 route**
 
 Build in this order:
 
@@ -1922,7 +1922,7 @@ Swift requests it with `(profileID, profileRevision)` immediately before routing
 
 Wire App scene/lifecycle events to `rust.suspendLLMHostDispatcher()` and `rust.resumeLLMHostDispatcher()`. `AgentRuntimeService.shutdown()` first prevents new starts, calls unregister/quiesce, waits for Rust dispatcher shutdown/runtime free, and only then releases `LLMHostRuntime`; tests use a blocked callback to verify no use-after-free and a second bootstrap to verify clean reinstall.
 
-- [ ] **Step 4: Add and run the complete deterministic Phase 4 gate**
+- [x] **Step 4: Add and run the complete deterministic Phase 4 gate**
 
 Create `scripts/run-llm-phase-4-contracts.sh`, run `chmod +x scripts/run-llm-phase-4-contracts.sh`, and make the script execute:
 
@@ -1952,7 +1952,7 @@ git status --short
 
 Expected: all Phase 1–4 Rust/Swift/C++/Simulator gates pass, route tamper/staleness and dispatcher lifecycle tests pass, and only intended documentation/status changes remain.
 
-- [ ] **Step 5: Record evidence and commit**
+- [x] **Step 5: Record evidence and commit**
 
 Add a dated Phase 4 implementation-evidence section to the parent design covering the host target, durable outbox/receipts, lifecycle watchdogs, restart behavior, route coexistence, test counts, and remaining Phase 5 removal/UI work. Then commit:
 

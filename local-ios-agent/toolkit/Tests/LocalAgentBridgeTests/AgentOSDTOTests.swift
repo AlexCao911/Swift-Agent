@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Agent OS bridge DTOs")
 struct AgentOSDTOTests {
+    @Test
+    func profileExecutionRouteUsesExactRevisionAndExplicitSchemaTag() throws {
+        let request = ProfileExecutionRouteRequestDTO(
+            profileID: "profile-v2",
+            profileRevision: 7
+        )
+        let encoded = try JSONEncoder().encode(request)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        #expect(object["profile_id"] as? String == "profile-v2")
+        #expect((object["profile_revision"] as? NSNumber)?.uint64Value == 7)
+
+        let response = try JSONDecoder().decode(
+            ProfileExecutionRouteDTO.self,
+            from: Data(
+                #"{"schema_version":1,"profile_id":"profile-v2","profile_revision":7,"llm_binding_schema":"host_slot_v2"}"#.utf8
+            )
+        )
+        #expect(response.llmBindingSchema == .hostSlotV2)
+    }
+
     @Test("StartExecutionRequestDTO encodes only ConversationRunFrameRef as trusted execution input")
     func startExecutionRequestEncodesConversationRunFrameRefOnly() throws {
         let request = StartExecutionRequestDTO(

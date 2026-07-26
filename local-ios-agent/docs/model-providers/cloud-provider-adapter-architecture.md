@@ -155,6 +155,19 @@ all seven provider fixture suites, direct runtime and subsystem integration,
 and the iOS `ThisDeviceOnly`/non-synchronizable Keychain contract. The live
 smoke runner is manual and reference-only; it never accepts an API key value.
 
-Phase 4 still owns the Rust host-command bridge and canonical public
-registration recomputation. Phase 5 still owns product UI, migration, and
-legacy-path removal.
+Phase 4 now connects this path to the Rust Agent worker through the
+provider-neutral host target. Rust owns exact-revision route selection,
+authoritative frozen input, public registration/attestation recomputation,
+durable command outbox and receipts, ordered tool batches, lifecycle
+watchdogs, formal output, global admission, and restart recovery. Swift keeps
+the provider session, credential, egress, network, and continuation details.
+The App installs one local/cloud host under the same Rust-owned execution
+route and App-owned epoch; stale or mismatched routes fail without fallback.
+
+`scripts/run-llm-phase-4-contracts.sh` is the release gate. It runs this Phase
+3 gate first, clears all seven supported provider-key variables, then verifies
+the Rust host contracts and integration, the complete Swift package, and the
+App composition on explicit available iPhone and iPad Simulator UDIDs without
+live network traffic.
+
+Phase 5 still owns product UI, binding migration, and legacy-path removal.

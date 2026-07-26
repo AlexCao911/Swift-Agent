@@ -31,6 +31,8 @@
 		0D0000010000000000000001 /* CloudCredentialKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */; };
 		0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 0D0000010000000000000301 /* LocalAgentLLMCloud */; };
 		0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */ = {isa = PBXBuildFile; productRef = 0E0000010000000000000301 /* LocalAgentLLMHost */; };
+		0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000101 /* AppLLMHostRouting.swift */; };
+		0F0000010000000000000002 /* LLMHostCompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000102 /* LLMHostCompositionTests.swift */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -149,6 +151,8 @@
 		0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceNativeLinkTests.swift; sourceTree = "<group>"; };
 		0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceReleaseSmokeTests.swift; sourceTree = "<group>"; };
 		0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudCredentialKeychainTests.swift; sourceTree = "<group>"; };
+		0F0000010000000000000101 /* AppLLMHostRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLLMHostRouting.swift; sourceTree = "<group>"; };
+		0F0000010000000000000102 /* LLMHostCompositionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMHostCompositionTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -325,6 +329,7 @@
 				0B0000010000000000001501 /* Conversation */,
 				0B0000010000000000001502 /* Execution */,
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
+				0F0000010000000000000101 /* AppLLMHostRouting.swift */,
 				0A000001000000000000011A /* AttachmentService.swift */,
 				0B0000010000000000001150 /* ChatInteractionCoordinator.swift */,
 				0A000001000000000000010F /* ConversationService.swift */,
@@ -630,6 +635,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
+				0F0000010000000000000102 /* LLMHostCompositionTests.swift */,
 				0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */,
 				0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */,
 				0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */,
@@ -778,6 +784,7 @@
 				0C0000010000000000002021 /* ToolCenterView.swift in Sources */,
 				0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
+				0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */,
 				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
 				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
 				0B0000010000000000001003 /* ExecutionDomain.swift in Sources */,
@@ -847,6 +854,7 @@
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
+				0F0000010000000000000002 /* LLMHostCompositionTests.swift in Sources */,
 				0A00000100000000000000F5 /* LocalInferenceNativeLinkTests.swift in Sources */,
 				0A00000100000000000000F6 /* LocalInferenceReleaseSmokeTests.swift in Sources */,
 				0D0000010000000000000001 /* CloudCredentialKeychainTests.swift in Sources */,

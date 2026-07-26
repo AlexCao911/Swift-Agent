@@ -1,4 +1,6 @@
 import LocalAgentBridge
+import LocalAgentLLMCloud
+import LocalAgentLLMHost
 import LocalAgentLLMLocal
 import LocalNativeToolkit
 
@@ -13,9 +15,18 @@ struct AppContainer {
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
     let runInlineCardActionHandler: RunInlineCardActionHandler
     let modelRoutingClient: (any ModelRoutingClient)?
+    let rustRuntimeClient: RustRuntimeClient?
+    let hostRunStarter: AppHostRunStarter?
+    let llmHostSelections: AppLLMHostSelectionRegistry?
     let localLLMSubsystem: LocalLLMSubsystem?
+    let cloudLLMSubsystem: CloudLLMSubsystem?
+    let llmHostRuntime: LLMHostProductRuntime?
 
-    func attaching(localLLMSubsystem: LocalLLMSubsystem) -> AppContainer {
+    func attaching(
+        localLLMSubsystem: LocalLLMSubsystem,
+        cloudLLMSubsystem: CloudLLMSubsystem,
+        llmHostRuntime: LLMHostProductRuntime
+    ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
             runtimeService: runtimeService,
@@ -27,8 +38,25 @@ struct AppContainer {
             agentBuilderToolCatalogClient: agentBuilderToolCatalogClient,
             runInlineCardActionHandler: runInlineCardActionHandler,
             modelRoutingClient: modelRoutingClient,
-            localLLMSubsystem: localLLMSubsystem
+            rustRuntimeClient: rustRuntimeClient,
+            hostRunStarter: hostRunStarter,
+            llmHostSelections: llmHostSelections,
+            localLLMSubsystem: localLLMSubsystem,
+            cloudLLMSubsystem: cloudLLMSubsystem,
+            llmHostRuntime: llmHostRuntime
         )
+    }
+
+    func suspendLLMHost() {
+        try? llmHostRuntime?.suspend()
+    }
+
+    func resumeLLMHost() {
+        try? llmHostRuntime?.resume()
+    }
+
+    func shutdownLLMHost() {
+        try? llmHostRuntime?.shutdown()
     }
 
     @MainActor

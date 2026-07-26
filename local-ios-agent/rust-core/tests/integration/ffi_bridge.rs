@@ -19,6 +19,7 @@ use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_prepare_profile_publish,
     local_agent_runtime_bridge_prepare_user_turn, local_agent_runtime_bridge_preview_context,
     local_agent_runtime_bridge_preview_run_preparation,
+    local_agent_runtime_bridge_profile_execution_route,
     local_agent_runtime_bridge_register_prepared_session,
     local_agent_runtime_bridge_register_tool_schema,
     local_agent_runtime_bridge_renew_run_preparation, local_agent_runtime_bridge_send_message,
@@ -427,7 +428,9 @@ fn c_abi_round_trips_host_binding_and_preparation_lifecycle_without_host_secrets
         ));
         assert_eq!(handle["run_id"], renewed["proposed_run_id"]);
         assert_eq!(handle["session_handle"], registration["session_handle"]);
-        assert!(handle["first_command_id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert!(handle["first_command_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
         let reconciled = decode(
             &(&*runtime)
                 .reconcile_preparation_json(
@@ -767,6 +770,46 @@ fn c_abi_agent_profiles_include_revision_id() {
         )));
         assert_eq!(built["profile_id"], "profile.from_template.template_1");
         assert_eq!(built["profile_revision_id"], 1);
+
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_returns_exact_authoritative_profile_execution_route() {
+    unsafe {
+        let runtime = Box::into_raw(Box::new(seeded_bridge()));
+        let v2_request = CString::new(
+            json!({
+                "profile_id": "profile_v2",
+                "profile_revision": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let v2 = decode(&take_bridge_string(
+            local_agent_runtime_bridge_profile_execution_route(runtime, v2_request.as_ptr()),
+        ));
+        assert_eq!(v2["schema_version"], 1);
+        assert_eq!(v2["profile_id"], "profile_v2");
+        assert_eq!(v2["profile_revision"], 1);
+        assert_eq!(v2["llm_binding_schema"], "host_slot_v2");
+
+        let stale_request = CString::new(
+            json!({
+                "profile_id": "profile_v2",
+                "profile_revision": 2
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stale = decode(&take_bridge_string(
+            local_agent_runtime_bridge_profile_execution_route(runtime, stale_request.as_ptr()),
+        ));
+        assert!(stale["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("snapshot.profile_revision_missing"));
 
         local_agent_runtime_bridge_free(runtime);
     }

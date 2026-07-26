@@ -2,6 +2,7 @@ use crate::support::agent_os_fixtures::AgentOsTestWorld;
 
 use local_ios_agent_runtime::conversation::{ConversationFrameId, ConversationRunFrameRef};
 use local_ios_agent_runtime::core::{EntryId, SessionId};
+use local_ios_agent_runtime::llm_contracts::LLMBindingSchema;
 use local_ios_agent_runtime::run_snapshot::{RunSnapshotId, RunSnapshotService, StartRunRequest};
 use local_ios_agent_runtime::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
@@ -62,7 +63,7 @@ fn host_slot_v2_stops_before_legacy_snapshot_model_resolution() {
         ))
         .unwrap_err();
 
-    assert_eq!(error.code(), "execution.host_slot_v2_not_runnable");
+    assert_eq!(error.code(), "execution.host_slot_v2_requires_preparation");
     assert!(!service.repository().contains(RunSnapshotId::new(1)));
 }
 
@@ -95,6 +96,33 @@ fn host_slot_v2_gate_precedes_permission_and_repository_commit() {
         ))
         .unwrap_err();
 
-    assert_eq!(error.code(), "execution.host_slot_v2_not_runnable");
+    assert_eq!(error.code(), "execution.host_slot_v2_requires_preparation");
     assert!(!service.repository().contains(RunSnapshotId::new(1)));
+}
+
+#[test]
+fn exact_profile_revision_has_one_authoritative_execution_route() {
+    let world = AgentOsTestWorld::new();
+    let installed = world.install_fixture_package();
+    let service = RunSnapshotService::from_real_repositories(
+        world.profile_repository,
+        world.component_catalog,
+        world.model_catalog,
+        std::sync::Arc::new(StaticSecurityPermissionService::default()),
+        std::sync::Arc::new(InMemoryCredentialResolver::default()),
+        Box::new(InMemoryTransactionRunner::default()),
+    );
+    let reference = installed.profile();
+
+    let route = service
+        .profile_execution_route(reference.profile_id(), reference.profile_version().unwrap())
+        .unwrap();
+
+    assert_eq!(route.schema_version(), 1);
+    assert_eq!(route.profile_id(), reference.profile_id().as_str());
+    assert_eq!(
+        route.profile_revision(),
+        reference.profile_version().unwrap().as_u64()
+    );
+    assert_eq!(route.llm_binding_schema(), LLMBindingSchema::HostSlotV2);
 }

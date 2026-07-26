@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMHost
 
 struct ChatInteractionResult: Equatable, Sendable {
     var runId: String
@@ -23,15 +24,18 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
     private let conversation: any ConversationDomain
     private let execution: any ExecutionDomain
     private let toolDriver: any HostToolDriving
+    private let runStarter: any LLMProductRunStarting
 
     init(
         conversation: any ConversationDomain,
         execution: any ExecutionDomain,
-        toolDriver: any HostToolDriving = MinimalHostToolDriver()
+        toolDriver: any HostToolDriving = MinimalHostToolDriver(),
+        runStarter: (any LLMProductRunStarting)? = nil
     ) {
         self.conversation = conversation
         self.execution = execution
         self.toolDriver = toolDriver
+        self.runStarter = runStarter ?? ExecutionDomainRunStarter(execution: execution)
     }
 
     func sendMessage(
@@ -51,7 +55,7 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
             )
         )
         await onEvent(preparedTurn.userMessageEvent(text: text, parentEventId: parentEventId))
-        let handle = try await execution.startRun(
+        let handle = try await runStarter.startRun(
             StartExecutionRequestDTO(
                 agentProfileId: agentProfileId,
                 profileRevisionId: agentProfileRevisionId,
@@ -214,6 +218,14 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
 
     func cancelRun(runId: String) async throws {
         _ = try await execution.cancelRun(runId: runId)
+    }
+}
+
+private struct ExecutionDomainRunStarter: LLMProductRunStarting {
+    let execution: any ExecutionDomain
+
+    func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
+        try await execution.startRun(request)
     }
 }
 

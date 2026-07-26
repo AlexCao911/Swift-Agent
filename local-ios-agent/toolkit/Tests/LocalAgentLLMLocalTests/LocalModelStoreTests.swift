@@ -26,6 +26,7 @@ struct LocalModelStoreTests {
             "local_filesystem_operations",
             "local_model_use_leases",
             "prepared_local_sessions",
+            "reserved_local_sessions",
         ])
         #expect(!store.fileURL.path.hasSuffix("llm-state.sqlite"))
         let excluded = Set(backupExclusion.urls.map(\.path))

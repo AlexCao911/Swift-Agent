@@ -3411,6 +3411,48 @@ unrelated or non-array object shapes with
 `scripts/run-llm-phase-3-contracts.sh` and the dated Phase 3.1 design and
 execution plan.
 
+## Phase 4 implementation evidence (2026-07-27)
+
+Phase 4 enables the provider-neutral `host_slot_v2` production route without
+moving provider, model-file, credential, network, or C++ inference semantics
+into Rust. Rust returns one exact-revision `ProfileExecutionRoute`; legacy
+profiles continue through the existing model client, while V2 profiles must
+enter the authoritative preview/register/commit preparation path. Swift never
+infers a route from target availability and never falls back after stale,
+tampered, or mismatched route data. Persisted V2 snapshots use the tagged
+`HostSlotV2` binding with only requirements and an opaque cross-link.
+
+The Rust worker now writes lifecycle state and a durable command outbox in one
+SQLite authority. Stable command IDs, copy receipts, asynchronous
+acknowledgements, event sequence receipts, terminal outcomes, ordered tool
+batches, and independent acknowledgement/start/cancel/close watchdogs cover
+the complete generation loop. Swift owns the local/cloud session and provider
+continuation; Rust owns Agent planning, tool execution policy, formal
+assistant output, retry/cancel state, and the global run lease. The shared
+`HostAttestationV1Document` is recomputed on both sides from the frozen
+authoritative input and exact binding.
+
+App composition generates one host epoch and supplies it to Rust, local,
+cloud, and the installed dispatcher. Startup closes old-epoch preparations,
+sessions, outbox work, and legacy running state before exposing actions.
+Suspend/resume preserves deadlines; shutdown quiesces and joins the dispatcher
+before releasing Swift host state. Tool-effect receipts prevent blind replay
+after outcome-unknown interruption, and ambiguous Phase C replies reconcile
+before any preparation abort.
+
+Deterministic evidence is provided by
+`scripts/run-llm-phase-4-contracts.sh`. It clears the seven known provider key
+variables, runs the complete Phase 3 gate first, then 427 Rust contract tests,
+126 Rust integration tests, the Phase 4 architecture lint, the complete Swift
+package suite, and the App host-composition test on explicitly selected
+available iPhone and iPad Simulators. It uses only local fake engines and
+secret-free cloud fixtures and never invokes the live-smoke runner.
+
+Phase 5 remains deliberately separate: it adds the iPhone/iPad Model Center
+and Provider Profile UI, publishes real user-selected exact host bindings,
+migrates existing profiles, and removes the temporary legacy Rust
+provider/local-inference path only after migration and parity evidence pass.
+
 ## Official API References
 
 The adapter design was checked against official provider documentation on

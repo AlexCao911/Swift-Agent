@@ -12,6 +12,7 @@ public enum RustAgentOSOperation: String, Hashable, Sendable {
     case cancelRun = "cancel_run"
     case updateRuntimeOptions = "update_runtime_options"
     case previewContext = "preview_context"
+    case profileExecutionRoute = "profile_execution_route"
     case prepareProfilePublish = "prepare_profile_publish"
     case commitProfilePublish = "commit_profile_publish"
     case beginPackageBinding = "begin_package_binding"
@@ -38,4 +39,11 @@ public protocol RustAgentOSBridgeGateway: Sendable {
         _ operation: RustAgentOSOperation,
         _ request: Request
     ) -> AsyncThrowingStream<RuntimeEventDTO, Error>
+}
+
+public protocol ProfileExecutionRouteClient: Sendable {
+    func profileExecutionRoute(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws -> ProfileExecutionRouteDTO
 }

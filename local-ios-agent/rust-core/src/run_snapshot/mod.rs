@@ -10,7 +10,9 @@ pub use resolved_bindings::{
     ResolvedComponentBinding, ResolvedHostSlotBinding, ResolvedLLMBinding, ResolvedMemoryBinding,
     ResolvedModelBinding, ResolvedToolBinding, ResolvedVoiceBinding, TrustedHostRunState,
 };
-pub use resolver::{RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog};
+pub use resolver::{
+    ProfileExecutionRoute, RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog,
+};
 pub use snapshot::{
     PersistedResolvedLLMBinding, PersistedResolvedRunSnapshotV2, PersistedRunSnapshotError,
     ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview, RunSnapshotReadinessIssue,

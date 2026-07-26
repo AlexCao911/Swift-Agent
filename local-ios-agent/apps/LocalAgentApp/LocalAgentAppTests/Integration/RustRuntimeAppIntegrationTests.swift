@@ -250,8 +250,8 @@ struct RustRuntimeAppIntegrationTests {
         #expect(state.messages.contains { $0.role == .assistant })
     }
 
-    @Test("App bootstrapper keeps legacy streaming path by default")
-    func appBootstrapperKeepsLegacyStreamingPathByDefault() async throws {
+    @Test("App bootstrapper always installs exact-revision execution routing")
+    func appBootstrapperAlwaysInstallsExactRevisionExecutionRouting() async throws {
         let container = try AppBootstrapper.makeContainer(
             hostProcessEpoch: try testHostProcessEpoch(),
             environment: [:],
@@ -259,11 +259,11 @@ struct RustRuntimeAppIntegrationTests {
         )
 
         let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
-        #expect(!usesCoordinator)
+        #expect(usesCoordinator)
     }
 
-    @Test("App bootstrapper can wire conversation execution coordinator behind feature flag")
-    func appBootstrapperCanWireConversationExecutionCoordinatorBehindFeatureFlag() async throws {
+    @Test("legacy coordinator feature flag no longer changes production routing")
+    func legacyCoordinatorFeatureFlagNoLongerChangesProductionRouting() async throws {
         let container = try AppBootstrapper.makeContainer(
             hostProcessEpoch: try testHostProcessEpoch(),
             environment: ["LOCAL_AGENT_ENABLE_CONVERSATION_EXECUTION_COORDINATOR": "1"],
