@@ -14,9 +14,11 @@ pub use event_store::{
 pub use migration::{MigrationPlan, MigrationStep, SchemaVersion};
 pub use repository::{RepositoryName, StorageRepository};
 pub use runtime_state::{
-    runtime_now_millis, HostCommandOutboxRow, HostCommandOutboxStatus, InMemoryRuntimeStateStore,
-    PreparedHostRunCommit, RuntimeAggregateFailurePoint, RuntimeAggregateInspection,
-    RuntimeStateError, RuntimeTransition, UnifiedRuntimeStateRepository,
+    runtime_now_millis, EventQueueUsage, HostCommandOutboxRow, HostCommandOutboxStatus,
+    InMemoryRuntimeStateStore, PreparedHostRunCommit, RuntimeAggregateFailurePoint,
+    RuntimeAggregateInspection, RuntimeStateError, RuntimeTransition,
+    UnifiedRuntimeStateRepository, HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS,
+    HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS,
 };
 pub use sqlite_runtime_state::{
     MigrationState, RuntimeStateMigrationFailurePoint, SqliteRuntimeStateStore,

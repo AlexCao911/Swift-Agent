@@ -25,6 +25,8 @@ mod global_run_lease;
 mod host_binding_saga;
 #[path = "contract/host_llm_contracts.rs"]
 mod host_llm_contracts;
+#[path = "contract/host_llm_event_ingress.rs"]
+mod host_llm_event_ingress;
 #[path = "contract/host_llm_outbox.rs"]
 mod host_llm_outbox;
 #[path = "contract/host_llm_worker.rs"]

@@ -130,6 +130,7 @@ impl LLMEventEnvelope {
 pub enum LLMEventReceiptDisposition {
     Accepted,
     TerminallyIgnored,
+    TerminalFailure,
     Closed,
 }
 
@@ -205,6 +206,15 @@ impl LLMEventReceipt {
     pub fn event_envelope_digest(&self) -> &str {
         &self.event_envelope_digest
     }
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+    pub fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+    pub fn session_handle(&self) -> &str {
+        &self.session_handle
+    }
     pub fn disposition(&self) -> LLMEventReceiptDisposition {
         self.disposition
     }
@@ -238,10 +248,11 @@ pub enum LLMEventSubmissionResult {
 impl LLMEventSubmissionResult {
     pub fn sequence_effect(self) -> SequenceEffect {
         match self {
-            Self::Duplicate => SequenceEffect::AlreadyConsumed,
-            Self::Accepted | Self::TurnTerminal | Self::GenerationTerminal => {
-                SequenceEffect::ConsumeNew
-            }
+            Self::Duplicate | Self::SequenceConflict => SequenceEffect::AlreadyConsumed,
+            Self::Accepted
+            | Self::TurnTerminal
+            | Self::GenerationTerminal
+            | Self::PayloadTooLarge => SequenceEffect::ConsumeNew,
             _ => SequenceEffect::DoNotConsume,
         }
     }

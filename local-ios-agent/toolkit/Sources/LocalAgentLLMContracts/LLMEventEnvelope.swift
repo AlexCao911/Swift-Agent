@@ -128,7 +128,12 @@ public struct LLMEventEnvelope: Codable, Equatable, Sendable {
     }
 }
 
-public enum LLMEventReceiptDisposition: String, Codable, Sendable { case accepted, terminallyIgnored = "terminally_ignored", closed }
+public enum LLMEventReceiptDisposition: String, Codable, Sendable {
+    case accepted
+    case terminallyIgnored = "terminally_ignored"
+    case terminalFailure = "terminal_failure"
+    case closed
+}
 
 public struct LLMEventReceipt: Codable, Equatable, Sendable {
     public let schemaVersion: UInt32; public let runID: String; public let sessionHandle: String
@@ -197,10 +202,10 @@ public enum LLMEventSubmissionResult: String, Codable, Sendable {
 
     public var sequenceEffect: LLMEventSequenceEffect {
         switch self {
-        case .duplicate: .alreadyConsumed
-        case .backpressure, .staleSession, .closedSession, .sequenceGap, .sequenceConflict,
-             .identityConflict, .invalidEnvelope, .payloadTooLarge: .doNotConsume
-        case .accepted, .turnTerminal, .generationTerminal: .consumeNew
+        case .duplicate, .sequenceConflict: .alreadyConsumed
+        case .backpressure, .staleSession, .closedSession, .sequenceGap,
+             .identityConflict, .invalidEnvelope: .doNotConsume
+        case .accepted, .turnTerminal, .generationTerminal, .payloadTooLarge: .consumeNew
         }
     }
     public var retrySameEnvelope: Bool { self == .backpressure }

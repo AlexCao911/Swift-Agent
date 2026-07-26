@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::llm_contracts::{
     HostCommandAcknowledgement, HostCommandCopyReceipt, HostCommandKind, HostDispatchEnvelope,
-    LLMEventEnvelope, LLMEventReceipt, LLMEventSubmissionResult,
+    LLMEventEnvelope, LLMEventSubmissionResult,
 };
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
 use crate::storage::{runtime_now_millis, RuntimeStateError, UnifiedRuntimeStateRepository};
@@ -293,29 +293,11 @@ impl HostLLMDispatcherRuntime {
     pub fn submit_event(
         &self,
         event: &LLMEventEnvelope,
-    ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
-        let result = if let Some(existing) = self
-            .shared
-            .repository
-            .event_receipt(event.session_handle(), event.event_sequence())?
-        {
-            if existing.event_envelope_digest() == event.event_envelope_digest() {
-                LLMEventSubmissionResult::Duplicate
-            } else {
-                return Err(RuntimeStateError::new(
-                    "llm.event.sequence_conflict",
-                    "the event sequence is already bound to a different envelope",
-                ));
-            }
-        } else {
-            LLMEventSubmissionResult::Accepted
-        };
-        let receipt = self
-            .shared
-            .repository
-            .apply_event_transactionally(event, result)?;
+    ) -> Result<LLMEventSubmissionResult, RuntimeStateError> {
+        let result =
+            super::HostLLMWorkerService::new(self.shared.repository.clone()).submit_event(event)?;
         self.wake();
-        Ok(receipt)
+        Ok(result)
     }
 }
 

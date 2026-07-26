@@ -13,11 +13,10 @@ use crate::llm_contracts::{
     GlobalRunLease, GlobalRunLeaseError, HostBindingActivationConfirmation, HostBindingCommit,
     HostBindingCrossLink, HostBindingError, HostBindingOperation, HostCommandAcknowledgement,
     HostCommandCopyReceipt, HostRunHandle, HostSessionCloseDisposition, HostSessionRecord,
-    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
-    LLMEventSubmissionResult, LogicalRunOutcome, PackageBindingPreparation, PreparationError,
-    PreparationReconciliation, PreparedSessionCleanupAcknowledgement,
-    PreparedSessionCleanupIdentity, ProfilePublishPreparation, ResourceLifecycle,
-    RunPreparationRecord, RunPreparationState,
+    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventSubmissionResult,
+    LogicalRunOutcome, PackageBindingPreparation, PreparationError, PreparationReconciliation,
+    PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupIdentity,
+    ProfilePublishPreparation, ResourceLifecycle, RunPreparationRecord, RunPreparationState,
 };
 
 use super::agent_os_state::{
@@ -25,9 +24,12 @@ use super::agent_os_state::{
     RunPreparationRepository, SharedAgentOSStateStore, SqliteAgentOSStateStore,
 };
 use super::runtime_state::{
-    apply_command_acknowledgement_state, close_command_for, conflict, contract_error, not_found,
-    poisoned, reconciliation_conflict, transaction_failed, validate_ack,
-    validate_command_for_worker, validate_transition, validate_worker_session,
+    accepted_event_state, apply_command_acknowledgement_state, close_command_for, conflict,
+    contract_error, event_kind_name, event_receipt_disposition, is_protocol_failure,
+    lifecycle_command, not_found, poisoned, protocol_failure_state, queues_inbound_event,
+    reconciliation_conflict, transaction_failed, validate_ack, validate_command_for_worker,
+    validate_transition, validate_worker_session, EventQueueUsage, HOST_EVENT_LOW_WATER_BYTES,
+    HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS,
 };
 use super::{
     HostCommandOutboxRow, HostCommandOutboxStatus, PreparedHostRunCommit,
@@ -451,19 +453,13 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         if result == LLMEventSubmissionResult::Duplicate {
             return self.event_receipt(event.session_handle(), event.event_sequence());
         }
-        if !matches!(
+        if matches!(
             result,
-            LLMEventSubmissionResult::Accepted
-                | LLMEventSubmissionResult::TurnTerminal
-                | LLMEventSubmissionResult::GenerationTerminal
+            LLMEventSubmissionResult::Backpressure
+                | LLMEventSubmissionResult::StaleSession
+                | LLMEventSubmissionResult::ClosedSession
         ) {
             return Ok(None);
-        }
-        if event.expected_digest().map_err(contract_error)? != event.event_envelope_digest() {
-            return Err(RuntimeStateError::new(
-                "llm.event.invalid_envelope",
-                "event envelope digest mismatch",
-            ));
         }
         let mut store = self.inner.lock().map_err(|_| poisoned())?;
         let transaction = store
@@ -471,20 +467,41 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_error)?;
         let worker = load_worker(&transaction, event.run_id())?.ok_or_else(not_found)?;
+        let session = load_session(&transaction, event.session_handle())?.ok_or_else(not_found)?;
         if worker.session_handle() != event.session_handle()
             || worker.host_process_epoch() != event.host_process_epoch()
-            || worker.expected_event_sequence() != event.event_sequence()
+            || session.run_id() != event.run_id()
+            || session.host_process_epoch() != event.host_process_epoch()
         {
             return Err(RuntimeStateError::new(
                 "llm.event.identity_or_sequence_conflict",
-                "event does not match worker identity and expected sequence",
+                "event does not match worker and session identity",
             ));
         }
-        let disposition = if result == LLMEventSubmissionResult::Accepted {
-            LLMEventReceiptDisposition::Accepted
-        } else {
-            LLMEventReceiptDisposition::TerminallyIgnored
-        };
+
+        if is_protocol_failure(result) {
+            let (next_worker, next_session, close) =
+                protocol_failure_state(&worker, &session, event, result)?;
+            update_worker(&transaction, worker.revision(), &next_worker)?;
+            update_session(&transaction, &next_session)?;
+            if let Some(close) = close {
+                insert_outbox(&transaction, &HostCommandOutboxRow::pending(close))?;
+                self.take_failure(RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+            }
+            transaction.commit().map_err(sqlite_error)?;
+            return Ok(None);
+        }
+
+        if worker.expected_event_sequence() != event.event_sequence()
+            || event.expected_digest().map_err(contract_error)? != event.event_envelope_digest()
+        {
+            return Err(RuntimeStateError::new(
+                "llm.event.identity_or_sequence_conflict",
+                "event does not match the expected sequence or digest",
+            ));
+        }
+
+        let disposition = event_receipt_disposition(event, result);
         let receipt = LLMEventReceipt::new(
             event.run_id(),
             event.session_handle(),
@@ -496,11 +513,38 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         )
         .map_err(contract_error)?;
         insert_event_receipt(&transaction, &receipt)?;
-        let next = worker
-            .clone()
-            .with_revision(worker.revision() + 1)
-            .with_expected_event_sequence(worker.expected_event_sequence() + 1);
-        update_worker(&transaction, worker.revision(), &next)?;
+        self.take_failure(RuntimeAggregateFailurePoint::AfterEventReceiptWrite)?;
+
+        let (next_worker, next_session, close) =
+            accepted_event_state(&worker, &session, event, result)?;
+        update_worker(&transaction, worker.revision(), &next_worker)?;
+        self.take_failure(RuntimeAggregateFailurePoint::AfterExpectedSequenceWrite)?;
+
+        if queues_inbound_event(event, result) {
+            insert_inbound_event(&transaction, event)?;
+        }
+        self.take_failure(RuntimeAggregateFailurePoint::AfterInboundEventWrite)?;
+
+        if let Some(turn_id) = event.generation_turn_id.as_deref() {
+            append_turn_accumulator(&transaction, event.session_handle(), turn_id, event)?;
+        }
+        self.take_failure(RuntimeAggregateFailurePoint::AfterEventAccumulatorWrite)?;
+
+        update_session(&transaction, &next_session)?;
+        self.take_failure(RuntimeAggregateFailurePoint::AfterEventStateWrite)?;
+
+        insert_agent_event(
+            &transaction,
+            event.run_id(),
+            &format!("llm.event.{}", event_kind_name(event.kind())),
+            event.event_id(),
+        )?;
+        self.take_failure(RuntimeAggregateFailurePoint::AfterEventAgentWrite)?;
+
+        if let Some(close) = close {
+            insert_outbox(&transaction, &HostCommandOutboxRow::pending(close))?;
+            self.take_failure(RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+        }
         transaction.commit().map_err(sqlite_error)?;
         Ok(Some(receipt))
     }
@@ -740,6 +784,133 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             .map_err(sqlite_error)?
             .map(|json| decode(&json))
             .transpose()
+    }
+
+    fn event_receipt_by_id(
+        &self,
+        session_handle: &str,
+        event_id: &str,
+    ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        store
+            .connection()
+            .query_row(
+                "select record_json from llm_event_receipts
+                 where session_handle = ?1 and event_id = ?2",
+                params![session_handle, event_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_error)?
+            .map(|json| decode(&json))
+            .transpose()
+    }
+
+    fn event_queue_usage(
+        &self,
+        session_handle: &str,
+    ) -> Result<EventQueueUsage, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        event_queue_usage_sql(store.connection(), session_handle)
+    }
+
+    fn drain_inbound_events(
+        &self,
+        maximum: usize,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+        if maximum == 0 {
+            return Ok(Vec::new());
+        }
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let session_handle: Option<String> = transaction
+            .query_row(
+                "select session_handle from host_llm_inbound_events
+                 order by session_handle, cast(event_sequence as integer) limit 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        let Some(session_handle) = session_handle else {
+            transaction.commit().map_err(sqlite_error)?;
+            return Ok(Vec::new());
+        };
+        let before = event_queue_usage_sql(&transaction, &session_handle)?;
+        let rows = {
+            let mut statement = transaction
+                .prepare(
+                    "select event_sequence, record_json from host_llm_inbound_events
+                     where session_handle = ?1
+                     order by cast(event_sequence as integer) limit ?2",
+                )
+                .map_err(sqlite_error)?;
+            let rows = statement
+                .query_map(
+                    params![session_handle, i64::try_from(maximum).unwrap_or(i64::MAX)],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(sqlite_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_error)?;
+            rows
+        };
+        let mut drained = Vec::with_capacity(rows.len());
+        for (sequence, json) in rows {
+            transaction
+                .execute(
+                    "delete from host_llm_inbound_events
+                     where session_handle = ?1 and event_sequence = ?2",
+                    params![session_handle, sequence],
+                )
+                .map_err(sqlite_error)?;
+            drained.push(decode(&json)?);
+        }
+        let after = event_queue_usage_sql(&transaction, &session_handle)?;
+        if (before.event_count >= HOST_EVENT_MAX_EVENTS
+            || before.byte_count >= HOST_EVENT_MAX_BYTES)
+            && after.event_count < HOST_EVENT_LOW_WATER_EVENTS
+            && after.byte_count < HOST_EVENT_LOW_WATER_BYTES
+        {
+            let worker =
+                load_worker_by_session(&transaction, &session_handle)?.ok_or_else(not_found)?;
+            let command = lifecycle_command(
+                &worker,
+                crate::llm_contracts::HostCommandKind::CapacityAvailable,
+            )?;
+            insert_outbox(&transaction, &HostCommandOutboxRow::pending(command))?;
+            let next = worker
+                .clone()
+                .with_revision(worker.revision() + 1)
+                .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+            update_worker(&transaction, worker.revision(), &next)?;
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(drained)
+    }
+
+    fn turn_accumulator_events(
+        &self,
+        session_handle: &str,
+        generation_turn_id: &str,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        store
+            .connection()
+            .query_row(
+                "select record_json from host_llm_turn_accumulators
+                 where session_handle = ?1 and generation_turn_id = ?2",
+                params![session_handle, generation_turn_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_error)?
+            .map(|json| decode(&json))
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     fn inspect_v2_aggregate(
@@ -1410,6 +1581,16 @@ fn initialize_connection(connection: &Connection) -> Result<(), RuntimeStateErro
                primary key(session_handle, event_sequence),
                unique(session_handle, event_id)
              );
+             create table if not exists host_llm_inbound_events (
+               session_handle text not null, event_sequence text not null,
+               byte_count text not null, record_json text not null,
+               primary key(session_handle, event_sequence)
+             );
+             create table if not exists host_llm_turn_accumulators (
+               session_handle text not null, generation_turn_id text not null,
+               record_json text not null,
+               primary key(session_handle, generation_turn_id)
+             );
              create table if not exists host_committed_preparations (
                preparation_id text primary key, consumed_token_digest text not null,
                lease_generation text not null, run_id text not null unique
@@ -1745,6 +1926,40 @@ fn load_worker(
         .transpose()
 }
 
+fn load_worker_by_session(
+    connection: &Connection,
+    session_handle: &str,
+) -> Result<Option<HostWorkerRecord>, RuntimeStateError> {
+    connection
+        .query_row(
+            "select record_json from host_workers where session_handle = ?1",
+            params![session_handle],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?
+        .map(|json| decode(&json))
+        .transpose()
+}
+
+fn event_queue_usage_sql(
+    connection: &Connection,
+    session_handle: &str,
+) -> Result<EventQueueUsage, RuntimeStateError> {
+    let (event_count, byte_count): (u64, u64) = connection
+        .query_row(
+            "select count(*), coalesce(sum(cast(byte_count as integer)), 0)
+             from host_llm_inbound_events where session_handle = ?1",
+            params![session_handle],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sqlite_error)?;
+    Ok(EventQueueUsage {
+        event_count: usize::try_from(event_count).unwrap_or(usize::MAX),
+        byte_count: usize::try_from(byte_count).unwrap_or(usize::MAX),
+    })
+}
+
 fn insert_session(
     transaction: &Transaction<'_>,
     session: &HostSessionRecord,
@@ -1902,6 +2117,85 @@ fn insert_event_receipt(
                 receipt.receipt_digest(),
                 encode(receipt)?
             ],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn insert_inbound_event(
+    transaction: &Transaction<'_>,
+    event: &LLMEventEnvelope,
+) -> Result<(), RuntimeStateError> {
+    let json = encode(event)?;
+    transaction
+        .execute(
+            "insert into host_llm_inbound_events(
+               session_handle, event_sequence, byte_count, record_json
+             ) values (?1, ?2, ?3, ?4)",
+            params![
+                event.session_handle(),
+                event.event_sequence().to_string(),
+                json.len().to_string(),
+                json
+            ],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn append_turn_accumulator(
+    transaction: &Transaction<'_>,
+    session_handle: &str,
+    generation_turn_id: &str,
+    event: &LLMEventEnvelope,
+) -> Result<(), RuntimeStateError> {
+    let existing: Option<String> = transaction
+        .query_row(
+            "select record_json from host_llm_turn_accumulators
+             where session_handle = ?1 and generation_turn_id = ?2",
+            params![session_handle, generation_turn_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    let mut events: Vec<LLMEventEnvelope> = existing
+        .as_deref()
+        .map(decode)
+        .transpose()?
+        .unwrap_or_default();
+    events.push(event.clone());
+    transaction
+        .execute(
+            "insert into host_llm_turn_accumulators(
+               session_handle, generation_turn_id, record_json
+             ) values (?1, ?2, ?3)
+             on conflict(session_handle, generation_turn_id)
+             do update set record_json = excluded.record_json",
+            params![session_handle, generation_turn_id, encode(&events)?],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn insert_agent_event(
+    transaction: &Transaction<'_>,
+    run_id: &str,
+    code: &str,
+    payload: &str,
+) -> Result<(), RuntimeStateError> {
+    let sequence: u64 = transaction
+        .query_row(
+            "select coalesce(max(cast(sequence as integer)), 0) + 1
+             from host_agent_events where run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    transaction
+        .execute(
+            "insert into host_agent_events(run_id, sequence, code, payload)
+             values (?1, ?2, ?3, ?4)",
+            params![run_id, sequence.to_string(), code, payload],
         )
         .map_err(sqlite_error)?;
     Ok(())

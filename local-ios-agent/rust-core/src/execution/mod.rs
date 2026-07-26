@@ -7,6 +7,7 @@ mod execution_plan;
 mod execution_planner;
 mod execution_service;
 mod host_llm_dispatcher;
+mod host_llm_worker;
 mod inference_settings;
 mod react_worker;
 mod run_lifecycle;
@@ -33,6 +34,7 @@ pub use host_llm_dispatcher::{
     LocalAgentLLMHostCopyReceipt, LocalAgentLLMHostReleaseContextFn, LocalAgentLLMHostVTable,
     LOCAL_AGENT_LLM_HOST_ABI_VERSION,
 };
+pub use host_llm_worker::{HostLLMWorkerService, HostLLMWorkerServiceConfig};
 pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use react_worker::{
     ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker, ExecutionToolCall,

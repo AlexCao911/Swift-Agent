@@ -1113,7 +1113,7 @@ git commit -m "feat: add swift llm host actor"
 - Swift `LLMEventSequencer` assigns ID/sequence only when an immutable envelope is ready for FFI, retries only `backpressure`, and never advances on stale/closed/invalid results.
 - Exact close receipt replay remains `duplicate`; other closed/stale events never consume sequence.
 
-- [ ] **Step 1: Write the complete failing result-matrix tests**
+- [x] **Step 1: Write the complete failing result-matrix tests**
 
 Parameterize every result with `sequenceConsumed`, `receiptPersisted`, and `retrySameSequence`. Add conflict-before-terminal-order tests and the N/N+1 late-event case:
 
@@ -1142,7 +1142,7 @@ Add a crash-injection matrix after receipt write, expected-sequence write, inbou
 
 Swift tests must prove only the exact backpressured bytes are retried and that raw backend late events are filtered before sequence allocation.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_event_ingress -- --nocapture
@@ -1151,7 +1151,7 @@ swift test --package-path toolkit --filter LLMHostEventSequencerTests
 
 Expected: fail because the aggregate event transaction, crash-safe receipt coupling, and Swift sequencer are absent.
 
-- [ ] **Step 3: Implement validation order and lossless handoff**
+- [x] **Step 3: Implement validation order and lossless handoff**
 
 Apply this order exactly: structural/canonical validation → session/epoch lookup including retained close duplicate → identity/sequence receipt comparison → expected sequence → turn/generation lifecycle → capacity → one `apply_event_transactionally` call. The repository rechecks session/epoch/expected sequence and worker revision inside its immediate transaction before writing anything. Return a typed FFI response only after commit:
 
@@ -1179,7 +1179,7 @@ package func submit(_ payload: LLMEventPayload) async throws {
 
 Coalesce only text/reasoning deltas up to 32 KiB or 50 ms. Never coalesce/drop tool, usage, start, terminal, failure, cancel, or close events. Low-water `capacity_available` insertion is part of the same aggregate transaction that drains below both limits, so a crash cannot lose the only wakeup.
 
-- [ ] **Step 4: Run GREEN and reopen regressions**
+- [x] **Step 4: Run GREEN and reopen regressions**
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_event_ingress -- --nocapture
@@ -1190,7 +1190,7 @@ git diff --check
 
 Expected: every matrix row, conflict precedence, low-water notification, exact retry, and reopen receipt case passes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add rust-core/src/execution rust-core/src/ffi_bridge.rs \

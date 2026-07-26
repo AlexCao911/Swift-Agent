@@ -25,6 +25,13 @@ pub enum RuntimeAggregateFailurePoint {
     AfterWorkerWrite,
     AfterSessionWrite,
     AfterOutboxWrite,
+    AfterEventReceiptWrite,
+    AfterExpectedSequenceWrite,
+    AfterInboundEventWrite,
+    AfterEventAccumulatorWrite,
+    AfterEventStateWrite,
+    AfterEventAgentWrite,
+    AfterEventOutboxWrite,
 }
 
 impl RuntimeAggregateFailurePoint {
@@ -38,6 +45,28 @@ impl RuntimeAggregateFailurePoint {
             Self::AfterOutboxWrite,
         ]
     }
+
+    pub const fn event_points() -> [Self; 6] {
+        [
+            Self::AfterEventReceiptWrite,
+            Self::AfterExpectedSequenceWrite,
+            Self::AfterInboundEventWrite,
+            Self::AfterEventAccumulatorWrite,
+            Self::AfterEventStateWrite,
+            Self::AfterEventAgentWrite,
+        ]
+    }
+}
+
+pub const HOST_EVENT_MAX_EVENTS: usize = 256;
+pub const HOST_EVENT_MAX_BYTES: usize = 2 * 1024 * 1024;
+pub const HOST_EVENT_LOW_WATER_EVENTS: usize = 128;
+pub const HOST_EVENT_LOW_WATER_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EventQueueUsage {
+    pub event_count: usize,
+    pub byte_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -468,6 +497,22 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
         session_handle: &str,
         event_sequence: u64,
     ) -> Result<Option<LLMEventReceipt>, RuntimeStateError>;
+    fn event_receipt_by_id(
+        &self,
+        session_handle: &str,
+        event_id: &str,
+    ) -> Result<Option<LLMEventReceipt>, RuntimeStateError>;
+    fn event_queue_usage(&self, session_handle: &str)
+        -> Result<EventQueueUsage, RuntimeStateError>;
+    fn drain_inbound_events(
+        &self,
+        maximum: usize,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError>;
+    fn turn_accumulator_events(
+        &self,
+        session_handle: &str,
+        generation_turn_id: &str,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError>;
     fn inspect_v2_aggregate(
         &self,
         preparation_id: &str,
@@ -490,6 +535,8 @@ struct InMemoryRuntimeState {
     sessions: BTreeMap<String, HostSessionRecord>,
     commands: BTreeMap<String, HostCommandOutboxRow>,
     event_receipts: BTreeMap<(String, u64), LLMEventReceipt>,
+    inbound_events: BTreeMap<(String, u64), LLMEventEnvelope>,
+    turn_accumulators: BTreeMap<(String, String), Vec<LLMEventEnvelope>>,
     committed_preparations: BTreeMap<String, (String, u64, String)>,
     snapshots: BTreeMap<String, (String, String)>,
     agent_events: BTreeMap<String, Vec<(String, String)>>,
@@ -808,7 +855,7 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         event: &LLMEventEnvelope,
         result: LLMEventSubmissionResult,
     ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
-        apply_event_in_memory(&self.inner, event, result)
+        apply_event_in_memory(&self.inner, &self.failure, event, result)
     }
 
     fn recover_run_for_epoch(
@@ -1009,6 +1056,54 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .cloned())
     }
 
+    fn event_receipt_by_id(
+        &self,
+        session_handle: &str,
+        event_id: &str,
+    ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .event_receipts
+            .values()
+            .find(|receipt| {
+                receipt.session_handle() == session_handle && receipt.event_id() == event_id
+            })
+            .cloned())
+    }
+
+    fn event_queue_usage(
+        &self,
+        session_handle: &str,
+    ) -> Result<EventQueueUsage, RuntimeStateError> {
+        let state = self.inner.lock().map_err(|_| poisoned())?;
+        event_queue_usage_in_memory(&state, session_handle)
+    }
+
+    fn drain_inbound_events(
+        &self,
+        maximum: usize,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        drain_events_in_memory(&mut state, maximum)
+    }
+
+    fn turn_accumulator_events(
+        &self,
+        session_handle: &str,
+        generation_turn_id: &str,
+    ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .turn_accumulators
+            .get(&(session_handle.to_string(), generation_turn_id.to_string()))
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn inspect_v2_aggregate(
         &self,
         preparation_id: &str,
@@ -1080,6 +1175,7 @@ impl ExecutionEventRepository for InMemoryRuntimeStateStore {
 
 fn apply_event_in_memory(
     state: &Mutex<InMemoryRuntimeState>,
+    failure: &Mutex<Option<RuntimeAggregateFailurePoint>>,
     event: &LLMEventEnvelope,
     result: LLMEventSubmissionResult,
 ) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
@@ -1090,39 +1186,78 @@ fn apply_event_in_memory(
             .get(&(event.session_handle().to_string(), event.event_sequence()))
             .cloned());
     }
-    if !matches!(
+    if matches!(
         result,
-        LLMEventSubmissionResult::Accepted
-            | LLMEventSubmissionResult::TurnTerminal
-            | LLMEventSubmissionResult::GenerationTerminal
+        LLMEventSubmissionResult::Backpressure
+            | LLMEventSubmissionResult::StaleSession
+            | LLMEventSubmissionResult::ClosedSession
     ) {
         return Ok(None);
     }
-    if event.expected_digest().map_err(contract_error)? != event.event_envelope_digest() {
-        return Err(RuntimeStateError::new(
-            "llm.event.invalid_envelope",
-            "event envelope digest mismatch",
-        ));
+    let original = state.clone();
+    let outcome = apply_event_in_memory_mutation(&mut state, failure, event, result);
+    if outcome.is_err() {
+        *state = original;
     }
+    outcome
+}
+
+fn apply_event_in_memory_mutation(
+    state: &mut InMemoryRuntimeState,
+    failure: &Mutex<Option<RuntimeAggregateFailurePoint>>,
+    event: &LLMEventEnvelope,
+    result: LLMEventSubmissionResult,
+) -> Result<Option<LLMEventReceipt>, RuntimeStateError> {
     let worker = state
         .workers
         .get(event.run_id())
         .ok_or_else(not_found)?
         .clone();
+    let session = state
+        .sessions
+        .get(event.session_handle())
+        .ok_or_else(not_found)?
+        .clone();
     if worker.session_handle() != event.session_handle()
         || worker.host_process_epoch() != event.host_process_epoch()
-        || worker.expected_event_sequence() != event.event_sequence()
+        || session.run_id() != event.run_id()
+        || session.host_process_epoch() != event.host_process_epoch()
     {
         return Err(RuntimeStateError::new(
             "llm.event.identity_or_sequence_conflict",
-            "event does not match worker identity and expected sequence",
+            "event does not match worker and session identity",
         ));
     }
-    let disposition = if result == LLMEventSubmissionResult::Accepted {
-        LLMEventReceiptDisposition::Accepted
-    } else {
-        LLMEventReceiptDisposition::TerminallyIgnored
-    };
+
+    if is_protocol_failure(result) {
+        let (next_worker, next_session, close) =
+            protocol_failure_state(&worker, &session, event, result)?;
+        state
+            .workers
+            .insert(event.run_id().to_string(), next_worker);
+        state
+            .sessions
+            .insert(event.session_handle().to_string(), next_session);
+        if let Some(close) = close {
+            state.commands.insert(
+                close.command_id().to_string(),
+                HostCommandOutboxRow::pending(close),
+            );
+            take_event_failure(failure, RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+        }
+        return Ok(None);
+    }
+
+    if worker.expected_event_sequence() != event.event_sequence()
+        || event.expected_digest().map_err(contract_error)? != event.event_envelope_digest()
+    {
+        return Err(RuntimeStateError::new(
+            "llm.event.identity_or_sequence_conflict",
+            "event does not match the expected sequence or digest",
+        ));
+    }
+
+    let disposition = event_receipt_disposition(event, result);
     let receipt = LLMEventReceipt::new(
         event.run_id(),
         event.session_handle(),
@@ -1137,14 +1272,361 @@ fn apply_event_in_memory(
         (event.session_handle().to_string(), event.event_sequence()),
         receipt.clone(),
     );
-    state.workers.insert(
-        worker.run_id().to_string(),
-        worker
-            .clone()
-            .with_revision(worker.revision() + 1)
-            .with_expected_event_sequence(worker.expected_event_sequence() + 1),
-    );
+    take_event_failure(
+        failure,
+        RuntimeAggregateFailurePoint::AfterEventReceiptWrite,
+    )?;
+
+    let (next_worker, next_session, close) =
+        accepted_event_state(&worker, &session, event, result)?;
+    state
+        .workers
+        .insert(event.run_id().to_string(), next_worker);
+    take_event_failure(
+        failure,
+        RuntimeAggregateFailurePoint::AfterExpectedSequenceWrite,
+    )?;
+
+    if queues_inbound_event(event, result) {
+        state.inbound_events.insert(
+            (event.session_handle().to_string(), event.event_sequence()),
+            event.clone(),
+        );
+    }
+    take_event_failure(
+        failure,
+        RuntimeAggregateFailurePoint::AfterInboundEventWrite,
+    )?;
+
+    if let Some(turn_id) = event.generation_turn_id.as_deref() {
+        state
+            .turn_accumulators
+            .entry((event.session_handle().to_string(), turn_id.to_string()))
+            .or_default()
+            .push(event.clone());
+    }
+    take_event_failure(
+        failure,
+        RuntimeAggregateFailurePoint::AfterEventAccumulatorWrite,
+    )?;
+
+    state
+        .sessions
+        .insert(event.session_handle().to_string(), next_session);
+    take_event_failure(failure, RuntimeAggregateFailurePoint::AfterEventStateWrite)?;
+
+    state
+        .agent_events
+        .entry(event.run_id().to_string())
+        .or_default()
+        .push((
+            format!("llm.event.{}", event_kind_name(event.kind())),
+            event.event_id().to_string(),
+        ));
+    take_event_failure(failure, RuntimeAggregateFailurePoint::AfterEventAgentWrite)?;
+
+    if let Some(close) = close {
+        state.commands.insert(
+            close.command_id().to_string(),
+            HostCommandOutboxRow::pending(close),
+        );
+        take_event_failure(failure, RuntimeAggregateFailurePoint::AfterEventOutboxWrite)?;
+    }
     Ok(Some(receipt))
+}
+
+fn take_event_failure(
+    failure: &Mutex<Option<RuntimeAggregateFailurePoint>>,
+    point: RuntimeAggregateFailurePoint,
+) -> Result<(), RuntimeStateError> {
+    let mut failure = failure.lock().map_err(|_| poisoned())?;
+    if failure.as_ref() == Some(&point) {
+        *failure = None;
+        Err(transaction_failed())
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn event_receipt_disposition(
+    event: &LLMEventEnvelope,
+    result: LLMEventSubmissionResult,
+) -> LLMEventReceiptDisposition {
+    match result {
+        LLMEventSubmissionResult::TurnTerminal | LLMEventSubmissionResult::GenerationTerminal => {
+            LLMEventReceiptDisposition::TerminallyIgnored
+        }
+        LLMEventSubmissionResult::PayloadTooLarge => LLMEventReceiptDisposition::TerminalFailure,
+        _ if event.kind() == crate::llm_contracts::LLMEventKind::SessionClosed => {
+            LLMEventReceiptDisposition::Closed
+        }
+        _ => LLMEventReceiptDisposition::Accepted,
+    }
+}
+
+pub(crate) fn queues_inbound_event(
+    event: &LLMEventEnvelope,
+    result: LLMEventSubmissionResult,
+) -> bool {
+    result == LLMEventSubmissionResult::Accepted
+        && event.kind() != crate::llm_contracts::LLMEventKind::SessionClosed
+}
+
+pub(crate) fn accepted_event_state(
+    worker: &HostWorkerRecord,
+    session: &HostSessionRecord,
+    event: &LLMEventEnvelope,
+    result: LLMEventSubmissionResult,
+) -> Result<
+    (
+        HostWorkerRecord,
+        HostSessionRecord,
+        Option<HostCommandEnvelope>,
+    ),
+    RuntimeStateError,
+> {
+    let mut next_worker = worker
+        .clone()
+        .with_revision(worker.revision() + 1)
+        .with_expected_event_sequence(worker.expected_event_sequence() + 1);
+    let mut lifecycle = worker.resource_lifecycle().clone();
+    let mut close = None;
+
+    if result == LLMEventSubmissionResult::PayloadTooLarge {
+        let code = "llm.event.payload_too_large".to_string();
+        next_worker = next_worker
+            .with_execution_phase(None)
+            .with_logical_outcome(LogicalRunOutcome::Failed { code })
+            .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+        lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+        close = Some(lifecycle_command(worker, HostCommandKind::CloseSession)?);
+    } else if result == LLMEventSubmissionResult::Accepted {
+        use crate::llm_contracts::LLMEventKind;
+        match event.kind() {
+            LLMEventKind::GenerationStarted => {
+                next_worker =
+                    next_worker.with_execution_phase(Some(HostExecutionPhase::ConsumingLlmTurn));
+                lifecycle = ResourceLifecycle::Generating;
+            }
+            LLMEventKind::GenerationCompleted => {
+                let completion = event.payload.completion.as_ref().ok_or_else(|| {
+                    RuntimeStateError::new(
+                        "llm.event.invalid_envelope",
+                        "generation completion payload is missing",
+                    )
+                })?;
+                if completion.outcome == "tool_calls_ready" {
+                    next_worker = next_worker
+                        .with_execution_phase(Some(HostExecutionPhase::ExecutingToolBatch));
+                } else {
+                    next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
+                        LogicalRunOutcome::Succeeded {
+                            finish_reason: completion.finish_reason.clone(),
+                        },
+                    );
+                }
+            }
+            LLMEventKind::Failed => {
+                next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
+                    LogicalRunOutcome::Failed {
+                        code: event
+                            .payload
+                            .failure_code
+                            .clone()
+                            .unwrap_or_else(|| "llm.generation.failed".into()),
+                    },
+                );
+            }
+            LLMEventKind::Cancelled => {
+                next_worker = next_worker
+                    .with_execution_phase(None)
+                    .with_logical_outcome(LogicalRunOutcome::Cancelled);
+            }
+            LLMEventKind::SessionClosed => {
+                lifecycle = ResourceLifecycle::Closed {
+                    disposition: HostSessionCloseDisposition::Closed,
+                };
+            }
+            _ => {}
+        }
+    }
+    next_worker = next_worker.with_resource_lifecycle(lifecycle.clone());
+    Ok((
+        next_worker,
+        session.clone().with_resource_lifecycle(lifecycle),
+        close,
+    ))
+}
+
+pub(crate) fn is_protocol_failure(result: LLMEventSubmissionResult) -> bool {
+    matches!(
+        result,
+        LLMEventSubmissionResult::SequenceGap
+            | LLMEventSubmissionResult::SequenceConflict
+            | LLMEventSubmissionResult::IdentityConflict
+            | LLMEventSubmissionResult::InvalidEnvelope
+    )
+}
+
+pub(crate) fn protocol_failure_state(
+    worker: &HostWorkerRecord,
+    session: &HostSessionRecord,
+    _event: &LLMEventEnvelope,
+    result: LLMEventSubmissionResult,
+) -> Result<
+    (
+        HostWorkerRecord,
+        HostSessionRecord,
+        Option<HostCommandEnvelope>,
+    ),
+    RuntimeStateError,
+> {
+    let code = format!("llm.event.{}", submission_result_name(result));
+    let lifecycle = if matches!(
+        worker.resource_lifecycle(),
+        ResourceLifecycle::Closed { .. }
+    ) {
+        worker.resource_lifecycle().clone()
+    } else {
+        ResourceLifecycle::AwaitingCloseCommandAck
+    };
+    let mut next = worker
+        .clone()
+        .with_revision(worker.revision() + 1)
+        .with_execution_phase(None)
+        .with_logical_outcome(LogicalRunOutcome::Interrupted { code })
+        .with_resource_lifecycle(lifecycle.clone());
+    let close = if matches!(lifecycle, ResourceLifecycle::AwaitingCloseCommandAck) {
+        next = next.with_expected_command_sequence(worker.expected_command_sequence() + 1);
+        Some(lifecycle_command(worker, HostCommandKind::CloseSession)?)
+    } else {
+        None
+    };
+    Ok((
+        next,
+        session.clone().with_resource_lifecycle(lifecycle),
+        close,
+    ))
+}
+
+pub(crate) fn lifecycle_command(
+    worker: &HostWorkerRecord,
+    kind: HostCommandKind,
+) -> Result<HostCommandEnvelope, RuntimeStateError> {
+    let id = crate::llm_contracts::BearerTokenIssuer::system()
+        .issue("saga-token:v1")
+        .map_err(|error| RuntimeStateError::new("llm.command.id_failed", error.to_string()))?
+        .raw()
+        .to_string();
+    HostCommandEnvelope::lifecycle(
+        id,
+        worker.run_id(),
+        worker.session_handle(),
+        worker.host_process_epoch(),
+        worker.expected_command_sequence(),
+        kind,
+    )
+    .map_err(|error| RuntimeStateError::new("llm.command.invalid", error.to_string()))
+}
+
+fn submission_result_name(result: LLMEventSubmissionResult) -> &'static str {
+    match result {
+        LLMEventSubmissionResult::SequenceGap => "sequence_gap",
+        LLMEventSubmissionResult::SequenceConflict => "sequence_conflict",
+        LLMEventSubmissionResult::IdentityConflict => "identity_conflict",
+        LLMEventSubmissionResult::InvalidEnvelope => "invalid_envelope",
+        _ => "protocol_violation",
+    }
+}
+
+pub(crate) fn event_kind_name(kind: crate::llm_contracts::LLMEventKind) -> &'static str {
+    use crate::llm_contracts::LLMEventKind;
+    match kind {
+        LLMEventKind::GenerationStarted => "generation_started",
+        LLMEventKind::TextDelta => "text_delta",
+        LLMEventKind::ReasoningSummaryDelta => "reasoning_summary_delta",
+        LLMEventKind::ToolCallStarted => "tool_call_started",
+        LLMEventKind::ToolCallArgumentsDelta => "tool_call_arguments_delta",
+        LLMEventKind::ToolCallCompleted => "tool_call_completed",
+        LLMEventKind::UsageUpdated => "usage_updated",
+        LLMEventKind::GenerationCompleted => "generation_completed",
+        LLMEventKind::Failed => "failed",
+        LLMEventKind::Cancelled => "cancelled",
+        LLMEventKind::SessionClosed => "session_closed",
+    }
+}
+
+fn event_queue_usage_in_memory(
+    state: &InMemoryRuntimeState,
+    session_handle: &str,
+) -> Result<EventQueueUsage, RuntimeStateError> {
+    let events = state
+        .inbound_events
+        .iter()
+        .filter(|((handle, _), _)| handle == session_handle)
+        .map(|(_, event)| event);
+    let mut usage = EventQueueUsage::default();
+    for event in events {
+        usage.event_count += 1;
+        usage.byte_count += serde_json::to_vec(event)
+            .map_err(|error| RuntimeStateError::new("llm.event.encode_failed", error.to_string()))?
+            .len();
+    }
+    Ok(usage)
+}
+
+fn drain_events_in_memory(
+    state: &mut InMemoryRuntimeState,
+    maximum: usize,
+) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+    if maximum == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(session_handle) = state
+        .inbound_events
+        .keys()
+        .next()
+        .map(|(handle, _)| handle.clone())
+    else {
+        return Ok(Vec::new());
+    };
+    let before = event_queue_usage_in_memory(state, &session_handle)?;
+    let keys: Vec<_> = state
+        .inbound_events
+        .keys()
+        .filter(|(handle, _)| handle == &session_handle)
+        .take(maximum)
+        .cloned()
+        .collect();
+    let drained = keys
+        .into_iter()
+        .filter_map(|key| state.inbound_events.remove(&key))
+        .collect::<Vec<_>>();
+    let after = event_queue_usage_in_memory(state, &session_handle)?;
+    if (before.event_count >= HOST_EVENT_MAX_EVENTS || before.byte_count >= HOST_EVENT_MAX_BYTES)
+        && after.event_count < HOST_EVENT_LOW_WATER_EVENTS
+        && after.byte_count < HOST_EVENT_LOW_WATER_BYTES
+    {
+        let worker = state
+            .workers
+            .values()
+            .find(|worker| worker.session_handle() == session_handle)
+            .cloned()
+            .ok_or_else(not_found)?;
+        let command = lifecycle_command(&worker, HostCommandKind::CapacityAvailable)?;
+        state.commands.insert(
+            command.command_id().to_string(),
+            HostCommandOutboxRow::pending(command),
+        );
+        state.workers.insert(
+            worker.run_id().to_string(),
+            worker
+                .clone()
+                .with_revision(worker.revision() + 1)
+                .with_expected_command_sequence(worker.expected_command_sequence() + 1),
+        );
+    }
+    Ok(drained)
 }
 
 pub(crate) fn validate_worker_session(

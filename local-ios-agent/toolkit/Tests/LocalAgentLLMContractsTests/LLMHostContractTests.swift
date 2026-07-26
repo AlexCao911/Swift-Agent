@@ -45,6 +45,8 @@ struct LLMHostContractTests {
         #expect(LLMEventSubmissionResult.accepted.sequenceEffect == .consumeNew)
         #expect(LLMEventSubmissionResult.duplicate.sequenceEffect == .alreadyConsumed)
         #expect(LLMEventSubmissionResult.backpressure.sequenceEffect == .doNotConsume)
+        #expect(LLMEventSubmissionResult.payloadTooLarge.sequenceEffect == .consumeNew)
+        #expect(LLMEventSubmissionResult.sequenceConflict.sequenceEffect == .alreadyConsumed)
         #expect(LLMEventSubmissionResult.turnTerminal.sequenceEffect == .consumeNew)
         #expect(LLMEventSubmissionResult.generationTerminal.sequenceEffect == .consumeNew)
         #expect(LLMEventSubmissionResult.staleSession.retrySameEnvelope == false)
