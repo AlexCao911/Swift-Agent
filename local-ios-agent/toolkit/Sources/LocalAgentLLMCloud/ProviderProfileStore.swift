@@ -7,11 +7,6 @@ private struct ProfileKey: Hashable, Sendable {
     let revision: UInt64
 }
 
-private struct TargetKey: Hashable, Sendable {
-    let id: String
-    let revision: UInt64
-}
-
 struct PersistedProfileRevision: Codable, Sendable {
     let recordSchemaVersion: Int
     let published: PublishedProviderProfileRevision
@@ -68,40 +63,11 @@ struct PersistedProfileState: Codable, Sendable {
     }
 }
 
-struct PersistedTargetRevision: Codable, Sendable {
-    let recordSchemaVersion: Int
-    let target: LLMTargetRevision
-
-    enum CodingKeys: String, CodingKey {
-        case recordSchemaVersion = "record_schema_version"
-        case target
-    }
-
-    init(target: LLMTargetRevision) {
-        recordSchemaVersion = 2
-        self.target = target
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        recordSchemaVersion = try container.decode(Int.self, forKey: .recordSchemaVersion)
-        guard recordSchemaVersion == 2 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .recordSchemaVersion,
-                in: container,
-                debugDescription: "unsupported LLM-target record schema"
-            )
-        }
-        target = try container.decode(LLMTargetRevision.self, forKey: .target)
-    }
-}
-
 public actor ProviderProfileStore {
     private let database: SQLiteConnection
     private let originValidator: any ProviderOriginValidating
     private var profiles: [ProfileKey: PublishedProviderProfileRevision]
     private var states: [ProfileKey: ProviderProfileState]
-    private var targets: [TargetKey: LLMTargetRevision]
 
     package static func inMemory(
         originValidator: any ProviderOriginValidating
@@ -144,7 +110,6 @@ public actor ProviderProfileStore {
             self.originValidator = originValidator
             profiles = loaded.profiles
             states = loaded.states
-            targets = loaded.targets
         } catch let failure as ProviderProfileFailure {
             throw failure
         } catch let failure as LLMStoreSchemaError {
@@ -486,77 +451,6 @@ public actor ProviderProfileStore {
         return credentialRefs.sorted()
     }
 
-    public func publishTarget(_ target: LLMTargetRevision) throws {
-        let key = TargetKey(id: target.targetID.rawValue, revision: target.revision)
-        if let existing = targets[key] {
-            guard existing == target else {
-                throw failure("llm_target.revision_conflict", "LLM target revision is immutable")
-            }
-            return
-        }
-        guard target.revision > 0, !target.targetID.rawValue.isEmpty, !target.modelID.isEmpty else {
-            throw failure("llm_target.invalid_revision", "LLM target identity is invalid")
-        }
-        let profileID: String
-        let profileRevision: UInt64
-        switch target.kind {
-        case let .cloud(id, revision):
-            profileID = id
-            profileRevision = revision
-        case .local:
-            throw failure("llm_target.kind_not_cloud", "provider profile store accepts cloud targets only")
-        }
-        guard profile(profileID: profileID, revision: profileRevision)?.lifecycle == .active else {
-            throw failure("llm_target.profile_not_found", "cloud target references a missing profile revision")
-        }
-        let latest = targets.values
-            .filter { $0.targetID == target.targetID }
-            .map(\.revision)
-            .max() ?? 0
-        guard target.revision > latest else {
-            throw failure("llm_target.revision_not_monotonic", "LLM target revision must increase")
-        }
-        do {
-            try database.transaction {
-                let rows = try database.queryRows(
-                    """
-                    SELECT lifecycle FROM provider_profile_revisions
-                    WHERE profile_id = ?1 AND revision = ?2
-                    """,
-                    bindings: [.text(profileID), .text(String(profileRevision))]
-                )
-                guard rows.count == 1, rows.first?.text("lifecycle") == "active" else {
-                    throw failure(
-                        "llm_target.profile_not_found",
-                        "cloud target references a missing profile revision"
-                    )
-                }
-                try database.execute(
-                    """
-                    INSERT INTO llm_target_revisions(
-                      target_id, revision, kind, model_id, profile_id, profile_revision,
-                      record_schema_version, record_json
-                    ) VALUES (?1, ?2, 'cloud', ?3, ?4, ?5, 2, ?6)
-                    """,
-                    bindings: [
-                        .text(target.targetID.rawValue), .text(String(target.revision)),
-                        .text(target.modelID), .text(profileID), .text(String(profileRevision)),
-                        .text(try Self.encode(PersistedTargetRevision(target: target))),
-                    ]
-                )
-            }
-        } catch let profileFailure as ProviderProfileFailure {
-            throw profileFailure
-        } catch {
-            throw failure("llm_target.persistence_failed", "could not persist LLM target revision")
-        }
-        targets[key] = target
-    }
-
-    public func target(targetID: LLMTargetID, revision: UInt64) -> LLMTargetRevision? {
-        targets[TargetKey(id: targetID.rawValue, revision: revision)]
-    }
-
     package func schemaVersionForTesting() -> Int {
         (try? LLMStoreSchema.userVersion(database)) ?? 0
     }
@@ -612,12 +506,10 @@ public actor ProviderProfileStore {
 
     private static func load(_ database: SQLiteConnection) throws -> (
         profiles: [ProfileKey: PublishedProviderProfileRevision],
-        states: [ProfileKey: ProviderProfileState],
-        targets: [TargetKey: LLMTargetRevision]
+        states: [ProfileKey: ProviderProfileState]
     ) {
         var profiles: [ProfileKey: PublishedProviderProfileRevision] = [:]
         var states: [ProfileKey: ProviderProfileState] = [:]
-        var targets: [TargetKey: LLMTargetRevision] = [:]
 
         for row in try database.queryRows(
             "SELECT profile_id, revision, preset_id, origin, credential_ref, retention_mode, lifecycle, record_schema_version, record_json FROM provider_profile_revisions"
@@ -665,28 +557,7 @@ public actor ProviderProfileStore {
             }
             states[ProfileKey(id: id, revision: revision)] = value
         }
-        for row in try database.queryRows(
-            "SELECT target_id, revision, kind, model_id, profile_id, profile_revision, record_schema_version, record_json FROM llm_target_revisions"
-        ) {
-            guard row.integer("record_schema_version") == 2,
-                  let id = row.text("target_id"),
-                  let revision = try parseRevision(row.text("revision")),
-                  let json = row.text("record_json")
-            else { throw corruptRecord("LLM target revision") }
-            let value = try decode(PersistedTargetRevision.self, json: json).target
-            guard case let .cloud(profileID, profileRevision) = value.kind,
-                  value.targetID.rawValue == id,
-                  value.revision == revision,
-                  row.text("kind") == "cloud",
-                  row.text("model_id") == value.modelID,
-                  row.text("profile_id") == profileID,
-                  row.text("profile_revision") == String(profileRevision)
-            else {
-                throw corruptRecord("LLM target revision identity")
-            }
-            targets[TargetKey(id: id, revision: revision)] = value
-        }
-        return (profiles, states, targets)
+        return (profiles, states)
     }
 
     private static func parseRevision(_ text: String?) throws -> UInt64? {

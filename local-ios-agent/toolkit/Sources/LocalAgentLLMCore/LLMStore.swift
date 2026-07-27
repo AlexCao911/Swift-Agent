@@ -1,5 +1,65 @@
 import Foundation
 
+public struct LLMStoreError: Error, Equatable, Sendable {
+    public let code: String
+    public let message: String
+
+    public init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
+}
+
+public struct ActiveAgentHostBinding: Equatable, Sendable {
+    public let configuration: AgentHostConfiguration
+    public let binding: HostBindingTuple
+
+    public init(
+        configuration: AgentHostConfiguration,
+        binding: HostBindingTuple
+    ) {
+        self.configuration = configuration
+        self.binding = binding
+    }
+
+    public var targetReference: LLMTargetReference {
+        configuration.selectedTarget
+    }
+}
+
+private struct TargetKey: Hashable, Sendable {
+    let id: String
+    let revision: UInt64
+}
+
+package struct PersistedTargetRevision: Codable, Sendable {
+    package let recordSchemaVersion: Int
+    package let target: LLMTargetRevision
+
+    enum CodingKeys: String, CodingKey {
+        case recordSchemaVersion = "record_schema_version"
+        case target
+    }
+
+    package init(target: LLMTargetRevision) {
+        recordSchemaVersion = 2
+        self.target = target
+    }
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordSchemaVersion = try container.decode(Int.self, forKey: .recordSchemaVersion)
+        guard recordSchemaVersion == 2 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .recordSchemaVersion,
+                in: container,
+                debugDescription: "unsupported LLM-target record schema"
+            )
+        }
+        target = try container.decode(LLMTargetRevision.self, forKey: .target)
+    }
+}
+
 public enum StoredHostBindingState: String, Codable, Equatable, Sendable {
     case staged
     case active
@@ -45,6 +105,7 @@ private struct LLMStoreDocument: Codable, Equatable, Sendable {
 public actor LLMStore {
     private let database: SQLiteConnection
     private var document: LLMStoreDocument
+    private var targetRevisions: [TargetKey: LLMTargetRevision]
     private var injectedPersistenceFailure = false
 
     public static func inMemory() -> LLMStore {
@@ -79,8 +140,136 @@ public actor LLMStore {
         } else {
             database = try SQLiteConnection(path: fileURL?.path ?? ":memory:")
             try LLMStoreSchema.ensureBaseSchema(database)
+            try LLMStoreSchema.migrateToVersionTwo(database)
         }
         document = try Self.loadDocument(from: database)
+        targetRevisions = try Self.loadTargets(from: database)
+    }
+
+    public func publishTarget(_ target: LLMTargetRevision) throws {
+        let key = TargetKey(id: target.targetID.rawValue, revision: target.revision)
+        if let existing = targetRevisions[key] {
+            guard existing == target else {
+                throw targetFailure(
+                    "llm_target.revision_conflict",
+                    "LLM target revision is immutable"
+                )
+            }
+            return
+        }
+        guard !target.targetID.rawValue.isEmpty,
+              target.revision > 0,
+              !target.modelID.isEmpty
+        else {
+            throw targetFailure(
+                "llm_target.invalid_revision",
+                "LLM target identity is invalid"
+            )
+        }
+        let latest = targetRevisions.values
+            .filter { $0.targetID == target.targetID }
+            .map(\.revision)
+            .max() ?? 0
+        guard target.revision > latest else {
+            throw targetFailure(
+                "llm_target.revision_not_monotonic",
+                "LLM target revision must increase"
+            )
+        }
+        do {
+            try database.transaction {
+                try consumeInjectedFailure()
+                let (kind, profileID, profileRevision): (
+                    String,
+                    SQLiteValue,
+                    SQLiteValue
+                ) = switch target.kind {
+                case .local:
+                    ("local", .null, .null)
+                case let .cloud(id, revision):
+                    ("cloud", .text(id), .text(String(revision)))
+                }
+                try database.execute(
+                    """
+                    INSERT INTO llm_target_revisions(
+                      target_id, revision, kind, model_id, profile_id, profile_revision,
+                      record_schema_version, record_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7)
+                    """,
+                    bindings: [
+                        .text(target.targetID.rawValue),
+                        .text(String(target.revision)),
+                        .text(kind),
+                        .text(target.modelID),
+                        profileID,
+                        profileRevision,
+                        .text(try Self.encode(PersistedTargetRevision(target: target))),
+                    ]
+                )
+            }
+        } catch let failure as LLMStoreError {
+            throw failure
+        } catch {
+            throw targetFailure(
+                "llm_target.persistence_failed",
+                "could not persist LLM target revision"
+            )
+        }
+        targetRevisions[key] = target
+    }
+
+    public func target(reference: LLMTargetReference) -> LLMTargetRevision? {
+        targetRevisions[
+            TargetKey(id: reference.targetID.rawValue, revision: reference.revision)
+        ]
+    }
+
+    public func targets() -> [LLMTargetRevision] {
+        targetRevisions.values.sorted {
+            ($0.targetID.rawValue, $0.revision) < ($1.targetID.rawValue, $1.revision)
+        }
+    }
+
+    public func activeHostBindings() throws -> [ActiveAgentHostBinding] {
+        try document.hostBindings.values
+            .filter { $0.state == .active }
+            .map { record in
+                let configuration = record.request.configuration
+                let binding = record.receipt.binding
+                guard record.request.llmSlotID == configuration.llmSlotID,
+                      record.request.requirementsHash == configuration.requirementsHash,
+                      binding.bindingID == configuration.bindingID,
+                      binding.bindingRevision == configuration.revision,
+                      binding.bindingHash == (try agentHostConfigurationDigest(configuration)),
+                      target(reference: configuration.selectedTarget) != nil
+                else {
+                    throw targetFailure(
+                        "host_binding.persisted_record_invalid",
+                        "active host binding does not match its exact target and digest"
+                    )
+                }
+                return ActiveAgentHostBinding(
+                    configuration: configuration,
+                    binding: binding
+                )
+            }
+            .sorted {
+                let lhs = $0.configuration
+                let rhs = $1.configuration
+                return (
+                    lhs.agentProfileID,
+                    lhs.agentProfileRevision,
+                    lhs.llmSlotID,
+                    lhs.bindingID,
+                    lhs.revision
+                ) < (
+                    rhs.agentProfileID,
+                    rhs.agentProfileRevision,
+                    rhs.llmSlotID,
+                    rhs.bindingID,
+                    rhs.revision
+                )
+            }
     }
 
     func stage(_ record: StoredHostBindingRecord) throws -> HostBindingStagingReceipt {
@@ -395,6 +584,68 @@ public actor LLMStore {
         return document
     }
 
+    private static func loadTargets(
+        from database: SQLiteConnection
+    ) throws -> [TargetKey: LLMTargetRevision] {
+        var targets: [TargetKey: LLMTargetRevision] = [:]
+        for row in try database.query(
+            """
+            SELECT target_id, revision, kind, model_id, profile_id, profile_revision,
+                   record_schema_version, record_json
+            FROM llm_target_revisions
+            """
+        ) {
+            guard row["record_schema_version"] == "2",
+                  let id = row["target_id"] ?? nil,
+                  let revisionText = row["revision"] ?? nil,
+                  let revision = UInt64(revisionText),
+                  String(revision) == revisionText,
+                  let kind = row["kind"] ?? nil,
+                  let modelID = row["model_id"] ?? nil,
+                  let json = row["record_json"] ?? nil
+            else {
+                throw targetFailure(
+                    "llm_target.persisted_record_invalid",
+                    "LLM target record identity is invalid"
+                )
+            }
+            let value: LLMTargetRevision
+            do {
+                value = try JSONDecoder().decode(
+                    PersistedTargetRevision.self,
+                    from: Data(json.utf8)
+                ).target
+            } catch {
+                throw targetFailure(
+                    "llm_target.persisted_record_invalid",
+                    "LLM target record schema is unsupported"
+                )
+            }
+            let kindMatches = switch value.kind {
+            case .local:
+                kind == "local"
+                    && (row["profile_id"] ?? nil) == nil
+                    && (row["profile_revision"] ?? nil) == nil
+            case let .cloud(profileID, profileRevision):
+                kind == "cloud"
+                    && (row["profile_id"] ?? nil) == profileID
+                    && (row["profile_revision"] ?? nil) == String(profileRevision)
+            }
+            guard kindMatches,
+                  value.targetID.rawValue == id,
+                  value.revision == revision,
+                  value.modelID == modelID
+            else {
+                throw targetFailure(
+                    "llm_target.persisted_record_invalid",
+                    "LLM target record payload differs from its indexed identity"
+                )
+            }
+            targets[TargetKey(id: id, revision: revision)] = value
+        }
+        return targets
+    }
+
     private static func importLegacy(
         _ document: LLMStoreDocument,
         into database: SQLiteConnection
@@ -530,6 +781,7 @@ public actor LLMStore {
         let database = try SQLiteConnection(path: importing.path)
         do {
             try LLMStoreSchema.ensureBaseSchema(database)
+            try LLMStoreSchema.migrateToVersionTwo(database)
             try importLegacy(document, into: database)
         } catch {
             try? FileManager.default.removeItem(at: importing)
@@ -566,4 +818,8 @@ private func staleCAS() -> HostBindingSagaError {
         code: "llm_store.cas_conflict",
         message: "LLM store record changed before the transactional update"
     )
+}
+
+private func targetFailure(_ code: String, _ message: String) -> LLMStoreError {
+    LLMStoreError(code: code, message: message)
 }

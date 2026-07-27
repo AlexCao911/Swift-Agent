@@ -96,7 +96,7 @@ struct CloudProviderLiveSmoke {
             modelID: modelID,
             defaultParameters: GenerationConfiguration()
         )
-        try await subsystem.profiles.publishTarget(target)
+        try await subsystem.bindingStore.publishTarget(target)
         let configuration = AgentHostConfiguration(
             bindingID: "live-smoke-binding-\(operationID)",
             revision: 1,

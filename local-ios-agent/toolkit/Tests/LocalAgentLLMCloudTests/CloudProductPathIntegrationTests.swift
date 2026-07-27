@@ -16,6 +16,9 @@ struct CloudProductPathIntegrationTests {
         let catalogFixture = try signedCloudCatalog(revision: 1)
         let transport = SubsystemFixtureTransport(toolLoop: false)
         let epoch = try HostProcessEpoch.generate()
+        let llmStore = try LLMStore(
+            fileURL: directory.appending(path: "LocalAgent/LLM/llm-state.sqlite")
+        )
         let subsystem = try await CloudLLMSubsystem.bootstrap(
             appSupportRoot: directory,
             hostProcessEpoch: epoch,
@@ -26,8 +29,10 @@ struct CloudProductPathIntegrationTests {
             approvalPrompt: RuntimeApprovalPrompt(),
             transportFactory: { _ in transport },
             localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
-            originValidator: RuntimeOriginValidator()
+            originValidator: RuntimeOriginValidator(),
+            llmStore: llmStore
         )
+        #expect(subsystem.bindingStore === llmStore)
 
         try await subsystem.credentials.createSlot(
             credentialRef: "manual-integration-key",
@@ -53,7 +58,7 @@ struct CloudProductPathIntegrationTests {
             modelID: "manual-openai-model",
             defaultParameters: GenerationConfiguration()
         )
-        try await subsystem.profiles.publishTarget(target)
+        try await subsystem.bindingStore.publishTarget(target)
         let validation = try await subsystem.validation.validate(
             profileID: "manual-integration-profile",
             profileRevision: 1,
@@ -178,7 +183,7 @@ struct CloudProductPathIntegrationTests {
             modelID: "fixture-model",
             defaultParameters: GenerationConfiguration()
         )
-        try await subsystem.profiles.publishTarget(target)
+        try await subsystem.bindingStore.publishTarget(target)
         let validation = try await subsystem.validation.validate(
             profileID: "integration-profile",
             profileRevision: 1,

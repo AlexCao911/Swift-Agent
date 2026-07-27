@@ -61,7 +61,12 @@ struct LLMStoreSchemaV2Tests {
             let directory = temporarySchemaDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
             let url = directory.appendingPathComponent("llm-state.sqlite")
-            _ = try LLMStore(fileURL: url)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let versionOne = try SQLiteConnection(path: url.path)
+            try LLMStoreSchema.ensureBaseSchema(versionOne)
 
             #expect(throws: (any Error).self) {
                 _ = try ProviderProfileStore(

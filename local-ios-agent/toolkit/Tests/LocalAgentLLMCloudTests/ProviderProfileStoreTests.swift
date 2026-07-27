@@ -74,9 +74,14 @@ struct ProviderProfileStoreTests {
 
     @Test
     func archiveAndStateCASDoNotDeleteOtherRevisionsOrTargets() async throws {
-        let store = try ProviderProfileStore.inMemory(
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("llm-state.sqlite")
+        let store = try ProviderProfileStore(
+            fileURL: url,
             originValidator: FixtureOriginValidator()
         )
+        let llmStore = try LLMStore(fileURL: url)
         let revision1 = fixtureProfile()
         let revision2 = fixtureProfile(revision: 2)
         _ = try await store.publish(revision1)
@@ -91,7 +96,7 @@ struct ProviderProfileStoreTests {
             modelID: "gpt-fixture",
             defaultParameters: GenerationConfiguration()
         )
-        try await store.publishTarget(target)
+        try await llmStore.publishTarget(target)
 
         let initialState = try #require(await store.state(
             profileID: revision1.profileID,
@@ -127,10 +132,7 @@ struct ProviderProfileStoreTests {
             profileID: revision2.profileID,
             revision: revision2.revision
         )?.lifecycle == .active)
-        #expect(await store.target(
-            targetID: target.targetID,
-            revision: target.revision
-        ) == target)
+        #expect(await llmStore.target(reference: target.reference) == target)
     }
 
     @Test

@@ -617,10 +617,6 @@ public actor CloudLLMRuntime {
     private func requireRoute(target: LLMTargetRevision) async throws -> Route {
         guard case let .cloud(profileID, profileRevision) = target.kind,
               profileRevision > 0,
-              await profileStore.target(
-                  targetID: target.targetID,
-                  revision: target.revision
-              ) == target,
               let profile = await profileStore.profile(
                   profileID: profileID,
                   revision: profileRevision

@@ -1001,7 +1001,8 @@ private struct CloudRuntimeHarness: Sendable {
             modelID: modelID,
             defaultParameters: targetDefaults
         )
-        try await profiles.publishTarget(target)
+        let bindingStore = try LLMStore(fileURL: databaseURL)
+        try await bindingStore.publishTarget(target)
         let hostConfiguration = AgentHostConfiguration(
             bindingID: "binding-cloud",
             revision: 1,
@@ -1013,7 +1014,6 @@ private struct CloudRuntimeHarness: Sendable {
             llmTargetRevision: target.revision,
             parameterOverrides: hostOverrides
         )
-        let bindingStore = try LLMStore(fileURL: databaseURL)
         let bindingSaga = AgentHostBindingSaga(store: bindingStore)
         let receipt = try await bindingSaga.stageHostBinding(HostBindingStageRequest(
             operationToken: "runtime-binding-token",

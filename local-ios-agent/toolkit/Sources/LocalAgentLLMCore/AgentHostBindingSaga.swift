@@ -130,10 +130,12 @@ public struct AgentHostBindingSaga: Sendable {
         configuration: AgentHostConfiguration,
         target: LLMTargetRevision
     ) async throws -> HostBindingTuple {
-        guard configuration.selectedTarget == target.reference else {
+        guard configuration.selectedTarget == target.reference,
+              await store.target(reference: target.reference) == target
+        else {
             throw HostBindingSagaError(
                 code: "host_binding.target_mismatch",
-                message: "host configuration does not select the supplied immutable target revision"
+                message: "host configuration does not select the stored immutable target revision"
             )
         }
         let bindingHash = try agentHostConfigurationDigest(configuration)

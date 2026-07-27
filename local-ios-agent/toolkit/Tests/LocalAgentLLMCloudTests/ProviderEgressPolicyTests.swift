@@ -491,7 +491,7 @@ struct ProviderEgressPolicyTests {
             modelID: "model-main",
             defaultParameters: GenerationConfiguration()
         )
-        try await harness.profileStore.publishTarget(target)
+        try await harness.llmStore.publishTarget(target)
         let session = CloudEgressSessionContext(
             runID: "run-2",
             targetID: target.targetID,
@@ -579,6 +579,7 @@ struct ProviderEgressPolicyTests {
 private struct EgressHarness: Sendable {
     let directory: URL
     let profileStore: ProviderProfileStore
+    let llmStore: LLMStore
     let credentials: ProviderCredentialStore
     let vault: EgressCountingVault
     let prompt: EgressPromptRecorder
@@ -623,7 +624,8 @@ private struct EgressHarness: Sendable {
             modelID: "model-main",
             defaultParameters: GenerationConfiguration()
         )
-        try await profiles.publishTarget(target)
+        let llmStore = try LLMStore(fileURL: url)
+        try await llmStore.publishTarget(target)
         let epoch = try HostProcessEpoch.generate()
         let lease = try await credentials.acquireUseLease(
             credentialRef: "credential-main",
@@ -650,6 +652,7 @@ private struct EgressHarness: Sendable {
         return Self(
             directory: directory,
             profileStore: profiles,
+            llmStore: llmStore,
             credentials: credentials,
             vault: vault,
             prompt: prompt,

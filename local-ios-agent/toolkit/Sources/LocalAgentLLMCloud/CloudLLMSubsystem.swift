@@ -49,7 +49,8 @@ public struct CloudLLMSubsystem: Sendable {
         hostProcessEpoch: HostProcessEpoch,
         remoteCatalog: Data?,
         approvalPrompt: any CloudLLMApprovalPrompting,
-        localUnloader: any LocalRouteUnloading
+        localUnloader: any LocalRouteUnloading,
+        llmStore: LLMStore? = nil
     ) async throws -> CloudLLMSubsystem {
         let resources = try CloudCapabilityCatalogResources.loadBundled()
         let vault = SecurityCredentialVault()
@@ -65,7 +66,8 @@ public struct CloudLLMSubsystem: Sendable {
                 URLSessionCloudHTTPTransport(credentialStore: credentials)
             },
             localUnloader: localUnloader,
-            originValidator: StablePublicOriginValidator()
+            originValidator: StablePublicOriginValidator(),
+            llmStore: llmStore
         )
     }
 
@@ -79,7 +81,8 @@ public struct CloudLLMSubsystem: Sendable {
         approvalPrompt: any CloudLLMApprovalPrompting,
         transportFactory: @Sendable (ProviderCredentialStore) throws -> any CloudHTTPTransport,
         localUnloader: any LocalRouteUnloading,
-        originValidator: any ProviderOriginValidating
+        originValidator: any ProviderOriginValidating,
+        llmStore: LLMStore? = nil
     ) async throws -> CloudLLMSubsystem {
         let root = appSupportRoot.appending(
             path: "LocalAgent/LLM",
@@ -155,7 +158,7 @@ public struct CloudLLMSubsystem: Sendable {
             transport: transport,
             hostProcessEpoch: hostProcessEpoch
         )
-        let bindingStore = try LLMStore(fileURL: databaseURL)
+        let bindingStore = try llmStore ?? LLMStore(fileURL: databaseURL)
         let runtime = CloudLLMRuntime(
             profileStore: profiles,
             catalogStore: catalog,

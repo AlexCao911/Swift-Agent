@@ -193,6 +193,7 @@ func activeResolutionRequiresExactTargetConfigurationAndStoredHash() async throw
         modelID: "model-1",
         defaultParameters: GenerationConfiguration()
     )
+    try await store.publishTarget(target)
 
     #expect(try await saga.requireActive(configuration: activeConfiguration, target: target) == receipt.binding)
 

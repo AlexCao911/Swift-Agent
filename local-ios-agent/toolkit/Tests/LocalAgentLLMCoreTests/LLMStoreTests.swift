@@ -6,6 +6,96 @@ import Testing
 @Suite("LLMStore SQLite")
 struct LLMStoreTests {
     @Test
+    func targetRevisionIsImmutableAndReopensWithActiveBinding() async throws {
+        let (directory, url) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try LLMStore(fileURL: url)
+        let target = fixtureTarget()
+        try await first.publishTarget(target)
+        let configuration = fixtureConfiguration()
+        let saga = AgentHostBindingSaga(store: first)
+        let request = HostBindingStageRequest(
+            operationToken: "publish-target-1",
+            tokenDigest: "publish-target-digest-1",
+            llmSlotID: configuration.llmSlotID,
+            requirementsHash: configuration.requirementsHash,
+            configuration: configuration
+        )
+        let receipt = try await saga.stageHostBinding(request)
+        try await saga.activateHostBinding(
+            operationToken: request.operationToken,
+            binding: receipt.binding
+        )
+
+        let reopened = try LLMStore(fileURL: url)
+
+        #expect(await reopened.target(reference: target.reference) == target)
+        #expect(try await reopened.activeHostBindings() == [
+            ActiveAgentHostBinding(
+                configuration: configuration,
+                binding: receipt.binding
+            ),
+        ])
+    }
+
+    @Test
+    func duplicateTargetRevisionWithDifferentPayloadFailsClosed() async throws {
+        let store = LLMStore.inMemory()
+        let target = fixtureTarget()
+        try await store.publishTarget(target)
+        let conflict = LLMTargetRevision(
+            targetID: target.targetID,
+            revision: target.revision,
+            kind: target.kind,
+            modelID: "different-model",
+            defaultParameters: target.defaultParameters
+        )
+
+        await #expect(throws: LLMStoreError.self) {
+            try await store.publishTarget(conflict)
+        }
+        #expect(await store.targets() == [target])
+    }
+
+    @Test
+    func activeBindingWithMissingTargetFailsClosed() async throws {
+        let store = LLMStore.inMemory()
+        let configuration = fixtureConfiguration()
+        let saga = AgentHostBindingSaga(store: store)
+        let request = HostBindingStageRequest(
+            operationToken: "missing-target",
+            tokenDigest: "missing-target-digest",
+            llmSlotID: configuration.llmSlotID,
+            requirementsHash: configuration.requirementsHash,
+            configuration: configuration
+        )
+        let receipt = try await saga.stageHostBinding(request)
+        try await saga.activateHostBinding(
+            operationToken: request.operationToken,
+            binding: receipt.binding
+        )
+
+        await #expect(throws: LLMStoreError.self) {
+            try await store.activeHostBindings()
+        }
+    }
+
+    @Test
+    func targetPersistenceFailureRollsBackMemoryAndSQLite() async throws {
+        let (directory, url) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LLMStore(fileURL: url)
+        await store.failNextPersistenceForTesting()
+
+        await #expect(throws: (any Error).self) {
+            try await store.publishTarget(fixtureTarget())
+        }
+
+        #expect(await store.targets().isEmpty)
+        #expect(await (try LLMStore(fileURL: url)).targets().isEmpty)
+    }
+
+    @Test
     func fileStoreCreatesVersionedNormalizedSQLiteDatabase() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -16,10 +106,14 @@ struct LLMStoreTests {
         let store = try LLMStore(fileURL: url)
         let header = try Data(contentsOf: url).prefix(16)
         #expect(String(decoding: header, as: UTF8.self) == "SQLite format 3\0")
-        #expect(await store.schemaVersionForTesting() == 1)
-        #expect(Set(await store.tableNamesForTesting()) == [
-            "llm_store_meta", "host_bindings", "prepared_sessions"
-        ])
+        #expect(await store.schemaVersionForTesting() == 2)
+        let tables = Set(await store.tableNamesForTesting())
+        #expect(tables.isSuperset(of: [
+            "llm_store_meta",
+            "host_bindings",
+            "prepared_sessions",
+            "llm_target_revisions",
+        ]))
     }
 
     @Test
@@ -166,5 +260,15 @@ private func fixtureConfiguration() -> AgentHostConfiguration {
         llmTargetID: LLMTargetID(rawValue: "target-1"),
         llmTargetRevision: 1,
         parameterOverrides: GenerationConfiguration()
+    )
+}
+
+private func fixtureTarget() -> LLMTargetRevision {
+    LLMTargetRevision(
+        targetID: LLMTargetID(rawValue: "target-1"),
+        revision: 1,
+        kind: .local(installationID: "installation-1"),
+        modelID: "model-1",
+        defaultParameters: GenerationConfiguration()
     )
 }

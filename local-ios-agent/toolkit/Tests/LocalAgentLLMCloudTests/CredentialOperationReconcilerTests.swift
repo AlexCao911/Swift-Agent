@@ -251,8 +251,8 @@ struct CredentialOperationReconcilerTests {
             modelID: "model",
             defaultParameters: GenerationConfiguration()
         )
-        try await profiles.publishTarget(target)
         let bindingStore = try LLMStore(fileURL: url)
+        try await bindingStore.publishTarget(target)
         _ = try await AgentHostBindingSaga(store: bindingStore).stageHostBinding(
             HostBindingStageRequest(
                 operationToken: "binding-operation",

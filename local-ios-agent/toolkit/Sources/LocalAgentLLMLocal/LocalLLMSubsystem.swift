@@ -29,7 +29,8 @@ public struct LocalLLMSubsystem: Sendable {
     public static func bootstrap(
         appSupportRoot: URL,
         hostProcessEpoch: HostProcessEpoch,
-        remoteCatalog: Data?
+        remoteCatalog: Data?,
+        llmStore: LLMStore? = nil
     ) async throws -> LocalLLMSubsystem {
         let resources = try OfficialModelCatalogResources.loadBundled()
         return try await bootstrap(
@@ -38,7 +39,8 @@ public struct LocalLLMSubsystem: Sendable {
             bundledCatalog: resources.envelope,
             remoteCatalog: remoteCatalog,
             transport: URLSessionModelDownloadTransport(),
-            inference: CppInferenceClient.live
+            inference: CppInferenceClient.live,
+            llmStore: llmStore
         )
     }
 
@@ -48,7 +50,8 @@ public struct LocalLLMSubsystem: Sendable {
         bundledCatalog: Data,
         remoteCatalog: Data?,
         transport: any ModelDownloadTransport,
-        inference: any CppInferenceAPI
+        inference: any CppInferenceAPI,
+        llmStore: LLMStore? = nil
     ) async throws -> LocalLLMSubsystem {
         let store = try LocalModelStore.default(appSupportRoot: appSupportRoot)
         let paths = try LocalModelPaths(
@@ -78,7 +81,7 @@ public struct LocalLLMSubsystem: Sendable {
         let bindingStoreURL = appSupportRoot.appending(
             path: "LocalAgent/LLM/llm-state.sqlite"
         )
-        let bindingStore = try LLMStore(fileURL: bindingStoreURL)
+        let bindingStore = try llmStore ?? LLMStore(fileURL: bindingStoreURL)
         let runtime = LocalModelRuntime(
             store: store,
             paths: paths,

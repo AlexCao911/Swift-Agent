@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import Testing
 @testable import LocalAgentLLMLocal
 
@@ -13,6 +14,9 @@ struct LocalLLMSubsystemTests {
         let epoch = try HostProcessEpoch.generate()
         let transport = BootstrapTransport()
         let resources = try OfficialModelCatalogResources.loadBundled()
+        let llmStore = try LLMStore(
+            fileURL: root.appending(path: "LocalAgent/LLM/llm-state.sqlite")
+        )
 
         let subsystem = try await LocalLLMSubsystem.bootstrap(
             appSupportRoot: root,
@@ -20,13 +24,15 @@ struct LocalLLMSubsystemTests {
             bundledCatalog: resources.envelope,
             remoteCatalog: nil,
             transport: transport,
-            inference: BootstrapInference()
+            inference: BootstrapInference(),
+            llmStore: llmStore
         )
 
         #expect(subsystem.hostProcessEpoch == epoch)
         #expect(transport.restoredCallCount == 1)
         #expect(subsystem.acceptedCatalog.verified.catalogRevision > 0)
         #expect(subsystem.store.fileURL == root.appending(path: "LocalAgent/LLM/local-models.sqlite"))
+        #expect(subsystem.bindingStore === llmStore)
         #expect(await subsystem.runtime.state == .idle)
     }
 }
