@@ -114,11 +114,7 @@ struct AppShellView: View {
         case .tools:
             ToolCenterView(viewModel: toolCenterViewModel)
         case .models:
-            ModelCenterView(
-                viewModel: modelCenterViewModel,
-                shellViewModel: viewModel,
-                chatViewModel: chatViewModel
-            )
+            ModelCenterView(viewModel: modelCenterViewModel)
         case .settings:
             if case .debug = viewModel.route {
                 debugDestination

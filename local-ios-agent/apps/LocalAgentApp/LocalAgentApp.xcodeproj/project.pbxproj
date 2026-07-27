@@ -89,6 +89,10 @@
 		0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002122 /* ModelCenterViewModel.swift */; };
 		0C0000010000000000002023 /* ModelCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002123 /* ModelCenterView.swift */; };
 		0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002124 /* ModelCenterViewModelTests.swift */; };
+		0E5000010000000000000001 /* ProviderProfileEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000010000000000000011 /* ProviderProfileEditorTests.swift */; };
+		0E5000020000000000000001 /* AppModelCenterClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000020000000000000011 /* AppModelCenterClient.swift */; };
+		0E5000020000000000000002 /* ProviderProfileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000020000000000000012 /* ProviderProfileEditorView.swift */; };
+		0E5000020000000000000003 /* LocalAgentLLMCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0E5000020000000000000301 /* LocalAgentLLMCore */; };
 		0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002125 /* PrivacySettingsView.swift */; };
 		0C0000010000000000002026 /* DebugTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002126 /* DebugTraceView.swift */; };
 		0C0000010000000000002027 /* StateBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002127 /* StateBadges.swift */; };
@@ -208,6 +212,9 @@
 		0C0000010000000000002122 /* ModelCenterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002123 /* ModelCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002124 /* ModelCenterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCenterViewModelTests.swift; sourceTree = "<group>"; };
+		0E5000010000000000000011 /* ProviderProfileEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderProfileEditorTests.swift; sourceTree = "<group>"; };
+		0E5000020000000000000011 /* AppModelCenterClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelCenterClient.swift; sourceTree = "<group>"; };
+		0E5000020000000000000012 /* ProviderProfileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderProfileEditorView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002125 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002126 /* DebugTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002127 /* StateBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadges.swift; sourceTree = "<group>"; };
@@ -247,6 +254,7 @@
 				0A00000100000000000000F1 /* LocalAgentLLMLocal in Frameworks */,
 				0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */,
 				0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */,
+				0E5000020000000000000003 /* LocalAgentLLMCore in Frameworks */,
 				0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -323,6 +331,7 @@
 		0A0000010000000000000502 /* Composition */ = {
 			isa = PBXGroup;
 			children = (
+				0E5000020000000000000011 /* AppModelCenterClient.swift */,
 				0A0000010000000000000102 /* AppBootstrapper.swift */,
 				0A0000010000000000000103 /* AppContainer.swift */,
 			);
@@ -438,6 +447,7 @@
 				0D5000010000000000000102 /* CloudApprovalSheet.swift */,
 				0C0000010000000000002123 /* ModelCenterView.swift */,
 				0C0000010000000000002122 /* ModelCenterViewModel.swift */,
+				0E5000020000000000000012 /* ProviderProfileEditorView.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -600,6 +610,7 @@
 			isa = PBXGroup;
 			children = (
 				0C0000010000000000002124 /* ModelCenterViewModelTests.swift */,
+				0E5000010000000000000011 /* ProviderProfileEditorTests.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -683,6 +694,7 @@
 				0A0000010000000000000303 /* LocalAgentLLMLocal */,
 				0A0000010000000000000304 /* LocalAgentLLMContracts */,
 				0D0000010000000000000301 /* LocalAgentLLMCloud */,
+				0E5000020000000000000301 /* LocalAgentLLMCore */,
 				0E0000010000000000000301 /* LocalAgentLLMHost */,
 			);
 			productName = LocalAgentApp;
@@ -786,6 +798,8 @@
 				0C000001000000000000201B /* RunInlineCards.swift in Sources */,
 				0C0000010000000000002023 /* ModelCenterView.swift in Sources */,
 				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
+				0E5000020000000000000001 /* AppModelCenterClient.swift in Sources */,
+				0E5000020000000000000002 /* ProviderProfileEditorView.swift in Sources */,
 				0C0000010000000000002026 /* DebugTraceView.swift in Sources */,
 				0C0000010000000000002028 /* ProductEmptyStates.swift in Sources */,
 				0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */,
@@ -861,6 +875,7 @@
 				0C000001000000000000201C /* RunInlineCardsTests.swift in Sources */,
 				0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */,
 				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
+				0E5000010000000000000001 /* ProviderProfileEditorTests.swift in Sources */,
 				0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */,
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,
@@ -1172,6 +1187,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
 			productName = LocalAgentLLMHost;
+		};
+		0E5000020000000000000301 /* LocalAgentLLMCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
+			productName = LocalAgentLLMCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

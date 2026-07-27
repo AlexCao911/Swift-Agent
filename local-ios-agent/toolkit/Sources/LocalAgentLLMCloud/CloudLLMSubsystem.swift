@@ -86,21 +86,100 @@ public struct CloudLLMSubsystem: Sendable {
                 profileID: profile.revision.profileID,
                 profileRevision: profile.revision.revision
             )
+            let credential = try await credentials.slot(
+                profile.revision.credentialRef
+            )
             result.append(CloudProviderProductState(
                 profileID: profile.revision.profileID,
                 revision: profile.revision.revision,
                 presetID: profile.revision.presetID,
                 displayName: profile.revision.displayName,
                 displayOrigin: profile.origin.serialized,
+                baseURL: profile.revision.baseURL,
                 retentionMode: profile.revision.retentionMode,
                 validation: try await productValidationStatus(
                     state,
                     credentialRef: profile.revision.credentialRef,
                     modelID: nil
-                )
+                ),
+                hasStoredCredential: credential?.lifecycle == .active
             ))
         }
         return result
+    }
+
+    public func publishProviderProfileRevision(
+        profileID proposedProfileID: String?,
+        replacingRevision: UInt64?,
+        presetID: ProviderPresetID,
+        displayName: String,
+        baseURL: URL,
+        retentionMode: ProviderRetentionMode,
+        initialSecret: SecretBytes?,
+        proposedOperationID: String = UUID().uuidString.lowercased()
+    ) async throws -> PublishedProviderProfileRevision {
+        defer { initialSecret?.erase() }
+        let profileID = proposedProfileID ?? UUID().uuidString.lowercased()
+        let previous: PublishedProviderProfileRevision?
+        if let replacingRevision {
+            previous = await profiles.profile(
+                profileID: profileID,
+                revision: replacingRevision
+            )
+            guard previous?.lifecycle == .active else {
+                throw ProviderProfileFailure(
+                    code: "provider_profile.not_found",
+                    message: "the profile revision being edited does not exist"
+                )
+            }
+        } else {
+            previous = nil
+        }
+        let credentialRef: String
+        if initialSecret != nil {
+            credentialRef = UUID().uuidString.lowercased()
+        } else if let previous {
+            credentialRef = previous.revision.credentialRef
+        } else {
+            throw CredentialFailure(
+                code: "credential.secret_required",
+                message: "a new provider profile requires an API key"
+            )
+        }
+        let revision = (replacingRevision ?? 0) + 1
+        let value = ProviderProfileRevision(
+            profileID: profileID,
+            revision: revision,
+            presetID: presetID,
+            displayName: displayName,
+            baseURL: baseURL,
+            credentialRef: credentialRef,
+            retentionMode: retentionMode
+        )
+        let operationID = try await profiles.prepareCreatingRevision(
+            value,
+            proposedOperationID: proposedOperationID
+        )
+        if let initialSecret {
+            try await credentials.createSlot(
+                credentialRef: credentialRef,
+                initialSecret: initialSecret,
+                operationID: operationID
+            )
+        } else {
+            guard try await credentials.slot(credentialRef)?.lifecycle == .active else {
+                throw CredentialFailure(
+                    code: "credential.slot_not_active",
+                    message: "the existing provider credential is unavailable"
+                )
+            }
+        }
+        return try await profiles.activateCreatingRevision(
+            profileID: profileID,
+            revision: revision,
+            operationID: operationID,
+            credentialStore: credentials
+        )
     }
 
     public func modelInventory(
@@ -134,8 +213,15 @@ public struct CloudLLMSubsystem: Sendable {
                 validation: .unvalidated
             )
         }
-        if let manualModelID, !manualModelID.isEmpty,
-           !entries.contains(where: { $0.modelID == manualModelID }) {
+        var additionalModelIDs: [String] = []
+        if let manualModelID, !manualModelID.isEmpty {
+            additionalModelIDs.append(manualModelID)
+        }
+        if case .validated(let evidence) = state?.validationState {
+            additionalModelIDs.append(evidence.modelID)
+        }
+        for manualModelID in Set(additionalModelIDs)
+        where !entries.contains(where: { $0.modelID == manualModelID }) {
             entries.append(CloudModelProductState(
                 profileID: profileID,
                 profileRevision: profileRevision,

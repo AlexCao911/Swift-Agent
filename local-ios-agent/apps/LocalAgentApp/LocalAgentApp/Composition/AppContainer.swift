@@ -1,5 +1,6 @@
 import LocalAgentBridge
 import LocalAgentLLMCloud
+import LocalAgentLLMCore
 import LocalAgentLLMHost
 import LocalAgentLLMLocal
 import LocalNativeToolkit
@@ -14,7 +15,7 @@ struct AppContainer {
     let permissionClient: any PermissionClient
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
     let runInlineCardActionHandler: RunInlineCardActionHandler
-    let modelRoutingClient: (any ModelRoutingClient)?
+    let modelCenterClient: (any ModelCenterClient)?
     let rustRuntimeClient: RustRuntimeClient?
     let hostRunStarter: AppHostRunStarter?
     let llmHostSelections: AppLLMHostSelectionRegistry?
@@ -26,7 +27,8 @@ struct AppContainer {
     func attaching(
         localLLMSubsystem: LocalLLMSubsystem,
         cloudLLMSubsystem: CloudLLMSubsystem,
-        llmHostRuntime: LLMHostProductRuntime
+        llmHostRuntime: LLMHostProductRuntime,
+        modelCenterClient: any ModelCenterClient
     ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -38,7 +40,7 @@ struct AppContainer {
             permissionClient: permissionClient,
             agentBuilderToolCatalogClient: agentBuilderToolCatalogClient,
             runInlineCardActionHandler: runInlineCardActionHandler,
-            modelRoutingClient: modelRoutingClient,
+            modelCenterClient: modelCenterClient,
             rustRuntimeClient: rustRuntimeClient,
             hostRunStarter: hostRunStarter,
             llmHostSelections: llmHostSelections,
@@ -101,28 +103,6 @@ struct AppContainer {
 
     @MainActor
     func makeModelCenterViewModel() -> ModelCenterViewModel {
-        if let modelRoutingClient {
-            return ModelCenterViewModel(routingClient: modelRoutingClient)
-        }
-
-        return ModelCenterViewModel(
-            profiles: [
-                ProviderProfileDTO(
-                    id: "mock",
-                    displayName: "Mock Model",
-                    kind: .mock,
-                    maxContextTokens: 4096
-                ),
-                ProviderProfileDTO(
-                    id: "local_llm",
-                    displayName: "Local LLM",
-                    kind: .localLLM,
-                    maxContextTokens: 2048
-                ),
-            ],
-            activeModel: nil,
-            localModelAvailability: ["local_llm": false],
-            cloudCredentialAvailability: ["mock": true]
-        )
+        ModelCenterViewModel(client: modelCenterClient)
     }
 }

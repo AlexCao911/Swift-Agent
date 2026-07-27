@@ -19,7 +19,6 @@ struct PrivacySettingsEntryPoint: Equatable, Identifiable, Sendable {
 enum PrivacySettingsProjection {
     static func project(
         activeAgent: ActiveAgentRevisionSelection?,
-        activeModel: ActiveModelSummary?,
         toolRows: [ToolCenterRowState],
         advancedDebugEnabled: Bool
     ) -> PrivacySettingsSnapshot {
@@ -28,7 +27,7 @@ enum PrivacySettingsProjection {
             toolPermissionSummary: toolPermissionSummary(toolRows),
             attachmentStorageSummary: "Attachments stay in the app sandbox and are referenced by opaque IDs.",
             memoryRetentionSummary: "Run-only by default; memory candidates require explicit review.",
-            modelProviderSummary: modelSummary(activeModel),
+            modelProviderSummary: modelSummary(activeAgent),
             advancedDebugEnabled: advancedDebugEnabled,
             entryPoints: [
                 PrivacySettingsEntryPoint(id: "export", title: "Export Data", systemImageName: "square.and.arrow.up"),
@@ -45,17 +44,13 @@ enum PrivacySettingsProjection {
         return "\(activeAgent.displayName) revision \(activeAgent.profileRevisionId)"
     }
 
-    private static func modelSummary(_ activeModel: ActiveModelSummary?) -> String {
-        guard let activeModel else {
-            return "No active model selected"
+    private static func modelSummary(
+        _ activeAgent: ActiveAgentRevisionSelection?
+    ) -> String {
+        guard let activeAgent else {
+            return "Select an Agent to inspect its host target"
         }
-
-        switch activeModel.readiness {
-        case .ready:
-            return "\(activeModel.displayName) ready"
-        case .missingConfiguration(let reason), .unavailable(let reason):
-            return "\(activeModel.displayName): \(reason)"
-        }
+        return "Host target is selected by \(activeAgent.displayName) revision \(activeAgent.profileRevisionId)"
     }
 
     private static func toolPermissionSummary(_ toolRows: [ToolCenterRowState]) -> String {
@@ -76,7 +71,6 @@ struct PrivacySettingsView: View {
     private var snapshot: PrivacySettingsSnapshot {
         PrivacySettingsProjection.project(
             activeAgent: shellViewModel.activeAgent,
-            activeModel: shellViewModel.activeModel,
             toolRows: toolCenterViewModel.rows,
             advancedDebugEnabled: shellViewModel.advancedDebugEnabled
         )

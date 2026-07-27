@@ -135,8 +135,8 @@ struct RustRuntimeAppIntegrationTests {
             environment: environment,
             providers: AppBootstrapper.simulatorProviders(environment: environment)
         ) == "mock")
-        #expect(!modelCenter.rows.contains { $0.id == "local_llm.llama_cpp" })
-        #expect(modelCenter.activeModel?.providerId == "mock")
+        #expect(modelCenter.snapshot == .empty)
+        #expect(modelCenter.selectedTarget == nil)
         #expect(state.phase == .ready)
         #expect(state.messages.map(\.text).contains("Mock response to: hello"))
     }

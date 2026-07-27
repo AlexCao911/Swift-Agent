@@ -1,171 +1,186 @@
-import LocalAgentBridge
+import Foundation
+import LocalAgentLLMCloud
+import LocalAgentLLMContracts
+import LocalAgentLLMCore
+import LocalAgentLLMLocal
 import Testing
 @testable import LocalAgentApp
 
 @Suite("Model Center view model")
 @MainActor
 struct ModelCenterViewModelTests {
-    @Test("no selected model creates missing model banner")
-    func noSelectedModelCreatesMissingModelBanner() {
-        let viewModel = ModelCenterViewModel()
-
-        #expect(viewModel.missingModelBanner() == GlobalReadinessBanner(
-            id: "missing_model",
-            kind: .missingModel,
-            title: "Choose a model",
-            message: "Select a ready local or cloud model before starting a run.",
-            route: .models
-        ))
-    }
-
-    @Test("local model without downloaded weights is not ready")
-    func localModelWithoutDownloadedWeightsIsNotReady() {
-        let rows = ModelCenterProjection.project(
-            profiles: [profile(id: "local_llm", displayName: "Local LLM", kind: .localLLM)],
-            localModelAvailability: ["local_llm": false]
-        )
-
-        #expect(rows.first == ModelCenterRowState(
-            id: "local_llm",
-            displayName: "Local LLM",
-            route: .localCpp(engineId: "local_llm"),
-            readiness: .missingConfiguration(reason: "weights_missing"),
-            isActive: false
-        ))
-    }
-
-    @Test("cloud model without api key is not ready")
-    func cloudModelWithoutAPIKeyIsNotReady() {
-        let rows = ModelCenterProjection.project(
-            profiles: [profile(id: "openai", displayName: "OpenAI", kind: .openAiCompatibleLocal)],
-            cloudCredentialAvailability: ["openai": false]
-        )
-
-        #expect(rows.first?.route == .cloud(providerId: "openai"))
-        #expect(rows.first?.readiness == .missingConfiguration(reason: "api_key_missing"))
-    }
-
-    @Test("selecting ready model updates shell active model")
-    func selectingReadyModelUpdatesShellActiveModel() async {
-        let shell = AppShellViewModel()
-        let viewModel = ModelCenterViewModel(
-            rows: [
-                ModelCenterRowState(
-                    id: "mock",
-                    displayName: "Mock",
-                    route: .cloud(providerId: "mock"),
-                    readiness: .ready,
-                    isActive: false
-                ),
-            ]
-        )
-
-        await viewModel.select(rowId: "mock", shell: shell)
-
-        #expect(shell.activeModel == ActiveModelSummary(
-            providerId: "mock",
-            modelId: "mock",
-            displayName: "Mock",
-            route: .cloud(providerId: "mock"),
-            readiness: .ready
-        ))
-        #expect(viewModel.rows.first?.isActive == true)
-    }
-
-    @Test("reload loads runtime providers and active model")
-    func reloadLoadsRuntimeProvidersAndActiveModel() async throws {
-        let client = RecordingModelRoutingClient(
-            profiles: [
-                profile(id: "mock", displayName: "Mock", kind: .mock),
-                profile(id: "local_llm", displayName: "Local LLM", kind: .localLLM),
-            ],
-            activeProvider: profile(id: "local_llm", displayName: "Local LLM", kind: .localLLM)
-        )
-        let viewModel = ModelCenterViewModel(routingClient: client)
-        let shell = AppShellViewModel(
-            readinessBanners: [
-                GlobalReadinessBanner(
-                    id: "missing_model",
-                    kind: .missingModel,
-                    title: "Choose a model",
-                    message: "Select a ready local or cloud model before starting a run.",
-                    route: .models
-                ),
-            ]
-        )
-
-        await viewModel.reload(shell: shell)
-
-        #expect(viewModel.activeModel == ActiveModelSummary(
-            providerId: "local_llm",
-            modelId: "local_llm",
-            displayName: "Local LLM",
-            route: .localCpp(engineId: "local_llm"),
-            readiness: .ready
-        ))
-        #expect(viewModel.rows.map(\.id) == ["local_llm", "mock"])
-        #expect(viewModel.rows.first(where: { $0.id == "local_llm" })?.isActive == true)
-        #expect(viewModel.rows.first(where: { $0.id == "local_llm" })?.readiness == .ready)
-        #expect(shell.activeModel?.providerId == "local_llm")
-        #expect(shell.readinessBanners.isEmpty)
-    }
-
-    @Test("selecting runtime model updates runtime provider and shell")
-    func selectingRuntimeModelUpdatesRuntimeProviderAndShell() async throws {
-        let client = RecordingModelRoutingClient(
-            profiles: [
-                profile(id: "mock", displayName: "Mock", kind: .mock),
-                profile(id: "local_llm", displayName: "Local LLM", kind: .localLLM),
-            ],
-            activeProvider: profile(id: "mock", displayName: "Mock", kind: .mock)
-        )
-        let shell = AppShellViewModel()
-        let viewModel = ModelCenterViewModel(routingClient: client)
+    @Test
+    func selectingAModelCreatesOneImmutableTargetRevision() async throws {
+        let client = ModelCenterClientSpy(snapshot: .fixture)
+        let viewModel = ModelCenterViewModel(client: client)
         await viewModel.reload()
 
-        await viewModel.select(rowId: "local_llm", shell: shell)
+        try await viewModel.createTarget(modelID: "local:official-1:1")
 
-        #expect(await client.selectedProviderIds == ["local_llm"])
-        #expect(shell.activeModel?.providerId == "local_llm")
-        #expect(viewModel.rows.first(where: { $0.id == "local_llm" })?.isActive == true)
+        let published = await client.publishedTargets
+        #expect(published.count == 1)
+        #expect(viewModel.selectedTarget == published.first?.reference)
+        #expect(published.first?.kind == .local(installationID: "installation-1"))
+    }
+
+    @Test
+    func incompatibleParametersAreDroppedAndReportedOnModelChange() async {
+        let client = ModelCenterClientSpy(snapshot: .fixture)
+        let viewModel = ModelCenterViewModel(client: client)
+        await viewModel.reload()
+        viewModel.targetDefaults = GenerationConfiguration()
+            .setting(.samplingTemperature, to: .decimal(0.7))
+
+        viewModel.selectModel(id: "cloud:profile:1:reasoning-model")
+
+        #expect(viewModel.targetDefaults.parameters.isEmpty)
+        #expect(viewModel.parameterNotice == "Temperature is not supported by this model.")
+    }
+
+    @Test
+    func localActionsDelegateWithoutChangingGlobalRuntimeProvider() async throws {
+        let client = ModelCenterClientSpy(snapshot: .fixture)
+        let viewModel = ModelCenterViewModel(client: client)
+
+        try await viewModel.pauseLocalModel(installationID: "installation-1")
+        try await viewModel.resumeLocalModel(installationID: "installation-1")
+        try await viewModel.cancelLocalModel(installationID: "installation-1")
+        try await viewModel.deleteLocalModel(installationID: "installation-1")
+
+        #expect(await client.localActions == [
+            "pause:installation-1",
+            "resume:installation-1",
+            "cancel:installation-1",
+            "delete:installation-1",
+        ])
     }
 }
 
-private func profile(
-    id: String,
-    displayName: String,
-    kind: ProviderKindDTO
-) -> ProviderProfileDTO {
-    ProviderProfileDTO(
-        id: id,
-        displayName: displayName,
-        kind: kind,
-        maxContextTokens: 4096
-    )
+actor ModelCenterClientSpy: ModelCenterClient {
+    nonisolated let updates = AsyncStream<Void> { _ in }
+
+    private let storedSnapshot: ModelCenterSnapshot
+    private(set) var publishedTargets: [LLMTargetRevision] = []
+    private(set) var localActions: [String] = []
+
+    init(snapshot: ModelCenterSnapshot) {
+        storedSnapshot = snapshot
+    }
+
+    func snapshot() async throws -> ModelCenterSnapshot {
+        storedSnapshot
+    }
+
+    func enqueueLocalModel(_ id: LocalModelRevisionID) async throws {
+        localActions.append("enqueue:\(id.modelID):\(id.revision)")
+    }
+
+    func pauseLocalModel(installationID: String) async throws {
+        localActions.append("pause:\(installationID)")
+    }
+
+    func resumeLocalModel(installationID: String) async throws {
+        localActions.append("resume:\(installationID)")
+    }
+
+    func cancelLocalModel(installationID: String) async throws {
+        localActions.append("cancel:\(installationID)")
+    }
+
+    func deleteLocalModel(installationID: String) async throws {
+        localActions.append("delete:\(installationID)")
+    }
+
+    func publishProviderProfile(_ draft: ProviderProfileProductDraft) async throws {}
+
+    func rotateProviderCredential(
+        profileID: String,
+        profileRevision: UInt64,
+        replacement: SecretBytes
+    ) async throws {}
+
+    func archiveProviderProfile(profileID: String) async throws {}
+
+    func validateProviderModel(_ selection: CloudModelSelection) async throws {}
+
+    func publishTarget(_ target: LLMTargetRevision) async throws {
+        publishedTargets.append(target)
+    }
 }
 
-private actor RecordingModelRoutingClient: ModelRoutingClient {
-    private let profiles: [ProviderProfileDTO]
-    private var active: ProviderProfileDTO
-    private(set) var selectedProviderIds: [String] = []
-
-    init(profiles: [ProviderProfileDTO], activeProvider: ProviderProfileDTO) {
-        self.profiles = profiles
-        self.active = activeProvider
-    }
-
-    func providerProfiles() async throws -> [ProviderProfileDTO] {
-        profiles
-    }
-
-    func activeProvider() async throws -> ProviderProfileDTO {
-        active
-    }
-
-    func selectProvider(_ providerId: String) async throws {
-        selectedProviderIds.append(providerId)
-        if let profile = profiles.first(where: { $0.id == providerId }) {
-            active = profile
-        }
+extension ModelCenterSnapshot {
+    static var fixture: Self {
+        let temperature = LLMParameterSchema(definitions: [
+            .decimal(
+                .samplingTemperature,
+                support: .supported,
+                minimum: 0,
+                maximum: 2
+            ),
+        ])
+        let reasoning = LLMParameterSchema(definitions: [
+            .choice(
+                .reasoningEffort,
+                support: .supported,
+                choices: ["low", "medium", "high"]
+            ),
+        ])
+        return ModelCenterSnapshot(
+            localModels: [
+                LocalModelCenterState(
+                    modelRevision: LocalModelRevisionID(
+                        modelID: "official-1",
+                        revision: 1
+                    ),
+                    displayName: "Official One",
+                    requiredBytes: 1_024,
+                    parameterSchema: temperature,
+                    parameterDefaults: GenerationConfiguration(),
+                    installation: LocalModelProductState(
+                        installationID: "installation-1",
+                        modelRevision: LocalModelRevisionID(
+                            modelID: "official-1",
+                            revision: 1
+                        ),
+                        state: .installed,
+                        receivedBytes: 1_024,
+                        expectedBytes: 1_024,
+                        installedBytes: 1_024,
+                        requiredBytes: 1_024,
+                        repairAction: .delete
+                    )
+                ),
+            ],
+            cloudProviders: [
+                CloudProviderProductState(
+                    profileID: "profile",
+                    revision: 1,
+                    presetID: .openAI,
+                    displayName: "OpenAI",
+                    displayOrigin: "https://api.openai.com:443",
+                    baseURL: URL(string: "https://api.openai.com:443")!,
+                    retentionMode: .statelessRequired,
+                    validation: .unvalidated,
+                    hasStoredCredential: true
+                ),
+            ],
+            cloudModels: [
+                CloudModelProductState(
+                    profileID: "profile",
+                    profileRevision: 1,
+                    modelID: "reasoning-model",
+                    modelRevision: nil,
+                    capabilities: CapabilitySnapshot(capabilities: [:]),
+                    parameterSchema: reasoning,
+                    validation: .unvalidated
+                ),
+            ],
+            targets: [],
+            disk: LocalDiskProductState(
+                availableImportantUsageBytes: 10_000,
+                reservedBytes: 0,
+                installedBytes: 1_024
+            )
+        )
     }
 }

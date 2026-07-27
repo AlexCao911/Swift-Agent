@@ -1,245 +1,188 @@
-import LocalAgentBridge
+import Foundation
+import LocalAgentLLMCloud
+import LocalAgentLLMContracts
+import LocalAgentLLMCore
+import LocalAgentLLMLocal
 import Observation
-
-protocol ModelRoutingClient: Sendable {
-    func providerProfiles() async throws -> [ProviderProfileDTO]
-    func activeProvider() async throws -> ProviderProfileDTO
-    func selectProvider(_ providerId: String) async throws
-}
-
-struct ModelCenterRowState: Equatable, Sendable, Identifiable {
-    var id: String
-    var displayName: String
-    var route: ModelRouteKind
-    var readiness: ModelReadiness
-    var isActive: Bool
-}
 
 @MainActor
 @Observable
 final class ModelCenterViewModel {
-    var activeModel: ActiveModelSummary?
-    var rows: [ModelCenterRowState]
+    private(set) var snapshot: ModelCenterSnapshot = .empty
+    private(set) var selectedTarget: LLMTargetReference?
+    private(set) var selectedModelID: String?
+    var targetDefaults = GenerationConfiguration()
+    private(set) var parameterNotice: String?
     var errorMessage: String?
+    var showingProviderEditor = false
 
-    private let routingClient: (any ModelRoutingClient)?
+    private let client: (any ModelCenterClient)?
 
-    init(
-        activeModel: ActiveModelSummary? = nil,
-        rows: [ModelCenterRowState] = [],
-        routingClient: (any ModelRoutingClient)? = nil
-    ) {
-        self.activeModel = activeModel
-        self.rows = rows
-        self.routingClient = routingClient
+    init(client: (any ModelCenterClient)? = nil) {
+        self.client = client
     }
 
-    convenience init(
-        routingClient: any ModelRoutingClient
-    ) {
-        self.init(activeModel: nil, rows: [], routingClient: routingClient)
-    }
-
-    convenience init(
-        profiles: [ProviderProfileDTO],
-        activeModel: ActiveModelSummary? = nil,
-        localModelAvailability: [String: Bool] = [:],
-        cloudCredentialAvailability: [String: Bool] = [:]
-    ) {
-        self.init(
-            activeModel: activeModel,
-            rows: ModelCenterProjection.project(
-                profiles: profiles,
-                activeModel: activeModel,
-                localModelAvailability: localModelAvailability,
-                cloudCredentialAvailability: cloudCredentialAvailability
-            ),
-            routingClient: nil
-        )
-    }
-
-    func missingModelBanner() -> GlobalReadinessBanner? {
-        guard activeModel == nil else {
-            return nil
-        }
-        return GlobalReadinessBanner(
-            id: "missing_model",
-            kind: .missingModel,
-            title: "Choose a model",
-            message: "Select a ready local or cloud model before starting a run.",
-            route: .models
-        )
-    }
-
-    func reload(shell: AppShellViewModel? = nil) async {
-        guard let routingClient else {
-            return
-        }
-
+    func reload() async {
+        guard let client else { return }
         do {
-            let profiles = try await routingClient.providerProfiles()
-            let activeProvider = try await routingClient.activeProvider()
-            let activeRoute = ModelCenterProjection.routeKind(for: activeProvider)
-            let activeReadiness = ModelCenterProjection.runtimeReadyReadiness(for: activeProvider)
-            let activeSummary = ActiveModelSummary(
-                providerId: activeProvider.id,
-                modelId: activeProvider.id,
-                displayName: activeProvider.displayName,
-                route: activeRoute,
-                readiness: activeReadiness
-            )
-            activeModel = activeSummary
-            shell?.activeModel = activeSummary
-            shell?.readinessBanners.removeAll { $0.kind == .missingModel }
-            rows = ModelCenterProjection.projectRuntimeProviders(
-                profiles: profiles,
-                activeModel: activeSummary
-            )
+            snapshot = try await client.snapshot()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func select(rowId: String, shell: AppShellViewModel) async {
-        guard let row = rows.first(where: { $0.id == rowId }),
-              row.readiness == .ready
-        else {
-            return
-        }
-
-        if let routingClient {
-            do {
-                try await routingClient.selectProvider(row.id)
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-                return
-            }
-        }
-
-        let summary = ActiveModelSummary(
-            providerId: row.id,
-            modelId: row.id,
-            displayName: row.displayName,
-            route: row.route,
-            readiness: row.readiness
-        )
-        activeModel = summary
-        shell.activeModel = summary
-        shell.readinessBanners.removeAll { $0.kind == .missingModel }
-        rows = rows.map { existing in
-            var updated = existing
-            updated.isActive = existing.id == row.id
-            return updated
+    func observeUpdates() async {
+        guard let client else { return }
+        for await _ in client.updates {
+            await reload()
         }
     }
-}
 
-enum ModelCenterProjection {
-    static func projectRuntimeProviders(
-        profiles: [ProviderProfileDTO],
-        activeModel: ActiveModelSummary?
-    ) -> [ModelCenterRowState] {
-        profiles.map { profile in
-            let route = routeKind(for: profile)
-            let readiness = runtimeReadyReadiness(for: profile)
-            return ModelCenterRowState(
-                id: profile.id,
-                displayName: profile.displayName,
-                route: route,
-                readiness: readiness,
-                isActive: activeModel?.providerId == profile.id
+    func selectModel(id: String) {
+        guard let schema = parameterSchema(for: id) else { return }
+        selectedModelID = id
+        let supported = targetDefaults.parameters.filter { rawID, _ in
+            schema.definitions[rawID]?.support == .supported
+        }
+        let removed = Set(targetDefaults.parameters.keys)
+            .subtracting(supported.keys)
+            .sorted()
+        targetDefaults = GenerationConfiguration(parameters: supported)
+        parameterNotice = removed.first.map {
+            "\(parameterDisplayName($0)) is not supported by this model."
+        }
+    }
+
+    func createTarget(modelID: String) async throws {
+        guard let client else { return }
+        selectModel(id: modelID)
+        let target: LLMTargetRevision
+        if let local = snapshot.localModels.first(where: { $0.id == modelID }),
+           let installation = local.installation,
+           installation.state == .installed {
+            let defaults = try LLMParameterSystem.resolve(
+                modelDefaults: local.parameterDefaults,
+                targetDefaults: targetDefaults,
+                schema: local.parameterSchema
             )
-        }
-        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-    }
-
-    static func project(
-        profiles: [ProviderProfileDTO],
-        activeModel: ActiveModelSummary? = nil,
-        localModelAvailability: [String: Bool] = [:],
-        cloudCredentialAvailability: [String: Bool] = [:]
-    ) -> [ModelCenterRowState] {
-        profiles.map { profile in
-            let route = routeKind(for: profile)
-            let readiness = readiness(
-                for: profile,
-                route: route,
-                localModelAvailability: localModelAvailability,
-                cloudCredentialAvailability: cloudCredentialAvailability
+            target = LLMTargetRevision(
+                targetID: LLMTargetID(rawValue: UUID().uuidString.lowercased()),
+                revision: 1,
+                kind: .local(installationID: installation.installationID),
+                modelID: local.modelRevision.modelID,
+                defaultParameters: defaults
             )
-            return ModelCenterRowState(
-                id: profile.id,
-                displayName: profile.displayName,
-                route: route,
-                readiness: readiness,
-                isActive: activeModel?.providerId == profile.id
+        } else if let cloud = cloudModel(for: modelID) {
+            let defaults = try LLMParameterSystem.resolve(
+                targetDefaults: targetDefaults,
+                schema: cloud.parameterSchema
             )
-        }
-        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-    }
-
-    static func routeKind(for profile: ProviderProfileDTO) -> ModelRouteKind {
-        switch profile.kind {
-        case .localLLM:
-            .localCpp(engineId: profile.id)
-        default:
-            .cloud(providerId: profile.id)
-        }
-    }
-
-    static func runtimeReadyReadiness(for profile: ProviderProfileDTO) -> ModelReadiness {
-        .ready
-    }
-
-    private static func readiness(
-        for profile: ProviderProfileDTO,
-        route: ModelRouteKind,
-        localModelAvailability: [String: Bool],
-        cloudCredentialAvailability: [String: Bool]
-    ) -> ModelReadiness {
-        if profile.kind == .mock {
-            return .ready
-        }
-
-        switch route {
-        case .localCpp:
-            return localModelAvailability[profile.id] == true
-                ? .ready
-                : .missingConfiguration(reason: "weights_missing")
-        case .cloud:
-            return cloudCredentialAvailability[profile.id] == true
-                ? .ready
-                : .missingConfiguration(reason: "api_key_missing")
-        case .unset:
-            return .missingConfiguration(reason: "model_unset")
-        }
-    }
-}
-
-actor RuntimeModelRoutingClient: ModelRoutingClient {
-    private let runtimeClient: any RuntimeClient & ProviderControllingRuntimeClient
-
-    init(runtimeClient: any RuntimeClient & ProviderControllingRuntimeClient) {
-        self.runtimeClient = runtimeClient
-    }
-
-    func providerProfiles() async throws -> [ProviderProfileDTO] {
-        try await runtimeClient.providerProfiles()
-    }
-
-    func activeProvider() async throws -> ProviderProfileDTO {
-        try await runtimeClient.activeProvider()
-    }
-
-    func selectProvider(_ providerId: String) async throws {
-        let sessionId: String
-        if let existing = try await runtimeClient.sessionIds().last {
-            sessionId = existing
+            target = LLMTargetRevision(
+                targetID: LLMTargetID(rawValue: UUID().uuidString.lowercased()),
+                revision: 1,
+                kind: .cloud(
+                    providerProfileID: cloud.profileID,
+                    providerProfileRevision: cloud.profileRevision
+                ),
+                modelID: cloud.modelID,
+                defaultParameters: defaults
+            )
         } else {
-            sessionId = try await runtimeClient.createSession()
+            throw ModelCenterFailure("The selected model is not ready.")
         }
-        _ = try await runtimeClient.setProvider(sessionId: sessionId, providerId: providerId)
+        try await client.publishTarget(target)
+        selectedTarget = target.reference
+        await reload()
+    }
+
+    func enqueueLocalModel(_ id: LocalModelRevisionID) async throws {
+        try await client?.enqueueLocalModel(id)
+    }
+
+    func pauseLocalModel(installationID: String) async throws {
+        try await client?.pauseLocalModel(installationID: installationID)
+    }
+
+    func resumeLocalModel(installationID: String) async throws {
+        try await client?.resumeLocalModel(installationID: installationID)
+    }
+
+    func cancelLocalModel(installationID: String) async throws {
+        try await client?.cancelLocalModel(installationID: installationID)
+    }
+
+    func deleteLocalModel(installationID: String) async throws {
+        try await client?.deleteLocalModel(installationID: installationID)
+    }
+
+    func validate(_ model: CloudModelProductState) async throws {
+        try await client?.validateProviderModel(CloudModelSelection(
+            profileID: model.profileID,
+            profileRevision: model.profileRevision,
+            modelID: model.modelID
+        ))
+    }
+
+    func validateManual(
+        _ modelID: String,
+        for provider: CloudProviderProductState
+    ) async throws {
+        guard !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ModelCenterFailure("Enter a model ID.")
+        }
+        try await client?.validateProviderModel(CloudModelSelection(
+            profileID: provider.profileID,
+            profileRevision: provider.revision,
+            modelID: modelID
+        ))
+    }
+
+    func archive(_ provider: CloudProviderProductState) async throws {
+        try await client?.archiveProviderProfile(profileID: provider.profileID)
+    }
+
+    func parameterSchema(for id: String) -> LLMParameterSchema? {
+        snapshot.localModels.first(where: { $0.id == id })?.parameterSchema
+            ?? cloudModel(for: id)?.parameterSchema
+    }
+
+    func parameterValue(_ id: LLMParameterID) -> LLMParameterValue? {
+        targetDefaults.value(for: id)
+    }
+
+    func setParameter(_ id: LLMParameterID, value: LLMParameterValue) {
+        targetDefaults = targetDefaults.setting(id, to: value)
+        parameterNotice = nil
+    }
+
+    func cloudModelID(_ model: CloudModelProductState) -> String {
+        "cloud:\(model.profileID):\(model.profileRevision):\(model.modelID)"
+    }
+
+    func makeProviderEditor() -> ProviderProfileEditorViewModel? {
+        client.map(ProviderProfileEditorViewModel.init(client:))
+    }
+
+    private func cloudModel(for id: String) -> CloudModelProductState? {
+        snapshot.cloudModels.first { cloudModelID($0) == id }
+    }
+}
+
+private struct ModelCenterFailure: LocalizedError {
+    let errorDescription: String?
+
+    init(_ message: String) {
+        errorDescription = message
+    }
+}
+
+private func parameterDisplayName(_ rawID: String) -> String {
+    switch rawID {
+    case LLMParameterID.samplingTemperature.rawValue: "Temperature"
+    case LLMParameterID.samplingTopP.rawValue: "Top-p"
+    case LLMParameterID.samplingTopK.rawValue: "Top-k"
+    case LLMParameterID.reasoningEffort.rawValue: "Reasoning effort"
+    default: rawID
     }
 }

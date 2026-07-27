@@ -14,13 +14,6 @@ struct PrivacySettingsProjectionTests {
                 profileRevisionId: 3,
                 displayName: "Research Agent"
             ),
-            activeModel: ActiveModelSummary(
-                providerId: "mock",
-                modelId: "mock",
-                displayName: "Mock Model",
-                route: .cloud(providerId: "mock"),
-                readiness: .ready
-            ),
             toolRows: [
                 ToolCenterRowState(
                     id: "calendar.search_events",
@@ -56,22 +49,21 @@ struct PrivacySettingsProjectionTests {
         #expect(snapshot.toolPermissionSummary == "1 ready, 1 needs attention")
         #expect(snapshot.attachmentStorageSummary == "Attachments stay in the app sandbox and are referenced by opaque IDs.")
         #expect(snapshot.memoryRetentionSummary == "Run-only by default; memory candidates require explicit review.")
-        #expect(snapshot.modelProviderSummary == "Mock Model ready")
+        #expect(snapshot.modelProviderSummary == "Host target is selected by Research Agent revision 3")
         #expect(snapshot.activeAgentSummary == "Research Agent revision 3")
         #expect(snapshot.advancedDebugEnabled == true)
         #expect(snapshot.entryPoints.map(\.id) == ["export", "reset", "debug"])
     }
 
-    @Test("settings snapshot marks missing model honestly")
-    func settingsSnapshotMarksMissingModelHonestly() {
+    @Test("settings snapshot marks missing agent host target honestly")
+    func settingsSnapshotMarksMissingAgentHostTargetHonestly() {
         let snapshot = PrivacySettingsProjection.project(
             activeAgent: nil,
-            activeModel: nil,
             toolRows: [],
             advancedDebugEnabled: false
         )
 
-        #expect(snapshot.modelProviderSummary == "No active model selected")
+        #expect(snapshot.modelProviderSummary == "Select an Agent to inspect its host target")
         #expect(snapshot.activeAgentSummary == "No active agent selected")
         #expect(snapshot.toolPermissionSummary == "No native tools registered")
     }

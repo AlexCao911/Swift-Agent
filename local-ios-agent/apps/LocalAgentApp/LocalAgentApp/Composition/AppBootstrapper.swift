@@ -1,6 +1,7 @@
 import Foundation
 import LocalAgentBridge
 import LocalAgentLLMCloud
+import LocalAgentLLMCore
 import LocalAgentLLMHost
 import LocalAgentLLMLocal
 import LocalNativeToolkit
@@ -29,17 +30,22 @@ enum AppBootstrapper {
             appropriateFor: nil,
             create: true
         )
+        let llmStore = try LLMStore(fileURL: appSupportRoot.appending(
+            path: "LocalAgent/LLM/llm-state.sqlite"
+        ))
         let local = try await LocalLLMSubsystem.bootstrap(
             appSupportRoot: appSupportRoot,
             hostProcessEpoch: hostProcessEpoch,
-            remoteCatalog: remoteCatalog
+            remoteCatalog: remoteCatalog,
+            llmStore: llmStore
         )
         let cloud = try await CloudLLMSubsystem.bootstrap(
             appSupportRoot: appSupportRoot,
             hostProcessEpoch: hostProcessEpoch,
             remoteCatalog: remoteCloudCatalog,
             approvalPrompt: container.cloudApprovalBroker,
-            localUnloader: AppLocalRouteUnloader(runtime: local.runtime)
+            localUnloader: AppLocalRouteUnloader(runtime: local.runtime),
+            llmStore: llmStore
         )
         guard let rust = container.rustRuntimeClient,
               let starter = container.hostRunStarter
@@ -54,10 +60,16 @@ enum AppBootstrapper {
             hostProcessEpoch: hostProcessEpoch
         )
         await starter.install(host: host, local: local, cloud: cloud)
+        let modelCenterClient = AppModelCenterClient(
+            local: local,
+            cloud: cloud,
+            store: llmStore
+        )
         return container.attaching(
             localLLMSubsystem: local,
             cloudLLMSubsystem: cloud,
-            llmHostRuntime: host
+            llmHostRuntime: host,
+            modelCenterClient: modelCenterClient
         )
     }
 
@@ -108,7 +120,7 @@ enum AppBootstrapper {
                 broker: nativeBundle.interactionBroker,
                 approvalResponder: ExecutionBridgeToolApprovalResponder(bridge: executionBridge)
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            modelCenterClient: nil,
             rustRuntimeClient: client,
             hostRunStarter: hostStarter,
             llmHostSelections: selections,
@@ -156,7 +168,7 @@ enum AppBootstrapper {
             runInlineCardActionHandler: RunInlineCardActionHandler(
                 broker: nativeBundle.interactionBroker
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            modelCenterClient: nil,
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
@@ -196,7 +208,7 @@ enum AppBootstrapper {
                     presenter: UnavailableNativeInteractionPresenter()
                 )
             ),
-            modelRoutingClient: RuntimeModelRoutingClient(runtimeClient: client),
+            modelCenterClient: nil,
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
