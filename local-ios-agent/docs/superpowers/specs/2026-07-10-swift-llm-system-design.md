@@ -347,6 +347,7 @@ Registered V1 domains and coverage are:
 | `execution-plan:v1` | Ordered Agent plan steps and policy-relevant metadata | Runtime timestamps |
 | `tool-schema:v1` | Ordered tool identities plus complete input/output/data-label schemas | Tool implementation pointers |
 | `source-revisions:v1` | Ordered frame, memory, context, and attachment identity/revision tuples | Source content |
+| `legacy-profile-source:v1` | Source Profile ID/revision, historical record schema version, and complete immutable legacy source record | Migration attempt, selected target, host binding, and migration outcome |
 | `agent-input:v1` | Complete canonical semantic generation request: ordered messages/history, complete canonical tool schema, full normalized tool-result batch, provider-required semantic continuation history, attachment identities/revisions, and memory/context revisions | Provider wire encoding, credential, and diagnostics |
 | `generation-disclosure:v1` | Turn ID, content/source digests, sorted data classes, sensitivity, and grant-neutral safe source summary | Raw source content and grant identity |
 | `capability-attestation:v1` | Generic Agent capability values plus contributing observation digests/expiry | Provider-specific claims and evidence body |
@@ -1702,12 +1703,38 @@ saga; startup never scans Keychain and guesses whether an item is orphaned:
 5. in one transaction CAS the same slot to active and complete the operation
 ```
 
-`creating` rejects profile publication, lease acquisition, validation, and
-credential resolution. Before step 3, reconciliation deletes only the staged
-item named by the recorded operation. From step 3 onward it finishes promotion
-and activation; it never deletes or adopts an untracked Keychain item. Replays
-with the same operation and input are idempotent, while an operation/input
-mismatch is a conflict.
+Credential-slot `creating` rejects active Profile publication, lease
+acquisition, validation, and credential resolution. Before step 3,
+reconciliation deletes only the staged item named by the recorded operation.
+From step 3 onward it finishes promotion and activation; it never deletes or
+adopts an untracked Keychain item. Replays with the same operation and input
+are idempotent, while an operation/input mismatch is a conflict.
+
+Product-level Provider Profile creation wraps that credential saga without a
+second operation table:
+
+```text
+1. persist provider_profile_revisions lifecycle=creating with a stable operationID
+2. run CredentialCreationOperation with that same operationID
+3. verify the exact credential slot is active
+4. transactionally activate the immutable Profile revision and its state row
+```
+
+The creation operation ID is lifecycle metadata in the revision's versioned
+record envelope; it is not part of the active public Profile value. Startup
+first reconciles credential operations, then `creating` Profile revisions. An
+exact active slot completes Profile activation; an absent or rolled-back slot
+archives the creating revision. Thus a crash after credential completion but
+before Profile activation remains discoverable without scanning Keychain or
+guessing which credential belongs to which Profile.
+
+This authoritative lifecycle-envelope change is the Swift `LLMStore`
+`user_version = 3` migration. It transactionally rebuilds only
+`provider_profile_revisions`, converts every V2 active/archived envelope into
+the tagged V3 lifecycle with no creation operation, restores indexes, and
+updates the store version last. Rollback leaves an exact reopenable V2 store;
+version 4 is rejected as future. Other unchanged table envelopes retain their
+existing record schema.
 
 The pinned generation feeds provider validation, the scope grant, per-turn
 authorization, private egress subject, `LLMSessionHandle` registry entry,
@@ -1847,7 +1874,13 @@ struct EgressApprovalDisplaySummary: Codable, Sendable {
 `tool_result`, or `other`. Size uses coarse buckets (`none`, `<1 KiB`,
 `1-100 KiB`, `100 KiB-1 MiB`, `>1 MiB`). Tool display keys must come from the
 signed tool manifest and are localized by the app; no tool output can inject
-free-form approval text.
+free-form approval text. Phase 5 does not yet have a signed Tool Manifest
+verification chain, so the trusted display-key set is fixed to empty and the
+approval UI uses one localized generic tool label. Rust freezes an empty
+`triggeringToolDisplayKeys`; Swift supplies an empty `signedToolDisplayKeys`
+set and rejects non-empty preview keys. Function-schema text, tool metadata,
+and tool output are never fallback trust sources. Specific tool labels require
+a later signed-manifest design.
 
 `disclosureDigest` is computed over the disclosure with that field omitted.
 Rust constructs only the grant-neutral `SafeDisplaySummary`. Swift compares the
@@ -2903,8 +2936,10 @@ data or secrets.
 - Swift-side cancellation terminates the Rust run.
 - A host LLM failure maps to the limited agent-facing failure taxonomy.
 - During migration, architecture lint rejects growth of the checked-in legacy
-  allowlist; after Phase 5 it rejects all provider or engine concepts in the
-  Rust agent path.
+  allowlist. After Phase 5 the broad allowlist is deleted: production Rust
+  rejects provider or engine ownership everywhere except two targeted,
+  non-executing read-only translation boundaries for known legacy Agent
+  Profile records and schema-v1 Agent Package wire.
 
 ### End-to-End Tests
 
@@ -2988,15 +3023,22 @@ resolver.
 During Phases 1-3, production execution accepts only `legacy_v1`; V2 records may
 be created, installed, and host-bound for validation but remain not runnable.
 Phase 4 dispatches `host_slot_v2` through the host-backed worker while retaining
-the legacy route for unmigrated V1 records. Phase 5 migrates or archives every
-remaining V1 profile and then removes the legacy reader, writer, resolver, and
-route.
+the legacy route for unmigrated V1 records. Phase 5 removes the legacy writer,
+resolver, and execution route in one product cutover. The final binary retains
+one isolated, read-only, non-runnable Agent Profile translator so a device can
+upgrade directly from an old store, and the existing Agent Package reader
+retains a private schema-v1-wire-to-V2 translator. Both immediately produce
+provider-neutral V2 values and cannot construct a provider, credential,
+concrete model binding, URL, engine, local path, or executable legacy route.
 
 Architecture lint uses a checked-in temporary allowlist containing each
 pre-existing legacy occurrence as `path + owning item + forbidden symbol`, plus
 a non-increasing total count. It rejects a new `ModelBinding`, Provider Registry,
 or Rust inference-router dependency even inside an already listed file. The
 allowlist must shrink when code moves and is deleted entirely in Phase 5.
+Targeted source-shape tests remain only for the two migration-only translators;
+they forbid execution/provider ownership and ensure concrete legacy wire values
+are discarded after portable V2 requirements and redacted hints are derived.
 
 ### Phase 1: Contracts, Slots, and Consistency Foundation
 
@@ -3082,19 +3124,37 @@ allowlist must shrink when code moves and is deleted entirely in Phase 5.
 - Remove provider construction from `AppBootstrapper` and
   `RustRuntimeConfiguration` product setup.
 - Move Agent-to-model composition to Swift `AgentHostConfiguration`.
-- Migrate each retained `legacy_v1` profile to `host_slot_v2` only after its
-  Swift host binding has been staged and verified; failed migrations leave the
-  V1 record and route intact.
+- Migrate Swift `LLMStore` V2→V3 before introducing the tagged Provider
+  Profile creation lifecycle.
+- Migrate the unified Rust runtime store V2→V3 once, creating Profile,
+  component, and the single legacy-migration-record tables transactionally.
+  Task-level repository behavior must not create tables opportunistically.
+- Key every migration record with Rust-computed
+  `legacy-profile-source:v1`; Swift treats it only as opaque identity.
+- Before cutover, prove that each retained `legacy_v1` profile migrates to
+  `host_slot_v2` only after its Swift host binding has been staged and verified;
+  failed migrations leave the V1 record and route intact.
 - Remove the production use of Rust `ModelBinding`, Provider Registry, local LLM
   provider, and Rust `InferenceRouter` after parity tests pass.
 - Retain only the provider-neutral agent model-client trait and test mocks in
   Rust.
-- Delete the old product route after migration; do not maintain indefinite
+- Delete the old product route in the final cutover; do not maintain indefinite
   dual execution.
+- Retain a narrow read-only Agent Profile translator and private Agent Package
+  schema-v1 reader in the final binary for direct old-version upgrade. They are
+  migration-only, provider-neutral, and cannot execute V1.
+- Keep the complete component/tool/memory/voice/requirements graph inside Rust
+  while creating the V2 successor. Swift receives only migration subject,
+  source digest, display metadata, portable requirements, record state, and an
+  optional redacted model hint.
+- Keep durable host configurations, binding tuples, targets, and restored
+  selections independent of `HostProcessEpoch`. Epoch binds preparations,
+  sessions, runs, commands, and events created in the current launch.
 
 Legacy stored provider selection may be imported only through a one-time,
-read-only, redacted importer. No legacy plaintext secret is migrated. Development
-environment providers remain debug-only and are not treated as user profiles.
+read-only, redacted migration translator. No legacy plaintext secret is
+migrated. Development environment providers remain debug-only and are not
+treated as user profiles.
 
 ## Implementation Decomposition
 
@@ -3150,14 +3210,22 @@ lint rules above without pretending the legacy route is already gone.
 
 - [ ] Rust production code does not own LLM targets, Provider Profiles, model
       installations, credentials, Base URLs, model paths, or backend selection.
-- [ ] Rust never parses Provider Profile, origin, CredentialRef/generation,
-      scope grant, or per-turn authorization; it validates only the generic
-      public binding of a versioned opaque egress attestation.
+- [ ] Rust runtime code never parses Provider Profile, origin,
+      CredentialRef/generation, scope grant, or per-turn authorization; it
+      validates only the generic public binding of a versioned opaque egress
+      attestation. Migration-only readers may recognize fixed historical wire
+      keys solely to discard them and may not expose or execute those values.
 - [ ] Every cross-boundary, cross-store, reconciliation, identity, and policy
       digest uses a registered `CanonicalDigestV1` schema; Swift and Rust pass
       the applicable identical RFC 8785 golden fixtures.
+- [ ] `legacy-profile-source:v1` binds the complete immutable historical
+      Profile record and is computed only by Rust; Swift treats it as opaque.
 - [ ] Rust Agent/Profile/Package contracts retain only portable LLM slots,
       requirements, and optional hints; they contain no device-local binding.
+- [ ] The final binary retains only isolated, read-only translators for known
+      legacy Agent Profile records and schema-v1 Agent Package wire. They emit
+      V2 values immediately, are covered by targeted architecture tests, and
+      expose no execution route.
 - [ ] Swift is the sole product owner of local/cloud LLM selection and runtime
       configuration.
 - [ ] C++ performs only local inference execution.
@@ -3192,6 +3260,9 @@ lint rules above without pretending the legacy route is already gone.
       and converge after every injected crash boundary.
 - [ ] Profile and Package sagas persist the exact opaque binding ID, revision,
       and hash staged by Swift and reject cross-link mismatches.
+- [ ] Durable host configuration/binding/target records carry no process epoch;
+      every preparation/session/run/command/event uses the current launch
+      epoch.
 - [ ] Agent Package v2 carries LLM requirements/hints and no API key, device
       path, Provider Profile, or concrete host binding.
 - [ ] One Agent Profile revision resolves to one explicit LLM target revision.
@@ -3208,6 +3279,9 @@ lint rules above without pretending the legacy route is already gone.
 - [ ] API keys exist only in Keychain and never cross into Rust.
 - [ ] Initial credential publication is a persisted creation saga; recovery
       never scans and guesses whether a staged/final Keychain item is orphaned.
+- [ ] Swift `LLMStore` V2→V3 and Rust runtime V2→V3 migrations are atomic,
+      rollback-injected, reopen populated V2 fixtures without loss, and reject
+      future version 4 before mutation.
 - [ ] `CredentialSlotState` is the sole credential-generation authority;
       Provider Profile revisions keep only `credentialRef` and no generation
       copy.
@@ -3233,7 +3307,11 @@ lint rules above without pretending the legacy route is already gone.
       validation, or discovery requests; bare adapter wire output cannot send.
 - [ ] Every approval uses a digest-bound grant-neutral source summary plus a
       Swift-only grant-delta summary of source enums, counts, size bucket,
-      manifest tool keys, and new classes, with no raw user data.
+      trusted tool-key set (empty in Phase 5), and new classes, with no raw
+      user data.
+- [ ] Until a signed Tool Manifest verification chain exists, trusted tool
+      display keys are empty and approval uses a generic localized tool label;
+      function schema, metadata, and tool output cannot inject approval text.
 - [ ] OpenAI, Claude, Gemini, Grok, DeepSeek, MiniMax, and GLM have explicit
       Swift adapter semantics.
 - [ ] Capability unknowns fail conservatively.
