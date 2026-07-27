@@ -40,6 +40,40 @@ struct LocalToolCallCodecTests {
             try LocalToolCallCodec.decode(codecID: "unknown", rawText: "hello")
         }
     }
+
+    @Test
+    func continuationRestoresAssistantToolBatchBeforeToolResults() throws {
+        let input = AgentLLMInput(
+            inputID: "turn-2",
+            messages: [
+                LLMInputMessage(role: .system, content: [.text("policy")]),
+                LLMInputMessage(role: .user, content: [.text("find Ada")]),
+                LLMInputMessage(role: .tool, content: [.text("Ada")]),
+            ]
+        )
+        let continued = try localContinuationInput(
+            input,
+            pendingToolCalls: [
+                NormalizedToolCall(
+                    callID: "call-1",
+                    name: "contacts.search",
+                    argumentsJSON: #"{"query":"Ada"}"#
+                ),
+            ]
+        )
+
+        #expect(continued.messages.map(\.role) == [
+            .system, .user, .assistant, .tool,
+        ])
+        guard case let .text(text)? = continued.messages[2].content.first else {
+            Issue.record("assistant tool-call batch is missing")
+            return
+        }
+        #expect(
+            text
+                == #"<tool_calls>{"calls":[{"arguments":{"query":"Ada"},"id":"call-1","name":"contacts.search"}]}</tool_calls>"#
+        )
+    }
 }
 
 private func expectCodecFailure(operation: () throws -> Void) {

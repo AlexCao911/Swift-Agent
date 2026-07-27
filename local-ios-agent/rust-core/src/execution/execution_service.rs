@@ -308,6 +308,32 @@ impl<R: ConversationFrameRepository> ExecutionService<R> {
         Ok(())
     }
 
+    pub fn record_external_completed(
+        &self,
+        run_id: &str,
+        frame_ref: ConversationRunFrameRef,
+        host_event_id: &str,
+        message_id: &str,
+        text: &str,
+        finish_reason: &str,
+    ) -> Result<(), ExecutionStartError> {
+        self.parts.event_log.append_with_payload(
+            run_id,
+            "assistant_message_completed",
+            json!({
+                "finish_reason": finish_reason,
+                "host_event_id": host_event_id,
+                "message_id": message_id,
+                "text": text,
+            })
+            .to_string(),
+        );
+        self.parts
+            .completed_runs
+            .record_completed_with_text(run_id, message_id, frame_ref, text);
+        Ok(())
+    }
+
     pub fn tool_loop(&self) -> &ToolLoopService {
         &self.parts.tool_loop
     }

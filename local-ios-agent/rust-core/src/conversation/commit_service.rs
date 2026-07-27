@@ -5,9 +5,14 @@ use std::sync::{Arc, Mutex};
 use crate::conversation::ConversationRunFrameRef;
 use crate::execution::{idempotency_key, CompletedRunRecord, CompletedRunRegistry};
 
-#[derive(Clone, Debug)]
+type CompletedRunRecovery = Arc<
+    dyn Fn(&str, &str) -> Result<Option<CompletedRunRecord>, ConversationCommitError> + Send + Sync,
+>;
+
+#[derive(Clone)]
 pub struct ConversationCommitService {
     completed_runs: CompletedRunRegistry,
+    recovery: Option<CompletedRunRecovery>,
     commits: Arc<Mutex<BTreeMap<String, AssistantCommitRecord>>>,
 }
 
@@ -28,6 +33,18 @@ impl ConversationCommitService {
     pub fn new(completed_runs: CompletedRunRegistry) -> Self {
         Self {
             completed_runs,
+            recovery: None,
+            commits: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn with_recovery(
+        completed_runs: CompletedRunRegistry,
+        recovery: CompletedRunRecovery,
+    ) -> Self {
+        Self {
+            completed_runs,
+            recovery: Some(recovery),
             commits: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
@@ -79,15 +96,21 @@ impl ConversationCommitService {
             return Ok(record);
         }
 
-        let completed = self
-            .completed_runs
-            .get(run_id, final_message_id)
-            .ok_or_else(|| {
-                ConversationCommitError::new(
-                    "conversation_commit.completed_run_missing",
-                    format!("completed run not found for {key}"),
-                )
-            })?;
+        let completed = match self.completed_runs.get(run_id, final_message_id) {
+            Some(completed) => Some(completed),
+            None => self
+                .recovery
+                .as_ref()
+                .map(|recover| recover(run_id, final_message_id))
+                .transpose()?
+                .flatten(),
+        }
+        .ok_or_else(|| {
+            ConversationCommitError::new(
+                "conversation_commit.completed_run_missing",
+                format!("completed run not found for {key}"),
+            )
+        })?;
         if completed.conversation_run_frame_ref() != expected_frame_ref {
             return Err(ConversationCommitError::new(
                 "conversation_commit.frame_ref_mismatch",
@@ -110,6 +133,17 @@ impl ConversationCommitService {
             return 0;
         };
         commits.len()
+    }
+}
+
+impl fmt::Debug for ConversationCommitService {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConversationCommitService")
+            .field("completed_runs", &self.completed_runs)
+            .field("has_recovery", &self.recovery.is_some())
+            .field("commits", &self.commits)
+            .finish()
     }
 }
 

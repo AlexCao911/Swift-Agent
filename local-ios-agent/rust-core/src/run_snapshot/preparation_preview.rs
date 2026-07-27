@@ -276,10 +276,13 @@ pub(crate) fn derive_authoritative_preparation(
     let payload_digest = payload
         .expected_digest()
         .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
+    let content_digest = payload
+        .agent_input_digest()
+        .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
     let disclosure = GenerationDisclosureDocument {
         schema_version: "1".into(),
         generation_turn_id: format!("generation-turn:{model_input_digest}"),
-        content_digest: payload_digest.clone(),
+        content_digest,
         source_revision_digest: source_revisions_digest.clone(),
         data_classes: data_classes.iter().map(ToString::to_string).collect(),
         highest_sensitivity: "private".into(),

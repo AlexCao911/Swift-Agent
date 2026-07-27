@@ -131,8 +131,7 @@ fn production_route_is_enabled_without_growing_the_legacy_allowlist() {
 
 #[test]
 fn phase_four_runner_is_deterministic_and_secret_free() {
-    let runner =
-        fs::read_to_string(root().join("scripts/run-llm-phase-4-contracts.sh")).unwrap();
+    let runner = fs::read_to_string(root().join("scripts/run-llm-phase-4-contracts.sh")).unwrap();
     for required in [
         "run-llm-phase-3-contracts.sh",
         "--test contract",
@@ -149,11 +148,13 @@ fn phase_four_runner_is_deterministic_and_secret_free() {
         "MINIMAX_API_KEY",
         "ZHIPUAI_API_KEY",
     ] {
-        assert!(runner.contains(required), "Phase 4 runner is missing {required}");
+        assert!(
+            runner.contains(required),
+            "Phase 4 runner is missing {required}"
+        );
     }
     assert!(
-        runner.find("run-llm-phase-3-contracts.sh")
-            < runner.find("--test contract"),
+        runner.find("run-llm-phase-3-contracts.sh") < runner.find("--test contract"),
         "Phase 4 must run the Phase 3 gate first"
     );
     assert!(!runner.contains("run-llm-phase-3-live-smoke.sh"));

@@ -129,6 +129,7 @@ struct LLMHostRuntimeTests {
         await harness.runtime.drain()
 
         #expect(await harness.runtime.bridgeActor.lifecycle(for: harness.handle) == .committed)
+        await waitUntil { await harness.driver.startCount() == 1 }
         #expect(await harness.driver.startCount() == 1)
     }
 
@@ -182,6 +183,12 @@ struct LLMHostRuntimeTests {
         #expect(Set(dispositions) == Set([.closed, .alreadyClosed]))
         #expect(await counter.value() == 1)
         #expect(await owner.close() == .alreadyClosed)
+    }
+}
+
+private func waitUntil(_ predicate: @escaping @Sendable () async -> Bool) async {
+    for _ in 0..<100 where !(await predicate()) {
+        try? await Task.sleep(for: .milliseconds(1))
     }
 }
 

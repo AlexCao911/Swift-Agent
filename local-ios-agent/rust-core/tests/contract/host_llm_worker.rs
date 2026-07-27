@@ -71,7 +71,7 @@ fn commit_start_persists_provider_neutral_v2_snapshot_and_first_command_atomical
     );
     assert_eq!(
         command.disclosure.as_ref().unwrap().content_digest,
-        command.payload_digest()
+        command.payload().agent_input_digest().unwrap()
     );
     assert_eq!(handle.first_command_id(), command.command_id());
 

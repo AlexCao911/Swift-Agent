@@ -41,6 +41,9 @@ export LOCAL_AGENT_PHASE3_SIMULATOR_UDID="$IPHONE_UDID"
 
 CARGO_NET_OFFLINE=true cargo test \
   --manifest-path "$ROOT/rust-core/Cargo.toml" \
+  --lib
+CARGO_NET_OFFLINE=true cargo test \
+  --manifest-path "$ROOT/rust-core/Cargo.toml" \
   --test contract
 CARGO_NET_OFFLINE=true cargo test \
   --manifest-path "$ROOT/rust-core/Cargo.toml" \

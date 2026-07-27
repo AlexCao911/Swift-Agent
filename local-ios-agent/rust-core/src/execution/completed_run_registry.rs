@@ -55,6 +55,20 @@ impl CompletedRunRegistry {
 }
 
 impl CompletedRunRecord {
+    pub fn restored(
+        run_id: impl Into<String>,
+        final_message_id: impl Into<String>,
+        conversation_run_frame_ref: ConversationRunFrameRef,
+        final_text: impl Into<String>,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            final_message_id: final_message_id.into(),
+            final_text: final_text.into(),
+            conversation_run_frame_ref,
+        }
+    }
+
     pub fn conversation_run_frame_ref(&self) -> &ConversationRunFrameRef {
         &self.conversation_run_frame_ref
     }

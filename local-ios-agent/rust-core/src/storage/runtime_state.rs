@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -537,10 +537,15 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
     ) -> Result<Option<LLMEventReceipt>, RuntimeStateError>;
     fn event_queue_usage(&self, session_handle: &str)
         -> Result<EventQueueUsage, RuntimeStateError>;
-    fn drain_inbound_events(
+    fn record_event_backpressure(&self, session_handle: &str) -> Result<(), RuntimeStateError>;
+    fn pending_inbound_events(
         &self,
         maximum: usize,
     ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError>;
+    fn acknowledge_inbound_event_projection(
+        &self,
+        event: &LLMEventEnvelope,
+    ) -> Result<(), RuntimeStateError>;
     fn turn_accumulator_events(
         &self,
         session_handle: &str,
@@ -569,6 +574,7 @@ struct InMemoryRuntimeState {
     commands: BTreeMap<String, HostCommandOutboxRow>,
     event_receipts: BTreeMap<(String, u64), LLMEventReceipt>,
     inbound_events: BTreeMap<(String, u64), LLMEventEnvelope>,
+    backpressured_sessions: BTreeSet<String>,
     turn_accumulators: BTreeMap<(String, String), Vec<LLMEventEnvelope>>,
     committed_preparations: BTreeMap<String, (String, u64, String)>,
     snapshots: BTreeMap<String, (String, String)>,
@@ -1264,12 +1270,40 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         event_queue_usage_in_memory(&state, session_handle)
     }
 
-    fn drain_inbound_events(
+    fn record_event_backpressure(&self, session_handle: &str) -> Result<(), RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        if !state
+            .workers
+            .values()
+            .any(|worker| worker.session_handle() == session_handle)
+        {
+            return Err(not_found());
+        }
+        state
+            .backpressured_sessions
+            .insert(session_handle.to_string());
+        Ok(())
+    }
+
+    fn pending_inbound_events(
         &self,
         maximum: usize,
     ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+        let state = self.inner.lock().map_err(|_| poisoned())?;
+        Ok(pending_events_in_memory(&state, maximum))
+    }
+
+    fn acknowledge_inbound_event_projection(
+        &self,
+        event: &LLMEventEnvelope,
+    ) -> Result<(), RuntimeStateError> {
         let mut state = self.inner.lock().map_err(|_| poisoned())?;
-        drain_events_in_memory(&mut state, maximum)
+        let key = (event.session_handle().to_string(), event.event_sequence());
+        if state.inbound_events.get(&key) != Some(event) {
+            return Err(conflict());
+        }
+        state.inbound_events.remove(&key);
+        signal_in_memory_capacity_if_needed(&mut state, event.session_handle())
     }
 
     fn turn_accumulator_events(
@@ -1661,8 +1695,24 @@ pub(crate) fn accepted_event_state(
             LLMEventKind::GenerationStarted => {
                 next_worker = next_worker
                     .with_execution_phase(Some(HostExecutionPhase::ConsumingLlmTurn))
-                    .with_watchdog(None, None, None);
+                    .with_watchdog(
+                        Some(HostWatchdogKind::StreamIdle),
+                        None,
+                        Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                    );
                 lifecycle = ResourceLifecycle::Generating;
+            }
+            LLMEventKind::TextDelta
+            | LLMEventKind::ReasoningSummaryDelta
+            | LLMEventKind::ToolCallStarted
+            | LLMEventKind::ToolCallArgumentsDelta
+            | LLMEventKind::ToolCallCompleted
+            | LLMEventKind::UsageUpdated => {
+                next_worker = next_worker.with_watchdog(
+                    Some(HostWatchdogKind::StreamIdle),
+                    None,
+                    Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                );
             }
             LLMEventKind::GenerationCompleted => {
                 let completion = event.payload.completion.as_ref().ok_or_else(|| {
@@ -1675,7 +1725,12 @@ pub(crate) fn accepted_event_state(
                     && valid_tool_batch(completion, prior_events)
                 {
                     next_worker = next_worker
-                        .with_execution_phase(Some(HostExecutionPhase::ExecutingToolBatch));
+                        .with_execution_phase(Some(HostExecutionPhase::ExecutingToolBatch))
+                        .with_watchdog(
+                            Some(HostWatchdogKind::ToolBatch),
+                            None,
+                            Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                        );
                 } else if completion.outcome == "final_response"
                     && valid_final_response(completion, prior_events)
                 {
@@ -1759,7 +1814,6 @@ pub(crate) fn accepted_event_state(
                 };
                 next_worker = next_worker.with_watchdog(None, None, None);
             }
-            _ => {}
         }
     }
     next_worker = next_worker.with_resource_lifecycle(lifecycle.clone());
@@ -2049,35 +2103,28 @@ fn event_queue_usage_in_memory(
     Ok(usage)
 }
 
-fn drain_events_in_memory(
-    state: &mut InMemoryRuntimeState,
-    maximum: usize,
-) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
+fn pending_events_in_memory(state: &InMemoryRuntimeState, maximum: usize) -> Vec<LLMEventEnvelope> {
     if maximum == 0 {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let Some(session_handle) = state
-        .inbound_events
-        .keys()
-        .next()
-        .map(|(handle, _)| handle.clone())
-    else {
-        return Ok(Vec::new());
+    let Some(session_handle) = state.inbound_events.keys().next().map(|(handle, _)| handle) else {
+        return Vec::new();
     };
-    let before = event_queue_usage_in_memory(state, &session_handle)?;
-    let keys: Vec<_> = state
+    state
         .inbound_events
-        .keys()
-        .filter(|(handle, _)| handle == &session_handle)
+        .iter()
+        .filter(|((handle, _), _)| handle == session_handle)
         .take(maximum)
-        .cloned()
-        .collect();
-    let drained = keys
-        .into_iter()
-        .filter_map(|key| state.inbound_events.remove(&key))
-        .collect::<Vec<_>>();
-    let after = event_queue_usage_in_memory(state, &session_handle)?;
-    if (before.event_count >= HOST_EVENT_MAX_EVENTS || before.byte_count >= HOST_EVENT_MAX_BYTES)
+        .map(|(_, event)| event.clone())
+        .collect()
+}
+
+fn signal_in_memory_capacity_if_needed(
+    state: &mut InMemoryRuntimeState,
+    session_handle: &str,
+) -> Result<(), RuntimeStateError> {
+    let after = event_queue_usage_in_memory(state, session_handle)?;
+    if state.backpressured_sessions.contains(session_handle)
         && after.event_count < HOST_EVENT_LOW_WATER_EVENTS
         && after.byte_count < HOST_EVENT_LOW_WATER_BYTES
     {
@@ -2099,8 +2146,9 @@ fn drain_events_in_memory(
                 .with_revision(worker.revision() + 1)
                 .with_expected_command_sequence(worker.expected_command_sequence() + 1),
         );
+        state.backpressured_sessions.remove(session_handle);
     }
-    Ok(drained)
+    Ok(())
 }
 
 pub(crate) fn validate_worker_session(

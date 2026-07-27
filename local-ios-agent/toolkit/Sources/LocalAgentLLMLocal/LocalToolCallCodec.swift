@@ -73,3 +73,38 @@ package enum LocalToolCallCodec {
         LLMFailure(code: code, message: message, retryable: false)
     }
 }
+
+package func localContinuationInput(
+    _ input: AgentLLMInput,
+    pendingToolCalls: [NormalizedToolCall]
+) throws -> AgentLLMInput {
+    guard !pendingToolCalls.isEmpty else { return input }
+    let calls = try pendingToolCalls.map { call in
+        let arguments = try JSONDecoder().decode(
+            CanonicalJSONValue.self,
+            from: Data(call.argumentsJSON.utf8)
+        )
+        return try CanonicalJSONValue.object(entries: [
+            .init(name: "id", value: .string(call.callID)),
+            .init(name: "name", value: .string(call.name)),
+            .init(name: "arguments", value: arguments),
+        ])
+    }
+    let document = try CanonicalJSONValue.object(entries: [
+        .init(name: "calls", value: .array(calls)),
+    ])
+    let encoded = String(
+        decoding: try CanonicalDigestV1.canonicalize(document),
+        as: UTF8.self
+    )
+    var messages = input.messages
+    let insertion = messages.firstIndex { $0.role == .tool } ?? messages.endIndex
+    messages.insert(
+        LLMInputMessage(
+            role: .assistant,
+            content: [.text("<tool_calls>\(encoded)</tool_calls>")]
+        ),
+        at: insertion
+    )
+    return AgentLLMInput(inputID: input.inputID, messages: messages)
+}

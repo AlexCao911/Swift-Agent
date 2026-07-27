@@ -1012,7 +1012,7 @@ private func normalizedEvent(
             LLMEventPayload(failureCode: failure.code.rawValue)
         )
     case .cancelled:
-        return (.cancelled, LLMEventPayload())
+        return nil
     case let .sessionClosed(commandID, disposition):
         return (
             .sessionClosed,

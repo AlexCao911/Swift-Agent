@@ -29,8 +29,7 @@ use super::runtime_state::{
     is_protocol_failure, lifecycle_command, not_found, poisoned, protocol_failure_state,
     queues_inbound_event, reconciliation_conflict, transaction_failed, validate_ack,
     validate_command_for_worker, validate_transition, validate_worker_session, EventQueueUsage,
-    HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS, HOST_EVENT_MAX_BYTES,
-    HOST_EVENT_MAX_EVENTS,
+    HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS,
 };
 use super::{
     HostCommandOutboxRow, HostCommandOutboxStatus, PreparedHostRunCommit,
@@ -936,19 +935,31 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         event_queue_usage_sql(store.connection(), session_handle)
     }
 
-    fn drain_inbound_events(
+    fn record_event_backpressure(&self, session_handle: &str) -> Result<(), RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        if load_worker_by_session(store.connection(), session_handle)?.is_none() {
+            return Err(not_found());
+        }
+        store
+            .connection()
+            .execute(
+                "insert or ignore into host_llm_event_backpressure(session_handle) values (?1)",
+                params![session_handle],
+            )
+            .map_err(sqlite_error)?;
+        Ok(())
+    }
+
+    fn pending_inbound_events(
         &self,
         maximum: usize,
     ) -> Result<Vec<LLMEventEnvelope>, RuntimeStateError> {
         if maximum == 0 {
             return Ok(Vec::new());
         }
-        let mut store = self.inner.lock().map_err(|_| poisoned())?;
-        let transaction = store
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite_error)?;
-        let session_handle: Option<String> = transaction
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let session_handle: Option<String> = store
+            .connection()
             .query_row(
                 "select session_handle from host_llm_inbound_events
                  order by session_handle, cast(event_sequence as integer) limit 1",
@@ -958,60 +969,56 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             .optional()
             .map_err(sqlite_error)?;
         let Some(session_handle) = session_handle else {
-            transaction.commit().map_err(sqlite_error)?;
             return Ok(Vec::new());
         };
-        let before = event_queue_usage_sql(&transaction, &session_handle)?;
-        let rows = {
-            let mut statement = transaction
-                .prepare(
-                    "select event_sequence, record_json from host_llm_inbound_events
-                     where session_handle = ?1
-                     order by cast(event_sequence as integer) limit ?2",
-                )
-                .map_err(sqlite_error)?;
-            let rows = statement
-                .query_map(
-                    params![session_handle, i64::try_from(maximum).unwrap_or(i64::MAX)],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .map_err(sqlite_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_error)?;
-            rows
-        };
-        let mut drained = Vec::with_capacity(rows.len());
-        for (sequence, json) in rows {
-            transaction
-                .execute(
-                    "delete from host_llm_inbound_events
-                     where session_handle = ?1 and event_sequence = ?2",
-                    params![session_handle, sequence],
-                )
-                .map_err(sqlite_error)?;
-            drained.push(decode(&json)?);
+        let mut statement = store
+            .connection()
+            .prepare(
+                "select record_json from host_llm_inbound_events
+                 where session_handle = ?1
+                 order by cast(event_sequence as integer) limit ?2",
+            )
+            .map_err(sqlite_error)?;
+        let events = statement
+            .query_map(
+                params![session_handle, i64::try_from(maximum).unwrap_or(i64::MAX)],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(sqlite_error)?
+            .map(|row| row.map_err(sqlite_error).and_then(|json| decode(&json)))
+            .collect();
+        events
+    }
+
+    fn acknowledge_inbound_event_projection(
+        &self,
+        event: &LLMEventEnvelope,
+    ) -> Result<(), RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let stored: String = transaction
+            .query_row(
+                "select record_json from host_llm_inbound_events
+                 where session_handle = ?1 and event_sequence = ?2",
+                params![event.session_handle(), event.event_sequence().to_string()],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error)?;
+        if decode::<LLMEventEnvelope>(&stored)? != *event {
+            return Err(conflict());
         }
-        let after = event_queue_usage_sql(&transaction, &session_handle)?;
-        if (before.event_count >= HOST_EVENT_MAX_EVENTS
-            || before.byte_count >= HOST_EVENT_MAX_BYTES)
-            && after.event_count < HOST_EVENT_LOW_WATER_EVENTS
-            && after.byte_count < HOST_EVENT_LOW_WATER_BYTES
-        {
-            let worker =
-                load_worker_by_session(&transaction, &session_handle)?.ok_or_else(not_found)?;
-            let command = lifecycle_command(
-                &worker,
-                crate::llm_contracts::HostCommandKind::CapacityAvailable,
-            )?;
-            insert_outbox(&transaction, &HostCommandOutboxRow::pending(command))?;
-            let next = worker
-                .clone()
-                .with_revision(worker.revision() + 1)
-                .with_expected_command_sequence(worker.expected_command_sequence() + 1);
-            update_worker(&transaction, worker.revision(), &next)?;
-        }
-        transaction.commit().map_err(sqlite_error)?;
-        Ok(drained)
+        transaction
+            .execute(
+                "delete from host_llm_inbound_events
+                 where session_handle = ?1 and event_sequence = ?2",
+                params![event.session_handle(), event.event_sequence().to_string()],
+            )
+            .map_err(sqlite_error)?;
+        signal_sql_capacity_if_needed(&transaction, event.session_handle())?;
+        transaction.commit().map_err(sqlite_error)
     }
 
     fn turn_accumulator_events(
@@ -1708,6 +1715,9 @@ fn initialize_connection(connection: &Connection) -> Result<(), RuntimeStateErro
                byte_count text not null, record_json text not null,
                primary key(session_handle, event_sequence)
              );
+             create table if not exists host_llm_event_backpressure (
+               session_handle text primary key
+             );
              create table if not exists host_llm_turn_accumulators (
                session_handle text not null, generation_turn_id text not null,
                record_json text not null,
@@ -2148,6 +2158,45 @@ fn event_queue_usage_sql(
         event_count: usize::try_from(event_count).unwrap_or(usize::MAX),
         byte_count: usize::try_from(byte_count).unwrap_or(usize::MAX),
     })
+}
+
+fn signal_sql_capacity_if_needed(
+    transaction: &Transaction<'_>,
+    session_handle: &str,
+) -> Result<(), RuntimeStateError> {
+    let after = event_queue_usage_sql(transaction, session_handle)?;
+    let backpressured = transaction
+        .query_row(
+            "select 1 from host_llm_event_backpressure where session_handle = ?1",
+            params![session_handle],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(sqlite_error)?
+        .is_some();
+    if backpressured
+        && after.event_count < HOST_EVENT_LOW_WATER_EVENTS
+        && after.byte_count < HOST_EVENT_LOW_WATER_BYTES
+    {
+        let worker = load_worker_by_session(transaction, session_handle)?.ok_or_else(not_found)?;
+        let command = lifecycle_command(
+            &worker,
+            crate::llm_contracts::HostCommandKind::CapacityAvailable,
+        )?;
+        insert_outbox(transaction, &HostCommandOutboxRow::pending(command))?;
+        let next = worker
+            .clone()
+            .with_revision(worker.revision() + 1)
+            .with_expected_command_sequence(worker.expected_command_sequence() + 1);
+        update_worker(transaction, worker.revision(), &next)?;
+        transaction
+            .execute(
+                "delete from host_llm_event_backpressure where session_handle = ?1",
+                params![session_handle],
+            )
+            .map_err(sqlite_error)?;
+    }
+    Ok(())
 }
 
 fn insert_session(

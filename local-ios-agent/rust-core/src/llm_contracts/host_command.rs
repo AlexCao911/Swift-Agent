@@ -101,6 +101,72 @@ impl HostCommandPayload {
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
         digest("host-command-payload:v1", self)
     }
+
+    pub fn agent_input_digest(&self) -> Result<String, HostContractError> {
+        if !self.attachments.is_empty() {
+            return Err(HostContractError::new(
+                "llm.contract.attachment_resolution_unavailable",
+            ));
+        }
+        let canonical_tool_schema: Value = serde_json::from_str(&self.tool_schema_json)
+            .map_err(|_| HostContractError::new("llm.contract.tool_schema_invalid"))?;
+        let messages = self
+            .messages
+            .iter()
+            .map(|message| {
+                serde_json::json!({
+                    "content": message.content.iter().map(|content| {
+                        if content.kind == "text" {
+                            serde_json::json!({
+                                "text": content.text,
+                                "type": "text",
+                            })
+                        } else {
+                            serde_json::json!({
+                                "attachment_id": content.attachment_id,
+                                "media_type": content.media_type,
+                                "modality": content.modality,
+                                "type": "attachment",
+                            })
+                        }
+                    }).collect::<Vec<_>>(),
+                    "role": if message.role == "summary" {
+                        "system"
+                    } else {
+                        message.role.as_str()
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let tool_results = self
+            .tool_results
+            .iter()
+            .map(|result| {
+                let mut data_classes = result.data_classes.clone();
+                data_classes.sort();
+                serde_json::json!({
+                    "call_id": result.call_id,
+                    "data_classes": data_classes,
+                    "highest_sensitivity": result.highest_sensitivity,
+                    "is_error": result.is_error,
+                    "result": result.result,
+                    "tool_name": result.tool_name,
+                })
+            })
+            .collect::<Vec<_>>();
+        digest(
+            "agent-input:v1",
+            &serde_json::json!({
+                "canonical_tool_schema": canonical_tool_schema,
+                "input_id": self.model_input_id,
+                "messages": messages,
+                "provider_required_semantic_history": self.semantic_history,
+                "resolved_attachments": [],
+                "schema_version": "1",
+                "tool_results": tool_results,
+            }),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

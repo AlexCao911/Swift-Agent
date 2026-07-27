@@ -13,7 +13,9 @@ fn repository_root() -> PathBuf {
 
 fn source_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     fn visit(path: &Path, extensions: &[&str], output: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(path) else { return };
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -61,7 +63,10 @@ fn rust_agent_core_does_not_gain_swift_owned_concrete_model_details() {
     ];
     let mut findings = Vec::new();
     for path in source_files(&rust_root, &["rs"]) {
-        if legacy_prefixes.iter().any(|prefix| path.starts_with(prefix)) {
+        if legacy_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
             continue;
         }
         let source = fs::read_to_string(&path).expect("Rust source must be readable");
@@ -78,7 +83,8 @@ fn rust_agent_core_does_not_gain_swift_owned_concrete_model_details() {
     );
 
     let resolver = fs::read_to_string(rust_root.join("run_snapshot/resolver.rs")).unwrap();
-    let preparation = fs::read_to_string(rust_root.join("run_snapshot/snapshot_service.rs")).unwrap();
+    let preparation =
+        fs::read_to_string(rust_root.join("run_snapshot/snapshot_service.rs")).unwrap();
     // Phase 4 keeps the legacy resolver as a fail-closed endpoint for V2.
     assert!(resolver.contains("execution.host_slot_v2_requires_preparation"));
     assert!(!preparation.contains("execution.host_slot_v2_not_runnable"));
@@ -107,18 +113,15 @@ fn swift_native_path_target_and_epoch_ownership_are_single_source() {
         )]
     );
 
-    let target = fs::read_to_string(
-        root.join("toolkit/Sources/LocalAgentLLMCore/LLMTarget.swift"),
-    )
-    .unwrap();
+    let target =
+        fs::read_to_string(root.join("toolkit/Sources/LocalAgentLLMCore/LLMTarget.swift")).unwrap();
     let configuration = fs::read_to_string(
         root.join("toolkit/Sources/LocalAgentLLMCore/AgentHostConfiguration.swift"),
     )
     .unwrap();
-    let runtime = fs::read_to_string(
-        root.join("toolkit/Sources/LocalAgentLLMLocal/LocalModelRuntime.swift"),
-    )
-    .unwrap();
+    let runtime =
+        fs::read_to_string(root.join("toolkit/Sources/LocalAgentLLMLocal/LocalModelRuntime.swift"))
+            .unwrap();
     assert!(target.contains("case local(installationID: String)"));
     assert!(!configuration.contains("modelPath"));
     assert!(!configuration.contains("artifactPaths"));
@@ -153,10 +156,9 @@ fn swift_native_path_target_and_epoch_ownership_are_single_source() {
         )]
     );
     assert!(!runtime.contains("HostProcessEpoch.generate"));
-    let subsystem = fs::read_to_string(
-        root.join("toolkit/Sources/LocalAgentLLMLocal/LocalLLMSubsystem.swift"),
-    )
-    .unwrap();
+    let subsystem =
+        fs::read_to_string(root.join("toolkit/Sources/LocalAgentLLMLocal/LocalLLMSubsystem.swift"))
+            .unwrap();
     assert!(!subsystem.contains("HostProcessEpoch.generate"));
 }
 
@@ -207,10 +209,9 @@ fn cpp_and_artifact_link_ownership_remain_provider_neutral() {
 #[test]
 fn release_catalog_and_phase_two_verification_entrypoints_are_frozen() {
     let root = repository_root();
-    let release: serde_json::Value = serde_json::from_slice(
-        &fs::read(root.join("inference/release-engines.json")).unwrap(),
-    )
-    .unwrap();
+    let release: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("inference/release-engines.json")).unwrap())
+            .unwrap();
     let release_ids = release["engine_ids"]
         .as_array()
         .unwrap()
@@ -245,14 +246,16 @@ fn release_catalog_and_phase_two_verification_entrypoints_are_frozen() {
         "test-local-inference-app-link.sh",
         "--require-catalog-resources",
     ] {
-        assert!(runner.contains(command), "Phase 2 runner is missing {command}");
+        assert!(
+            runner.contains(command),
+            "Phase 2 runner is missing {command}"
+        );
     }
     assert!(!runner.contains("curl "));
 
-    let project = fs::read_to_string(
-        root.join("apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj"),
-    )
-    .unwrap();
+    let project =
+        fs::read_to_string(root.join("apps/LocalAgentApp/LocalAgentApp.xcodeproj/project.pbxproj"))
+            .unwrap();
     assert!(project.contains("LocalInferenceReleaseSmokeTests.swift in Sources"));
     let scheme = fs::read_to_string(root.join(
         "apps/LocalAgentApp/LocalAgentApp.xcodeproj/xcshareddata/xcschemes/LocalAgentApp.xcscheme",
@@ -265,16 +268,16 @@ fn release_catalog_and_phase_two_verification_entrypoints_are_frozen() {
 
     let release_smoke =
         fs::read_to_string(root.join("scripts/run-llm-phase-2-release-smoke.sh")).unwrap();
-    assert!(release_smoke.contains(
-        "-only-testing:LocalAgentAppTests/LocalInferenceReleaseSmokeTests"
-    ));
+    assert!(
+        release_smoke.contains("-only-testing:LocalAgentAppTests/LocalInferenceReleaseSmokeTests")
+    );
     assert!(release_smoke.contains("totalTestCount"));
     assert!(release_smoke.contains("ENABLE_TESTABILITY=YES"));
     assert!(release_smoke.contains("SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG"));
 
-    let design = fs::read_to_string(root.join(
-        "docs/superpowers/specs/2026-07-10-swift-llm-system-design.md",
-    ))
+    let design = fs::read_to_string(
+        root.join("docs/superpowers/specs/2026-07-10-swift-llm-system-design.md"),
+    )
     .unwrap();
     assert!(design.contains("Phase 2 implementation evidence (2026-07-15)"));
     for future in ["Phase 3", "Phase 4", "Phase 5"] {

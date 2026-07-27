@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -9,7 +12,9 @@ fn root() -> PathBuf {
 
 fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     fn visit(path: &Path, extensions: &[&str], output: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(path) else { return };
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -20,7 +25,9 @@ fn files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
                     continue;
                 }
                 visit(&path, extensions, output);
-            } else if path.extension().and_then(|value| value.to_str())
+            } else if path
+                .extension()
+                .and_then(|value| value.to_str())
                 .is_some_and(|value| extensions.contains(&value))
             {
                 output.push(path);
@@ -38,9 +45,21 @@ fn llm_phase_three_architecture_keeps_rust_v2_provider_neutral() {
     let root = root();
     let v2 = root.join("rust-core/src/llm_contracts");
     let forbidden = [
-        "ProviderProfile", "provider_profile", "BaseURL", "base_url", "APIKey",
-        "api_key", "OpenAI", "Anthropic", "Gemini", "Grok", "DeepSeek",
-        "MiniMax", "GLM", "CloudProviderAdapter", "URLSession",
+        "ProviderProfile",
+        "provider_profile",
+        "BaseURL",
+        "base_url",
+        "APIKey",
+        "api_key",
+        "OpenAI",
+        "Anthropic",
+        "Gemini",
+        "Grok",
+        "DeepSeek",
+        "MiniMax",
+        "GLM",
+        "CloudProviderAdapter",
+        "URLSession",
     ];
     let mut findings = Vec::new();
     for path in files(&v2, &["rs"]) {
@@ -59,9 +78,13 @@ fn llm_phase_three_architecture_keeps_rust_v2_provider_neutral() {
 
     let allowlist = fs::read_to_string(
         root.join("rust-core/tests/fixtures/architecture/legacy_llm_allowlist.txt"),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(
-        allowlist.lines().filter(|line| !line.starts_with('#') && !line.is_empty()).count(),
+        allowlist
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .count(),
         16,
         "Phase 3 must not grow the temporary legacy Rust LLM allowlist"
     );
@@ -73,7 +96,10 @@ fn llm_phase_three_architecture_keeps_rust_v2_provider_neutral() {
 #[test]
 fn llm_phase_three_architecture_freezes_swift_credential_egress_and_transport_boundaries() {
     let root = root();
-    let cloud = root.join(format!("toolkit/Sources/{}", ["LocalAgent", "LLMCloud"].concat()));
+    let cloud = root.join(format!(
+        "toolkit/Sources/{}",
+        ["LocalAgent", "LLMCloud"].concat()
+    ));
     let transport_path = cloud.join("CloudHTTPTransport.swift");
     let vault_path = cloud.join("SecurityCredentialVault.swift");
     let mut direct_session = Vec::new();
@@ -86,17 +112,38 @@ fn llm_phase_three_architecture_freezes_swift_credential_egress_and_transport_bo
             direct_session.push(path.strip_prefix(&root).unwrap().display().to_string());
         }
         if path != vault_path
-            && ["SecItemAdd", "SecItemUpdate", "SecItemCopyMatching", "SecItemDelete"]
-                .iter().any(|token| source.contains(token))
+            && [
+                "SecItemAdd",
+                "SecItemUpdate",
+                "SecItemCopyMatching",
+                "SecItemDelete",
+            ]
+            .iter()
+            .any(|token| source.contains(token))
         {
             direct_keychain.push(path.strip_prefix(&root).unwrap().display().to_string());
         }
-        for field in ["public let apiKey", "public var apiKey", "public let api_key", "public var api_key"] {
-            assert!(!source.contains(field), "public/Codable API-key field found in {}", path.display());
+        for field in [
+            "public let apiKey",
+            "public var apiKey",
+            "public let api_key",
+            "public var api_key",
+        ] {
+            assert!(
+                !source.contains(field),
+                "public/Codable API-key field found in {}",
+                path.display()
+            );
         }
     }
-    assert!(direct_session.is_empty(), "direct URLSession users: {direct_session:?}");
-    assert!(direct_keychain.is_empty(), "direct Keychain users: {direct_keychain:?}");
+    assert!(
+        direct_session.is_empty(),
+        "direct URLSession users: {direct_session:?}"
+    );
+    assert!(
+        direct_keychain.is_empty(),
+        "direct Keychain users: {direct_keychain:?}"
+    );
 
     let transport = fs::read_to_string(&transport_path).unwrap();
     assert!(transport.contains("_ request: AuthorizedCloudHTTPRequest"));
@@ -116,8 +163,17 @@ fn llm_phase_three_architecture_freezes_swift_credential_egress_and_transport_bo
 fn llm_phase_three_architecture_keeps_cpp_cloud_free() {
     let root = root();
     let forbidden = [
-        "CloudProvider", "ProviderProfile", "URLSession", "Keychain", "APIKey",
-        "api_key", "OpenAI", "Anthropic", "Gemini", "DeepSeek", "MiniMax",
+        "CloudProvider",
+        "ProviderProfile",
+        "URLSession",
+        "Keychain",
+        "APIKey",
+        "api_key",
+        "OpenAI",
+        "Anthropic",
+        "Gemini",
+        "DeepSeek",
+        "MiniMax",
     ];
     let mut findings = Vec::new();
     for directory in ["inference/c_api", "inference/core", "inference/backends"] {
@@ -130,7 +186,11 @@ fn llm_phase_three_architecture_keeps_cpp_cloud_free() {
             }
         }
     }
-    assert!(findings.is_empty(), "C++ must remain local-inference-only:\n{}", findings.join("\n"));
+    assert!(
+        findings.is_empty(),
+        "C++ must remain local-inference-only:\n{}",
+        findings.join("\n")
+    );
 }
 
 #[test]
@@ -149,16 +209,18 @@ fn llm_phase_three_architecture_requires_all_provider_fixtures_and_one_runner() 
         ("MiniMaxAdapterTests.swift", "minimax"),
         ("GLMAdapterTests.swift", "glm"),
     ] {
-        assert!(tests.join(suite).is_file(), "missing provider adapter suite {suite}");
+        assert!(
+            tests.join(suite).is_file(),
+            "missing provider adapter suite {suite}"
+        );
         let count = files(&tests.join("Fixtures").join(fixture), &["sse", "json"]).len();
         assert!(count > 0, "provider fixture directory {fixture} is empty");
     }
-    let preset = fs::read_to_string(
-        root.join(format!(
-            "toolkit/Sources/{}/ProviderPreset.swift",
-            ["LocalAgent", "LLMCloud"].concat()
-        )),
-    ).unwrap();
+    let preset = fs::read_to_string(root.join(format!(
+        "toolkit/Sources/{}/ProviderPreset.swift",
+        ["LocalAgent", "LLMCloud"].concat()
+    )))
+    .unwrap();
     assert!(preset.contains("public static let shipped"));
     let runtime_tests = fs::read_to_string(tests.join("CloudLLMRuntimeTests.swift")).unwrap();
     assert!(runtime_tests.contains("adapterIDs.count == 7"));
@@ -166,13 +228,25 @@ fn llm_phase_three_architecture_requires_all_provider_fixtures_and_one_runner() 
     let runner = fs::read_to_string(root.join("scripts/run-llm-phase-3-contracts.sh"))
         .expect("Phase 3 deterministic runner is missing");
     for required in [
-        "run-llm-phase-2-contracts.sh", "llm_phase_three_architecture",
-        "swift", "test", "CloudCredentialKeychainTests",
-        "LOCAL_AGENT_PHASE3_SIMULATOR_UDID", "platform=iOS Simulator,id=$SIMULATOR_UDID",
-        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY",
-        "DEEPSEEK_API_KEY", "MINIMAX_API_KEY", "ZHIPUAI_API_KEY",
+        "run-llm-phase-2-contracts.sh",
+        "llm_phase_three_architecture",
+        "swift",
+        "test",
+        "CloudCredentialKeychainTests",
+        "LOCAL_AGENT_PHASE3_SIMULATOR_UDID",
+        "platform=iOS Simulator,id=$SIMULATOR_UDID",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MINIMAX_API_KEY",
+        "ZHIPUAI_API_KEY",
     ] {
-        assert!(runner.contains(required), "Phase 3 runner is missing {required}");
+        assert!(
+            runner.contains(required),
+            "Phase 3 runner is missing {required}"
+        );
     }
     assert!(!runner.contains("name=iPhone 17 Pro"));
     assert!(!runner.contains("run-llm-phase-3-live-smoke.sh"));
@@ -186,7 +260,8 @@ fn llm_phase_three_architecture_requires_all_provider_fixtures_and_one_runner() 
     );
     let design = fs::read_to_string(
         root.join("docs/superpowers/specs/2026-07-10-swift-llm-system-design.md"),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(design.contains("Phase 3 implementation evidence (2026-07-18)"));
     assert!(design.contains("Phase 4"));
     assert!(design.contains("Phase 5"));

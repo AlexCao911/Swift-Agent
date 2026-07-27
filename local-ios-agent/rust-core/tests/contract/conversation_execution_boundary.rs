@@ -6,9 +6,9 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{AgentError, EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::execution::{
-    CompletedRunRegistry, ExecutionBudgets, ExecutionEventLog, ExecutionModelClient,
-    ExecutionModelTurn, ExecutionPlan, ExecutionPlanner, ExecutionService, ExecutionToolCall,
-    ExecutionToolExecutor, ExecutionToolOutcome, ExecutionWorkerDependencies,
+    CompletedRunRecord, CompletedRunRegistry, ExecutionBudgets, ExecutionEventLog,
+    ExecutionModelClient, ExecutionModelTurn, ExecutionPlan, ExecutionPlanner, ExecutionService,
+    ExecutionToolCall, ExecutionToolExecutor, ExecutionToolOutcome, ExecutionWorkerDependencies,
     InferenceSettingsService, RunLifecycleService, RuntimeOptions, StartExecutionRequest,
 };
 use local_ios_agent_runtime::run_snapshot::RunSnapshotService;
@@ -633,6 +633,42 @@ fn conversation_assistant_commit_is_idempotent_after_execution_completion() {
 }
 
 #[test]
+fn conversation_assistant_commit_recovers_a_durable_completion_after_restart() {
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_commit_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    let recovered_frame = frame_ref.clone();
+    let service = ConversationCommitService::with_recovery(
+        CompletedRunRegistry::default(),
+        std::sync::Arc::new(move |run_id, final_message_id| {
+            Ok(Some(CompletedRunRecord::restored(
+                run_id,
+                final_message_id,
+                recovered_frame.clone(),
+                "persisted answer",
+            )))
+        }),
+    );
+
+    let committed = service
+        .commit_assistant_result_with_persist(
+            "run_1",
+            "assistant:run_1:turn_1",
+            &frame_ref,
+            |completed| {
+                assert_eq!(completed.final_text(), "persisted answer");
+                Ok("assistant.persisted".into())
+            },
+        )
+        .unwrap();
+
+    assert_eq!(committed.assistant_message_id(), "assistant.persisted");
+}
+
+#[test]
 fn conversation_assistant_commit_rejects_mismatched_frame_ref() {
     let completed_runs = CompletedRunRegistry::default();
     let service = ConversationCommitService::new(completed_runs.clone());
@@ -655,6 +691,62 @@ fn conversation_assistant_commit_rejects_mismatched_frame_ref() {
         .unwrap_err();
 
     assert_eq!(error.code(), "conversation_commit.frame_ref_mismatch");
+}
+
+#[test]
+fn host_completion_projection_does_not_duplicate_the_durable_terminal_event() {
+    let frames = InMemoryConversationFrameRepository::default();
+    let event_log = ExecutionEventLog::default();
+    let completed_runs = CompletedRunRegistry::default();
+    let service = ExecutionService::with_runtime_parts(
+        frames,
+        RunSnapshotService::fixture(),
+        ExecutionPlanner::default(),
+        event_log.clone(),
+        completed_runs.clone(),
+        fixture_worker_dependencies(),
+    );
+    let frame_ref = ConversationRunFrameRef::new(
+        ConversationFrameId::new("frame_host_1"),
+        SessionId("session_1".into()),
+        EntryId("branch_head_1".into()),
+        EntryId("user_turn_1".into()),
+    );
+    event_log.append_with_payload(
+        "run-host",
+        "run.completed",
+        r#"{"finish_reason":"stop","message_id":"assistant:run-host:turn-1"}"#,
+    );
+
+    service
+        .record_external_completed(
+            "run-host",
+            frame_ref,
+            "host-terminal-1",
+            "assistant:run-host:turn-1",
+            "answer",
+            "stop",
+        )
+        .unwrap();
+
+    let events = event_log.replay("run-host", None);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.code() == "run.completed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.code() == "assistant_message_completed")
+            .count(),
+        1
+    );
+    assert!(completed_runs
+        .get("run-host", "assistant:run-host:turn-1")
+        .is_some());
 }
 
 #[test]

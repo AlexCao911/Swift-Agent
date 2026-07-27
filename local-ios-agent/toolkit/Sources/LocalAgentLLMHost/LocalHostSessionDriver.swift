@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import LocalAgentLLMContracts
 import LocalAgentLLMCore
@@ -152,7 +153,11 @@ package struct LocalHostSessionDriver: LLMHostSessionDriver {
             case .resume:
                 sequence = try await runtime.resumeGeneration(
                     sessionID: sessionID,
-                    input: decoded.input,
+                    input: try localResumeInput(
+                        decoded.input,
+                        semanticHistory: decoded.semanticHistoryMessages,
+                        toolResults: decoded.toolResults
+                    ),
                     attachments: [],
                     toolSchema: decoded.toolSchema
                 )
@@ -171,6 +176,35 @@ package struct LocalHostSessionDriver: LLMHostSessionDriver {
     package func close() async throws {
         try await runtime.closeSession(sessionID: sessionID)
     }
+}
+
+package func localResumeInput(
+    _ input: AgentLLMInput,
+    semanticHistory: [LLMInputMessage],
+    toolResults: [NormalizedToolResult]
+) throws -> AgentLLMInput {
+    let messages = try toolResults.map { result in
+        let document = try CanonicalJSONValue.object(entries: [
+            .init(name: "call_id", value: .string(result.callID)),
+            .init(name: "is_error", value: .bool(result.isError)),
+            .init(name: "result", value: result.result),
+            .init(name: "tool_name", value: .string(result.toolName)),
+        ])
+        return LLMInputMessage(
+            role: .tool,
+            content: [
+                .text(String(
+                    decoding: try CanonicalDigestV1.canonicalize(document),
+                    as: UTF8.self
+                )),
+            ]
+        )
+    }
+    return AgentLLMInput(
+        inputID: input.inputID,
+        messages: (semanticHistory.isEmpty ? input.messages : semanticHistory)
+            + messages
+    )
 }
 
 private func stream(

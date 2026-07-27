@@ -77,6 +77,8 @@ struct LLMHostGenerationTests {
         await driver.confirmCancel()
         await eventually { await sink.eventKinds().last == .cancelled }
         #expect(await driver.cancelCount() == 1)
+        #expect(await sink.eventKinds().filter { $0 == .cancelled }.count == 1)
+        #expect(await sink.events().last?.payload.commandID == "cancel-1")
 
         let close = try lifecycleCommand(
             from: harness.command,
@@ -99,6 +101,42 @@ struct LLMHostGenerationTests {
             ) == .closed
         }
         #expect(await driver.closeCount() == 1)
+    }
+
+    @Test
+    func localResumeInputCarriesSemanticHistoryAndTheExactToolResult() throws {
+        let input = AgentLLMInput(
+            inputID: "turn-2",
+            messages: [LLMInputMessage(role: .user, content: [.text("current")])]
+        )
+        let semanticHistory = [
+            LLMInputMessage(role: .system, content: [.text("policy")]),
+            LLMInputMessage(role: .user, content: [.text("hello")]),
+        ]
+        let result = NormalizedToolResult(
+            callID: "call-1",
+            toolName: "contacts.search",
+            result: try .object(entries: [
+                .init(name: "name", value: .string("Ada")),
+            ]),
+            isError: false,
+            dataClasses: [.contacts],
+            highestSensitivity: .sensitive
+        )
+
+        let resumed = try localResumeInput(
+            input,
+            semanticHistory: semanticHistory,
+            toolResults: [result]
+        )
+
+        #expect(resumed.messages.map(\.role) == [.system, .user, .tool])
+        #expect(resumed.messages.last?.role == .tool)
+        guard case let .text(text)? = resumed.messages.last?.content.only else {
+            Issue.record("tool result was not encoded as local model text")
+            return
+        }
+        #expect(text == #"{"call_id":"call-1","is_error":false,"result":{"name":"Ada"},"tool_name":"contacts.search"}"#)
     }
 }
 
@@ -238,6 +276,7 @@ private actor LifecycleGenerationDriver: LLMHostSessionDriver {
     func cancel() async throws {
         cancelCalls += 1
         await withCheckedContinuation { cancelConfirmation = $0 }
+        stream?.yield(.cancelled)
         stream?.finish()
     }
 

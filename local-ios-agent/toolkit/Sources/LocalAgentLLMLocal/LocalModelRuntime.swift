@@ -76,6 +76,7 @@ public actor LocalModelRuntime {
         let concreteOptions: [String: CanonicalJSONValue]
         var storeState: PreparedLocalSessionState
         var generation: ActiveGeneration?
+        var pendingToolCalls: [NormalizedToolCall]
     }
 
     private struct Reservation {
@@ -399,7 +400,8 @@ public actor LocalModelRuntime {
             prepared: prepared,
             concreteOptions: reservation.concreteOptions,
             storeState: .prepared,
-            generation: nil
+            generation: nil,
+            pendingToolCalls: []
         )
         self.reservation = nil
         state = .prepared
@@ -451,7 +453,7 @@ public actor LocalModelRuntime {
         attachments: [LocalResolvedAttachment],
         toolSchema: CanonicalJSONValue?
     ) async throws -> LLMBackendEventSequence {
-        guard let active,
+        guard var active,
               active.prepared.sessionID == sessionID,
               active.storeState == .awaitingToolResult,
               active.generation == nil,
@@ -459,9 +461,14 @@ public actor LocalModelRuntime {
         else {
             throw failure("runtime.local_resume_state_invalid", "local session is not awaiting tool results")
         }
+        let continuation = try localContinuationInput(
+            input,
+            pendingToolCalls: active.pendingToolCalls
+        )
+        active.pendingToolCalls = []
         return try beginGeneration(
             session: active,
-            input: input,
+            input: continuation,
             attachments: attachments,
             toolSchema: toolSchema
         )
@@ -603,7 +610,7 @@ public actor LocalModelRuntime {
             try generation.native.release()
             active.generation = nil
             switch terminal {
-            case .completed(.toolCallsReady):
+            case let .completed(.toolCallsReady, toolCalls):
                 if active.storeState == .prepared {
                     try store.transitionPreparedLocalSession(
                         sessionID: sessionID,
@@ -612,8 +619,9 @@ public actor LocalModelRuntime {
                     )
                 }
                 active.storeState = .awaitingToolResult
+                active.pendingToolCalls = toolCalls
                 state = .awaitingToolResult
-            case .completed(.finalResponse), .cancelled, .failed:
+            case .completed(.finalResponse, _), .cancelled, .failed:
                 try transitionToTerminal(&active)
                 state = .sessionTerminal
             }

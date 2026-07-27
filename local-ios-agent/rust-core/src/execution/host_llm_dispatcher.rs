@@ -316,6 +316,45 @@ impl HostLLMDispatcherRuntime {
         self.wake();
         Ok(result)
     }
+
+    pub fn cancel_run(&self, run_id: &str) -> Result<bool, RuntimeStateError> {
+        let cancelled =
+            super::HostLLMWorkerService::new(self.shared.repository.clone()).cancel_run(run_id)?;
+        if cancelled {
+            self.wake();
+        }
+        Ok(cancelled)
+    }
+
+    pub fn resume_tool_batch(
+        &self,
+        run_id: &str,
+        result: crate::llm_contracts::HostToolResult,
+    ) -> Result<(), RuntimeStateError> {
+        let worker = match &self.shared.tools {
+            Some(tools) => super::HostLLMWorkerService::with_tools(
+                self.shared.repository.clone(),
+                tools.clone(),
+            ),
+            None => super::HostLLMWorkerService::new(self.shared.repository.clone()),
+        };
+        worker.resume_tool_batch(run_id, result)?;
+        self.wake();
+        Ok(())
+    }
+
+    pub fn reject_tool_batch(&self, run_id: &str, message: &str) -> Result<(), RuntimeStateError> {
+        let worker = match &self.shared.tools {
+            Some(tools) => super::HostLLMWorkerService::with_tools(
+                self.shared.repository.clone(),
+                tools.clone(),
+            ),
+            None => super::HostLLMWorkerService::new(self.shared.repository.clone()),
+        };
+        worker.reject_tool_batch(run_id, message)?;
+        self.wake();
+        Ok(())
+    }
 }
 
 impl Drop for HostLLMDispatcherRuntime {

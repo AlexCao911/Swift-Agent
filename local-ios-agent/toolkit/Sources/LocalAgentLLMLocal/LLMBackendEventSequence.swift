@@ -1,7 +1,10 @@
 import LocalAgentLLMContracts
 
 package enum LocalGenerationTerminal: Sendable {
-    case completed(LLMGenerationOutcome)
+    case completed(
+        LLMGenerationOutcome,
+        toolCalls: [NormalizedToolCall]
+    )
     case cancelled
     case failed
 }
@@ -122,7 +125,10 @@ private actor LocalBackendEventIteratorState {
             }
             pending.append(.generationCompleted(decoded.completion))
             ended = true
-            try await terminal(.completed(.toolCallsReady))
+            try await terminal(.completed(
+                .toolCallsReady,
+                toolCalls: decoded.calls
+            ))
             return
         }
 
@@ -135,6 +141,6 @@ private actor LocalBackendEventIteratorState {
             finishReason: finishReason
         )))
         ended = true
-        try await terminal(.completed(.finalResponse))
+        try await terminal(.completed(.finalResponse, toolCalls: []))
     }
 }

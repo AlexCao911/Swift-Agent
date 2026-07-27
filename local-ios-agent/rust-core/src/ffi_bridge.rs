@@ -31,18 +31,19 @@ use crate::core::{
     ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
 };
 use crate::execution::{
-    CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionModelClient,
-    ExecutionModelTurn, ExecutionPlanner, ExecutionService, ExecutionStartError, ExecutionToolCall,
-    ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
-    ExecutionWorkerDependencies, HostLLMDispatcherConfig, HostLLMDispatcherRuntime,
-    HostToolBatchExecutor, LocalAgentLLMHostVTable, RunHandle, RuntimeOptions,
-    StartExecutionRequest,
+    CompletedRunRecord, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog,
+    ExecutionModelClient, ExecutionModelTurn, ExecutionPlanner, ExecutionService,
+    ExecutionStartError, ExecutionToolCall, ExecutionToolExecutor, ExecutionToolObservation,
+    ExecutionToolOutcome, ExecutionWorkerDependencies, HostLLMDispatcherConfig,
+    HostLLMDispatcherRuntime, HostToolBatchExecutor, LocalAgentLLMHostVTable, RunHandle,
+    RuntimeOptions, StartExecutionRequest,
 };
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
-    HostBindingSubjectCatalog, HostCommandAcknowledgement, LLMBindingSchema, LLMEventEnvelope,
-    PackageBindingPreparation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
-    PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
+    HostBindingSubjectCatalog, HostCommandAcknowledgement, HostToolResult, LLMBindingSchema,
+    LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult, PackageBindingPreparation,
+    PreparationAbortReason, PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
+    PreparedSessionRegistration, ProfilePublishPreparation,
 };
 use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::run_snapshot::{
@@ -70,6 +71,10 @@ fn execution_start_agent_error(error: ExecutionStartError) -> AgentError {
 }
 
 fn host_binding_agent_error(error: crate::llm_contracts::HostBindingError) -> AgentError {
+    AgentError::Storage(format!("{}: {error}", error.code()))
+}
+
+fn runtime_state_agent_error(error: crate::storage::RuntimeStateError) -> AgentError {
     AgentError::Storage(format!("{}: {error}", error.code()))
 }
 
@@ -267,6 +272,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     host_binding: AgentHostBindingService,
     run_preparation: RunPreparationService,
     host_llm_dispatcher: HostLLMDispatcherRuntime,
+    runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     ffi_tainted: AtomicBool,
 }
 
@@ -317,6 +323,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
             execution_tools,
         );
+        let completion_event_log = event_log.clone();
         let execution = ExecutionService::with_runtime_parts_and_agent_os_state(
             frames.clone(),
             snapshot_service.clone(),
@@ -341,15 +348,26 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             host_process_epoch,
             snapshot_service,
-            runtime_state,
+            runtime_state.clone(),
         );
         let conversation = ConversationService::new(frames.clone(), branch_reader);
-        let conversation_commits = ConversationCommitService::new(completed_runs);
+        let completion_runtime_state = runtime_state.clone();
+        let conversation_commits = ConversationCommitService::with_recovery(
+            completed_runs,
+            Arc::new(move |run_id, final_message_id| {
+                recover_host_completed_run(
+                    completion_runtime_state.as_ref(),
+                    &completion_event_log,
+                    run_id,
+                    final_message_id,
+                )
+            }),
+        );
         let host_binding = AgentHostBindingService::new(
             agent_os_state.clone(),
             HostBindingSubjectCatalog::new(app_services.profile_repository()),
         );
-        Ok(Self {
+        let bridge = Self {
             runtime,
             cancellations,
             debug_archives: Mutex::new(BTreeMap::new()),
@@ -362,8 +380,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             host_binding,
             run_preparation,
             host_llm_dispatcher,
+            runtime_state,
             ffi_tainted: AtomicBool::new(false),
-        })
+        };
+        bridge.consume_host_events()?;
+        Ok(bridge)
     }
 
     fn mark_ffi_tainted(&self) {
@@ -748,7 +769,158 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .host_llm_dispatcher
             .submit_event(&event)
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        if matches!(
+            receipt,
+            LLMEventSubmissionResult::Accepted | LLMEventSubmissionResult::Duplicate
+        ) {
+            self.consume_host_events()?;
+        }
         to_json(&receipt)
+    }
+
+    fn consume_host_events(&self) -> Result<(), AgentError> {
+        for event in self
+            .runtime_state
+            .pending_inbound_events(usize::MAX)
+            .map_err(runtime_state_agent_error)?
+        {
+            if self.host_event_projection_exists(&event) {
+                self.runtime_state
+                    .acknowledge_inbound_event_projection(&event)
+                    .map_err(runtime_state_agent_error)?;
+                continue;
+            }
+            let message_id = format!(
+                "assistant:{}:{}",
+                event.run_id(),
+                event.generation_turn_id.as_deref().unwrap_or("unknown")
+            );
+            match event.kind() {
+                LLMEventKind::GenerationStarted => self
+                    .execution()
+                    .record_external_event(
+                        event.run_id(),
+                        "assistant_message_started",
+                        json!({
+                            "host_event_id": event.event_id(),
+                            "message_id": message_id,
+                        })
+                        .to_string(),
+                    )
+                    .map_err(execution_start_agent_error)?,
+                LLMEventKind::TextDelta => self
+                    .execution()
+                    .record_external_event(
+                        event.run_id(),
+                        "assistant_text_delta",
+                        json!({
+                            "host_event_id": event.event_id(),
+                            "message_id": message_id,
+                            "text": event.payload.text.as_deref().unwrap_or_default(),
+                        })
+                        .to_string(),
+                    )
+                    .map_err(execution_start_agent_error)?,
+                LLMEventKind::GenerationCompleted
+                    if event
+                        .payload
+                        .completion
+                        .as_ref()
+                        .is_some_and(|completion| completion.outcome == "final_response") =>
+                {
+                    let turn_id = event.generation_turn_id.as_deref().ok_or_else(|| {
+                        AgentError::Storage("host completion is missing turn identity".into())
+                    })?;
+                    let text = self
+                        .runtime_state
+                        .turn_accumulator_events(event.session_handle(), turn_id)
+                        .map_err(runtime_state_agent_error)?
+                        .into_iter()
+                        .filter(|item| item.kind() == LLMEventKind::TextDelta)
+                        .filter_map(|item| item.payload.text)
+                        .collect::<String>();
+                    let snapshot_json = self
+                        .runtime_state
+                        .run_snapshot_json(event.run_id())
+                        .map_err(runtime_state_agent_error)?
+                        .ok_or_else(|| {
+                            AgentError::Storage("host run snapshot is missing".into())
+                        })?;
+                    let persisted: PersistedResolvedRunSnapshotV2 =
+                        serde_json::from_str(&snapshot_json)
+                            .map_err(|error| AgentError::Storage(error.to_string()))?;
+                    let snapshot = ResolvedRunSnapshot::try_from(persisted)
+                        .map_err(|error| AgentError::Storage(error.to_string()))?;
+                    let finish_reason = event
+                        .payload
+                        .completion
+                        .as_ref()
+                        .map(|completion| completion.finish_reason.as_str())
+                        .unwrap_or("other");
+                    self.execution()
+                        .record_external_completed(
+                            event.run_id(),
+                            snapshot.conversation_run_frame_ref().clone(),
+                            event.event_id(),
+                            &message_id,
+                            &text,
+                            finish_reason,
+                        )
+                        .map_err(execution_start_agent_error)?;
+                }
+                LLMEventKind::Failed => self
+                    .execution()
+                    .record_external_event(
+                        event.run_id(),
+                        "run.failed",
+                        json!({
+                            "host_event_id": event.event_id(),
+                            "message": event
+                                .payload
+                                .failure_code
+                                .as_deref()
+                                .unwrap_or("llm.generation.failed"),
+                        })
+                        .to_string(),
+                    )
+                    .map_err(execution_start_agent_error)?,
+                LLMEventKind::Cancelled => self
+                    .execution()
+                    .record_external_event(
+                        event.run_id(),
+                        "run.cancelled",
+                        json!({ "host_event_id": event.event_id() }).to_string(),
+                    )
+                    .map_err(execution_start_agent_error)?,
+                _ => {}
+            }
+            self.runtime_state
+                .acknowledge_inbound_event_projection(&event)
+                .map_err(runtime_state_agent_error)?;
+        }
+        Ok(())
+    }
+
+    fn host_event_projection_exists(&self, event: &LLMEventEnvelope) -> bool {
+        let Some(code) = host_event_projection_code(event) else {
+            return false;
+        };
+        self.execution
+            .observe_events(event.run_id(), None)
+            .iter()
+            .any(|projected| {
+                projected.code() == code
+                    && serde_json::from_str::<Value>(projected.payload())
+                        .ok()
+                        .and_then(|payload| {
+                            payload
+                                .get("host_event_id")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .as_deref()
+                        == Some(event.event_id())
+            })
     }
 
     fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
@@ -868,6 +1040,11 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
                 approved: request.decision.approved,
                 reason: request.decision.reason,
             })?;
+        let is_host_run = self
+            .runtime_state
+            .host_worker(&resolved.run_id.0)
+            .map_err(runtime_state_agent_error)?
+            .is_some();
         if let Some(call_id) = resolved.approved_tool_call_id {
             self.execution()
                 .record_external_event(
@@ -891,16 +1068,22 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
                     json!({ "message": resolved.message.clone() }).to_string(),
                 )
                 .map_err(execution_start_agent_error)?;
-            self.execution()
-                .record_external_event(
-                    &resolved.run_id.0,
-                    "run.failed",
-                    json!({
-                        "message": format!("tool approval rejected: {}", resolved.message)
-                    })
-                    .to_string(),
-                )
-                .map_err(execution_start_agent_error)?;
+            if is_host_run {
+                self.host_llm_dispatcher
+                    .reject_tool_batch(&resolved.run_id.0, &resolved.message)
+                    .map_err(runtime_state_agent_error)?;
+            } else {
+                self.execution()
+                    .record_external_event(
+                        &resolved.run_id.0,
+                        "run.failed",
+                        json!({
+                            "message": format!("tool approval rejected: {}", resolved.message)
+                        })
+                        .to_string(),
+                    )
+                    .map_err(execution_start_agent_error)?;
+            }
         }
         to_json(&EmptyAgentOSResponseJson {})
     }
@@ -908,6 +1091,26 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     fn cancel_run_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: CancelRunRequestJson = from_json(request_json)?;
         let run_id = request.run_id;
+        if self
+            .runtime_state
+            .host_worker(&run_id)
+            .map_err(runtime_state_agent_error)?
+            .is_some()
+        {
+            self.host_llm_dispatcher
+                .cancel_run(&run_id)
+                .map_err(runtime_state_agent_error)?;
+            self.execution()
+                .record_external_event(&run_id, "run.cancel_requested", r#"{"state":"cancelling"}"#)
+                .map_err(execution_start_agent_error)?;
+            let event = self
+                .execution()
+                .observe_events(&run_id, None)
+                .into_iter()
+                .last()
+                .ok_or_else(|| AgentError::Storage("cancel event is missing".into()))?;
+            return to_json(&RuntimeEventJson::from_execution_event(&event));
+        }
         let event = self.lock()?.cancel(run_id.clone())?;
         self.execution()
             .record_external_event(&run_id, "run.cancelled", "{}")
@@ -933,6 +1136,61 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
     ) -> Result<String, AgentError> {
         let result: ToolResultJson = from_json(result_json)?;
         let mut result = result.into_tool_result()?;
+
+        if self
+            .runtime_state
+            .host_worker(run_id)
+            .map_err(runtime_state_agent_error)?
+            .is_some()
+        {
+            let request = self
+                .lock()?
+                .consume_execution_pending_tool_request(&RunId(run_id.to_string()))?;
+            if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
+                result.provenance = format!("tool.{}", request.tool_name());
+            }
+            let before_sequence = self
+                .execution()
+                .observe_events(run_id, None)
+                .iter()
+                .map(ExecutionEvent::sequence)
+                .max()
+                .unwrap_or(0);
+            self.execution()
+                .record_external_event(
+                    run_id,
+                    "tool_result_message",
+                    json!({
+                        "call_id": request.tool_call_id(),
+                        "model_text": &result.model_text,
+                        "provenance": &result.provenance,
+                        "is_error": result.is_error,
+                    })
+                    .to_string(),
+                )
+                .map_err(execution_start_agent_error)?;
+            self.host_llm_dispatcher
+                .resume_tool_batch(
+                    run_id,
+                    HostToolResult {
+                        call_id: request.tool_call_id().to_string(),
+                        tool_name: request.tool_name().to_string(),
+                        result: json!({
+                            "model_text": result.model_text,
+                            "structured_json": result.structured_json,
+                        }),
+                        is_error: result.is_error,
+                        data_classes: vec!["unknown_data".into()],
+                        highest_sensitivity: host_tool_result_sensitivity(result.sensitivity)
+                            .into(),
+                    },
+                )
+                .map_err(runtime_state_agent_error)?;
+            let events = self
+                .execution()
+                .observe_events(run_id, Some(before_sequence));
+            return to_json(&AgentTurnResultJson::from_execution_events(run_id, &events));
+        }
 
         if self.execution().has_active_run(run_id) {
             let run_id_key = RunId(run_id.to_string());
@@ -3238,8 +3496,87 @@ fn from_json<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, AgentError> 
 fn is_execution_stream_boundary(event: &ExecutionEvent) -> bool {
     matches!(
         event.code(),
-        "run.completed" | "run.failed" | "run.cancelled" | "run.waiting_tool" | "run.suspended"
+        "assistant_message_completed"
+            | "run.completed"
+            | "run.failed"
+            | "run.cancelled"
+            | "run.waiting_tool"
+            | "run.suspended"
     )
+}
+
+fn host_event_projection_code(event: &LLMEventEnvelope) -> Option<&'static str> {
+    match event.kind() {
+        LLMEventKind::GenerationStarted => Some("assistant_message_started"),
+        LLMEventKind::TextDelta => Some("assistant_text_delta"),
+        LLMEventKind::GenerationCompleted
+            if event
+                .payload
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.outcome == "final_response") =>
+        {
+            Some("assistant_message_completed")
+        }
+        LLMEventKind::Failed => Some("run.failed"),
+        LLMEventKind::Cancelled => Some("run.cancelled"),
+        _ => None,
+    }
+}
+
+fn host_tool_result_sensitivity(sensitivity: Sensitivity) -> &'static str {
+    match sensitivity {
+        Sensitivity::Public => "routine",
+        Sensitivity::Private => "private",
+        Sensitivity::Secret => "highly_sensitive",
+    }
+}
+
+fn recover_host_completed_run(
+    runtime_state: &dyn UnifiedRuntimeStateRepository,
+    event_log: &ExecutionEventLog,
+    run_id: &str,
+    final_message_id: &str,
+) -> Result<Option<CompletedRunRecord>, ConversationCommitError> {
+    let Some(snapshot_json) = runtime_state.run_snapshot_json(run_id).map_err(|error| {
+        ConversationCommitError::new(
+            "conversation_commit.recovery_failed",
+            format!("{}: {error}", error.code()),
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    let output = event_log
+        .replay(run_id, None)
+        .into_iter()
+        .filter(|event| event.code() == "assistant.output")
+        .find_map(|event| {
+            let payload = serde_json::from_str::<Value>(event.payload()).ok()?;
+            (payload["message_id"].as_str() == Some(final_message_id)).then_some(payload)
+        });
+    let Some(output) = output else {
+        return Ok(None);
+    };
+    let persisted: PersistedResolvedRunSnapshotV2 =
+        serde_json::from_str(&snapshot_json).map_err(|error| {
+            ConversationCommitError::new("conversation_commit.recovery_failed", error.to_string())
+        })?;
+    let snapshot = ResolvedRunSnapshot::try_from(persisted).map_err(|error| {
+        ConversationCommitError::new("conversation_commit.recovery_failed", error.to_string())
+    })?;
+    let text = output["text"].as_str().ok_or_else(|| {
+        ConversationCommitError::new(
+            "conversation_commit.recovery_failed",
+            "persisted assistant output is missing text",
+        )
+    })?;
+    Ok(Some(CompletedRunRecord::restored(
+        run_id,
+        final_message_id,
+        snapshot.conversation_run_frame_ref().clone(),
+        text,
+    )))
 }
 
 fn execution_event_kind_json(code: &str) -> &'static str {
@@ -3616,6 +3953,19 @@ mod ffi_boundary_tests {
     }
 
     #[test]
+    fn tool_result_sensitivity_uses_swift_host_contract_values() {
+        assert_eq!(host_tool_result_sensitivity(Sensitivity::Public), "routine");
+        assert_eq!(
+            host_tool_result_sensitivity(Sensitivity::Private),
+            "private"
+        );
+        assert_eq!(
+            host_tool_result_sensitivity(Sensitivity::Secret),
+            "highly_sensitive"
+        );
+    }
+
+    #[test]
     fn caught_panic_taints_runtime_and_follow_up_call_returns_stable_error() {
         let runtime = Box::into_raw(Box::new(RuntimeJsonBridge::new(AgentRuntime::new(
             AgentRuntimeConfig {
@@ -3654,6 +4004,8 @@ mod ffi_boundary_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     #[test]
     fn execution_stream_boundary_includes_paused_tool_states() {
@@ -3677,6 +4029,515 @@ mod tests {
         assert_eq!(
             schema.metadata_json.as_deref(),
             Some(r#"{"native_permission_scope":"calendar.events"}"#)
+        );
+    }
+
+    #[test]
+    fn accepted_host_delta_is_consumed_and_wakes_the_execution_stream() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+
+        let mut stream = bridge.execution.observe_event_stream("run-host", None);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            sender
+                .send(
+                    stream
+                        .next_live()
+                        .map(|event| (event.code().to_string(), event.payload().to_string())),
+                )
+                .unwrap();
+        });
+
+        let mut event = LLMEventEnvelope {
+            schema_version: 1,
+            event_id: "delta-host".into(),
+            run_id: "run-host".into(),
+            session_handle: "session-host".into(),
+            host_process_epoch: TEST_HOST_PROCESS_EPOCH.into(),
+            generation_turn_id: Some("turn-host".into()),
+            event_sequence: 1,
+            kind: crate::llm_contracts::LLMEventKind::TextDelta,
+            payload: crate::llm_contracts::LLMEventPayload {
+                text: Some("hello".into()),
+                ..Default::default()
+            },
+            event_envelope_digest: String::new(),
+        };
+        event.event_envelope_digest = event.expected_digest().unwrap();
+        assert_eq!(
+            bridge
+                .submit_llm_event_json(&serde_json::to_string(&event).unwrap())
+                .unwrap(),
+            "\"accepted\""
+        );
+
+        let live = receiver
+            .recv_timeout(Duration::from_millis(100))
+            .expect("accepted host event must wake the live execution stream")
+            .unwrap();
+        assert_eq!(live.0, "assistant_text_delta");
+        assert_eq!(
+            serde_json::from_str::<Value>(&live.1).unwrap()["text"],
+            "hello"
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .event_queue_usage("session-host")
+                .unwrap()
+                .event_count,
+            0
+        );
+    }
+
+    #[test]
+    fn duplicate_host_event_recovers_a_pending_execution_projection() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+        let mut event = LLMEventEnvelope {
+            schema_version: 1,
+            event_id: "delta-host".into(),
+            run_id: "run-host".into(),
+            session_handle: "session-host".into(),
+            host_process_epoch: TEST_HOST_PROCESS_EPOCH.into(),
+            generation_turn_id: Some("turn-host".into()),
+            event_sequence: 1,
+            kind: crate::llm_contracts::LLMEventKind::TextDelta,
+            payload: crate::llm_contracts::LLMEventPayload {
+                text: Some("hello".into()),
+                ..Default::default()
+            },
+            event_envelope_digest: String::new(),
+        };
+        event.event_envelope_digest = event.expected_digest().unwrap();
+
+        assert_eq!(
+            bridge.host_llm_dispatcher.submit_event(&event).unwrap(),
+            LLMEventSubmissionResult::Accepted
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .event_queue_usage("session-host")
+                .unwrap()
+                .event_count,
+            1
+        );
+
+        assert_eq!(
+            bridge
+                .submit_llm_event_json(&serde_json::to_string(&event).unwrap())
+                .unwrap(),
+            "\"duplicate\""
+        );
+        assert_eq!(
+            bridge
+                .execution
+                .observe_events("run-host", None)
+                .iter()
+                .filter(|event| event.code() == "assistant_text_delta")
+                .count(),
+            1
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .event_queue_usage("session-host")
+                .unwrap()
+                .event_count,
+            0
+        );
+    }
+
+    #[test]
+    fn duplicate_host_event_does_not_repeat_an_already_persisted_projection() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+        let mut event = LLMEventEnvelope {
+            schema_version: 1,
+            event_id: "delta-host".into(),
+            run_id: "run-host".into(),
+            session_handle: "session-host".into(),
+            host_process_epoch: TEST_HOST_PROCESS_EPOCH.into(),
+            generation_turn_id: Some("turn-host".into()),
+            event_sequence: 1,
+            kind: crate::llm_contracts::LLMEventKind::TextDelta,
+            payload: crate::llm_contracts::LLMEventPayload {
+                text: Some("hello".into()),
+                ..Default::default()
+            },
+            event_envelope_digest: String::new(),
+        };
+        event.event_envelope_digest = event.expected_digest().unwrap();
+        assert_eq!(
+            bridge.host_llm_dispatcher.submit_event(&event).unwrap(),
+            LLMEventSubmissionResult::Accepted
+        );
+        bridge
+            .execution
+            .record_external_event(
+                "run-host",
+                "assistant_text_delta",
+                json!({
+                    "host_event_id": "delta-host",
+                    "message_id": "assistant:run-host:turn-host",
+                    "text": "hello",
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            bridge
+                .submit_llm_event_json(&serde_json::to_string(&event).unwrap())
+                .unwrap(),
+            "\"duplicate\""
+        );
+        assert_eq!(
+            bridge
+                .execution
+                .observe_events("run-host", None)
+                .iter()
+                .filter(|event| event.code() == "assistant_text_delta")
+                .count(),
+            1
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .event_queue_usage("session-host")
+                .unwrap()
+                .event_count,
+            0
+        );
+    }
+
+    #[test]
+    fn bridge_initialization_recovers_pending_host_event_projections() {
+        let store = crate::storage::InMemoryRuntimeStateStore::new();
+        store
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+        let mut event = LLMEventEnvelope {
+            schema_version: 1,
+            event_id: "delta-host".into(),
+            run_id: "run-host".into(),
+            session_handle: "session-host".into(),
+            host_process_epoch: TEST_HOST_PROCESS_EPOCH.into(),
+            generation_turn_id: Some("turn-host".into()),
+            event_sequence: 1,
+            kind: crate::llm_contracts::LLMEventKind::TextDelta,
+            payload: crate::llm_contracts::LLMEventPayload {
+                text: Some("hello".into()),
+                ..Default::default()
+            },
+            event_envelope_digest: String::new(),
+        };
+        event.event_envelope_digest = event.expected_digest().unwrap();
+        crate::execution::HostLLMWorkerService::new(Arc::new(store.clone()))
+            .submit_event(&event)
+            .unwrap();
+
+        let bridge = BridgeRuntime::try_new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+            store.agent_os_state(),
+            TEST_HOST_PROCESS_EPOCH.into(),
+            ExecutionEventLog::new(store.clone()),
+            Arc::new(store.clone()),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            bridge
+                .execution
+                .observe_events("run-host", None)
+                .iter()
+                .filter(|event| event.code() == "assistant_text_delta")
+                .count(),
+            1
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .event_queue_usage("session-host")
+                .unwrap()
+                .event_count,
+            0
+        );
+    }
+
+    #[test]
+    fn approving_a_host_tool_waits_for_the_granted_pending_request_result() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: Some(crate::tool::ToolRouter::new(
+                    crate::tool::ToolRegistry::new(),
+                )),
+            }),
+            AgentOSApplicationService::from_config(
+                AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
+            )
+            .unwrap(),
+        );
+        let schema: ToolSchemaJson = from_json(
+            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"confirm"}"#,
+        )
+        .unwrap();
+        bridge
+            .lock()
+            .unwrap()
+            .register_tool(schema.into_tool_schema().unwrap())
+            .unwrap();
+        let prepared: Value = serde_json::from_str(
+            &bridge
+                .prepare_user_turn_json(
+                    r#"{"session_id":null,"parent_event_id":null,"text":"use tool debug.echo","blob_refs":[]}"#,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let run: Value = serde_json::from_str(
+            &bridge
+                .start_run_json(
+                    &json!({
+                        "agent_profile_id": "profile_1",
+                        "profile_revision_id": 1,
+                        "user_intent": "use tool debug.echo",
+                        "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
+                        "options": {},
+                    })
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let run_id = run["run_id"].as_str().unwrap();
+        let approval_id = bridge.lock().unwrap().pending_approval_requests()[0]
+            .approval_id
+            .clone();
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    run_id,
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::SuspendedForToolApproval,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    run_id,
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+
+        bridge
+            .approve_tool_json(
+                &json!({
+                    "id": approval_id,
+                    "decision": {"approved": true, "reason": null},
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        assert_eq!(bridge.lock().unwrap().pending_tool_requests().len(), 1);
+        assert_eq!(
+            bridge
+                .runtime_state
+                .host_worker(run_id)
+                .unwrap()
+                .unwrap()
+                .execution_phase(),
+            Some(crate::llm_contracts::HostExecutionPhase::SuspendedForToolApproval)
+        );
+    }
+
+    #[test]
+    fn cancel_run_routes_v2_to_the_durable_host_outbox() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                system_prompt: "system".into(),
+                runtime_policy: "policy".into(),
+                tool_schemas: Vec::new(),
+                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
+                provider: Box::new(crate::core::MockStreamingProvider::new()),
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-host".into()))
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-host",
+                    "session-host",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "binding-host",
+                    1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .unwrap();
+
+        let response = bridge.cancel_run_json(r#"{"run_id":"run-host"}"#).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&response).unwrap()["payload"],
+            r#"{"state":"cancelling"}"#
+        );
+        let pending = bridge.runtime_state.pending_host_commands().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].payload().unwrap().kind(),
+            crate::llm_contracts::HostCommandKind::CancelGeneration
         );
     }
 }

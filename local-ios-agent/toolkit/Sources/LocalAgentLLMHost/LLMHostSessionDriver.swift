@@ -63,6 +63,7 @@ package struct DecodedHostGenerationTurn: Sendable {
     package let toolSchema: CanonicalJSONValue
     package let sourceRevisions: CanonicalJSONValue
     package let semanticHistory: CanonicalJSONValue
+    package let semanticHistoryMessages: [LLMInputMessage]
     package let toolResults: [NormalizedToolResult]
 }
 
@@ -84,6 +85,9 @@ package func decodeHostGenerationTurn(
         from: Data(turn.payload.toolSchemaJSON.utf8)
     )
     let messages = try turn.payload.messages.map(decodeMessage)
+    let semanticHistoryMessages = try turn.payload.semanticHistory.map(
+        decodeMessage
+    )
     let history = try CanonicalJSONValue.array(
         turn.payload.semanticHistory.map(canonicalMessage)
     )
@@ -127,6 +131,7 @@ package func decodeHostGenerationTurn(
         toolSchema: toolSchema,
         sourceRevisions: sources,
         semanticHistory: history,
+        semanticHistoryMessages: semanticHistoryMessages,
         toolResults: results
     )
 }

@@ -92,7 +92,6 @@ rust-core/tests/contract/
   runtime_state_migration.rs
 rust-core/tests/integration/
   host_llm_ffi.rs
-  host_llm_product_path.rs
 rust-core/tests/lint/
   llm_phase_four_architecture.rs
 
@@ -121,8 +120,8 @@ toolkit/Tests/LocalAgentLLMHostTests/
   LLMHostRuntimeTests.swift
   LLMHostPreparationTests.swift
   LLMHostEventSequencerTests.swift
-  LLMHostToolLoopTests.swift
-  LLMHostCancellationTests.swift
+  LLMHostGenerationTests.swift
+  LLMHostRuntimeTests.swift
   LLMHostRecoveryTests.swift
   LLMHostProductPathTests.swift
 
@@ -1506,9 +1505,8 @@ git commit -m "feat: drive local and cloud sessions through host commands"
 - Modify: `rust-core/src/storage/sqlite_runtime_state.rs`
 - Modify: `rust-core/src/storage/agent_os_state/mod.rs`
 - Modify: `rust-core/src/storage/agent_os_state/in_memory.rs`
-- Create: `toolkit/Tests/LocalAgentLLMHostTests/LLMHostToolLoopTests.swift`
-- Create: `rust-core/tests/integration/host_llm_product_path.rs`
-- Modify: `rust-core/tests/integration.rs`
+- Modify: `toolkit/Tests/LocalAgentLLMHostTests/LLMHostGenerationTests.swift`
+- Modify: `rust-core/tests/contract/host_llm_event_ingress.rs`
 
 **Interfaces:**
 - Rust accumulates text/tool fragments per turn but executes no tool until a valid `generation_completed` terminal arrives.
@@ -1566,8 +1564,8 @@ Swift integration must prove a sensitive result waits for incremental approval, 
 - [x] **Step 2: Run RED**
 
 ```bash
-CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration host_llm_product_path -- --nocapture
-swift test --package-path toolkit --filter LLMHostToolLoopTests
+CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_event_ingress -- --nocapture
+swift test --package-path toolkit --filter LLMHostGenerationTests
 ```
 
 Expected: the current synchronous worker supports one tool call at a time and cannot persist/emit a complete V2 batch.
@@ -1593,7 +1591,7 @@ On a valid `final_response`, call `apply_event_transactionally` once to persist 
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration -- --nocapture
-swift test --package-path toolkit --filter LLMHostToolLoopTests
+swift test --package-path toolkit --filter LLMHostGenerationTests
 git diff --check
 ```
 
@@ -1603,8 +1601,8 @@ Expected: valid batches resume once; invalid batches never execute; final output
 
 ```bash
 git add rust-core/src/execution rust-core/src/ffi_bridge.rs rust-core/src/storage \
-  rust-core/tests/integration.rs rust-core/tests/integration/host_llm_product_path.rs \
-  toolkit/Tests/LocalAgentLLMHostTests/LLMHostToolLoopTests.swift
+  rust-core/tests/contract/host_llm_event_ingress.rs \
+  toolkit/Tests/LocalAgentLLMHostTests/LLMHostGenerationTests.swift
 git commit -m "feat: resume host llm runs with ordered tool batches"
 ```
 
@@ -1623,7 +1621,7 @@ git commit -m "feat: resume host llm runs with ordered tool batches"
 - Modify: `toolkit/Sources/LocalAgentLLMHost/LLMHostSessionRegistry.swift`
 - Modify: `toolkit/Sources/LocalAgentLLMLocal/LocalModelRuntime.swift`
 - Modify: `toolkit/Sources/LocalAgentLLMCloud/CloudLLMRuntime.swift`
-- Create: `toolkit/Tests/LocalAgentLLMHostTests/LLMHostCancellationTests.swift`
+- Modify: `toolkit/Tests/LocalAgentLLMHostTests/LLMHostRuntimeTests.swift`
 - Modify: `rust-core/tests/contract/host_llm_worker.rs`
 
 **Interfaces:**
@@ -1669,7 +1667,7 @@ Cover terminal-first, cancel-first, simultaneous cancel/terminal, callback-block
 - [x] **Step 2: Run RED**
 
 ```bash
-swift test --package-path toolkit --filter LLMHostCancellationTests
+swift test --package-path toolkit --filter LLMHostRuntimeTests
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_worker -- --nocapture
 ```
 
@@ -1690,7 +1688,7 @@ The Swift actor claims a cancel/close command ID before calling the backend. Dup
 - [x] **Step 4: Run GREEN and native/cloud cancel regressions**
 
 ```bash
-swift test --package-path toolkit --filter LLMHostCancellationTests
+swift test --package-path toolkit --filter LLMHostRuntimeTests
 swift test --package-path toolkit --filter LocalModelRuntimeTests
 swift test --package-path toolkit --filter CloudLLMRuntimeTests
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_worker -- --nocapture
@@ -1706,7 +1704,7 @@ git add rust-core/src/execution rust-core/src/storage \
   rust-core/tests/contract/host_llm_worker.rs toolkit/Sources/LocalAgentLLMHost \
   toolkit/Sources/LocalAgentLLMLocal/LocalModelRuntime.swift \
   toolkit/Sources/LocalAgentLLMCloud/CloudLLMRuntime.swift \
-  toolkit/Tests/LocalAgentLLMHostTests/LLMHostCancellationTests.swift
+  toolkit/Tests/LocalAgentLLMHostTests/LLMHostRuntimeTests.swift
 git commit -m "feat: separate host llm lifecycle watchdogs"
 ```
 
@@ -1876,7 +1874,7 @@ Extend the Task 3 lint across all new Rust V2 files, keep its real persisted-sna
 
 ```bash
 CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test lint llm_phase_four_architecture -- --nocapture
-CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test integration host_llm_product_path -- --nocapture
+CARGO_NET_OFFLINE=true cargo test --manifest-path rust-core/Cargo.toml --test contract host_llm_event_ingress -- --nocapture
 swift test --package-path toolkit --filter LLMHostProductPathTests
 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test \
   -project apps/LocalAgentApp/LocalAgentApp.xcodeproj -scheme LocalAgentApp \
