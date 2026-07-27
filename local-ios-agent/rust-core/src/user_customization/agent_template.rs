@@ -1,12 +1,14 @@
 use crate::user_customization::{AgentSlot, AgentSlotId, AgentSlotKind};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentTemplate {
     id: AgentTemplateId,
     slots: Vec<AgentSlot>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct AgentTemplateId(String);
 
 impl AgentTemplate {

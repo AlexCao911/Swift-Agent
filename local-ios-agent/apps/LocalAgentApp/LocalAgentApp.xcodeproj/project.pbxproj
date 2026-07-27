@@ -93,6 +93,9 @@
 		0E5000020000000000000001 /* AppModelCenterClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000020000000000000011 /* AppModelCenterClient.swift */; };
 		0E5000020000000000000002 /* ProviderProfileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000020000000000000012 /* ProviderProfileEditorView.swift */; };
 		0E5000020000000000000003 /* LocalAgentLLMCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0E5000020000000000000301 /* LocalAgentLLMCore */; };
+		0E5000030000000000000001 /* HostBoundAgentBuilderClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000011 /* HostBoundAgentBuilderClient.swift */; };
+		0E5000030000000000000002 /* HostBoundAgentPublishTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */; };
+		0E5000030000000000000003 /* AgentLLMConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000013 /* AgentLLMConfigurationView.swift */; };
 		0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002125 /* PrivacySettingsView.swift */; };
 		0C0000010000000000002026 /* DebugTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002126 /* DebugTraceView.swift */; };
 		0C0000010000000000002027 /* StateBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002127 /* StateBadges.swift */; };
@@ -215,6 +218,9 @@
 		0E5000010000000000000011 /* ProviderProfileEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderProfileEditorTests.swift; sourceTree = "<group>"; };
 		0E5000020000000000000011 /* AppModelCenterClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelCenterClient.swift; sourceTree = "<group>"; };
 		0E5000020000000000000012 /* ProviderProfileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderProfileEditorView.swift; sourceTree = "<group>"; };
+		0E5000030000000000000011 /* HostBoundAgentBuilderClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBoundAgentBuilderClient.swift; sourceTree = "<group>"; };
+		0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBoundAgentPublishTests.swift; sourceTree = "<group>"; };
+		0E5000030000000000000013 /* AgentLLMConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLLMConfigurationView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002125 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002126 /* DebugTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002127 /* StateBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadges.swift; sourceTree = "<group>"; };
@@ -332,6 +338,7 @@
 			isa = PBXGroup;
 			children = (
 				0E5000020000000000000011 /* AppModelCenterClient.swift */,
+				0E5000030000000000000011 /* HostBoundAgentBuilderClient.swift */,
 				0A0000010000000000000102 /* AppBootstrapper.swift */,
 				0A0000010000000000000103 /* AppContainer.swift */,
 			);
@@ -394,6 +401,7 @@
 		0A000001000000000000050A /* AgentBuilder */ = {
 			isa = PBXGroup;
 			children = (
+				0E5000030000000000000013 /* AgentLLMConfigurationView.swift */,
 				0C0000010000000000002100 /* AgentBuilderDraftModels.swift */,
 				0C0000010000000000002102 /* AgentBuilderToolCatalog.swift */,
 				0C0000010000000000002105 /* AgentBuilderCards.swift */,
@@ -654,6 +662,7 @@
 		0A0000010000000000000516 /* Integration */ = {
 			isa = PBXGroup;
 			children = (
+				0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */,
 				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
 				0F0000010000000000000102 /* LLMHostCompositionTests.swift */,
 				0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */,
@@ -799,6 +808,7 @@
 				0C0000010000000000002023 /* ModelCenterView.swift in Sources */,
 				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
 				0E5000020000000000000001 /* AppModelCenterClient.swift in Sources */,
+				0E5000030000000000000001 /* HostBoundAgentBuilderClient.swift in Sources */,
 				0E5000020000000000000002 /* ProviderProfileEditorView.swift in Sources */,
 				0C0000010000000000002026 /* DebugTraceView.swift in Sources */,
 				0C0000010000000000002028 /* ProductEmptyStates.swift in Sources */,
@@ -852,6 +862,7 @@
 				0C0000010000000000002002 /* AgentBuilderToolCatalog.swift in Sources */,
 				0C0000010000000000002006 /* AgentBuilderToolPickerView.swift in Sources */,
 				0C0000010000000000002004 /* AgentBuilderView.swift in Sources */,
+				0E5000030000000000000003 /* AgentLLMConfigurationView.swift in Sources */,
 				0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */,
 				0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */,
 			);
@@ -876,6 +887,7 @@
 				0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */,
 				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
 				0E5000010000000000000001 /* ProviderProfileEditorTests.swift in Sources */,
+				0E5000030000000000000002 /* HostBoundAgentPublishTests.swift in Sources */,
 				0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */,
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,

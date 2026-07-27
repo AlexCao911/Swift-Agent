@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use crate::app_service::{
     AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
 };
+use crate::canonical_digest::CanonicalDigestV1;
 use crate::context::{
     ContextAssembler, ContextSegment, InferenceOptions, ModelInputMessages, PromptFrame,
     TokenizerAdapter,
@@ -365,7 +366,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         );
         let host_binding = AgentHostBindingService::new(
             agent_os_state.clone(),
-            HostBindingSubjectCatalog::new(app_services.profile_repository()),
+            HostBindingSubjectCatalog::new(app_services.runtime_state()),
         );
         let bridge = Self {
             runtime,
@@ -514,6 +515,35 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             )
             .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         to_json(&AgentProfileJson::from(&profile))
+    }
+
+    fn build_agent_v2_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: BuildAgentV2RequestJson = from_json(request_json)?;
+        let profile = self
+            .app_services
+            .build_agent_v2(
+                &request.operation_id,
+                request.draft.profile_id.as_deref(),
+                &request.draft.template_id,
+                request.draft.card_draft_input(),
+                request.requirements,
+            )
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        let slot = profile.llm_slot().ok_or_else(|| {
+            AgentError::Storage(
+                "application_service.profile_not_v2: built profile has no host LLM slot".into(),
+            )
+        })?;
+        let requirements_hash =
+            CanonicalDigestV1::digest("agent-requirements:v1", slot.requirements())
+                .map_err(|error| AgentError::Storage(error.to_string()))?;
+        to_json(&PendingAgentProfileJson {
+            profile_id: profile.id().as_str().to_string(),
+            profile_revision_id: profile.version().as_u64(),
+            display_name: profile.name().to_string(),
+            llm_slot_id: slot.requirements().slot_id().to_string(),
+            requirements_hash: requirements_hash.as_str().to_string(),
+        })
     }
 
     fn preview_context_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -1241,8 +1271,6 @@ impl RuntimeJsonBridge {
         validate_host_process_epoch(&config.host_process_epoch)?;
         let registry = config.provider_registry()?;
         let runtime_config = config.runtime_config(&registry)?;
-        let app_services = AgentOSApplicationService::from_config(config.agent_os.into())
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
         let host_process_epoch = config.host_process_epoch.clone();
         match config.store {
             StoreConfigJson::InMemory { .. } => {
@@ -1253,6 +1281,11 @@ impl RuntimeJsonBridge {
                 let event_log = ExecutionEventLog::new(runtime_state.clone());
                 let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
                     Arc::new(runtime_state.clone());
+                let app_services = AgentOSApplicationService::from_runtime_state(
+                    config.agent_os.clone().into(),
+                    runtime_state_authority.clone(),
+                )
+                .map_err(|error| AgentError::Storage(error.to_string()))?;
                 Ok(Self::InMemory(BridgeRuntime::try_new(
                     AgentRuntime::open_without_replay(
                         runtime_config,
@@ -1278,6 +1311,11 @@ impl RuntimeJsonBridge {
                 let event_log = ExecutionEventLog::new(runtime_state.clone());
                 let runtime_state_authority: Arc<dyn UnifiedRuntimeStateRepository> =
                     Arc::new(runtime_state.clone());
+                let app_services = AgentOSApplicationService::from_runtime_state(
+                    config.agent_os.clone().into(),
+                    runtime_state_authority.clone(),
+                )
+                .map_err(|error| AgentError::Storage(error.to_string()))?;
                 Ok(Self::Sqlite(BridgeRuntime::try_new(
                     AgentRuntime::open_without_replay(
                         runtime_config,
@@ -1794,6 +1832,13 @@ impl RuntimeJsonBridge {
         }
     }
 
+    pub fn build_agent_v2_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.build_agent_v2_json(request_json),
+            Self::Sqlite(runtime) => runtime.build_agent_v2_json(request_json),
+        }
+    }
+
     pub fn preview_context_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.preview_context_json(request_json),
@@ -2234,6 +2279,10 @@ macro_rules! json_bridge_function {
 }
 
 json_bridge_function!(
+    local_agent_runtime_bridge_build_agent_v2,
+    build_agent_v2_json
+);
+json_bridge_function!(
     local_agent_runtime_bridge_prepare_profile_publish,
     prepare_profile_publish_json
 );
@@ -2440,6 +2489,23 @@ struct BuildAgentRequestJson {
     selected_tool_ids: Vec<String>,
     #[serde(default)]
     context_step_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildAgentV2RequestJson {
+    operation_id: String,
+    draft: BuildAgentRequestJson,
+    requirements: crate::llm_contracts::AgentLLMRequirements,
+}
+
+#[derive(Serialize)]
+struct PendingAgentProfileJson {
+    profile_id: String,
+    profile_revision_id: u64,
+    display_name: String,
+    llm_slot_id: String,
+    requirements_hash: String,
 }
 
 impl BuildAgentRequestJson {

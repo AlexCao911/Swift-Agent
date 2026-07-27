@@ -65,11 +65,17 @@ enum AppBootstrapper {
             cloud: cloud,
             store: llmStore
         )
+        let agentBuilderPublishing = HostBoundAgentBuilderClient(
+            portable: RustPortableAgentBuilderClient(gateway: rust),
+            targets: modelCenterClient,
+            bindingSaga: AgentHostBindingSaga(store: llmStore)
+        )
         return container.attaching(
             localLLMSubsystem: local,
             cloudLLMSubsystem: cloud,
             llmHostRuntime: host,
-            modelCenterClient: modelCenterClient
+            modelCenterClient: modelCenterClient,
+            agentBuilderPublishing: agentBuilderPublishing
         )
     }
 
@@ -114,6 +120,7 @@ enum AppBootstrapper {
             nativeToolkitClient: nativeBundle.client,
             nativePermissionGateway: nativeBundle.permissionGateway,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
+            agentBuilderPublishing: nil,
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: nativeBundle.builderToolCatalogClient,
             runInlineCardActionHandler: RunInlineCardActionHandler(
@@ -163,6 +170,7 @@ enum AppBootstrapper {
                     message: "Runtime bridge entered recovery mode: \(error.localizedDescription)"
                 ),
             ]),
+            agentBuilderPublishing: nil,
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: nativeBundle.builderToolCatalogClient,
             runInlineCardActionHandler: RunInlineCardActionHandler(
@@ -200,6 +208,7 @@ enum AppBootstrapper {
                     message: "App entered last-resort recovery mode: \(error.localizedDescription)"
                 ),
             ]),
+            agentBuilderPublishing: nil,
             permissionClient: MockPermissionClient(issues: []),
             agentBuilderToolCatalogClient: StaticAgentBuilderToolCatalogClient(cards: []),
             runInlineCardActionHandler: RunInlineCardActionHandler(

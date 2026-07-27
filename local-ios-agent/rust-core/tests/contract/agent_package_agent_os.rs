@@ -12,14 +12,15 @@ use local_ios_agent_runtime::llm_contracts::{
 };
 use local_ios_agent_runtime::storage::agent_os_state::SharedAgentOSStateStore;
 use local_ios_agent_runtime::storage::{
-    InMemoryTransactionRunner, StorageError, StorageResult, TransactionName, TransactionOperation,
-    TransactionRunner,
+    InMemoryRuntimeStateStore, InMemoryTransactionRunner, StorageError, StorageResult,
+    TransactionName, TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository,
 };
 use local_ios_agent_runtime::user_customization::{
     AgentProfileId, AgentProfileReference, AgentProfileVersion, AgentSlotKind,
-    InMemoryAgentProfileRepository,
+    InMemoryAgentProfileRepository, ProfilePublicationOperation,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn fixture_profile_reference() -> AgentProfileReference {
@@ -54,9 +55,13 @@ fn package_binding_saga_advances_actual_installation_and_profile_state() {
             .host_binding_state,
         PackageHostBindingState::NeedsLLMBinding
     );
+    let profile_state = InMemoryRuntimeStateStore::new();
+    profile_state
+        .publish_agent_profile_aggregate(ProfilePublicationOperation::new(profile.clone(), vec![]))
+        .unwrap();
     let service = AgentHostBindingService::new(
         SharedAgentOSStateStore::in_memory(),
-        HostBindingSubjectCatalog::new(profiles.clone()).with_package_store(store.clone()),
+        HostBindingSubjectCatalog::new(Arc::new(profile_state)).with_package_store(store.clone()),
     );
     let pending = service
         .begin_package_binding(PackageBindingPreparation::new(

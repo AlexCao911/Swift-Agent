@@ -132,6 +132,23 @@ public struct HostBindingOperationDTO: Codable, Equatable, Sendable {
     public let kind: String; public let idempotencyKey: String; public let token: String; public let tokenDigest: String
     public let subjectId: String; public let agentProfileId: String; public let agentProfileRevision: UInt64
     public let llmSlotId: String; public let requirementsHash: String; public let state: String
+    public init(
+        kind: String,
+        idempotencyKey: String,
+        token: String,
+        tokenDigest: String,
+        subjectId: String,
+        agentProfileId: String,
+        agentProfileRevision: UInt64,
+        llmSlotId: String,
+        requirementsHash: String,
+        state: String
+    ) {
+        self.kind = kind; self.idempotencyKey = idempotencyKey
+        self.token = token; self.tokenDigest = tokenDigest; self.subjectId = subjectId
+        self.agentProfileId = agentProfileId; self.agentProfileRevision = agentProfileRevision
+        self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash; self.state = state
+    }
     private enum CodingKeys: String, CodingKey { case kind, idempotencyKey = "idempotency_key", token, tokenDigest = "token_digest", subjectId = "subject_id", agentProfileId = "agent_profile_id", agentProfileRevision = "agent_profile_revision", llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", state }
 }
 
@@ -139,6 +156,20 @@ public struct HostBindingCrossLinkDTO: Codable, Equatable, Sendable {
     public let operationToken: String; public let tokenDigest: String; public let kind: String
     public let llmSlotId: String; public let requirementsHash: String; public let binding: HostBindingTupleDTO
     public let stagingReceiptDigest: String; public let state: String
+    public init(
+        operationToken: String,
+        tokenDigest: String,
+        kind: String,
+        llmSlotId: String,
+        requirementsHash: String,
+        binding: HostBindingTupleDTO,
+        stagingReceiptDigest: String,
+        state: String
+    ) {
+        self.operationToken = operationToken; self.tokenDigest = tokenDigest; self.kind = kind
+        self.llmSlotId = llmSlotId; self.requirementsHash = requirementsHash
+        self.binding = binding; self.stagingReceiptDigest = stagingReceiptDigest; self.state = state
+    }
     private enum CodingKeys: String, CodingKey { case operationToken = "operation_token", tokenDigest = "token_digest", kind, llmSlotId = "llm_slot_id", requirementsHash = "requirements_hash", binding, stagingReceiptDigest = "staging_receipt_digest", state }
 }
 
@@ -149,10 +180,78 @@ public struct AgentLLMRequirementsDTO: Codable, Equatable, Sendable {
     public let contextBudget: String
     public let streamingRequired: Bool
     public let toolCallingMode: String
+
+    public init(
+        slotId: String,
+        capabilities: [String] = [],
+        inputModalities: [String] = ["text"],
+        contextBudget: String,
+        streamingRequired: Bool,
+        toolCallingMode: String
+    ) {
+        self.slotId = slotId
+        self.capabilities = capabilities
+        self.inputModalities = inputModalities
+        self.contextBudget = contextBudget
+        self.streamingRequired = streamingRequired
+        self.toolCallingMode = toolCallingMode
+    }
     private enum CodingKeys: String, CodingKey {
         case slotId = "slot_id", capabilities, inputModalities = "input_modalities"
         case contextBudget = "context_budget", streamingRequired = "streaming_required"
         case toolCallingMode = "tool_calling_mode"
+    }
+}
+
+public struct BuildAgentV2RequestDTO: Codable, Equatable, Sendable {
+    public let operationId: String
+    public let draft: AgentBuilderDraftDTO
+    public let requirements: AgentLLMRequirementsDTO
+
+    public init(
+        operationId: String,
+        draft: AgentBuilderDraftDTO,
+        requirements: AgentLLMRequirementsDTO
+    ) {
+        self.operationId = operationId
+        self.draft = draft
+        self.requirements = requirements
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationId = "operation_id"
+        case draft
+        case requirements
+    }
+}
+
+public struct PendingAgentProfileDTO: Codable, Equatable, Sendable {
+    public let profileId: String
+    public let profileRevisionId: UInt64
+    public let displayName: String
+    public let llmSlotId: String
+    public let requirementsHash: String
+
+    public init(
+        profileId: String,
+        profileRevisionId: UInt64,
+        displayName: String,
+        llmSlotId: String,
+        requirementsHash: String
+    ) {
+        self.profileId = profileId
+        self.profileRevisionId = profileRevisionId
+        self.displayName = displayName
+        self.llmSlotId = llmSlotId
+        self.requirementsHash = requirementsHash
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileId = "profile_id"
+        case profileRevisionId = "profile_revision_id"
+        case displayName = "display_name"
+        case llmSlotId = "llm_slot_id"
+        case requirementsHash = "requirements_hash"
     }
 }
 

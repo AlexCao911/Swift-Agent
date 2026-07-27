@@ -36,12 +36,56 @@ use super::{
     RuntimeAggregateFailurePoint, RuntimeAggregateInspection, RuntimeStateError, RuntimeTransition,
     UnifiedRuntimeStateRepository,
 };
+use crate::user_customization::{
+    AgentProfile, AgentProfileHostBindingState, AgentProfileHostBindingTransition, AgentProfileId,
+    AgentProfileReference, AgentProfileVersion, ProfilePublicationOperation,
+    PublishedUserComponentVersion, UserComponentVersionId,
+};
 
-const RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
+const RUNTIME_STATE_SCHEMA_VERSION: u32 = 3;
+
+const RUNTIME_V3_MIGRATION_STATEMENTS: &[&str] = &[
+    "create table agent_component_revisions (
+       component_version_id text primary key,
+       record_schema text not null,
+       revision_json text not null,
+       canonical_digest text not null
+     )",
+    "create index agent_component_revisions_schema_idx
+       on agent_component_revisions(record_schema)",
+    "create table agent_profile_revisions (
+       profile_id text not null,
+       profile_revision text not null,
+       publication_operation_id text not null unique,
+       record_schema text not null,
+       binding_schema text not null,
+       host_binding_state text not null,
+       revision_json text not null,
+       canonical_digest text not null,
+       primary key(profile_id, profile_revision)
+     )",
+    "create index agent_profile_revisions_latest_idx
+       on agent_profile_revisions(profile_id, profile_revision)",
+    "create table legacy_profile_migration_records (
+       legacy_profile_id text not null,
+       legacy_profile_revision text not null,
+       record_schema text not null,
+       state text not null,
+       record_json text not null,
+       primary key(legacy_profile_id, legacy_profile_revision)
+     )",
+    "create index legacy_profile_migration_state_idx
+       on legacy_profile_migration_records(state)",
+];
+
+pub const fn runtime_v3_migration_statement_count() -> usize {
+    RUNTIME_V3_MIGRATION_STATEMENTS.len()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStateMigrationFailurePoint {
     AfterLegacyCopy,
+    AfterVersionThreeStatement(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,9 +144,8 @@ impl SqliteRuntimeStateStore {
     }
 
     pub fn open_in_memory() -> Result<Self, RuntimeStateError> {
-        let store = SqliteAgentOSStateStore::open_in_memory().map_err(agent_os_error)?;
-        initialize_connection(store.connection())?;
-        activate_without_sidecar(store.connection())?;
+        let mut store = SqliteAgentOSStateStore::open_in_memory().map_err(agent_os_error)?;
+        prepare_runtime_schema(store.connection_mut(), None, None)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(store)),
             failure: Arc::new(Mutex::new(None)),
@@ -119,8 +162,7 @@ impl SqliteRuntimeStateStore {
         reject_future_schema(&probe)?;
         drop(probe);
         let mut store = SqliteAgentOSStateStore::open(path).map_err(agent_os_error)?;
-        initialize_connection(store.connection())?;
-        migrate_sidecar_if_needed(store.connection_mut(), path, migration_failure)?;
+        prepare_runtime_schema(store.connection_mut(), Some(path), migration_failure)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(store)),
             failure: Arc::new(Mutex::new(None)),
@@ -173,6 +215,28 @@ impl SqliteRuntimeStateStore {
             .map_err(sqlite_error)
     }
 
+    pub fn v3_table_names(&self) -> Result<Vec<String>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let mut statement = store
+            .connection()
+            .prepare(
+                "select name from sqlite_master
+                 where type = 'table' and name in (
+                   'agent_component_revisions',
+                   'agent_profile_revisions',
+                   'legacy_profile_migration_records'
+                 )
+                 order by name",
+            )
+            .map_err(sqlite_error)?;
+        let rows = statement
+            .query_map([], |row| row.get(0))
+            .map_err(sqlite_error)?
+            .map(|row| row.map_err(sqlite_error))
+            .collect();
+        rows
+    }
+
     pub fn migration_source_digest(&self) -> Result<Option<String>, RuntimeStateError> {
         let store = self.inner.lock().map_err(|_| poisoned())?;
         store
@@ -222,6 +286,204 @@ impl SqliteRuntimeStateStore {
 }
 
 impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
+    fn publish_agent_profile_aggregate(
+        &self,
+        operation: ProfilePublicationOperation,
+    ) -> Result<AgentProfileReference, RuntimeStateError> {
+        let (operation_id, profile, components) = operation.into_parts();
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        for component in &components {
+            insert_component_revision(&transaction, component)?;
+        }
+        for binding in profile.bindings() {
+            let exists: bool = transaction
+                .query_row(
+                    "select exists(
+                       select 1 from agent_component_revisions
+                       where component_version_id = ?1
+                     )",
+                    params![binding.component_version_id().as_u64().to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_error)?;
+            if !exists {
+                return Err(RuntimeStateError::new(
+                    "runtime_state.profile_component_missing",
+                    "profile aggregate omits a referenced component revision",
+                ));
+            }
+        }
+        let reference = profile.reference();
+        if let Some(existing) = load_profile_for_publication_operation(&transaction, &operation_id)?
+        {
+            return Ok(existing.reference());
+        }
+        insert_profile_revision(&transaction, &operation_id, &profile)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(reference)
+    }
+
+    fn agent_profile_exact(
+        &self,
+        id: &AgentProfileId,
+        version: AgentProfileVersion,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        load_profile_exact(store.connection(), id, version)
+    }
+
+    fn agent_profile_latest(
+        &self,
+        id: &AgentProfileId,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let row: Option<(String, String)> = store
+            .connection()
+            .query_row(
+                "select record_schema, revision_json
+                 from agent_profile_revisions
+                 where profile_id = ?1
+                 order by cast(profile_revision as integer) desc
+                 limit 1",
+                params![id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        row.map(|(schema, json)| decode_profile_revision(&schema, &json))
+            .transpose()
+    }
+
+    fn agent_profile_for_publication_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        load_profile_for_publication_operation(store.connection(), operation_id)
+    }
+
+    fn latest_agent_profiles(&self) -> Result<Vec<AgentProfile>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let mut statement = store
+            .connection()
+            .prepare(
+                "select record_schema, revision_json
+                 from agent_profile_revisions
+                 where host_binding_state != 'pending_host_binding'
+                 order by profile_id, cast(profile_revision as integer)",
+            )
+            .map_err(sqlite_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_error)?;
+        let mut latest = BTreeMap::<AgentProfileId, AgentProfile>::new();
+        for row in rows {
+            let (schema, json) = row.map_err(sqlite_error)?;
+            let profile = decode_profile_revision(&schema, &json)?;
+            latest.insert(profile.id().clone(), profile);
+        }
+        Ok(latest.into_values().collect())
+    }
+
+    fn transition_agent_profile_host_binding(
+        &self,
+        transition: AgentProfileHostBindingTransition,
+    ) -> Result<AgentProfile, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let current = load_profile_exact(
+            &transaction,
+            transition.profile_id(),
+            transition.profile_version(),
+        )?
+        .ok_or_else(not_found)?;
+        if current.host_binding_state() == transition.next() {
+            return Ok(current);
+        }
+        if current.host_binding_state() != transition.expected() {
+            return Err(RuntimeStateError::new(
+                "agent_profile.host_binding_state_stale",
+                "agent profile host-binding state changed before transition",
+            ));
+        }
+        let updated = current.with_host_binding_state(transition.next());
+        let json = serde_json::to_string(&updated).map_err(record_json_error)?;
+        let changed = transaction
+            .execute(
+                "update agent_profile_revisions
+                 set host_binding_state = ?1, revision_json = ?2, canonical_digest = ?3
+                 where profile_id = ?4 and profile_revision = ?5
+                   and host_binding_state = ?6",
+                params![
+                    host_binding_state_name(updated.host_binding_state()),
+                    json,
+                    sha256_text(&json),
+                    transition.profile_id().as_str(),
+                    transition.profile_version().as_u64().to_string(),
+                    host_binding_state_name(transition.expected()),
+                ],
+            )
+            .map_err(sqlite_error)?;
+        if changed != 1 {
+            return Err(conflict());
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(updated)
+    }
+
+    fn agent_component_exact(
+        &self,
+        id: UserComponentVersionId,
+    ) -> Result<Option<PublishedUserComponentVersion>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let row: Option<(String, String)> = store
+            .connection()
+            .query_row(
+                "select record_schema, revision_json
+                 from agent_component_revisions where component_version_id = ?1",
+                params![id.as_u64().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        row.map(|(schema, json)| decode_component_revision(&schema, &json))
+            .transpose()
+    }
+
+    fn agent_component_revisions(
+        &self,
+    ) -> Result<Vec<PublishedUserComponentVersion>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let mut statement = store
+            .connection()
+            .prepare(
+                "select record_schema, revision_json
+                 from agent_component_revisions
+                 order by cast(component_version_id as integer)",
+            )
+            .map_err(sqlite_error)?;
+        let revisions = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_error)?
+            .map(|row| {
+                let (schema, json) = row.map_err(sqlite_error)?;
+                decode_component_revision(&schema, &json)
+            })
+            .collect();
+        revisions
+    }
+
     fn insert_worker_and_session(
         &self,
         worker: HostWorkerRecord,
@@ -1573,6 +1835,192 @@ fn preparation_poisoned() -> PreparationError {
     )
 }
 
+fn insert_component_revision(
+    transaction: &Transaction<'_>,
+    component: &PublishedUserComponentVersion,
+) -> Result<(), RuntimeStateError> {
+    const SCHEMA: &str = "agent-component-revision:v1";
+    let json = serde_json::to_string(component).map_err(record_json_error)?;
+    let digest = sha256_text(&json);
+    let existing: Option<(String, String, String)> = transaction
+        .query_row(
+            "select record_schema, revision_json, canonical_digest
+             from agent_component_revisions where component_version_id = ?1",
+            params![component.id.as_u64().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    if let Some(existing) = existing {
+        return if existing == (SCHEMA.to_string(), json, digest) {
+            Ok(())
+        } else {
+            Err(conflict())
+        };
+    }
+    transaction
+        .execute(
+            "insert into agent_component_revisions(
+               component_version_id, record_schema, revision_json, canonical_digest
+             ) values (?1, ?2, ?3, ?4)",
+            params![component.id.as_u64().to_string(), SCHEMA, json, digest],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn insert_profile_revision(
+    transaction: &Transaction<'_>,
+    operation_id: &str,
+    profile: &AgentProfile,
+) -> Result<(), RuntimeStateError> {
+    const SCHEMA: &str = "agent-profile-revision:v1";
+    let binding_schema = profile
+        .llm_binding()
+        .map(|binding| binding.schema().as_str())
+        .unwrap_or("none");
+    let json = serde_json::to_string(profile).map_err(record_json_error)?;
+    let digest = sha256_text(&json);
+    let existing: Option<(String, String, String, String, String, String)> = transaction
+        .query_row(
+            "select publication_operation_id, record_schema, binding_schema, host_binding_state,
+                    revision_json, canonical_digest
+             from agent_profile_revisions
+             where profile_id = ?1 and profile_revision = ?2",
+            params![
+                profile.id().as_str(),
+                profile.version().as_u64().to_string()
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    let expected = (
+        operation_id.to_string(),
+        SCHEMA.to_string(),
+        binding_schema.to_string(),
+        host_binding_state_name(profile.host_binding_state()).to_string(),
+        json.clone(),
+        digest.clone(),
+    );
+    if let Some(existing) = existing {
+        return if existing == expected {
+            Ok(())
+        } else {
+            Err(conflict())
+        };
+    }
+    transaction
+        .execute(
+            "insert into agent_profile_revisions(
+               profile_id, profile_revision, publication_operation_id,
+               record_schema, binding_schema, host_binding_state,
+               revision_json, canonical_digest
+             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                profile.id().as_str(),
+                profile.version().as_u64().to_string(),
+                operation_id,
+                SCHEMA,
+                binding_schema,
+                host_binding_state_name(profile.host_binding_state()),
+                json,
+                digest,
+            ],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn load_profile_for_publication_operation(
+    connection: &Connection,
+    operation_id: &str,
+) -> Result<Option<AgentProfile>, RuntimeStateError> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "select record_schema, revision_json
+             from agent_profile_revisions
+             where publication_operation_id = ?1",
+            params![operation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    row.map(|(schema, json)| decode_profile_revision(&schema, &json))
+        .transpose()
+}
+
+fn load_profile_exact(
+    connection: &Connection,
+    id: &AgentProfileId,
+    version: AgentProfileVersion,
+) -> Result<Option<AgentProfile>, RuntimeStateError> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "select record_schema, revision_json
+             from agent_profile_revisions
+             where profile_id = ?1 and profile_revision = ?2",
+            params![id.as_str(), version.as_u64().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    row.map(|(schema, json)| decode_profile_revision(&schema, &json))
+        .transpose()
+}
+
+fn decode_profile_revision(schema: &str, json: &str) -> Result<AgentProfile, RuntimeStateError> {
+    if schema != "agent-profile-revision:v1" {
+        return Err(RuntimeStateError::new(
+            "runtime_state.profile_schema_unknown",
+            format!("unknown persisted Agent Profile schema: {schema}"),
+        ));
+    }
+    serde_json::from_str(json).map_err(record_json_error)
+}
+
+fn decode_component_revision(
+    schema: &str,
+    json: &str,
+) -> Result<PublishedUserComponentVersion, RuntimeStateError> {
+    if schema != "agent-component-revision:v1" {
+        return Err(RuntimeStateError::new(
+            "runtime_state.component_schema_unknown",
+            format!("unknown persisted component revision schema: {schema}"),
+        ));
+    }
+    serde_json::from_str(json).map_err(record_json_error)
+}
+
+fn host_binding_state_name(state: AgentProfileHostBindingState) -> &'static str {
+    match state {
+        AgentProfileHostBindingState::NotRequired => "not_required",
+        AgentProfileHostBindingState::PendingHostBinding => "pending_host_binding",
+        AgentProfileHostBindingState::HostUnbound => "host_unbound",
+        AgentProfileHostBindingState::Active => "active",
+    }
+}
+
+fn record_json_error(error: serde_json::Error) -> RuntimeStateError {
+    RuntimeStateError::new(
+        "runtime_state.record_json_invalid",
+        format!("invalid runtime state record JSON: {error}"),
+    )
+}
+
+fn sha256_text(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
 fn row_exists(
     connection: &Connection,
     table: &str,
@@ -1612,13 +2060,122 @@ fn reject_future_schema(connection: &Connection) -> Result<(), RuntimeStateError
             format!("future runtime state schema version: {version}"),
         ));
     }
-    if !matches!(version, 1 | RUNTIME_STATE_SCHEMA_VERSION) {
+    if !matches!(version, 1 | 2 | RUNTIME_STATE_SCHEMA_VERSION) {
         return Err(RuntimeStateError::new(
             "runtime_state.schema_unsupported",
             format!("unsupported runtime state schema version: {version}"),
         ));
     }
     Ok(())
+}
+
+fn prepare_runtime_schema(
+    connection: &mut Connection,
+    main_path: Option<&Path>,
+    failure: Option<RuntimeStateMigrationFailurePoint>,
+) -> Result<(), RuntimeStateError> {
+    connection
+        .execute_batch("pragma foreign_keys = on")
+        .map_err(sqlite_error)?;
+    let has_meta: bool = connection
+        .query_row(
+            "select exists(
+               select 1 from sqlite_master
+               where type = 'table' and name = 'runtime_state_meta'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+
+    if !has_meta {
+        let has_sidecar = main_path
+            .map(|path| PathBuf::from(format!("{}.agent-os", path.display())).exists())
+            .unwrap_or(false);
+        initialize_connection(connection)?;
+        if has_sidecar {
+            migrate_sidecar_if_needed(
+                connection,
+                main_path.expect("sidecar requires a filesystem path"),
+                failure,
+            )?;
+            migrate_runtime_v2_to_v3(connection, failure)?;
+        } else {
+            activate_without_sidecar_v2(connection)?;
+            migrate_runtime_v2_to_v3(connection, failure)?;
+        }
+        return Ok(());
+    }
+
+    let version: u32 = connection
+        .query_row(
+            "select schema_version from runtime_state_meta where singleton_id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    match version {
+        1 => {
+            initialize_connection(connection)?;
+            if let Some(path) = main_path {
+                migrate_sidecar_if_needed(connection, path, failure)?;
+            } else {
+                activate_without_sidecar_v2(connection)?;
+            }
+            migrate_runtime_v2_to_v3(connection, failure)
+        }
+        2 => {
+            let state: String = connection
+                .query_row(
+                    "select migration_state from runtime_state_meta where singleton_id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_error)?;
+            if MigrationState::from_str(&state)? == MigrationState::Pending {
+                if let Some(path) = main_path {
+                    migrate_sidecar_if_needed(connection, path, failure)?;
+                } else {
+                    activate_without_sidecar_v2(connection)?;
+                }
+            }
+            migrate_runtime_v2_to_v3(connection, failure)
+        }
+        3 => Ok(()),
+        version if version > RUNTIME_STATE_SCHEMA_VERSION => Err(RuntimeStateError::new(
+            "runtime_state.schema_future",
+            format!("future runtime state schema version: {version}"),
+        )),
+        version => Err(RuntimeStateError::new(
+            "runtime_state.schema_unsupported",
+            format!("unsupported runtime state schema version: {version}"),
+        )),
+    }
+}
+
+fn migrate_runtime_v2_to_v3(
+    connection: &mut Connection,
+    failure: Option<RuntimeStateMigrationFailurePoint>,
+) -> Result<(), RuntimeStateError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_error)?;
+    for (index, statement) in RUNTIME_V3_MIGRATION_STATEMENTS.iter().enumerate() {
+        transaction.execute_batch(statement).map_err(sqlite_error)?;
+        if failure == Some(RuntimeStateMigrationFailurePoint::AfterVersionThreeStatement(index)) {
+            return Err(RuntimeStateError::new(
+                "runtime_state.migration_injected_failure",
+                format!("injected runtime V3 migration failure after statement {index}"),
+            ));
+        }
+    }
+    transaction
+        .execute(
+            "update runtime_state_meta set schema_version = 3 where singleton_id = 1",
+            [],
+        )
+        .map_err(sqlite_error)?;
+    transaction.commit().map_err(sqlite_error)
 }
 
 fn initialize_connection(connection: &Connection) -> Result<(), RuntimeStateError> {
@@ -1756,7 +2313,7 @@ fn migrate_sidecar_if_needed(
     }
     let sidecar_path = PathBuf::from(format!("{}.agent-os", main_path.display()));
     if !sidecar_path.exists() {
-        activate_without_sidecar(connection)?;
+        activate_without_sidecar_v2(connection)?;
         return Ok(());
     }
     let source_digest = file_sha256(&sidecar_path)?;
@@ -1783,7 +2340,7 @@ fn migrate_sidecar_if_needed(
                 "update runtime_state_meta set schema_version = ?1, migration_state = ?2,
                    migration_source_digest = ?3 where singleton_id = 1",
                 params![
-                    RUNTIME_STATE_SCHEMA_VERSION,
+                    2_u32,
                     MigrationState::UnifiedV2Active.as_str(),
                     source_digest
                 ],
@@ -1890,15 +2447,12 @@ fn validate_legacy_source(transaction: &Transaction<'_>) -> Result<(), RuntimeSt
     Ok(())
 }
 
-fn activate_without_sidecar(connection: &Connection) -> Result<(), RuntimeStateError> {
+fn activate_without_sidecar_v2(connection: &Connection) -> Result<(), RuntimeStateError> {
     connection
         .execute(
             "update runtime_state_meta set schema_version = ?1, migration_state = ?2
              where singleton_id = 1",
-            params![
-                RUNTIME_STATE_SCHEMA_VERSION,
-                MigrationState::UnifiedV2Active.as_str()
-            ],
+            params![2_u32, MigrationState::UnifiedV2Active.as_str()],
         )
         .map_err(sqlite_error)?;
     Ok(())

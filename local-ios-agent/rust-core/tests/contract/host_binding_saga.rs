@@ -63,12 +63,15 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
         AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
     )
     .unwrap();
-    let profiles = app.profile_repository();
+    let profiles = app.runtime_state();
     let profile_ref = AgentProfileReference::pinned(
         AgentProfileId::new("profile_v2"),
         AgentProfileVersion::new(1),
     );
-    let profile = profiles.profile(&profile_ref).unwrap();
+    let profile = profiles
+        .agent_profile_exact(profile_ref.profile_id(), AgentProfileVersion::new(1))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         profile.host_binding_state(),
         AgentProfileHostBindingState::PendingHostBinding
@@ -125,7 +128,11 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
         .unwrap();
     assert_eq!(link.state(), HostBindingOperationState::HostUnbound);
     assert_eq!(
-        profiles.profile(&profile_ref).unwrap().host_binding_state(),
+        profiles
+            .agent_profile_exact(profile_ref.profile_id(), AgentProfileVersion::new(1))
+            .unwrap()
+            .unwrap()
+            .host_binding_state(),
         AgentProfileHostBindingState::HostUnbound
     );
     assert!(app
@@ -144,7 +151,10 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
         ))
         .unwrap();
     assert_eq!(active.state(), HostBindingOperationState::Active);
-    let profile = profiles.profile(&profile_ref).unwrap();
+    let profile = profiles
+        .agent_profile_exact(profile_ref.profile_id(), AgentProfileVersion::new(1))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         profile.host_binding_state(),
         AgentProfileHostBindingState::Active

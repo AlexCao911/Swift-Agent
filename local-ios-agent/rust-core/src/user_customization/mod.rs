@@ -17,10 +17,11 @@ pub mod skill_package;
 pub mod user_component;
 
 pub use agent_profile::{
-    AgentProfile, AgentProfileDraft, AgentProfileHostBindingState, AgentProfileId,
-    AgentProfileLLMBinding, AgentProfileLocalBindings, AgentProfileModelBinding,
-    AgentProfilePublisher, AgentProfileReference, AgentProfileVersion, ComponentBinding,
-    ComponentSettings, InMemoryAgentProfileRepository,
+    AgentProfile, AgentProfileDraft, AgentProfileHostBindingState,
+    AgentProfileHostBindingTransition, AgentProfileId, AgentProfileLLMBinding,
+    AgentProfileLocalBindings, AgentProfileModelBinding, AgentProfilePublisher,
+    AgentProfileReference, AgentProfileVersion, ComponentBinding, ComponentSettings,
+    InMemoryAgentProfileRepository, ProfilePublicationOperation,
 };
 pub use agent_slot::{AgentSlot, AgentSlotId, AgentSlotKind};
 pub use agent_template::{AgentTemplate, AgentTemplateId};

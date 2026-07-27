@@ -12,6 +12,7 @@ struct AgentBuilderView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    AgentLLMConfigurationView(viewModel: viewModel)
                     if let draft = viewModel.draft {
                         ForEach(draft.cards.sorted { $0.position < $1.position }) { card in
                             AgentBuilderCardView(

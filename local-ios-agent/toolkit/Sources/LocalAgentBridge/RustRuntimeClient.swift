@@ -611,6 +611,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             llmContractRequest: { runtime, operation, requestJson -> RustRuntimeCFunctionTable.StringResult in
                 guard let operation else { return nil }
                 switch String(cString: operation) {
+                case RustAgentOSOperation.buildAgentV2.rawValue:
+                    return local_agent_runtime_bridge_build_agent_v2(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.prepareProfilePublish.rawValue:
                     return local_agent_runtime_bridge_prepare_profile_publish(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.commitProfilePublish.rawValue:
@@ -747,7 +749,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                 result = functions.updateRuntimeOptions(handle, pointer)
             case .previewContext:
                 result = functions.previewContext(handle, pointer)
-            case .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
+            case .buildAgentV2, .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
                  .attachHostBinding, .confirmHostBindingActivation, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .reconcilePreparation,
                  .beginAbortPreparation,

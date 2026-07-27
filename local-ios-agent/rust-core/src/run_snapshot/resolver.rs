@@ -22,7 +22,7 @@ use crate::security::{
 };
 use crate::storage::{
     InMemoryTransactionRunner, PendingStoreWrite, StorageError, StorageResult, TransactionName,
-    TransactionOperation, TransactionRunner, UnitOfWork,
+    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
 };
 use crate::user_customization::{
     AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
@@ -44,6 +44,7 @@ pub struct RunSnapshotRepository {
 #[derive(Clone)]
 pub struct RunSnapshotSourceCatalog {
     profile_repository: InMemoryAgentProfileRepository,
+    runtime_state: Option<Arc<dyn UnifiedRuntimeStateRepository>>,
     component_catalog: ComponentCatalogService,
     model_catalog: InMemoryModelBindingCatalog,
     security: Arc<dyn SecurityPermissionService>,
@@ -340,12 +341,32 @@ impl RunSnapshotSourceCatalog {
     ) -> Self {
         Self {
             profile_repository,
+            runtime_state: None,
             component_catalog,
             model_catalog,
             security,
             credential_resolver,
             component_entity_versions: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub fn new_unified(
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+        profile_repository: InMemoryAgentProfileRepository,
+        component_catalog: ComponentCatalogService,
+        model_catalog: InMemoryModelBindingCatalog,
+        security: Arc<dyn SecurityPermissionService>,
+        credential_resolver: Arc<dyn CredentialRefResolver>,
+    ) -> Self {
+        let mut catalog = Self::new(
+            profile_repository,
+            component_catalog,
+            model_catalog,
+            security,
+            credential_resolver,
+        );
+        catalog.runtime_state = Some(runtime_state);
+        catalog
     }
 
     pub fn fixture_profile_with_persona_and_model() -> Self {
@@ -549,6 +570,16 @@ impl RunSnapshotSourceCatalog {
         profile_id: &AgentProfileId,
         profile_revision_id: AgentProfileVersion,
     ) -> RunSnapshotResult<AgentProfile> {
+        if let Some(runtime_state) = &self.runtime_state {
+            if let Some(profile) = runtime_state
+                .agent_profile_exact(profile_id, profile_revision_id)
+                .map_err(|error| {
+                    RunSnapshotError::new(error.code().to_string(), error.to_string())
+                })?
+            {
+                return Ok(profile);
+            }
+        }
         self.profile_repository
             .profile(&AgentProfileReference::pinned(
                 profile_id.clone(),

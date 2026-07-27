@@ -1,4 +1,6 @@
 import LocalAgentBridge
+import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import Observation
 
 enum AgentDraftLifecycleState: Equatable, Sendable {
@@ -18,7 +20,8 @@ enum AgentDraftLifecycleState: Equatable, Sendable {
 final class AgentBuilderViewModel {
     private let profileId: String
     private let templateId: String
-    private let builderClient: any AgentBuilderClient
+    private let builderClient: any AgentBuilderPublishing
+    private let requiresHostTarget: Bool
     private let permissionClient: any PermissionClient
     private let toolCatalogClient: any AgentBuilderToolCatalogClient
     private var draftVersion: UInt64 = 0
@@ -26,6 +29,8 @@ final class AgentBuilderViewModel {
     var draft: AgentBuilderDraft?
     var selectedCardId: String?
     var toolCards: [AgentBuilderToolCard] = []
+    var llmTargets: [AgentLLMTargetOption] = []
+    var llmSelection: AgentLLMSelectionDraft?
     var readiness: PermissionReadinessUIModel
     var preview: BuilderContextPreviewResult?
     var lifecycle: AgentDraftLifecycleState = .empty
@@ -44,7 +49,25 @@ final class AgentBuilderViewModel {
     ) {
         self.profileId = profileId
         self.templateId = templateId
-        self.builderClient = builderClient
+        self.builderClient = LegacyAgentBuilderPublishingAdapter(client: builderClient)
+        self.requiresHostTarget = false
+        self.permissionClient = permissionClient
+        self.toolCatalogClient = toolCatalogClient
+        self.readiness = readiness
+    }
+
+    init(
+        profileId: String,
+        templateId: String = "template_1",
+        publisher: any AgentBuilderPublishing,
+        permissionClient: any PermissionClient,
+        toolCatalogClient: any AgentBuilderToolCatalogClient = StaticAgentBuilderToolCatalogClient(cards: []),
+        readiness: PermissionReadinessUIModel = PermissionReadinessUIModel()
+    ) {
+        self.profileId = profileId
+        self.templateId = templateId
+        self.builderClient = publisher
+        self.requiresHostTarget = true
         self.permissionClient = permissionClient
         self.toolCatalogClient = toolCatalogClient
         self.readiness = readiness
@@ -53,10 +76,17 @@ final class AgentBuilderViewModel {
     func load() async {
         do {
             _ = try await builderClient.loadTemplate(templateId)
+            let targets = try await builderClient.availableTargets()
             let cards = try await toolCatalogClient.loadToolCards()
             draft = AgentBuilderDraft.makeDefault(profileId: profileId)
             selectedCardId = draft?.cards.first?.id
             toolCards = cards
+            llmTargets = targets
+            if let target = targets.first {
+                llmSelection = selection(for: target.target.reference)
+            } else if !requiresHostTarget {
+                llmSelection = legacyFallbackSelection()
+            }
             lifecycle = .editing
         } catch {
             readiness = PermissionReadinessUIModel(issues: [
@@ -115,6 +145,25 @@ final class AgentBuilderViewModel {
         markEdited()
     }
 
+    func selectTarget(_ reference: LLMTargetReference) {
+        guard llmTargets.contains(where: { $0.target.reference == reference }) else {
+            return
+        }
+        llmSelection = selection(for: reference)
+        markEdited()
+    }
+
+    func setParameter(_ id: LLMParameterID, _ value: LLMParameterValue) {
+        guard let selection = llmSelection else { return }
+        llmSelection = AgentLLMSelectionDraft(
+            operationID: selection.operationID,
+            target: selection.target,
+            requirements: selection.requirements,
+            parameterOverrides: selection.parameterOverrides.setting(id, to: value)
+        )
+        markEdited()
+    }
+
     func previewContext(sampleUserMessage: String) async {
         guard let draft else {
             return
@@ -143,7 +192,14 @@ final class AgentBuilderViewModel {
             async let permissionReadiness = permissionClient.readiness([])
             let draftResult = try await draftReadiness
             let permissionResult = try await permissionReadiness
-            readiness = PermissionReadinessUIModel(issues: draftResult.issues + permissionResult.issues)
+            var issues = draftResult.issues + permissionResult.issues
+            if requiresHostTarget, llmSelection == nil {
+                issues.append(PermissionIssueDTO(
+                    code: "llm_target.required",
+                    message: "Select an LLM target before publishing."
+                ))
+            }
+            readiness = PermissionReadinessUIModel(issues: issues)
         } catch {
             readiness = PermissionReadinessUIModel(issues: [
                 PermissionIssueDTO(code: "readiness.refresh_failed", message: error.localizedDescription),
@@ -153,6 +209,14 @@ final class AgentBuilderViewModel {
 
     func markEdited() {
         draftVersion += 1
+        if let selection = llmSelection {
+            llmSelection = AgentLLMSelectionDraft(
+                operationID: "\(requiresHostTarget ? "agent-builder" : "legacy").\(profileId).\(draftVersion)",
+                target: selection.target,
+                requirements: selection.requirements,
+                parameterOverrides: selection.parameterOverrides
+            )
+        }
         publishedAgentSelection = nil
         switch lifecycle {
         case .validating, .invalid, .readyToPublish, .editing, .published, .publishFailed, .empty, .publishing:
@@ -180,8 +244,13 @@ final class AgentBuilderViewModel {
         let version = draftVersion
         lifecycle = .publishing
         do {
-            let profile = try await builderClient.publishProfile(
-                draftDTO()
+            guard let llmSelection else {
+                lifecycle = .publishFailed("Select an LLM target before publishing.")
+                return
+            }
+            let profile = try await builderClient.publish(
+                draft: draftDTO(),
+                llm: llmSelection
             )
             guard version == draftVersion else {
                 lifecycle = .dirty
@@ -233,5 +302,38 @@ final class AgentBuilderViewModel {
     private func draftDTO() -> AgentBuilderDraftDTO {
         draft?.publishDTO(templateId: templateId)
             ?? AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
+    }
+
+    private func selection(for reference: LLMTargetReference) -> AgentLLMSelectionDraft {
+        AgentLLMSelectionDraft(
+            operationID: "agent-builder.\(profileId).\(draftVersion)",
+            target: reference,
+            requirements: AgentLLMRequirementsDTO(
+                slotId: "slot.model.primary",
+                capabilities: draft?.selectedToolIds.isEmpty == false ? ["tool_calling"] : [],
+                inputModalities: ["text"],
+                contextBudget: "4096",
+                streamingRequired: true,
+                toolCallingMode: draft?.selectedToolIds.isEmpty == false ? "allowed" : "disabled"
+            ),
+            parameterOverrides: GenerationConfiguration()
+        )
+    }
+
+    private func legacyFallbackSelection() -> AgentLLMSelectionDraft {
+        AgentLLMSelectionDraft(
+            operationID: "legacy.\(profileId).\(draftVersion)",
+            target: LLMTargetReference(
+                targetID: LLMTargetID(rawValue: "legacy"),
+                revision: 1
+            ),
+            requirements: AgentLLMRequirementsDTO(
+                slotId: "slot.model.primary",
+                contextBudget: "4096",
+                streamingRequired: true,
+                toolCallingMode: "disabled"
+            ),
+            parameterOverrides: GenerationConfiguration()
+        )
     }
 }

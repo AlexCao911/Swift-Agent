@@ -200,3 +200,27 @@ actor AppModelCenterClient: ModelCenterClient {
         updateContinuation.yield()
     }
 }
+
+extension AppModelCenterClient: AgentLLMTargetCatalog {
+    func targetOptions() async throws -> [AgentLLMTargetOption] {
+        let state = try await snapshot()
+        return state.targets.compactMap { target in
+            let schema: LLMParameterSchema? = switch target.kind {
+            case let .local(installationID):
+                state.localModels.first {
+                    $0.installation?.installationID == installationID
+                        && $0.modelRevision.modelID == target.modelID
+                }?.parameterSchema
+            case let .cloud(profileID, revision):
+                state.cloudModels.first {
+                    $0.profileID == profileID
+                        && $0.profileRevision == revision
+                        && $0.modelID == target.modelID
+                }?.parameterSchema
+            }
+            return schema.map {
+                AgentLLMTargetOption(target: target, parameterSchema: $0)
+            }
+        }
+    }
+}

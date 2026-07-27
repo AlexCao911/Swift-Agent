@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     llm_contracts::{LLMBindingSchema, LLMInputModality, LLMSlotV2, LLMToolCallingMode},
@@ -13,27 +13,30 @@ use crate::{
     },
     user_customization::{
         AgentReadinessIssue, AgentReadinessReport, AgentSlotId, AgentSlotKind, AgentTemplate,
-        AgentTemplateId, ComponentCatalogService, ComponentKind, UserComponentVersionId,
+        AgentTemplateId, ComponentCatalogService, ComponentKind, PublishedUserComponentVersion,
+        UserComponentVersionId,
     },
 };
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct AgentProfileId(String);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct AgentProfileVersion(u64);
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ComponentSettings {
     values: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentProfileLocalBindings {
     credential_refs: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ComponentBinding {
     slot_id: AgentSlotId,
     slot_kind: AgentSlotKind,
@@ -41,20 +44,21 @@ pub struct ComponentBinding {
     settings: ComponentSettings,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentProfileModelBinding {
     slot_id: AgentSlotId,
     selection: ModelSelection,
     settings: ComponentSettings,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "schema", content = "binding", rename_all = "snake_case")]
 pub enum AgentProfileLLMBinding {
     LegacyV1(AgentProfileModelBinding),
     HostSlotV2(LLMSlotV2),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProfileHostBindingState {
     NotRequired,
@@ -63,7 +67,7 @@ pub enum AgentProfileHostBindingState {
     Active,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentProfileDraft {
     id: AgentProfileId,
     template_id: AgentTemplateId,
@@ -73,7 +77,7 @@ pub struct AgentProfileDraft {
     local_bindings: AgentProfileLocalBindings,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentProfile {
     id: AgentProfileId,
     version: AgentProfileVersion,
@@ -134,10 +138,25 @@ pub struct LocalBindingDebugSummary {
     pub credential_ref: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentProfileReference {
     profile_id: AgentProfileId,
     profile_version: Option<AgentProfileVersion>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfilePublicationOperation {
+    operation_id: String,
+    profile: AgentProfile,
+    components: Vec<PublishedUserComponentVersion>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentProfileHostBindingTransition {
+    profile_id: AgentProfileId,
+    profile_version: AgentProfileVersion,
+    expected: AgentProfileHostBindingState,
+    next: AgentProfileHostBindingState,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -191,6 +210,74 @@ impl AgentProfileVersion {
 
     pub fn as_u64(&self) -> u64 {
         self.0
+    }
+}
+
+impl ProfilePublicationOperation {
+    pub fn new(profile: AgentProfile, components: Vec<PublishedUserComponentVersion>) -> Self {
+        let operation_id = format!(
+            "profile-publication.{}.{}",
+            profile.id().as_str(),
+            profile.version().as_u64()
+        );
+        Self {
+            operation_id,
+            profile,
+            components,
+        }
+    }
+
+    pub fn with_operation_id(mut self, operation_id: impl Into<String>) -> Self {
+        self.operation_id = operation_id.into();
+        self
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    pub fn profile(&self) -> &AgentProfile {
+        &self.profile
+    }
+
+    pub fn components(&self) -> &[PublishedUserComponentVersion] {
+        &self.components
+    }
+
+    pub fn into_parts(self) -> (String, AgentProfile, Vec<PublishedUserComponentVersion>) {
+        (self.operation_id, self.profile, self.components)
+    }
+}
+
+impl AgentProfileHostBindingTransition {
+    pub fn new(
+        profile_id: AgentProfileId,
+        profile_version: AgentProfileVersion,
+        expected: AgentProfileHostBindingState,
+        next: AgentProfileHostBindingState,
+    ) -> Self {
+        Self {
+            profile_id,
+            profile_version,
+            expected,
+            next,
+        }
+    }
+
+    pub fn profile_id(&self) -> &AgentProfileId {
+        &self.profile_id
+    }
+
+    pub fn profile_version(&self) -> AgentProfileVersion {
+        self.profile_version
+    }
+
+    pub fn expected(&self) -> AgentProfileHostBindingState {
+        self.expected
+    }
+
+    pub fn next(&self) -> AgentProfileHostBindingState {
+        self.next
     }
 }
 
@@ -816,6 +903,11 @@ impl AgentProfile {
 
     pub(crate) fn with_version(mut self, version: AgentProfileVersion) -> Self {
         self.version = version;
+        self
+    }
+
+    pub(crate) fn with_host_binding_state(mut self, state: AgentProfileHostBindingState) -> Self {
+        self.host_binding_state = state;
         self
     }
 

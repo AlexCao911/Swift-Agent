@@ -6,7 +6,7 @@ use local_ios_agent_runtime::core::{
 use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_active_branch, local_agent_runtime_bridge_approve_tool,
     local_agent_runtime_bridge_begin_abort_preparation, local_agent_runtime_bridge_build_agent,
-    local_agent_runtime_bridge_commit_assistant_result,
+    local_agent_runtime_bridge_build_agent_v2, local_agent_runtime_bridge_commit_assistant_result,
     local_agent_runtime_bridge_commit_prepared_start,
     local_agent_runtime_bridge_commit_profile_publish,
     local_agent_runtime_bridge_confirm_host_binding_activation,
@@ -771,6 +771,64 @@ fn c_abi_agent_profiles_include_revision_id() {
         assert_eq!(built["profile_id"], "profile.from_template.template_1");
         assert_eq!(built["profile_revision_id"], 1);
 
+        local_agent_runtime_bridge_free(runtime);
+    }
+}
+
+#[test]
+fn c_abi_build_agent_v2_accepts_only_portable_llm_requirements() {
+    unsafe {
+        let runtime = new_in_memory_c_bridge();
+        let request = CString::new(
+            json!({
+                "operation_id": "publish-profile-portable-1",
+                "draft": {
+                    "profile_id": "profile.portable",
+                    "template_id": "template.assistant.default",
+                    "display_name": "Portable Agent",
+                    "persona": "Careful",
+                    "selected_tool_ids": [],
+                    "context_step_ids": []
+                },
+                "requirements": {
+                    "slot_id": "slot.model.primary",
+                    "capabilities": ["tool_calling"],
+                    "input_modalities": ["text"],
+                    "context_budget": "16384",
+                    "streaming_required": true,
+                    "tool_calling_mode": "allowed"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let built = decode(&take_bridge_string(
+            local_agent_runtime_bridge_build_agent_v2(runtime, request.as_ptr()),
+        ));
+
+        assert_eq!(built["profile_id"], "profile.portable");
+        assert_eq!(built["profile_revision_id"], 1);
+        assert_eq!(built["llm_slot_id"], "slot.model.primary");
+        assert!(built["requirements_hash"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        let object = built.as_object().unwrap();
+        for forbidden in [
+            "provider",
+            "provider_profile",
+            "api_key",
+            "base_url",
+            "model_id",
+            "installation_id",
+            "target_id",
+            "parameter_overrides",
+        ] {
+            assert!(
+                !object.contains_key(forbidden),
+                "forbidden field: {forbidden}"
+            );
+        }
         local_agent_runtime_bridge_free(runtime);
     }
 }

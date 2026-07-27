@@ -11,6 +11,8 @@ mod agent_capability_contract;
 mod agent_package_agent_os;
 #[path = "contract/agent_profile_contract.rs"]
 mod agent_profile_contract;
+#[path = "contract/agent_profile_sqlite.rs"]
+mod agent_profile_sqlite;
 #[path = "contract/bearer_token.rs"]
 mod bearer_token;
 #[path = "contract/canonical_digest_v1.rs"]

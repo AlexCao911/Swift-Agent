@@ -1,3 +1,99 @@
+public protocol PortableAgentBuilderClient: Sendable {
+    func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel
+    func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel
+    func buildPendingProfile(_ request: BuildAgentV2RequestDTO) async throws -> PendingAgentProfileDTO
+    func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO
+    func prepareProfilePublish(_ request: ProfilePublishPreparationDTO) async throws -> HostBindingOperationDTO
+    func commitProfilePublish(_ request: HostBindingCommitDTO) async throws -> HostBindingCrossLinkDTO
+    func confirmHostBindingActivation(
+        _ request: HostBindingActivationConfirmationDTO
+    ) async throws -> HostBindingCrossLinkDTO
+}
+
+public struct RustPortableAgentBuilderClient: PortableAgentBuilderClient {
+    private let gateway: any RustAgentOSBridgeGateway
+
+    public init(gateway: any RustAgentOSBridgeGateway) {
+        self.gateway = gateway
+    }
+
+    public func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
+        AgentBuilderUIModel(
+            profileId: id,
+            displayName: "Assistant",
+            readiness: PermissionReadinessUIModel()
+        )
+    }
+
+    public func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel {
+        guard Self.supportedTemplateIDs.contains(draft.templateId) else {
+            return PermissionReadinessUIModel(issues: [
+                PermissionIssueDTO(
+                    code: "agent_builder.template_unsupported",
+                    message: "This agent template is not available."
+                ),
+            ])
+        }
+        return PermissionReadinessUIModel()
+    }
+
+    public func buildPendingProfile(
+        _ request: BuildAgentV2RequestDTO
+    ) async throws -> PendingAgentProfileDTO {
+        try await gateway.request(
+            .buildAgentV2,
+            request,
+            as: PendingAgentProfileDTO.self
+        )
+    }
+
+    public func previewContext(
+        _ request: BuilderContextPreviewRequestDTO
+    ) async throws -> BuilderContextPreviewResponseDTO {
+        try await gateway.request(
+            .previewContext,
+            request,
+            as: BuilderContextPreviewResponseDTO.self
+        )
+    }
+
+    public func prepareProfilePublish(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO {
+        try await gateway.request(
+            .prepareProfilePublish,
+            request,
+            as: HostBindingOperationDTO.self
+        )
+    }
+
+    public func commitProfilePublish(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        try await gateway.request(
+            .commitProfilePublish,
+            request,
+            as: HostBindingCrossLinkDTO.self
+        )
+    }
+
+    public func confirmHostBindingActivation(
+        _ request: HostBindingActivationConfirmationDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        try await gateway.request(
+            .confirmHostBindingActivation,
+            request,
+            as: HostBindingCrossLinkDTO.self
+        )
+    }
+
+    private static let supportedTemplateIDs: Set<String> = [
+        "template_1",
+        "template.assistant.default",
+    ]
+}
+
+@available(*, deprecated, message: "Use PortableAgentBuilderClient for host-bound V2 profiles")
 public protocol AgentBuilderClient: Sendable {
     func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel
     func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel

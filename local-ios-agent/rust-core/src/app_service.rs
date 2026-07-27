@@ -12,14 +12,14 @@ use crate::security::{
     CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
 };
 use crate::storage::{
-    InMemoryTransactionRunner, StorageResult, TransactionName, TransactionOperation,
-    TransactionRunner, UnitOfWork,
+    InMemoryRuntimeStateStore, InMemoryTransactionRunner, StorageResult, TransactionName,
+    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
 };
 use crate::user_customization::{
     AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
     AgentProfileModelBinding, AgentProfilePublisher, AgentProfileReference, AgentProfileVersion,
     AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent,
-    InMemoryAgentProfileRepository,
+    InMemoryAgentProfileRepository, ProfilePublicationOperation,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -30,6 +30,7 @@ pub struct AgentOSApplicationServiceConfig {
 pub struct AgentOSApplicationService {
     snapshot_service: Arc<RunSnapshotService>,
     profile_repository: InMemoryAgentProfileRepository,
+    runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     component_catalog: ComponentCatalogService,
     model_catalog: InMemoryModelBindingCatalog,
 }
@@ -118,6 +119,7 @@ impl AgentOSApplicationService {
         let model_catalog = InMemoryModelBindingCatalog::default();
         Self::from_repositories(
             profile_repository,
+            Arc::new(InMemoryRuntimeStateStore::new()),
             component_catalog,
             model_catalog,
             Arc::new(
@@ -128,12 +130,75 @@ impl AgentOSApplicationService {
         )
     }
 
+    pub fn from_runtime_state(
+        config: AgentOSApplicationServiceConfig,
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+    ) -> RunSnapshotResult<Self> {
+        if config.seed_development_profile() {
+            let seeded = Self::development_seeded()?;
+            for profile in seeded.profile_repository.profiles() {
+                let components = seeded
+                    .component_catalog
+                    .published_versions_for(
+                        profile
+                            .bindings()
+                            .iter()
+                            .map(ComponentBinding::component_version_id),
+                    )
+                    .map_err(|error| {
+                        RunSnapshotError::new(error.code().to_string(), error.to_string())
+                    })?;
+                runtime_state
+                    .publish_agent_profile_aggregate(ProfilePublicationOperation::new(
+                        profile, components,
+                    ))
+                    .map_err(runtime_state_error)?;
+            }
+            return Ok(Self::from_repositories(
+                seeded.profile_repository,
+                runtime_state,
+                seeded.component_catalog,
+                seeded.model_catalog,
+                Arc::new(
+                    StaticSecurityPermissionService::default()
+                        .with_permission("run.start", PermissionState::Granted),
+                ),
+                Arc::new(default_credential_resolver()),
+            ));
+        }
+        let profile_repository = InMemoryAgentProfileRepository::default();
+        let component_catalog = ComponentCatalogService::default();
+        component_catalog
+            .restore_published_versions(
+                runtime_state
+                    .agent_component_revisions()
+                    .map_err(runtime_state_error)?,
+            )
+            .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+        let service = Self::from_repositories(
+            profile_repository,
+            runtime_state,
+            component_catalog,
+            InMemoryModelBindingCatalog::default(),
+            Arc::new(
+                StaticSecurityPermissionService::default()
+                    .with_permission("run.start", PermissionState::Granted),
+            ),
+            Arc::new(default_credential_resolver()),
+        );
+        Ok(service)
+    }
+
     pub fn snapshot_service(&self) -> Arc<RunSnapshotService> {
         self.snapshot_service.clone()
     }
 
     pub fn profile_repository(&self) -> InMemoryAgentProfileRepository {
         self.profile_repository.clone()
+    }
+
+    pub fn runtime_state(&self) -> Arc<dyn UnifiedRuntimeStateRepository> {
+        self.runtime_state.clone()
     }
 
     pub fn resolve_and_persist_snapshot(
@@ -144,7 +209,9 @@ impl AgentOSApplicationService {
     }
 
     pub fn list_agent_profiles(&self) -> Vec<AgentProfile> {
-        self.profile_repository.latest_profiles()
+        self.runtime_state
+            .latest_agent_profiles()
+            .unwrap_or_default()
     }
 
     pub fn build_agent_from_template(
@@ -272,12 +339,183 @@ impl AgentOSApplicationService {
             &model_catalog_for_publish,
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
-        self.profile_repository.profile(&reference).ok_or_else(|| {
+        let profile = self.profile_repository.profile(&reference).ok_or_else(|| {
             RunSnapshotError::new(
                 "application_service.profile_publish_missing",
                 "published agent profile could not be loaded from repository",
             )
-        })
+        })?;
+        self.persist_profile_aggregate(&profile)?;
+        Ok(profile)
+    }
+
+    pub fn build_agent_v2(
+        &self,
+        operation_id: &str,
+        profile_id: Option<&str>,
+        template_id: &str,
+        card_draft: AgentBuilderCardDraftInput,
+        requirements: AgentLLMRequirements,
+    ) -> RunSnapshotResult<AgentProfile> {
+        if operation_id.trim().is_empty() {
+            return Err(RunSnapshotError::new(
+                "application_service.publication_operation_invalid",
+                "V2 Agent publication operation ID is empty",
+            ));
+        }
+        if let Some(existing) = self
+            .runtime_state
+            .agent_profile_for_publication_operation(operation_id)
+            .map_err(runtime_state_error)?
+        {
+            return Ok(existing);
+        }
+        let template = template_for_build_request(template_id)?;
+        let profile_id = AgentProfileId::new(
+            profile_id
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("profile.from_template.{template_id}")),
+        );
+        let profile_version = self
+            .runtime_state
+            .agent_profile_latest(&profile_id)
+            .map_err(runtime_state_error)?
+            .map(|profile| AgentProfileVersion::new(profile.version().as_u64() + 1))
+            .unwrap_or_else(AgentProfileVersion::initial);
+        let expected_slot = template
+            .slot_id_for_kind(AgentSlotKind::Model)
+            .expect("assistant template has model slot");
+        if requirements.slot_id() != expected_slot.as_str() {
+            return Err(RunSnapshotError::new(
+                "application_service.llm_slot_mismatch",
+                "portable LLM requirements do not match the template model slot",
+            ));
+        }
+
+        let persona_component_id = self
+            .component_catalog
+            .create_draft(ComponentContent::persona(card_draft.persona_name()));
+        let persona_version = self
+            .component_catalog
+            .publish(persona_component_id)
+            .map_err(|error| {
+                RunSnapshotError::new(
+                    "application_service.component_publish_failed",
+                    error.to_string(),
+                )
+            })?;
+        let mut draft =
+            AgentProfileDraft::new(profile_id, template.id().clone(), card_draft.display_name())
+                .bind(ComponentBinding::persona(
+                    template
+                        .slot_id_for_kind(AgentSlotKind::Persona)
+                        .expect("assistant template has persona slot")
+                        .clone(),
+                    persona_version,
+                ))
+                .with_llm_slot(LLMSlotV2::new(requirements));
+
+        if let Some(instruction_text) = card_draft.instruction_text() {
+            let component_id = self
+                .component_catalog
+                .create_draft(ComponentContent::instruction(instruction_text));
+            let version = self
+                .component_catalog
+                .publish(component_id)
+                .map_err(|error| {
+                    RunSnapshotError::new(
+                        "application_service.component_publish_failed",
+                        error.to_string(),
+                    )
+                })?;
+            draft = draft.bind(ComponentBinding::new(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Instruction)
+                    .expect("assistant template has instruction slot")
+                    .clone(),
+                AgentSlotKind::Instruction,
+                version,
+                Default::default(),
+            ));
+        }
+        if let Some(tool_recipe_name) = card_draft.tool_recipe_name() {
+            let component_id = self
+                .component_catalog
+                .create_draft(ComponentContent::tool_recipe(tool_recipe_name));
+            let version = self
+                .component_catalog
+                .publish(component_id)
+                .map_err(|error| {
+                    RunSnapshotError::new(
+                        "application_service.component_publish_failed",
+                        error.to_string(),
+                    )
+                })?;
+            draft = draft.bind(ComponentBinding::new(
+                template
+                    .slot_id_for_kind(AgentSlotKind::Toolset)
+                    .expect("assistant template has toolset slot")
+                    .clone(),
+                AgentSlotKind::Toolset,
+                version,
+                Default::default(),
+            ));
+        }
+
+        let staged = InMemoryAgentProfileRepository::default();
+        let reference = AgentProfilePublisher::new(
+            Box::new(InMemoryTransactionRunner::default()),
+            staged.clone(),
+        )
+        .publish_with_version(
+            draft,
+            profile_version,
+            &template,
+            &self.component_catalog,
+            &ModelBindingCatalog::default(),
+        )
+        .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+        let profile = staged.profile(&reference).ok_or_else(|| {
+            RunSnapshotError::new(
+                "application_service.profile_publish_missing",
+                "staged V2 agent profile could not be loaded",
+            )
+        })?;
+        let components = self
+            .component_catalog
+            .published_versions_for(
+                profile
+                    .bindings()
+                    .iter()
+                    .map(ComponentBinding::component_version_id),
+            )
+            .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+        self.runtime_state
+            .publish_agent_profile_aggregate(
+                ProfilePublicationOperation::new(profile.clone(), components)
+                    .with_operation_id(operation_id),
+            )
+            .map_err(runtime_state_error)?;
+        Ok(profile)
+    }
+
+    fn persist_profile_aggregate(&self, profile: &AgentProfile) -> RunSnapshotResult<()> {
+        let components = self
+            .component_catalog
+            .published_versions_for(
+                profile
+                    .bindings()
+                    .iter()
+                    .map(ComponentBinding::component_version_id),
+            )
+            .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
+        self.runtime_state
+            .publish_agent_profile_aggregate(ProfilePublicationOperation::new(
+                profile.clone(),
+                components,
+            ))
+            .map_err(runtime_state_error)?;
+        Ok(())
     }
 
     fn development_seeded() -> RunSnapshotResult<Self> {
@@ -370,8 +608,9 @@ impl AgentOSApplicationService {
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
-        Ok(Self::from_repositories(
+        let service = Self::from_repositories(
             profile_repository,
+            Arc::new(InMemoryRuntimeStateStore::new()),
             component_catalog,
             model_catalog,
             Arc::new(
@@ -379,11 +618,16 @@ impl AgentOSApplicationService {
                     .with_permission("run.start", PermissionState::Granted),
             ),
             Arc::new(default_credential_resolver()),
-        ))
+        );
+        for profile in service.profile_repository.profiles() {
+            service.persist_profile_aggregate(&profile)?;
+        }
+        Ok(service)
     }
 
     fn from_repositories(
         profile_repository: InMemoryAgentProfileRepository,
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
         component_catalog: ComponentCatalogService,
         model_catalog: InMemoryModelBindingCatalog,
         security: Arc<dyn crate::security::SecurityPermissionService>,
@@ -391,6 +635,7 @@ impl AgentOSApplicationService {
     ) -> Self {
         Self {
             snapshot_service: Arc::new(snapshot_service_from_repositories(
+                runtime_state.clone(),
                 profile_repository.clone(),
                 component_catalog.clone(),
                 model_catalog.clone(),
@@ -398,10 +643,15 @@ impl AgentOSApplicationService {
                 credential_resolver,
             )),
             profile_repository,
+            runtime_state,
             component_catalog,
             model_catalog,
         }
     }
+}
+
+fn runtime_state_error(error: crate::storage::RuntimeStateError) -> RunSnapshotError {
+    RunSnapshotError::new(error.code().to_string(), error.to_string())
 }
 
 fn next_profile_version(
@@ -494,13 +744,15 @@ fn cleaned_list(values: &[String]) -> Vec<String> {
 }
 
 fn snapshot_service_from_repositories(
+    runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     profile_repository: InMemoryAgentProfileRepository,
     component_catalog: ComponentCatalogService,
     model_catalog: InMemoryModelBindingCatalog,
     security: Arc<dyn crate::security::SecurityPermissionService>,
     credential_resolver: Arc<dyn crate::security::CredentialRefResolver>,
 ) -> RunSnapshotService {
-    RunSnapshotService::from_real_repositories(
+    RunSnapshotService::from_unified_repositories(
+        runtime_state,
         profile_repository,
         component_catalog,
         model_catalog,

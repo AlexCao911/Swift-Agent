@@ -3,6 +3,7 @@ import Foundation
 public enum RustAgentOSOperation: String, Hashable, Sendable {
     case listAgentProfiles = "list_agent_profiles"
     case buildAgent = "build_agent"
+    case buildAgentV2 = "build_agent_v2"
     case prepareUserTurn = "prepare_user_turn"
     case commitAssistantResult = "commit_assistant_result"
     case startRun = "start_run"

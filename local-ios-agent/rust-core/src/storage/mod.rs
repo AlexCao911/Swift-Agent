@@ -21,7 +21,8 @@ pub use runtime_state::{
     HOST_EVENT_MAX_BYTES, HOST_EVENT_MAX_EVENTS, HOST_LIFECYCLE_TIMEOUT_MILLIS,
 };
 pub use sqlite_runtime_state::{
-    MigrationState, RuntimeStateMigrationFailurePoint, SqliteRuntimeStateStore,
+    runtime_v3_migration_statement_count, MigrationState, RuntimeStateMigrationFailurePoint,
+    SqliteRuntimeStateStore,
 };
 pub use transaction::{
     InMemoryTransactionRunner, PendingStoreWrite, StorageError, StorageResult, TransactionName,

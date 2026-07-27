@@ -129,6 +129,29 @@ impl RunSnapshotService {
         )
     }
 
+    pub fn from_unified_repositories(
+        runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+        profile_repository: InMemoryAgentProfileRepository,
+        component_catalog: ComponentCatalogService,
+        model_catalog: InMemoryModelBindingCatalog,
+        security: Arc<dyn SecurityPermissionService>,
+        credential_resolver: Arc<dyn CredentialRefResolver>,
+        runner: Box<dyn TransactionRunner>,
+    ) -> Self {
+        Self::new(
+            RunSnapshotSourceCatalog::new_unified(
+                runtime_state,
+                profile_repository,
+                component_catalog,
+                model_catalog,
+                security,
+                credential_resolver,
+            ),
+            RunSnapshotRepository::default(),
+            runner,
+        )
+    }
+
     pub fn fixture() -> Self {
         Self::new(
             RunSnapshotSourceCatalog::fixture_profile_with_persona_and_model(),

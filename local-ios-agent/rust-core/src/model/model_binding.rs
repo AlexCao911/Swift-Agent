@@ -1,19 +1,24 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{ModelDescriptor, ModelFormat};
 use crate::security::{
     ApprovalGrant, ApprovalRequirement, DataEgressDecision, OperationDescriptor,
 };
 use crate::storage::{PendingStoreWrite, StorageError, StorageResult, UnitOfWork};
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct ModelBindingId(String);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct ModelCatalogVersion(u64);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelSelection {
     binding_id: ModelBindingId,
     provider_account_id: String,

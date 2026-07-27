@@ -1,9 +1,11 @@
 use crate::user_customization::{ComponentContent, UserComponentId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct UserComponentVersionId(pub u64);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PublishedUserComponentVersion {
     pub id: UserComponentVersionId,
     pub component_id: UserComponentId,

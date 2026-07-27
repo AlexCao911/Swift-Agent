@@ -12,6 +12,7 @@ struct AppContainer {
     let nativeToolkitClient: any NativeToolkitClientProtocol
     let nativePermissionGateway: any NativePermissionGateway
     let agentBuilderClient: any AgentBuilderClient
+    let agentBuilderPublishing: (any AgentBuilderPublishing)?
     let permissionClient: any PermissionClient
     let agentBuilderToolCatalogClient: any AgentBuilderToolCatalogClient
     let runInlineCardActionHandler: RunInlineCardActionHandler
@@ -28,7 +29,8 @@ struct AppContainer {
         localLLMSubsystem: LocalLLMSubsystem,
         cloudLLMSubsystem: CloudLLMSubsystem,
         llmHostRuntime: LLMHostProductRuntime,
-        modelCenterClient: any ModelCenterClient
+        modelCenterClient: any ModelCenterClient,
+        agentBuilderPublishing: any AgentBuilderPublishing
     ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -37,6 +39,7 @@ struct AppContainer {
             nativeToolkitClient: nativeToolkitClient,
             nativePermissionGateway: nativePermissionGateway,
             agentBuilderClient: agentBuilderClient,
+            agentBuilderPublishing: agentBuilderPublishing,
             permissionClient: permissionClient,
             agentBuilderToolCatalogClient: agentBuilderToolCatalogClient,
             runInlineCardActionHandler: runInlineCardActionHandler,
@@ -84,13 +87,23 @@ struct AppContainer {
         profileId: String = "profile_1",
         templateId: String = "template_1"
     ) -> AgentBuilderViewModel {
-        AgentBuilderViewModel(
-            profileId: profileId,
-            templateId: templateId,
-            builderClient: agentBuilderClient,
-            permissionClient: permissionClient,
-            toolCatalogClient: agentBuilderToolCatalogClient
-        )
+        if let agentBuilderPublishing {
+            AgentBuilderViewModel(
+                profileId: profileId,
+                templateId: templateId,
+                publisher: agentBuilderPublishing,
+                permissionClient: permissionClient,
+                toolCatalogClient: agentBuilderToolCatalogClient
+            )
+        } else {
+            AgentBuilderViewModel(
+                profileId: profileId,
+                templateId: templateId,
+                builderClient: agentBuilderClient,
+                permissionClient: permissionClient,
+                toolCatalogClient: agentBuilderToolCatalogClient
+            )
+        }
     }
 
     @MainActor

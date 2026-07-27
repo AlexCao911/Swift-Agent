@@ -4,6 +4,38 @@ import Testing
 
 @Suite("Agent builder bridge client")
 struct AgentBuilderClientTests {
+    @Test("portable builder sends requirements without Swift target details")
+    func portableBuilderSendsOnlyRustOwnedDraftAndRequirements() async throws {
+        let gateway = RecordingBuilderGateway()
+        let client = RustPortableAgentBuilderClient(gateway: gateway)
+        let request = BuildAgentV2RequestDTO(
+            operationId: "publish.profile.portable.1",
+            draft: AgentBuilderDraftDTO(
+                profileId: "profile.portable",
+                templateId: "template.assistant.default",
+                displayName: "Portable"
+            ),
+            requirements: AgentLLMRequirementsDTO(
+                slotId: "slot.model.primary",
+                contextBudget: "16384",
+                streamingRequired: true,
+                toolCallingMode: "allowed"
+            )
+        )
+
+        let pending = try await client.buildPendingProfile(request)
+
+        #expect(pending.profileId == "profile.portable")
+        #expect(gateway.operations == [.buildAgentV2])
+        let payload = try #require(gateway.payloads.first)
+        for forbidden in [
+            "target_id", "provider", "model_id", "api_key", "base_url",
+            "installation_id", "parameter_overrides",
+        ] {
+            #expect(payload.range(of: "\"\(forbidden)\"") == nil)
+        }
+    }
+
     @Test("publish profile uses draft template id through execution bridge")
     func publishProfileUsesDraftTemplateId() async throws {
         let bridge = RecordingExecutionBridgeClient()
@@ -86,6 +118,65 @@ struct AgentBuilderClientTests {
         ))
 
         #expect(readiness.issues.map(\.code) == ["agent_builder.template_unsupported"])
+    }
+}
+
+private final class RecordingBuilderGateway: RustAgentOSBridgeGateway, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedOperations: [RustAgentOSOperation] = []
+    private var storedPayloads: [String] = []
+
+    var operations: [RustAgentOSOperation] {
+        lock.withLock { storedOperations }
+    }
+
+    var payloads: [String] {
+        lock.withLock { storedPayloads }
+    }
+
+    func request<Request, Response>(
+        _ operation: RustAgentOSOperation,
+        _ request: Request,
+        as response: Response.Type
+    ) async throws -> Response where Request: Encodable, Response: Decodable {
+        let data = try JSONEncoder().encode(request)
+        lock.withLock {
+            storedOperations.append(operation)
+            storedPayloads.append(String(decoding: data, as: UTF8.self))
+        }
+        let value: any Encodable = switch operation {
+        case .buildAgentV2:
+            PendingAgentProfileDTO(
+                profileId: "profile.portable",
+                profileRevisionId: 1,
+                displayName: "Portable",
+                llmSlotId: "slot.model.primary",
+                requirementsHash: "requirements-hash"
+            )
+        default:
+            throw AgentBuilderClientTestError.unimplemented
+        }
+        let encoded = try JSONEncoder().encode(AnyEncodable(value))
+        return try JSONDecoder().decode(Response.self, from: encoded)
+    }
+
+    func stream<Request>(
+        _ operation: RustAgentOSOperation,
+        _ request: Request
+    ) -> AsyncThrowingStream<RuntimeEventDTO, Error> where Request: Encodable {
+        AsyncThrowingStream { $0.finish() }
+    }
+}
+
+private struct AnyEncodable: Encodable {
+    private let encodeValue: (Encoder) throws -> Void
+
+    init(_ value: any Encodable) {
+        encodeValue = value.encode(to:)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try encodeValue(encoder)
     }
 }
 

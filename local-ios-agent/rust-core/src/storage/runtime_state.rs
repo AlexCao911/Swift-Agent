@@ -16,6 +16,11 @@ use crate::llm_contracts::{
     PreparedSessionCleanupIdentity, ResourceLifecycle, RunPreparationState,
 };
 use crate::storage::agent_os_state::{PreparedRunConsumption, SharedAgentOSStateStore};
+use crate::user_customization::{
+    AgentProfile, AgentProfileHostBindingState, AgentProfileHostBindingTransition, AgentProfileId,
+    AgentProfileReference, AgentProfileVersion, ProfilePublicationOperation,
+    PublishedUserComponentVersion, UserComponentVersionId,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeAggregateFailurePoint {
@@ -432,6 +437,35 @@ impl fmt::Display for RuntimeStateError {
 impl std::error::Error for RuntimeStateError {}
 
 pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
+    fn publish_agent_profile_aggregate(
+        &self,
+        operation: ProfilePublicationOperation,
+    ) -> Result<AgentProfileReference, RuntimeStateError>;
+    fn agent_profile_exact(
+        &self,
+        id: &AgentProfileId,
+        version: AgentProfileVersion,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError>;
+    fn agent_profile_latest(
+        &self,
+        id: &AgentProfileId,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError>;
+    fn agent_profile_for_publication_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError>;
+    fn latest_agent_profiles(&self) -> Result<Vec<AgentProfile>, RuntimeStateError>;
+    fn transition_agent_profile_host_binding(
+        &self,
+        transition: AgentProfileHostBindingTransition,
+    ) -> Result<AgentProfile, RuntimeStateError>;
+    fn agent_component_exact(
+        &self,
+        id: UserComponentVersionId,
+    ) -> Result<Option<PublishedUserComponentVersion>, RuntimeStateError>;
+    fn agent_component_revisions(
+        &self,
+    ) -> Result<Vec<PublishedUserComponentVersion>, RuntimeStateError>;
     fn insert_worker_and_session(
         &self,
         worker: HostWorkerRecord,
@@ -569,6 +603,9 @@ pub struct InMemoryRuntimeStateStore {
 
 #[derive(Clone, Default)]
 struct InMemoryRuntimeState {
+    profiles: BTreeMap<(AgentProfileId, AgentProfileVersion), AgentProfile>,
+    profile_publication_operations: BTreeMap<String, (AgentProfileId, AgentProfileVersion)>,
+    components: BTreeMap<UserComponentVersionId, PublishedUserComponentVersion>,
     workers: BTreeMap<String, HostWorkerRecord>,
     sessions: BTreeMap<String, HostSessionRecord>,
     commands: BTreeMap<String, HostCommandOutboxRow>,
@@ -620,6 +657,169 @@ impl Default for InMemoryRuntimeStateStore {
 }
 
 impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
+    fn publish_agent_profile_aggregate(
+        &self,
+        operation: ProfilePublicationOperation,
+    ) -> Result<AgentProfileReference, RuntimeStateError> {
+        let (operation_id, profile, components) = operation.into_parts();
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let mut next = state.clone();
+        let profile_key = (profile.id().clone(), profile.version());
+        if let Some(existing_key) = next.profile_publication_operations.get(&operation_id) {
+            return next
+                .profiles
+                .get(existing_key)
+                .cloned()
+                .map(|profile| profile.reference())
+                .ok_or_else(not_found);
+        }
+        if let Some(existing) = next.profiles.get(&profile_key) {
+            return if existing == &profile {
+                Ok(profile.reference())
+            } else {
+                Err(conflict())
+            };
+        }
+        for component in components {
+            if let Some(existing) = next.components.get(&component.id) {
+                if existing != &component {
+                    return Err(conflict());
+                }
+            } else {
+                next.components.insert(component.id, component);
+            }
+        }
+        if profile.bindings().iter().any(|binding| {
+            !next
+                .components
+                .contains_key(&binding.component_version_id())
+        }) {
+            return Err(RuntimeStateError::new(
+                "runtime_state.profile_component_missing",
+                "profile aggregate omits a referenced component revision",
+            ));
+        }
+        let reference = profile.reference();
+        next.profiles.insert(profile_key, profile);
+        next.profile_publication_operations.insert(
+            operation_id,
+            (
+                reference.profile_id().clone(),
+                reference.profile_version().unwrap(),
+            ),
+        );
+        *state = next;
+        Ok(reference)
+    }
+
+    fn agent_profile_exact(
+        &self,
+        id: &AgentProfileId,
+        version: AgentProfileVersion,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .profiles
+            .get(&(id.clone(), version))
+            .cloned())
+    }
+
+    fn agent_profile_latest(
+        &self,
+        id: &AgentProfileId,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .profiles
+            .iter()
+            .filter(|((profile_id, _), _)| profile_id == id)
+            .max_by_key(|((_, version), _)| *version)
+            .map(|(_, profile)| profile.clone()))
+    }
+
+    fn agent_profile_for_publication_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<AgentProfile>, RuntimeStateError> {
+        let state = self.inner.lock().map_err(|_| poisoned())?;
+        Ok(state
+            .profile_publication_operations
+            .get(operation_id)
+            .and_then(|key| state.profiles.get(key))
+            .cloned())
+    }
+
+    fn latest_agent_profiles(&self) -> Result<Vec<AgentProfile>, RuntimeStateError> {
+        let state = self.inner.lock().map_err(|_| poisoned())?;
+        let mut latest = BTreeMap::<AgentProfileId, AgentProfile>::new();
+        for profile in state.profiles.values().filter(|profile| {
+            profile.host_binding_state() != AgentProfileHostBindingState::PendingHostBinding
+        }) {
+            if latest
+                .get(profile.id())
+                .is_none_or(|current| current.version() < profile.version())
+            {
+                latest.insert(profile.id().clone(), profile.clone());
+            }
+        }
+        Ok(latest.into_values().collect())
+    }
+
+    fn transition_agent_profile_host_binding(
+        &self,
+        transition: AgentProfileHostBindingTransition,
+    ) -> Result<AgentProfile, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let profile = state
+            .profiles
+            .get_mut(&(
+                transition.profile_id().clone(),
+                transition.profile_version(),
+            ))
+            .ok_or_else(not_found)?;
+        if profile.host_binding_state() == transition.next() {
+            return Ok(profile.clone());
+        }
+        if profile.host_binding_state() != transition.expected() {
+            return Err(RuntimeStateError::new(
+                "agent_profile.host_binding_state_stale",
+                "agent profile host-binding state changed before transition",
+            ));
+        }
+        *profile = profile.clone().with_host_binding_state(transition.next());
+        Ok(profile.clone())
+    }
+
+    fn agent_component_exact(
+        &self,
+        id: UserComponentVersionId,
+    ) -> Result<Option<PublishedUserComponentVersion>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .components
+            .get(&id)
+            .cloned())
+    }
+
+    fn agent_component_revisions(
+        &self,
+    ) -> Result<Vec<PublishedUserComponentVersion>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .components
+            .values()
+            .cloned()
+            .collect())
+    }
+
     fn insert_worker_and_session(
         &self,
         worker: HostWorkerRecord,

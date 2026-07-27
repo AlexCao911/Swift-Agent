@@ -191,6 +191,51 @@ impl ComponentCatalogService {
             .get(&id)
             .cloned()
     }
+
+    pub(crate) fn restore_published_versions(
+        &self,
+        versions: impl IntoIterator<Item = PublishedUserComponentVersion>,
+    ) -> StorageResult<()> {
+        let mut inner = self.inner.lock().expect("component catalog mutex poisoned");
+        for version in versions {
+            if let Some(existing) = inner.versions.get(&version.id) {
+                if existing != &version {
+                    return Err(StorageError::new(
+                        "component.version_conflict",
+                        "persisted component revision conflicts with the in-memory catalog",
+                    ));
+                }
+                continue;
+            }
+            let component = inner
+                .components
+                .entry(version.component_id)
+                .or_insert_with(|| {
+                    UserComponent::new(version.component_id, version.content().clone())
+                });
+            component.record_published_version(version.id);
+            inner.next_component_id = inner.next_component_id.max(version.component_id.0 + 1);
+            inner.next_version_id = inner.next_version_id.max(version.id.0 + 1);
+            inner.versions.insert(version.id, version);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn published_versions_for(
+        &self,
+        ids: impl IntoIterator<Item = UserComponentVersionId>,
+    ) -> StorageResult<Vec<PublishedUserComponentVersion>> {
+        ids.into_iter()
+            .map(|id| {
+                self.version(id).ok_or_else(|| {
+                    StorageError::new(
+                        "component.version_missing",
+                        "published component revision is missing from the catalog",
+                    )
+                })
+            })
+            .collect()
+    }
 }
 
 impl TransactionOperation for ComponentPublishOperation {

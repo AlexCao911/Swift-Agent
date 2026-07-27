@@ -1,16 +1,18 @@
 use crate::core::AgentError;
 use crate::user_customization::{ComponentContent, ComponentKind, UserComponentVersionId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct UserComponentId(pub u64);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UserComponentDraft {
     pub id: UserComponentId,
     pub content: ComponentContent,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UserComponent {
     id: UserComponentId,
     kind: ComponentKind,

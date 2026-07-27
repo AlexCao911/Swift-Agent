@@ -1,10 +1,12 @@
 use crate::agent_package::{InMemoryPackageInstallStore, PackageHostBindingState};
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
+use crate::storage::UnifiedRuntimeStateRepository;
 use crate::user_customization::{
-    AgentProfile, AgentProfileHostBindingState, AgentProfileId, AgentProfileReference,
-    AgentProfileVersion, InMemoryAgentProfileRepository,
+    AgentProfile, AgentProfileHostBindingState, AgentProfileHostBindingTransition, AgentProfileId,
+    AgentProfileVersion,
 };
+use std::sync::Arc;
 
 use super::{
     HostBindingActivationConfirmation, HostBindingCommit, HostBindingCrossLink, HostBindingError,
@@ -13,12 +15,12 @@ use super::{
 
 #[derive(Clone)]
 pub struct HostBindingSubjectCatalog {
-    profiles: InMemoryAgentProfileRepository,
+    profiles: Arc<dyn UnifiedRuntimeStateRepository>,
     packages: Option<InMemoryPackageInstallStore>,
 }
 
 impl HostBindingSubjectCatalog {
-    pub fn new(profiles: InMemoryAgentProfileRepository) -> Self {
+    pub fn new(profiles: Arc<dyn UnifiedRuntimeStateRepository>) -> Self {
         Self {
             profiles,
             packages: None,
@@ -30,8 +32,8 @@ impl HostBindingSubjectCatalog {
         self
     }
 
-    pub fn profiles(&self) -> &InMemoryAgentProfileRepository {
-        &self.profiles
+    pub fn profiles(&self) -> Arc<dyn UnifiedRuntimeStateRepository> {
+        self.profiles.clone()
     }
 }
 
@@ -181,10 +183,13 @@ impl AgentHostBindingService {
     fn exact_profile(&self, id: &str, revision: u64) -> Result<AgentProfile, HostBindingError> {
         self.subjects
             .profiles
-            .profile(&AgentProfileReference::pinned(
-                AgentProfileId::new(id),
-                AgentProfileVersion::new(revision),
-            ))
+            .agent_profile_exact(&AgentProfileId::new(id), AgentProfileVersion::new(revision))
+            .map_err(|runtime_error| {
+                error(
+                    "host_binding.profile_store_failed",
+                    runtime_error.to_string(),
+                )
+            })?
             .ok_or_else(|| {
                 error(
                     "host_binding.profile_revision_not_found",
@@ -246,16 +251,22 @@ fn validate_profile_subject(
 }
 
 fn transition_profile(
-    profiles: &InMemoryAgentProfileRepository,
+    profiles: &Arc<dyn UnifiedRuntimeStateRepository>,
     link: &HostBindingCrossLink,
     expected: AgentProfileHostBindingState,
     next: AgentProfileHostBindingState,
 ) -> Result<(), HostBindingError> {
     let current = profiles
-        .profile(&AgentProfileReference::pinned(
-            AgentProfileId::new(link.agent_profile_id()),
+        .agent_profile_exact(
+            &AgentProfileId::new(link.agent_profile_id()),
             AgentProfileVersion::new(link.agent_profile_revision()),
-        ))
+        )
+        .map_err(|runtime_error| {
+            error(
+                "host_binding.profile_store_failed",
+                runtime_error.to_string(),
+            )
+        })?
         .ok_or_else(|| {
             error(
                 "host_binding.profile_revision_not_found",
@@ -266,7 +277,12 @@ fn transition_profile(
         return Ok(());
     }
     profiles
-        .transition_host_binding_state(current.id(), current.version(), expected, next)
+        .transition_agent_profile_host_binding(AgentProfileHostBindingTransition::new(
+            current.id().clone(),
+            current.version(),
+            expected,
+            next,
+        ))
         .map(|_| ())
         .map_err(|storage_error| {
             error(
