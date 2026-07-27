@@ -209,7 +209,9 @@ private func productionManifest() throws -> LocalModelRevisionManifest {
         envelope: resources.envelope,
         keyRing: resources.keyRing
     )
-    return try #require(catalog.models.values.first)
+    return try #require(catalog.models[
+        LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+    ])
 }
 
 private func copy(

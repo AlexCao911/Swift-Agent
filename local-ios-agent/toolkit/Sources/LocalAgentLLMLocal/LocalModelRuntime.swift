@@ -558,6 +558,14 @@ public actor LocalModelRuntime {
             state = .sessionTerminal
             throw failure("runtime.local_catalog_revision_unavailable", "pinned local model revision is no longer runnable")
         }
+        guard attachments.isEmpty
+            || session.prepared.capabilitySnapshot.support(for: "image_input") == .supported
+        else {
+            throw failure(
+                "runtime.local_image_input_unsupported",
+                "the selected local model does not support image input"
+            )
+        }
         let request = CppGenerationRequest(
             input: input,
             attachments: attachments,

@@ -199,6 +199,16 @@ public enum OfficialLocalModelCatalogVerifier {
               Set(model.declaredCapabilities.map(\.capabilityID)).count == model.declaredCapabilities.count,
               model.declaredCapabilities.allSatisfy({ !$0.capabilityID.isEmpty })
         else { throw manifestInvalid("model artifact or capability relationships are invalid") }
+
+        let supportsImages = model.declaredCapabilities.contains {
+            $0.capabilityID == "image_input" && $0.value == .support(.supported)
+        }
+        let hasRequiredProjection =
+            artifactRoles.contains(.multimodalProjection)
+            && model.loadTemplate.requiredArtifactRoles.contains(.multimodalProjection)
+        guard supportsImages == hasRequiredProjection else {
+            throw manifestInvalid("image capability and multimodal projection do not match")
+        }
     }
 
     private static func isSafeRelativePath(_ path: String) -> Bool {

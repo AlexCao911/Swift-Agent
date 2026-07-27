@@ -21,7 +21,7 @@ struct CppInferencePackagingTests {
         #expect(capabilities.supportedModelFormats.contains("gguf"))
         #expect(capabilities.supportsStreaming)
         #expect(capabilities.supportsCancellation)
-        #expect(!capabilities.supportsVision)
+        #expect(capabilities.supportsVision)
         #expect(capabilities.backendParameters.contains { $0.backendOption == "top_p" })
         #expect(capabilities.backendParameters.contains { $0.backendOption == "repeat_penalty" })
     }

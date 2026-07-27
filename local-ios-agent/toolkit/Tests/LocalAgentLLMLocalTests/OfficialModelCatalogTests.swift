@@ -26,6 +26,86 @@ struct OfficialModelCatalogTests {
     }
 
     @Test
+    func bundledCatalogPinsRequestedMobileGGUFArtifactsAndVisionProjectors() throws {
+        let catalog = try bundledCatalog()
+        let expected: [
+            String: (
+                repositoryRevision: String,
+                artifacts: [LocalModelArtifactRole: (byteSize: UInt64, sha256: String)]
+            )
+        ] = [
+            "minicpm5-1b-q4-k-m": (
+                "87007042419d30c1d8f38ef065424ee33870831e",
+                [.weights: (688_065_920, "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa")]
+            ),
+            "gemma-4-e2b-it-qat-q4-0": (
+                "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+                [
+                    .weights: (3_349_516_256, "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634"),
+                    .multimodalProjection: (986_833_664, "021059cce659fe7f9170d5599761d7bbaf644b798dab9503aca30dc43e6beb14"),
+                ]
+            ),
+            "lfm2.5-230m-q4-k-m": (
+                "fa224d4cb60cffe61eb58726712ef255bb64d0b7",
+                [.weights: (153_406_304, "7bbd90384d3deffe4c646ec9643b212802d32d4ce417c90a1ec9282100650062")]
+            ),
+            "lfm2.5-350m-q4-k-m": (
+                "bb7ee58b243e4cede04187e323e760b04f8a0091",
+                [.weights: (229_312_224, "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4")]
+            ),
+            "lfm2.5-1.2b-thinking-q4-k-m": (
+                "7cb86bcf8ccd6ef5eae50a9ccbdf690ee2646ee5",
+                [.weights: (730_895_360, "7223a2202405b02e8e1e6c5baa543c43dc98c1d9741a5c2a0ee1583212e1231b")]
+            ),
+            "lfm2.5-vl-1.6b-q4-0": (
+                "0df8719db7180cedababc2bc589abfe5e8ebcd1f",
+                [
+                    .weights: (695_752_480, "8186364a4e7c3ad30f6dd3d3b7a4e0074c77dd91eed6cad5d8be9090ce285804"),
+                    .multimodalProjection: (583_109_888, "2ce89e610c56f3198ece2b86cf61743a08b9307279c89125eb2412ebb908689d"),
+                ]
+            ),
+        ]
+
+        for (modelID, expectedModel) in expected {
+            let manifest = try #require(catalog.models[
+                LocalModelRevisionID(modelID: modelID, revision: 1)
+            ])
+            #expect(manifest.modelFormat == "gguf")
+            #expect(manifest.engineID == "llama_cpp")
+            #expect(manifest.loadTemplate.contextTokens == 32_768)
+            #expect(manifest.artifacts.count == expectedModel.artifacts.count)
+            for (role, expectedArtifact) in expectedModel.artifacts {
+                let artifact = try #require(manifest.artifacts.first { $0.role == role })
+                #expect(artifact.byteSize == expectedArtifact.byteSize)
+                #expect(artifact.artifactSHA256 == expectedArtifact.sha256)
+                #expect(artifact.downloadURL.absoluteString.contains(
+                    "/resolve/\(expectedModel.repositoryRevision)/"
+                ))
+                #expect(!artifact.downloadURL.absoluteString.contains("/resolve/main/"))
+            }
+        }
+
+        let imageModels = Set([
+            "gemma-4-e2b-it-qat-q4-0",
+            "lfm2.5-vl-1.6b-q4-0",
+        ])
+        for modelID in expected.keys {
+            let manifest = try #require(catalog.models[
+                LocalModelRevisionID(modelID: modelID, revision: 1)
+            ])
+            let imageInput = manifest.declaredCapabilities.first {
+                $0.capabilityID == "image_input"
+            }
+            if imageModels.contains(modelID) {
+                #expect(imageInput?.value == .support(.supported))
+                #expect(manifest.loadTemplate.requiredArtifactRoles.contains(.multimodalProjection))
+            } else {
+                #expect(imageInput == nil)
+            }
+        }
+    }
+
+    @Test
     func validTestSignatureVerifiesButProductionKeyRingCannotAcceptIt() throws {
         let production = try bundledCatalog()
         let payload = payload(from: production, keyID: "test-catalog-key")
@@ -71,8 +151,8 @@ struct OfficialModelCatalogTests {
             envelope: Data(contentsOf: rollbackURL),
             keyRing: keyRing
         )
-        #expect(valid.catalogRevision == 2)
-        #expect(rollback.catalogRevision == 1)
+        #expect(valid.catalogRevision == 3)
+        #expect(rollback.catalogRevision == 2)
         #expect(valid.keyID.hasPrefix("test-"))
 
         let production = try OfficialModelCatalogResources.loadBundled()
@@ -172,7 +252,9 @@ struct OfficialModelCatalogTests {
     @Test
     func schemaAndManifestInvariantsFailClosed() throws {
         let production = try bundledCatalog()
-        let model = try #require(production.models.values.first)
+        let model = try #require(production.models[
+            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        ])
 
         let unsupported = SignedLocalModelCatalogPayload(
             schemaVersion: "2",
@@ -218,9 +300,43 @@ struct OfficialModelCatalogTests {
     }
 
     @Test
+    func imageCapabilityRequiresARequiredProjectionArtifact() throws {
+        let production = try bundledCatalog()
+        let model = try #require(production.models[
+            LocalModelRevisionID(modelID: "gemma-4-e2b-it-qat-q4-0", revision: 1)
+        ])
+        let weightsOnly = copy(
+            model,
+            artifacts: model.artifacts.filter { $0.role == .weights },
+            installedByteSize: model.artifacts.first { $0.role == .weights }?.byteSize,
+            loadTemplate: LocalEngineLoadTemplate(
+                contextTokens: model.loadTemplate.contextTokens,
+                requiredArtifactRoles: [.weights],
+                manifestControlledOptions: model.loadTemplate.manifestControlledOptions
+            )
+        )
+        let fixture = try sign(SignedLocalModelCatalogPayload(
+            schemaVersion: "1",
+            keyID: "test-key",
+            catalogRevision: 1,
+            models: [weightsOnly],
+            revokedModelRevisions: []
+        ))
+
+        try expectFailure("download.catalog_manifest_invalid") {
+            try OfficialLocalModelCatalogVerifier.verify(
+                envelope: fixture.envelope,
+                keyRing: fixture.keyRing
+            )
+        }
+    }
+
+    @Test
     func unsignedDecimalStringsPreserveValuesAboveTwoToTheFiftyThird() throws {
         let production = try bundledCatalog()
-        let model = try #require(production.models.values.first)
+        let model = try #require(production.models[
+            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        ])
         let exact: UInt64 = 9_007_199_254_740_993
         let large = copy(
             model,
@@ -245,7 +361,9 @@ struct OfficialModelCatalogTests {
     @Test
     func explicitRevocationInvalidatesObservationsButMissingEntryDoesNotImplyRevocation() throws {
         let production = try bundledCatalog()
-        let model = try #require(production.models.values.first)
+        let model = try #require(production.models[
+            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        ])
         let revokedPayload = SignedLocalModelCatalogPayload(
             schemaVersion: "1",
             keyID: "test-key",
@@ -392,7 +510,8 @@ private func copy(
     artifacts: [LocalModelArtifactManifest]? = nil,
     installedByteSize: UInt64? = nil,
     minimumOSMajor: Int? = nil,
-    supportedDeviceClasses: Set<LocalDeviceClass>? = nil
+    supportedDeviceClasses: Set<LocalDeviceClass>? = nil,
+    loadTemplate: LocalEngineLoadTemplate? = nil
 ) -> LocalModelRevisionManifest {
     LocalModelRevisionManifest(
         id: model.id,
@@ -408,7 +527,7 @@ private func copy(
         declaredCapabilities: model.declaredCapabilities,
         parameterSchema: model.parameterSchema,
         parameterDefaults: model.parameterDefaults,
-        loadTemplate: model.loadTemplate,
+        loadTemplate: loadTemplate ?? model.loadTemplate,
         chatTemplate: model.chatTemplate,
         toolCallCodecID: model.toolCallCodecID
     )

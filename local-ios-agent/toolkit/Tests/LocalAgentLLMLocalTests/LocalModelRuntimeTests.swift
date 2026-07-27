@@ -120,6 +120,45 @@ struct LocalModelRuntimeTests {
         try await fixture.runtime.closeSession(sessionID: session.sessionID)
         #expect(try fixture.store.modelUseLease(leaseID: session.activeSessionLeaseID)?.state == .released)
     }
+
+    @Test
+    func textOnlyModelRejectsImageBeforeStartingNativeGeneration() async throws {
+        let fixture = try await RuntimeFixture.make()
+        let session = try await fixture.runtime.prepareSession(
+            hostConfiguration: fixture.configuration,
+            target: fixture.target
+        )
+        await #expect(throws: LLMFailure.self) {
+            try await fixture.runtime.startGeneration(
+                sessionID: session.sessionID,
+                input: AgentLLMInput(
+                    inputID: "turn-image",
+                    messages: [LLMInputMessage(
+                        role: .user,
+                        content: [
+                            .text("describe"),
+                            .attachment(
+                                modality: .image,
+                                attachmentID: "image-1",
+                                mediaType: "image/rgb8"
+                            ),
+                        ]
+                    )]
+                ),
+                attachments: [
+                    LocalResolvedAttachment(
+                        attachmentID: "image-1",
+                        rgb8: Data([255, 255, 255]),
+                        width: 1,
+                        height: 1
+                    ),
+                ],
+                toolSchema: nil
+            )
+        }
+        #expect(fixture.inference.startCount == 0)
+        try await fixture.runtime.closeSession(sessionID: session.sessionID)
+    }
 }
 
 private struct RuntimeFixture {
@@ -142,7 +181,9 @@ private struct RuntimeFixture {
             bundled: resources.envelope,
             remote: nil
         )
-        let manifest = try #require(accepted.verified.models.values.first)
+        let manifest = try #require(accepted.verified.models[
+            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        ])
         var installation = try store.enqueueInstallation(
             installationID: "installation-1",
             modelRevision: manifest.id,
@@ -227,6 +268,7 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
     private var unloads = 0
     private var cancels = 0
     private var releases = 0
+    private var starts = 0
 
     init(manifest: LocalModelRevisionManifest, mode: GenerationMode) {
         self.mode = mode
@@ -252,6 +294,7 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
     var unloadCount: Int { lock.withLock { unloads } }
     var cancelCount: Int { lock.withLock { cancels } }
     var releaseCount: Int { lock.withLock { releases } }
+    var startCount: Int { lock.withLock { starts } }
 
     func listEngines() throws -> [CppEngineDescriptor] { [descriptor] }
     func validateModel(_ request: CppModelLoadRequest) throws {}
@@ -263,6 +306,7 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
     fileprivate func didUnload() { lock.withLock { unloads += 1 } }
     fileprivate func didCancel() { lock.withLock { cancels += 1 } }
     fileprivate func didRelease() { lock.withLock { releases += 1 } }
+    fileprivate func didStart() { lock.withLock { starts += 1 } }
 }
 
 private final class FakeLoadedModel: CppLoadedModelAPI, @unchecked Sendable {
@@ -276,7 +320,8 @@ private final class FakeLoadedModel: CppLoadedModelAPI, @unchecked Sendable {
 
     func validateGeneration(_ request: CppGenerationRequest) throws {}
     func start(_ request: CppGenerationRequest) throws -> any CppGenerationAPI {
-        FakeGeneration(owner: owner, mode: mode)
+        owner.didStart()
+        return FakeGeneration(owner: owner, mode: mode)
     }
     func unload() throws { owner.didUnload() }
 }

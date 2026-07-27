@@ -271,10 +271,13 @@ private func makeInstallManifest(
 
 private func productionInstallManifest() throws -> LocalModelRevisionManifest {
     let resources = try OfficialModelCatalogResources.loadBundled()
-    return try #require(OfficialLocalModelCatalogVerifier.verify(
+    let catalog = try OfficialLocalModelCatalogVerifier.verify(
         envelope: resources.envelope,
         keyRing: resources.keyRing
-    ).models.values.first)
+    )
+    return try #require(catalog.models[
+        LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+    ])
 }
 
 private func sha256Hex(_ data: Data) -> String {

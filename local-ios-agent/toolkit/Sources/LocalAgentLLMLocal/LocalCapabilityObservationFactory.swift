@@ -75,9 +75,11 @@ public enum LocalCapabilityObservationFactory {
         try manifest.declaredCapabilities.map { declaration in
             let value: CapabilityValue
             switch declaration.capabilityID {
+            case "text_generation":
+                value = .support(.supported)
             case "streaming":
                 value = .support(descriptor.capabilities.supportsStreaming ? .supported : .unsupported)
-            case "vision":
+            case "vision", "image_input":
                 value = .support(descriptor.capabilities.supportsVision ? .supported : .unsupported)
             case "cancellation":
                 value = .support(descriptor.capabilities.supportsCancellation ? .supported : .unsupported)

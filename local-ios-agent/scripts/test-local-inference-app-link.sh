@@ -81,8 +81,8 @@ assert_complete_native_abi() {
     fi
   done
 
-  if "$NM" -u "$binary" 2>/dev/null | grep -E '_(llama|ggml)_' >/dev/null; then
-    fail "$binary contains unresolved llama.cpp/ggml vendor symbols"
+  if "$NM" -u "$binary" 2>/dev/null | grep -E '_(llama|ggml|mtmd)_' >/dev/null; then
+    fail "$binary contains unresolved llama.cpp/ggml/mtmd vendor symbols"
   fi
 }
 
@@ -139,6 +139,10 @@ require_text 'target/xcode-ios' "$ROOT/scripts/build-local-inference-xcode.sh"
 require_text 'rev-parse --path-format=absolute --git-common-dir' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_text 'plutil -extract engine_ids' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'libmtmd.a' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_file "$ROOT/inference/release-engines.json"
 require_text '"llama_cpp"' "$ROOT/inference/release-engines.json"

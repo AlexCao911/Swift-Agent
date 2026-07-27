@@ -12,7 +12,9 @@ struct LocalCapabilityObservationTests {
             envelope: resources.envelope,
             keyRing: resources.keyRing
         )
-        let model = try #require(catalog.models.values.first)
+        let model = try #require(catalog.models[
+            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        ])
         let observations = try LocalCapabilityObservationFactory.observations(
             for: model.id,
             in: catalog,
@@ -38,6 +40,45 @@ struct LocalCapabilityObservationTests {
         #expect(streaming.evidenceDigest == expectedEvidence)
         #expect(streaming.observationDigest == expectedObservation)
         #expect(streaming.evidenceDigest != model.artifacts[0].artifactSHA256)
+    }
+
+    @Test
+    func imageInputUsesTheCompiledMtmdCapability() throws {
+        let resources = try OfficialModelCatalogResources.loadBundled()
+        let catalog = try OfficialLocalModelCatalogVerifier.verify(
+            envelope: resources.envelope,
+            keyRing: resources.keyRing
+        )
+        let manifest = try #require(catalog.models[
+            LocalModelRevisionID(modelID: "lfm2.5-vl-1.6b-q4-0", revision: 1)
+        ])
+        let descriptor = CppEngineDescriptor(
+            engineID: "llama_cpp",
+            abiVersion: "2",
+            engineVersion: "mtmd-test",
+            displayName: "llama.cpp",
+            testOnly: false,
+            capabilities: CppEngineCapabilities(
+                supportedModelFormats: ["gguf"],
+                supportsVision: true,
+                supportsStreaming: true,
+                supportsCancellation: true,
+                supportsTokenUsage: false,
+                maxContextTokens: nil,
+                backendParameters: []
+            )
+        )
+        let observations = try LocalCapabilityObservationFactory.engineObservations(
+            descriptor: descriptor,
+            manifest: manifest,
+            subject: CapabilitySubject(engineID: "llama_cpp"),
+            appBuild: "tests",
+            observedAt: Date(timeIntervalSince1970: 0)
+        )
+
+        #expect(observations.first {
+            $0.capabilityID == "image_input"
+        }?.value == .support(.supported))
     }
 }
 
