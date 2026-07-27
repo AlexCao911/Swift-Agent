@@ -21,6 +21,7 @@ public enum RustAgentOSOperation: String, Hashable, Sendable {
     case confirmHostBindingActivation = "confirm_host_binding_activation"
     case beginLegacyProfileMigration = "begin_legacy_profile_migration"
     case listLegacyProfileMigrations = "list_legacy_profile_migrations"
+    case listLegacyProfileMigrationActions = "list_legacy_profile_migration_actions"
     case completeLegacyProfileMigration = "complete_legacy_profile_migration"
     case previewRunPreparation = "preview_run_preparation"
     case renewRunPreparation = "renew_run_preparation"

@@ -106,6 +106,7 @@ struct LocalProductPathIntegrationTests {
             parameterOverrides: GenerationConfiguration()
         )
         let bindingStore = LLMStore.inMemory()
+        try await bindingStore.publishTarget(target)
         let bindingSaga = AgentHostBindingSaga(store: bindingStore)
         let staged = try await bindingSaga.stageHostBinding(HostBindingStageRequest(
             operationToken: "phase-two-operation",

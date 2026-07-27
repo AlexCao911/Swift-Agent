@@ -707,6 +707,18 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         )
     }
 
+    fn list_legacy_profile_migration_actions_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let _: EmptyAgentOSRequestJson = from_json(request_json)?;
+        let actions = self
+            .profile_migration
+            .actions()
+            .map_err(profile_migration_agent_error)?;
+        to_json(&actions)
+    }
+
     fn complete_legacy_profile_migration_json(
         &self,
         request_json: &str,
@@ -1832,6 +1844,19 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime.list_legacy_profile_migrations_json(request_json),
         }
     }
+    pub fn list_legacy_profile_migration_actions_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => {
+                runtime.list_legacy_profile_migration_actions_json(request_json)
+            }
+            Self::Sqlite(runtime) => {
+                runtime.list_legacy_profile_migration_actions_json(request_json)
+            }
+        }
+    }
     pub fn complete_legacy_profile_migration_json(
         &self,
         request_json: &str,
@@ -2387,6 +2412,10 @@ json_bridge_function!(
 json_bridge_function!(
     local_agent_runtime_bridge_list_legacy_profile_migrations,
     list_legacy_profile_migrations_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_list_legacy_profile_migration_actions,
+    list_legacy_profile_migration_actions_json
 );
 json_bridge_function!(
     local_agent_runtime_bridge_complete_legacy_profile_migration,

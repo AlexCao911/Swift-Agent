@@ -4,6 +4,9 @@ import LocalAgentLLMContracts
 import LocalAgentLLMCore
 import LocalAgentLLMLocal
 
+typealias ModelCenterCloudProviderState = CloudProviderProductState
+typealias ModelCenterCloudModelState = CloudModelProductState
+
 struct LocalModelCenterState: Equatable, Identifiable, Sendable {
     let modelRevision: LocalModelRevisionID
     let displayName: String
@@ -19,8 +22,8 @@ struct LocalModelCenterState: Equatable, Identifiable, Sendable {
 
 struct ModelCenterSnapshot: Equatable, Sendable {
     let localModels: [LocalModelCenterState]
-    let cloudProviders: [CloudProviderProductState]
-    let cloudModels: [CloudModelProductState]
+    let cloudProviders: [ModelCenterCloudProviderState]
+    let cloudModels: [ModelCenterCloudModelState]
     let targets: [LLMTargetRevision]
     let disk: LocalDiskProductState?
 
@@ -113,7 +116,7 @@ actor AppModelCenterClient: ModelCenterClient {
                     == .orderedAscending
             }
         let providers = try await cloud.providerInventory()
-        var cloudModels: [CloudModelProductState] = []
+        var cloudModels: [ModelCenterCloudModelState] = []
         for provider in providers {
             cloudModels += try await cloud.modelInventory(
                 profileID: provider.profileID,
@@ -203,12 +206,18 @@ actor AppModelCenterClient: ModelCenterClient {
 
 extension AppModelCenterClient: AgentLLMTargetCatalog {
     func targetOptions() async throws -> [AgentLLMTargetOption] {
-        let state = try await snapshot()
+        Self.availableTargetOptions(in: try await snapshot())
+    }
+
+    nonisolated static func availableTargetOptions(
+        in state: ModelCenterSnapshot
+    ) -> [AgentLLMTargetOption] {
         return state.targets.compactMap { target in
             let schema: LLMParameterSchema? = switch target.kind {
             case let .local(installationID):
                 state.localModels.first {
                     $0.installation?.installationID == installationID
+                        && $0.installation?.state == .installed
                         && $0.modelRevision.modelID == target.modelID
                 }?.parameterSchema
             case let .cloud(profileID, revision):
@@ -216,6 +225,7 @@ extension AppModelCenterClient: AgentLLMTargetCatalog {
                     $0.profileID == profileID
                         && $0.profileRevision == revision
                         && $0.modelID == target.modelID
+                        && $0.validation.isCurrent
                 }?.parameterSchema
             }
             return schema.map {

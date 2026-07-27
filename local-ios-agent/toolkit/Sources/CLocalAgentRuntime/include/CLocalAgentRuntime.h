@@ -146,6 +146,7 @@ char *local_agent_runtime_bridge_attach_host_binding(LocalAgentRuntimeBridge *ru
 char *local_agent_runtime_bridge_confirm_host_binding_activation(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_begin_legacy_profile_migration(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_list_legacy_profile_migrations(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_list_legacy_profile_migration_actions(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_complete_legacy_profile_migration(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_preview_run_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_renew_run_preparation(LocalAgentRuntimeBridge *runtime, const char *request_json);

@@ -65,6 +65,29 @@ fn legacy_inventory_persists_an_archivable_record_before_migration_begins() {
 }
 
 #[test]
+fn startup_lists_minimal_actions_without_creating_a_successor() {
+    let repository = Arc::new(InMemoryRuntimeStateStore::new());
+    let _app = legacy_app(repository.clone());
+    let migration = LegacyProfileMigrationService::new(repository.clone());
+
+    let actions = migration.actions().unwrap();
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].migration_subject(), "legacy-profile:1");
+    assert_eq!(actions[0].display_name(), "Legacy Agent");
+    assert_eq!(actions[0].redacted_model_hint(), Some("gpt-4.1-mini"));
+    assert!(actions[0].successor().is_none());
+    assert_eq!(
+        repository
+            .agent_profile_latest(&AgentProfileId::new("legacy-profile"))
+            .unwrap()
+            .unwrap()
+            .version(),
+        AgentProfileVersion::new(1)
+    );
+}
+
+#[test]
 fn migration_completion_activates_exact_successor_and_persists_one_record() {
     let repository = Arc::new(InMemoryRuntimeStateStore::new());
     let _app = legacy_app(repository.clone());

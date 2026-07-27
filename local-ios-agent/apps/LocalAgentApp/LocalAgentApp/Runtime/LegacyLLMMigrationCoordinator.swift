@@ -30,6 +30,10 @@ actor LegacyLLMMigrationCoordinator {
         self.bindingSaga = bindingSaga
     }
 
+    func pendingActions() async throws -> [LegacyMigrationActionDTO] {
+        try await rust.actions().filter { $0.state == "pending" }
+    }
+
     func migrate(
         profileID: String,
         revision: UInt64,

@@ -1,4 +1,3 @@
-import LocalAgentLLMCloud
 import LocalAgentLLMContracts
 import LocalAgentLLMLocal
 import SwiftUI
@@ -254,15 +253,15 @@ struct ModelCenterView: View {
     }
 
     private func cloudModels(
-        for provider: CloudProviderProductState
-    ) -> [CloudModelProductState] {
+        for provider: ModelCenterCloudProviderState
+    ) -> [ModelCenterCloudModelState] {
         viewModel.snapshot.cloudModels.filter {
             $0.profileID == provider.profileID
                 && $0.profileRevision == provider.revision
         }
     }
 
-    private func capabilityText(_ model: CloudModelProductState) -> Text {
+    private func capabilityText(_ model: ModelCenterCloudModelState) -> Text {
         let supported = model.capabilities.capabilities
             .filter { $0.value.support == .supported }
             .keys
@@ -272,7 +271,7 @@ struct ModelCenterView: View {
     }
 
     private func manualModelBinding(
-        for provider: CloudProviderProductState
+        for provider: ModelCenterCloudProviderState
     ) -> Binding<String> {
         Binding(
             get: { manualModelIDs[provider.id] ?? "" },
@@ -294,7 +293,7 @@ struct ModelCenterView: View {
 
 private struct ProviderEditorPresentation: Identifiable {
     let id = UUID()
-    let provider: CloudProviderProductState?
+    let provider: ModelCenterCloudProviderState?
 }
 
 private struct ParameterControl: View {

@@ -23,6 +23,14 @@ struct LLMHostCompositionTests {
         #expect(container.localLLMSubsystem?.hostProcessEpoch == epoch)
         #expect(container.cloudLLMSubsystem?.hostProcessEpoch == epoch)
         #expect(container.llmHostRuntime?.hostProcessEpoch == epoch)
+        #expect(await container.hostRunStarter?.canStart == true)
+        #expect(container.legacyMigration != nil)
+        let active = try #require(container.activeAgentProfile)
+        let shellSelection = await MainActor.run {
+            container.makeAppShellViewModel().activeAgent
+        }
+        #expect(shellSelection?.profileId == active.profileId)
+        #expect(shellSelection?.profileRevisionId == active.profileRevisionId)
 
         container.suspendLLMHost()
         container.resumeLLMHost()

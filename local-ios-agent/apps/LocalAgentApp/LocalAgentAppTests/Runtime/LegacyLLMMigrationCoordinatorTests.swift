@@ -7,6 +7,38 @@ import Testing
 
 @Suite("Legacy LLM migration")
 struct LegacyLLMMigrationCoordinatorTests {
+    @Test("startup exposes only Rust-owned minimal migration actions")
+    func pendingActionsComeFromRustInventory() async throws {
+        let expected = try JSONDecoder().decode(
+            [LegacyMigrationActionDTO].self,
+            from: """
+            [{
+              "migration_subject":"legacy:1",
+              "source_digest":"source-digest",
+              "display_name":"Legacy",
+              "requirements":{
+                "slot_id":"slot.model.primary",
+                "capabilities":[],
+                "input_modalities":["text"],
+                "context_budget":"4096",
+                "streaming_required":true,
+                "tool_calling_mode":"allowed"
+              },
+              "redacted_model_hint":"gpt-4.1",
+              "state":"pending"
+            }]
+            """.data(using: .utf8)!
+        )
+        let rust = RecordingLegacyMigrationClient(actions: expected)
+        let coordinator = LegacyLLMMigrationCoordinator(
+            rust: rust,
+            targets: StaticAgentLLMTargetCatalog(options: []),
+            bindingSaga: AgentHostBindingSaga(store: .inMemory())
+        )
+
+        #expect(try await coordinator.pendingActions() == expected)
+    }
+
     @Test("legacy model hint never selects a target automatically")
     func migrationRequiresExplicitExactTarget() async throws {
         let rust = RecordingLegacyMigrationClient()
@@ -135,9 +167,14 @@ private actor RecordingLegacyMigrationClient: LegacyProfileMigrationClient {
     private(set) var beginRequests: [BeginLegacyProfileMigrationDTO] = []
     private(set) var completion: HostBindingActivationConfirmationDTO?
     private let migrationRecords: [LegacyProfileMigrationRecordDTO]
+    private let migrationActions: [LegacyMigrationActionDTO]
 
-    init(records: [LegacyProfileMigrationRecordDTO] = []) {
+    init(
+        records: [LegacyProfileMigrationRecordDTO] = [],
+        actions: [LegacyMigrationActionDTO] = []
+    ) {
         migrationRecords = records
+        migrationActions = actions
     }
 
     func begin(
@@ -173,6 +210,10 @@ private actor RecordingLegacyMigrationClient: LegacyProfileMigrationClient {
 
     func records() async throws -> [LegacyProfileMigrationRecordDTO] {
         migrationRecords
+    }
+
+    func actions() async throws -> [LegacyMigrationActionDTO] {
+        migrationActions
     }
 
     func prepareProfilePublish(

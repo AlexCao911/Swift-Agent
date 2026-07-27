@@ -627,6 +627,8 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_begin_legacy_profile_migration(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.listLegacyProfileMigrations.rawValue:
                     return local_agent_runtime_bridge_list_legacy_profile_migrations(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.listLegacyProfileMigrationActions.rawValue:
+                    return local_agent_runtime_bridge_list_legacy_profile_migration_actions(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.completeLegacyProfileMigration.rawValue:
                     return local_agent_runtime_bridge_complete_legacy_profile_migration(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.profileExecutionRoute.rawValue:
@@ -761,6 +763,7 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                  .beginAbortPreparation,
                  .ackPreparedSessionCleanup, .confirmPreparedSessionClosed,
                  .beginLegacyProfileMigration, .listLegacyProfileMigrations,
+                 .listLegacyProfileMigrationActions,
                  .completeLegacyProfileMigration,
                  .profileExecutionRoute:
                 result = operation.rawValue.withCString { operationPointer in

@@ -239,8 +239,7 @@ public actor LLMStore {
                       record.request.requirementsHash == configuration.requirementsHash,
                       binding.bindingID == configuration.bindingID,
                       binding.bindingRevision == configuration.revision,
-                      binding.bindingHash == (try agentHostConfigurationDigest(configuration)),
-                      target(reference: configuration.selectedTarget) != nil
+                      binding.bindingHash == (try agentHostConfigurationDigest(configuration))
                 else {
                     throw targetFailure(
                         "host_binding.persisted_record_invalid",

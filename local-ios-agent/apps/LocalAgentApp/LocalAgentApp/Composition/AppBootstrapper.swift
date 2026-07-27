@@ -59,12 +59,41 @@ enum AppBootstrapper {
             rust: rust,
             hostProcessEpoch: hostProcessEpoch
         )
-        await starter.install(host: host, local: local, cloud: cloud)
         let modelCenterClient = AppModelCenterClient(
             local: local,
             cloud: cloud,
             store: llmStore
         )
+        let migration = LegacyLLMMigrationCoordinator(
+            rust: RustLegacyProfileMigrationClient(gateway: rust),
+            targets: modelCenterClient,
+            bindingSaga: AgentHostBindingSaga(store: llmStore)
+        )
+        let reconciliation = try await migration.reconcilePendingActivations()
+        let activeBindings = try await llmStore.activeHostBindings()
+        let targets = await llmStore.targets()
+        let availableTargets = try await modelCenterClient.targetOptions()
+        var readinessIssues = await container.llmHostSelections?.hydrate(
+            bindings: activeBindings,
+            targets: targets,
+            available: availableTargets
+        ) ?? []
+        if !reconciliation.selectionRequiredSourceDigests.isEmpty {
+            readinessIssues.append("migration.target_selection_required")
+        }
+        if !reconciliation.bindingRequiredSourceDigests.isEmpty {
+            readinessIssues.append("migration.binding_incomplete")
+        }
+        let profiles = try await RustExecutionBridgeClient(
+            gateway: rust,
+            legacyClient: rust
+        ).listAgentProfiles()
+        let activeAgentProfile = profiles.sorted {
+            $0.profileId == $1.profileId
+                ? $0.profileRevisionId > $1.profileRevisionId
+                : $0.profileId < $1.profileId
+        }.first
+        await starter.install(host: host, local: local, cloud: cloud)
         let agentBuilderPublishing = HostBoundAgentBuilderClient(
             portable: RustPortableAgentBuilderClient(gateway: rust),
             targets: modelCenterClient,
@@ -75,7 +104,10 @@ enum AppBootstrapper {
             cloudLLMSubsystem: cloud,
             llmHostRuntime: host,
             modelCenterClient: modelCenterClient,
-            agentBuilderPublishing: agentBuilderPublishing
+            agentBuilderPublishing: agentBuilderPublishing,
+            legacyMigration: migration,
+            readinessIssues: Array(Set(readinessIssues)).sorted(),
+            activeAgentProfile: activeAgentProfile
         )
     }
 
@@ -131,6 +163,9 @@ enum AppBootstrapper {
             rustRuntimeClient: client,
             hostRunStarter: hostStarter,
             llmHostSelections: selections,
+            legacyMigration: nil,
+            readinessIssues: [],
+            activeAgentProfile: nil,
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
@@ -180,6 +215,13 @@ enum AppBootstrapper {
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
+            legacyMigration: nil,
+            readinessIssues: ["app.bootstrap.degraded"],
+            activeAgentProfile: AgentProfileDTO(
+                profileId: "profile_1",
+                profileRevisionId: 1,
+                displayName: "Recovery Agent"
+            ),
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
@@ -221,6 +263,9 @@ enum AppBootstrapper {
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
+            legacyMigration: nil,
+            readinessIssues: ["app.bootstrap.last_resort"],
+            activeAgentProfile: nil,
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,

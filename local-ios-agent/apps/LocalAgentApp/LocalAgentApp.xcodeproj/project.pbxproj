@@ -98,6 +98,7 @@
 		0E5000030000000000000003 /* AgentLLMConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000013 /* AgentLLMConfigurationView.swift */; };
 		0E5000040000000000000001 /* LegacyLLMMigrationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */; };
 		0E5000040000000000000002 /* LegacyLLMMigrationCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */; };
+		0E5000050000000000000001 /* LLMProductBootstrapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000050000000000000011 /* LLMProductBootstrapTests.swift */; };
 		0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002125 /* PrivacySettingsView.swift */; };
 		0C0000010000000000002026 /* DebugTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002126 /* DebugTraceView.swift */; };
 		0C0000010000000000002027 /* StateBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002127 /* StateBadges.swift */; };
@@ -225,6 +226,7 @@
 		0E5000030000000000000013 /* AgentLLMConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLLMConfigurationView.swift; sourceTree = "<group>"; };
 		0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLLMMigrationCoordinator.swift; sourceTree = "<group>"; };
 		0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLLMMigrationCoordinatorTests.swift; sourceTree = "<group>"; };
+		0E5000050000000000000011 /* LLMProductBootstrapTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProductBootstrapTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002125 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002126 /* DebugTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002127 /* StateBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadges.swift; sourceTree = "<group>"; };
@@ -671,6 +673,7 @@
 				0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */,
 				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
 				0F0000010000000000000102 /* LLMHostCompositionTests.swift */,
+				0E5000050000000000000011 /* LLMProductBootstrapTests.swift */,
 				0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */,
 				0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */,
 				0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */,
@@ -896,6 +899,7 @@
 				0E5000010000000000000001 /* ProviderProfileEditorTests.swift in Sources */,
 				0E5000030000000000000002 /* HostBoundAgentPublishTests.swift in Sources */,
 				0E5000040000000000000002 /* LegacyLLMMigrationCoordinatorTests.swift in Sources */,
+				0E5000050000000000000001 /* LLMProductBootstrapTests.swift in Sources */,
 				0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */,
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,

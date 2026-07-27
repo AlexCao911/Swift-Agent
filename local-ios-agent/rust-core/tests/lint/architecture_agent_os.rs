@@ -883,7 +883,8 @@ fn llm_store_is_transactional_sqlite_and_redacts_bearers() {
         read_workspace_file("toolkit/Sources/LocalAgentLLMCore/SQLiteConnection.swift");
     assert!(store.contains("SQLiteConnection"));
     assert!(connection.contains("BEGIN IMMEDIATE"));
-    assert!(store.contains("LLMStoreSchema.ensureBaseSchema"));
+    assert!(store.contains("LLMStoreSchema.migrateToCurrent"));
+    assert!(schema.contains("try ensureBaseSchema(database)"));
     assert!(!store.contains("PRAGMA user_version ="));
     assert!(schema.contains("if version == 0"));
     assert!(schema.contains("PRAGMA user_version = 1"));

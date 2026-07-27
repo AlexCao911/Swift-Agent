@@ -42,6 +42,7 @@ public enum CanonicalDigestV1 {
         "host-command-envelope:v1",
         "host-command-payload:v1",
         "host-tool-effect-result:v1",
+        "legacy-profile-source:v1",
         "llm-event-envelope:v1",
         "llm-event-receipt:v1",
         "preparation-binding:v1",

@@ -1,0 +1,8 @@
+{
+  "profile_id": "fixture.legacy.local",
+  "display_name": "Legacy Local Agent",
+  "target_family": "local",
+  "selected_tool_ids": ["contacts.read"],
+  "context_step_ids": [],
+  "expected_model_hint": "gpt-4.1-mini"
+}

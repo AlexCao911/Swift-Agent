@@ -1,0 +1,8 @@
+{
+  "profile_id": "fixture.direct.upgrade",
+  "display_name": "Imported Agent",
+  "target_family": "cloud",
+  "selected_tool_ids": ["contacts.read", "calendar.events.create"],
+  "context_step_ids": ["memory.retrieve", "attachments.index"],
+  "expected_model_hint": "gpt-4.1-mini"
+}

@@ -1,0 +1,8 @@
+{
+  "profile_id": "fixture.legacy.mock",
+  "display_name": "Legacy Mock Agent",
+  "target_family": "mock",
+  "selected_tool_ids": [],
+  "context_step_ids": [],
+  "expected_model_hint": "gpt-4.1-mini"
+}

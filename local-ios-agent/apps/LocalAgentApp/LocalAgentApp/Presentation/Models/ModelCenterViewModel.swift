@@ -1,5 +1,4 @@
 import Foundation
-import LocalAgentLLMCloud
 import LocalAgentLLMContracts
 import LocalAgentLLMCore
 import LocalAgentLLMLocal
@@ -116,7 +115,7 @@ final class ModelCenterViewModel {
         try await client?.deleteLocalModel(installationID: installationID)
     }
 
-    func validate(_ model: CloudModelProductState) async throws {
+    func validate(_ model: ModelCenterCloudModelState) async throws {
         try await client?.validateProviderModel(CloudModelSelection(
             profileID: model.profileID,
             profileRevision: model.profileRevision,
@@ -126,7 +125,7 @@ final class ModelCenterViewModel {
 
     func validateManual(
         _ modelID: String,
-        for provider: CloudProviderProductState
+        for provider: ModelCenterCloudProviderState
     ) async throws {
         guard !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelCenterFailure("Enter a model ID.")
@@ -138,7 +137,7 @@ final class ModelCenterViewModel {
         ))
     }
 
-    func archive(_ provider: CloudProviderProductState) async throws {
+    func archive(_ provider: ModelCenterCloudProviderState) async throws {
         try await client?.archiveProviderProfile(profileID: provider.profileID)
     }
 
@@ -156,7 +155,7 @@ final class ModelCenterViewModel {
         parameterNotice = nil
     }
 
-    func cloudModelID(_ model: CloudModelProductState) -> String {
+    func cloudModelID(_ model: ModelCenterCloudModelState) -> String {
         "cloud:\(model.profileID):\(model.profileRevision):\(model.modelID)"
     }
 
@@ -164,7 +163,7 @@ final class ModelCenterViewModel {
         client.map(ProviderProfileEditorViewModel.init(client:))
     }
 
-    private func cloudModel(for id: String) -> CloudModelProductState? {
+    private func cloudModel(for id: String) -> ModelCenterCloudModelState? {
         snapshot.cloudModels.first { cloudModelID($0) == id }
     }
 }

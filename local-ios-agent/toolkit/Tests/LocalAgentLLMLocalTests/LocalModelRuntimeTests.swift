@@ -183,6 +183,7 @@ private struct RuntimeFixture {
             parameterOverrides: GenerationConfiguration()
         )
         let bindingStore = LLMStore.inMemory()
+        try await bindingStore.publishTarget(target)
         let saga = AgentHostBindingSaga(store: bindingStore)
         let staged = try await saga.stageHostBinding(HostBindingStageRequest(
             operationToken: "binding-token",

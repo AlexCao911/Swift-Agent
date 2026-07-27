@@ -58,7 +58,7 @@ struct LLMStoreTests {
     }
 
     @Test
-    func activeBindingWithMissingTargetFailsClosed() async throws {
+    func activeBindingWithMissingTargetRemainsAvailableForBootstrapRepair() async throws {
         let store = LLMStore.inMemory()
         let configuration = fixtureConfiguration()
         let saga = AgentHostBindingSaga(store: store)
@@ -75,9 +75,12 @@ struct LLMStoreTests {
             binding: receipt.binding
         )
 
-        await #expect(throws: LLMStoreError.self) {
-            try await store.activeHostBindings()
-        }
+        #expect(try await store.activeHostBindings() == [
+            ActiveAgentHostBinding(
+                configuration: configuration,
+                binding: receipt.binding
+            ),
+        ])
     }
 
     @Test

@@ -3,6 +3,7 @@ public protocol LegacyProfileMigrationClient: Sendable {
         _ request: BeginLegacyProfileMigrationDTO
     ) async throws -> LegacyMigrationActionDTO
     func records() async throws -> [LegacyProfileMigrationRecordDTO]
+    func actions() async throws -> [LegacyMigrationActionDTO]
     func prepareProfilePublish(
         _ request: ProfilePublishPreparationDTO
     ) async throws -> HostBindingOperationDTO
@@ -36,6 +37,14 @@ public struct RustLegacyProfileMigrationClient: LegacyProfileMigrationClient {
             .listLegacyProfileMigrations,
             EmptyAgentOSRequestDTO(),
             as: [LegacyProfileMigrationRecordDTO].self
+        )
+    }
+
+    public func actions() async throws -> [LegacyMigrationActionDTO] {
+        try await gateway.request(
+            .listLegacyProfileMigrationActions,
+            EmptyAgentOSRequestDTO(),
+            as: [LegacyMigrationActionDTO].self
         )
     }
 

@@ -4,6 +4,17 @@ import Testing
 
 @Suite("Legacy profile migration bridge")
 struct LegacyProfileMigrationClientTests {
+    @Test("action inventory uses the dedicated read-only operation")
+    func actionInventoryOperation() async throws {
+        let gateway = MigrationActionGateway()
+        let client = RustLegacyProfileMigrationClient(gateway: gateway)
+
+        let actions = try await client.actions()
+
+        #expect(actions.first?.migrationSubject == "legacy:1")
+        #expect(gateway.operations == [.listLegacyProfileMigrationActions])
+    }
+
     @Test("begin request and action remain provider neutral")
     func portableMigrationProjection() throws {
         let request = BeginLegacyProfileMigrationDTO(
@@ -51,5 +62,52 @@ struct LegacyProfileMigrationClientTests {
 
         #expect(action.successor?.profileRevision == 2)
         #expect(action.redactedModelHint == "gpt-4.1")
+    }
+}
+
+private final class MigrationActionGateway: RustAgentOSBridgeGateway, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedOperations: [RustAgentOSOperation] = []
+
+    var operations: [RustAgentOSOperation] {
+        lock.withLock { recordedOperations }
+    }
+
+    func request<Request: Encodable, Response: Decodable>(
+        _ operation: RustAgentOSOperation,
+        _ request: Request,
+        as response: Response.Type
+    ) async throws -> Response {
+        lock.withLock {
+            recordedOperations.append(operation)
+        }
+        return try JSONDecoder().decode(
+            Response.self,
+            from: Data(
+                """
+                [{
+                  "migration_subject":"legacy:1",
+                  "source_digest":"opaque-source-digest",
+                  "display_name":"Legacy",
+                  "requirements":{
+                    "slot_id":"slot.model.primary",
+                    "capabilities":[],
+                    "input_modalities":["text"],
+                    "context_budget":"4096",
+                    "streaming_required":true,
+                    "tool_calling_mode":"allowed"
+                  },
+                  "state":"pending"
+                }]
+                """.utf8
+            )
+        )
+    }
+
+    func stream<Request: Encodable>(
+        _ operation: RustAgentOSOperation,
+        _ request: Request
+    ) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
+        AsyncThrowingStream { $0.finish() }
     }
 }

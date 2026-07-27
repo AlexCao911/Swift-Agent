@@ -7,12 +7,21 @@ import LocalAgentLLMLocal
 enum AppLLMHostSelection: Sendable {
     case local(
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision
+        target: LLMTargetRevision,
+        binding: HostBindingTuple
     )
     case cloud(
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision
+        target: LLMTargetRevision,
+        binding: HostBindingTuple
     )
+
+    var binding: HostBindingTuple {
+        switch self {
+        case let .local(_, _, binding), let .cloud(_, _, binding):
+            binding
+        }
+    }
 }
 
 actor AppLLMHostSelectionRegistry {
@@ -23,12 +32,66 @@ actor AppLLMHostSelectionRegistry {
 
     private var selections: [Key: AppLLMHostSelection] = [:]
 
-    func register(
-        _ selection: AppLLMHostSelection,
-        profileID: String,
-        revision: UInt64
-    ) {
-        selections[Key(profileID: profileID, revision: revision)] = selection
+    var count: Int {
+        selections.count
+    }
+
+    var only: AppLLMHostSelection? {
+        selections.count == 1 ? selections.values.first : nil
+    }
+
+    func hydrate(
+        bindings: [ActiveAgentHostBinding],
+        targets: [LLMTargetRevision],
+        available: [AgentLLMTargetOption]
+    ) -> [String] {
+        var next: [Key: AppLLMHostSelection] = [:]
+        var issues: [String] = []
+        for active in bindings {
+            let configuration = active.configuration
+            let key = Key(
+                profileID: configuration.agentProfileID,
+                revision: configuration.agentProfileRevision
+            )
+            guard active.binding.bindingID == configuration.bindingID,
+                  active.binding.bindingRevision == configuration.revision,
+                  let target = targets.first(where: {
+                      $0.reference == configuration.selectedTarget
+                  }),
+                  let option = available.first(where: {
+                      $0.target == target
+                  }),
+                  next[key] == nil
+            else {
+                next.removeValue(forKey: key)
+                issues.append("execution.host_binding_not_configured")
+                continue
+            }
+            guard (try? LLMParameterSystem.resolve(
+                targetDefaults: target.defaultParameters,
+                hostOverrides: configuration.parameterOverrides,
+                schema: option.parameterSchema
+            )) == configuration.parameterOverrides else {
+                issues.append("execution.host_binding_not_configured")
+                continue
+            }
+            switch target.kind {
+            case .local:
+                next[key] = .local(
+                    configuration: configuration,
+                    target: target,
+                    binding: active.binding
+                )
+            case .cloud:
+                next[key] = .cloud(
+                    configuration: configuration,
+                    target: target,
+                    binding: active.binding
+                )
+            }
+        }
+        selections = next
+        return Array(Set(issues)).sorted()
     }
 
     func selection(profileID: String, revision: UInt64) -> AppLLMHostSelection? {
@@ -74,6 +137,10 @@ actor AppHostRunStarter: LLMProductRunStarting {
         composition = (host, local, cloud)
     }
 
+    var canStart: Bool {
+        composition != nil
+    }
+
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
         guard let composition else {
             throw LLMHostFailure(
@@ -91,14 +158,14 @@ actor AppHostRunStarter: LLMProductRunStarting {
             )
         }
         switch selection {
-        case .local(let configuration, let target):
+        case .local(let configuration, let target, _):
             return try await composition.host.startLocal(
                 request,
                 subsystem: composition.local,
                 configuration: configuration,
                 target: target
             )
-        case .cloud(let configuration, let target):
+        case .cloud(let configuration, let target, _):
             return try await composition.host.startCloud(
                 request,
                 subsystem: composition.cloud,

@@ -25,6 +25,8 @@ mod host_llm_ffi;
 mod llm_profile_migration_ffi;
 #[path = "integration/openai_chat_adapter.rs"]
 mod openai_chat_adapter;
+#[path = "integration/phase_five_product_path.rs"]
+mod phase_five_product_path;
 #[path = "integration/runtime_execution_lifecycle.rs"]
 mod runtime_execution_lifecycle;
 #[path = "integration/runtime_mock.rs"]

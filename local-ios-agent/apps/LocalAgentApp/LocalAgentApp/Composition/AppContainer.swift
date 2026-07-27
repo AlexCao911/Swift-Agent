@@ -20,6 +20,9 @@ struct AppContainer {
     let rustRuntimeClient: RustRuntimeClient?
     let hostRunStarter: AppHostRunStarter?
     let llmHostSelections: AppLLMHostSelectionRegistry?
+    let legacyMigration: LegacyLLMMigrationCoordinator?
+    let readinessIssues: [String]
+    let activeAgentProfile: AgentProfileDTO?
     let cloudApprovalBroker: AppCloudApprovalBroker
     let localLLMSubsystem: LocalLLMSubsystem?
     let cloudLLMSubsystem: CloudLLMSubsystem?
@@ -30,7 +33,10 @@ struct AppContainer {
         cloudLLMSubsystem: CloudLLMSubsystem,
         llmHostRuntime: LLMHostProductRuntime,
         modelCenterClient: any ModelCenterClient,
-        agentBuilderPublishing: any AgentBuilderPublishing
+        agentBuilderPublishing: any AgentBuilderPublishing,
+        legacyMigration: LegacyLLMMigrationCoordinator,
+        readinessIssues: [String],
+        activeAgentProfile: AgentProfileDTO?
     ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -47,6 +53,9 @@ struct AppContainer {
             rustRuntimeClient: rustRuntimeClient,
             hostRunStarter: hostRunStarter,
             llmHostSelections: llmHostSelections,
+            legacyMigration: legacyMigration,
+            readinessIssues: readinessIssues,
+            activeAgentProfile: activeAgentProfile,
             cloudApprovalBroker: cloudApprovalBroker,
             localLLMSubsystem: localLLMSubsystem,
             cloudLLMSubsystem: cloudLLMSubsystem,
@@ -74,11 +83,13 @@ struct AppContainer {
     @MainActor
     func makeAppShellViewModel() -> AppShellViewModel {
         AppShellViewModel(
-            activeAgent: ActiveAgentRevisionSelection(
-                profileId: "profile_1",
-                profileRevisionId: 1,
-                displayName: "Assistant"
-            )
+            activeAgent: activeAgentProfile.map {
+                ActiveAgentRevisionSelection(
+                    profileId: $0.profileId,
+                    profileRevisionId: $0.profileRevisionId,
+                    displayName: $0.displayName
+                )
+            }
         )
     }
 

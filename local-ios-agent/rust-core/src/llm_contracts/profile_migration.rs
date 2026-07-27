@@ -220,8 +220,20 @@ impl LegacyProfileSuccessorSubject {
 }
 
 impl LegacyMigrationAction {
+    pub fn migration_subject(&self) -> &str {
+        &self.migration_subject
+    }
+
     pub fn source_digest(&self) -> &str {
         &self.source_digest
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn redacted_model_hint(&self) -> Option<&str> {
+        self.redacted_model_hint.as_deref()
     }
 
     pub fn successor(&self) -> Option<&LegacyProfileSuccessorSubject> {
@@ -382,6 +394,31 @@ impl LegacyProfileMigrationService {
         self.repository
             .legacy_profile_migration_records()
             .map_err(storage_error)
+    }
+
+    pub fn actions(&self) -> Result<Vec<LegacyMigrationAction>, LegacyProfileMigrationError> {
+        self.records()?
+            .into_iter()
+            .map(|record| {
+                let source = self
+                    .repository
+                    .agent_profile_exact(record.source_profile_id(), record.source_revision())
+                    .map_err(storage_error)?
+                    .ok_or_else(|| {
+                        error(
+                            "legacy_profile.source_missing",
+                            "legacy migration source Profile does not exist",
+                        )
+                    })?;
+                let translated = LegacyAgentProfileTranslator::translate_known_profile(&source)
+                    .map_err(translation_error)?;
+                Ok(action_from_record(
+                    &record,
+                    &source,
+                    translated.llm_slot().requirements(),
+                ))
+            })
+            .collect()
     }
 
     pub fn record(
