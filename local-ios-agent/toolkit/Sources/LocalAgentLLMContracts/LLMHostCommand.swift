@@ -17,6 +17,20 @@ public struct HostSemanticContent: Codable, Equatable, Sendable {
     public let attachmentID: String?
     public let mediaType: String?
 
+    public init(
+        kind: HostSemanticContentKind,
+        text: String? = nil,
+        modality: String? = nil,
+        attachmentID: String? = nil,
+        mediaType: String? = nil
+    ) {
+        self.kind = kind
+        self.text = text
+        self.modality = modality
+        self.attachmentID = attachmentID
+        self.mediaType = mediaType
+    }
+
     private enum CodingKeys: String, CodingKey {
         case kind, text, modality
         case attachmentID = "attachment_id"
@@ -27,6 +41,11 @@ public struct HostSemanticContent: Codable, Equatable, Sendable {
 public struct HostSemanticMessage: Codable, Equatable, Sendable {
     public let role: String
     public let content: [HostSemanticContent]
+
+    public init(role: String, content: [HostSemanticContent]) {
+        self.role = role
+        self.content = content
+    }
 }
 
 public struct HostSourceRevision: Codable, Equatable, Sendable {
@@ -81,6 +100,30 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
     public let attachments: [HostAttachmentReference]
     public let semanticHistory: [HostSemanticMessage]
     public let toolResults: [HostToolResult]
+
+    public init(
+        schemaVersion: String,
+        modelInputID: String,
+        messages: [HostSemanticMessage],
+        toolSchemaJSON: String,
+        toolSchemaDigest: String,
+        sourceRevisions: [HostSourceRevision],
+        sourceRevisionsDigest: String,
+        attachments: [HostAttachmentReference],
+        semanticHistory: [HostSemanticMessage],
+        toolResults: [HostToolResult]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.modelInputID = modelInputID
+        self.messages = messages
+        self.toolSchemaJSON = toolSchemaJSON
+        self.toolSchemaDigest = toolSchemaDigest
+        self.sourceRevisions = sourceRevisions
+        self.sourceRevisionsDigest = sourceRevisionsDigest
+        self.attachments = attachments
+        self.semanticHistory = semanticHistory
+        self.toolResults = toolResults
+    }
 
     public func computedDigest() throws -> CanonicalDigest {
         try CanonicalDigestV1.digest(

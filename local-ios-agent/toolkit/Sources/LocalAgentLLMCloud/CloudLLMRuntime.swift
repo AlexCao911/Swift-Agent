@@ -351,6 +351,18 @@ public actor CloudLLMRuntime {
         }
     }
 
+    package func resolvedGenerationConfiguration(
+        hostConfiguration: AgentHostConfiguration,
+        target: LLMTargetRevision
+    ) async throws -> GenerationConfiguration {
+        let route = try await requireRoute(target: target)
+        return try resolveConfiguration(
+            route: route,
+            targetDefaults: target.defaultParameters,
+            hostOverrides: hostConfiguration.parameterOverrides
+        ).semantic
+    }
+
     public func openReservedSession(
         _ expected: ReservedCloudSession
     ) async throws -> PreparedCloudSession {

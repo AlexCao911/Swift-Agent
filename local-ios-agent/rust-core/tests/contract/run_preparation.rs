@@ -79,7 +79,7 @@ fn authoritative_preview_derives_model_input_and_source_digests_from_rust_source
         first.binding().initial_disclosure_digest()
     );
     let public_preview = serde_json::to_string(&first).unwrap();
-    assert!(!public_preview.contains("first input"));
+    assert!(public_preview.contains("first input"));
     let bytes = first_service
         .frozen_model_input(first.binding().model_input_id())
         .unwrap()
@@ -91,6 +91,50 @@ fn authoritative_preview_derives_model_input_and_source_digests_from_rust_source
             .as_str(),
         first.binding().model_input_digest()
     );
+}
+
+#[test]
+fn preview_returns_the_exact_rust_frozen_turn() {
+    let service = RunPreparationService::with_authoritative_preview(
+        SharedAgentOSStateStore::in_memory(),
+        "epoch-frozen-turn",
+        std::sync::Arc::new(RunSnapshotService::fixture_with_host_slot_v2()),
+    );
+    let frame = authoritative_frame("private user text");
+    let preview = service
+        .preview_authoritative(
+            "frozen-turn-preview",
+            "frozen-turn-preparation",
+            "frozen-turn-run",
+            authoritative_start(frame.frame_ref().clone(), "private user text"),
+            &frame,
+            0,
+        )
+        .unwrap();
+    let frozen = preview.frozen_initial_turn();
+
+    assert_eq!(
+        frozen.payload().agent_input_digest().unwrap(),
+        preview.binding().model_input_digest()
+    );
+    assert_eq!(
+        frozen.payload().tool_schema_digest,
+        preview.binding().tool_schema_digest()
+    );
+    assert_eq!(
+        frozen.payload().source_revisions_digest,
+        preview.binding().source_revisions_digest()
+    );
+    assert_eq!(
+        frozen.disclosure().expected_digest().unwrap(),
+        preview.binding().initial_disclosure_digest()
+    );
+    assert!(frozen
+        .disclosure()
+        .safe_display_summary
+        .triggering_tool_display_keys
+        .is_empty());
+    assert!(!frozen.payload().messages.is_empty());
 }
 
 fn authoritative_start(frame_ref: ConversationRunFrameRef, intent: &str) -> StartRunRequest {

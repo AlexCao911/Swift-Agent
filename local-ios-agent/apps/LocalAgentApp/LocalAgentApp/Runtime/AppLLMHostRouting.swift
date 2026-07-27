@@ -11,8 +11,7 @@ enum AppLLMHostSelection: Sendable {
     )
     case cloud(
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision,
-        context: @Sendable (String, String) throws -> CloudSessionPreparationContext
+        target: LLMTargetRevision
     )
 }
 
@@ -49,8 +48,7 @@ protocol AppLLMHostExecuting: Sendable {
         _ request: StartExecutionRequestDTO,
         subsystem: CloudLLMSubsystem,
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision,
-        context: @Sendable (String, String) throws -> CloudSessionPreparationContext
+        target: LLMTargetRevision
     ) async throws -> RunHandleDTO
 }
 
@@ -100,13 +98,12 @@ actor AppHostRunStarter: LLMProductRunStarting {
                 configuration: configuration,
                 target: target
             )
-        case .cloud(let configuration, let target, let context):
+        case .cloud(let configuration, let target):
             return try await composition.host.startCloud(
                 request,
                 subsystem: composition.cloud,
                 configuration: configuration,
-                target: target,
-                context: context
+                target: target
             )
         }
     }

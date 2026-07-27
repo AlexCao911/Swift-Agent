@@ -5,18 +5,15 @@ import LocalAgentLLMCore
 
 package struct CloudHostSessionReserver: LLMHostSessionReserving {
     private let runtime: CloudLLMRuntime
-    private let context: CloudSessionPreparationContext
     private let configuration: AgentHostConfiguration
     private let target: LLMTargetRevision
 
     package init(
         runtime: CloudLLMRuntime,
-        context: CloudSessionPreparationContext,
         configuration: AgentHostConfiguration,
         target: LLMTargetRevision
     ) {
         self.runtime = runtime
-        self.context = context
         self.configuration = configuration
         self.target = target
     }
@@ -24,24 +21,27 @@ package struct CloudHostSessionReserver: LLMHostSessionReserving {
     package func reserve(
         preview: RunPreparationPreviewDTO
     ) async throws -> ReservedHostSession {
-        guard context.preparationID == preview.preparationId,
-              context.proposedRunID == preview.proposedRunId,
-              preview.binding.requirementsHash == configuration.requirementsHash,
-              try context.initialTurn.disclosure.computedDigest().hex
-                == preview.binding.initialDisclosureDigest
-        else {
+        guard preview.binding.requirementsHash == configuration.requirementsHash else {
             throw LLMHostFailure(
                 code: "llm.host.preparation_binding_mismatch",
                 message: "cloud reservation input differs from the Rust preview"
             )
         }
+        let resolvedParameters = try await runtime.resolvedGenerationConfiguration(
+            hostConfiguration: configuration,
+            target: target
+        )
+        let initialTurn = try FrozenPreparationTurn.cloudRequest(
+            preview: preview,
+            resolvedParameters: resolvedParameters
+        )
         let capability = try preparedCapabilityAttestation(preview)
         let reserved = try await runtime.reserveSession(
             context: CloudSessionPreparationContext(
-                preparationID: context.preparationID,
-                proposedRunID: context.proposedRunID,
-                initialTurn: context.initialTurn,
-                signedToolDisplayKeys: context.signedToolDisplayKeys,
+                preparationID: preview.preparationId,
+                proposedRunID: preview.proposedRunId,
+                initialTurn: initialTurn,
+                signedToolDisplayKeys: [],
                 capabilityAttestationDigest: capability.attestationDigest
             ),
             hostConfiguration: configuration,
@@ -109,7 +109,7 @@ package struct CloudHostSessionReserver: LLMHostSessionReserving {
                     driver: CloudHostSessionDriver(
                         runtime: runtime,
                         sessionID: opened.sessionID,
-                        resolvedParameters: context.initialTurn.resolvedParameters
+                        resolvedParameters: resolvedParameters
                     )
                 )
             }

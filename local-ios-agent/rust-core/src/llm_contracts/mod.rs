@@ -35,12 +35,12 @@ pub use llm_event::{
 };
 pub(crate) use preparation::RunPreparationRequest;
 pub use preparation::{
-    HostAttestation, HostAttestationV1Document, HostRunHandle, PreparationAbortReason,
-    PreparationBinding, PreparationError, PreparationReconciliation, PreparedCapabilityAttestation,
-    PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupEnvelope,
-    PreparedSessionCleanupIdentity, PreparedSessionCloseDisposition, PreparedSessionClosedReceipt,
-    PreparedSessionRegistration, RenewalReplay, RunPreparationPreview, RunPreparationRecord,
-    RunPreparationState,
+    FrozenInitialTurn, HostAttestation, HostAttestationV1Document, HostRunHandle,
+    PreparationAbortReason, PreparationBinding, PreparationError, PreparationReconciliation,
+    PreparedCapabilityAttestation, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionCleanupEnvelope, PreparedSessionCleanupIdentity,
+    PreparedSessionCloseDisposition, PreparedSessionClosedReceipt, PreparedSessionRegistration,
+    RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationState,
 };
 pub use prepared_start_validator::{PreparedStartValidator, ValidatedPreparedStart};
 pub use requirements::{

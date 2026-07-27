@@ -103,6 +103,15 @@ impl HostCommandPayload {
     }
 
     pub fn agent_input_digest(&self) -> Result<String, HostContractError> {
+        digest("agent-input:v1", &self.agent_input_document()?)
+    }
+
+    pub(crate) fn canonical_agent_input(&self) -> Result<Vec<u8>, HostContractError> {
+        CanonicalDigestV1::canonicalize(&self.agent_input_document()?)
+            .map_err(|_| HostContractError::new("llm.contract.digest_failed"))
+    }
+
+    fn agent_input_document(&self) -> Result<Value, HostContractError> {
         if !self.attachments.is_empty() {
             return Err(HostContractError::new(
                 "llm.contract.attachment_resolution_unavailable",
@@ -154,18 +163,15 @@ impl HostCommandPayload {
                 })
             })
             .collect::<Vec<_>>();
-        digest(
-            "agent-input:v1",
-            &serde_json::json!({
-                "canonical_tool_schema": canonical_tool_schema,
-                "input_id": self.model_input_id,
-                "messages": messages,
-                "provider_required_semantic_history": self.semantic_history,
-                "resolved_attachments": [],
-                "schema_version": "1",
-                "tool_results": tool_results,
-            }),
-        )
+        Ok(serde_json::json!({
+            "canonical_tool_schema": canonical_tool_schema,
+            "input_id": self.model_input_id,
+            "messages": messages,
+            "provider_required_semantic_history": self.semantic_history,
+            "resolved_attachments": [],
+            "schema_version": "1",
+            "tool_results": tool_results,
+        }))
     }
 }
 

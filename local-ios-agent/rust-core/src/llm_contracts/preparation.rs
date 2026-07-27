@@ -4,7 +4,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentLLMRequirements, GenerationDisclosureDocument, LLMInputModality, LLMToolCallingMode,
+    AgentLLMRequirements, GenerationDisclosureDocument, HostCommandPayload, LLMInputModality,
+    LLMToolCallingMode,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -182,6 +183,33 @@ impl RunPreparationRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct FrozenInitialTurn {
+    payload: HostCommandPayload,
+    disclosure: GenerationDisclosureDocument,
+}
+
+impl FrozenInitialTurn {
+    pub(crate) fn new(
+        payload: HostCommandPayload,
+        disclosure: GenerationDisclosureDocument,
+    ) -> Self {
+        Self {
+            payload,
+            disclosure,
+        }
+    }
+
+    pub fn payload(&self) -> &HostCommandPayload {
+        &self.payload
+    }
+
+    pub fn disclosure(&self) -> &GenerationDisclosureDocument {
+        &self.disclosure
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunPreparationPreview {
     preparation_id: String,
     proposed_run_id: String,
@@ -191,6 +219,7 @@ pub struct RunPreparationPreview {
     binding: PreparationBinding,
     binding_digest: String,
     initial_disclosure: GenerationDisclosureDocument,
+    frozen_initial_turn: FrozenInitialTurn,
     host_process_epoch: String,
     lease_generation: u64,
     expiration_millis: u64,
@@ -204,7 +233,7 @@ impl RunPreparationPreview {
         token: String,
         token_digest: String,
         binding_digest: String,
-        initial_disclosure: GenerationDisclosureDocument,
+        frozen_initial_turn: FrozenInitialTurn,
         host_epoch: String,
         lease_generation: u64,
         expiration_millis: u64,
@@ -218,7 +247,8 @@ impl RunPreparationPreview {
             token_generation: 1,
             binding: request.binding.clone(),
             binding_digest,
-            initial_disclosure,
+            initial_disclosure: frozen_initial_turn.disclosure.clone(),
+            frozen_initial_turn,
             host_process_epoch: host_epoch,
             lease_generation,
             expiration_millis,
@@ -248,6 +278,9 @@ impl RunPreparationPreview {
     }
     pub fn initial_disclosure(&self) -> &GenerationDisclosureDocument {
         &self.initial_disclosure
+    }
+    pub fn frozen_initial_turn(&self) -> &FrozenInitialTurn {
+        &self.frozen_initial_turn
     }
     pub fn host_process_epoch(&self) -> &str {
         &self.host_process_epoch

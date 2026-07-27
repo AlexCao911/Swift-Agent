@@ -79,6 +79,13 @@ struct ModelInputMessageDocument<'a> {
     source_segment_id: &'a str,
 }
 
+#[derive(Serialize)]
+struct SourceRevisionDigestDocument<'a> {
+    resolved_attachments: [(); 0],
+    schema_version: &'static str,
+    source_revision_document: &'a [HostSourceRevision],
+}
+
 pub(crate) fn derive_authoritative_preparation(
     request: &StartRunRequest,
     frame: &ConversationRunFrame,
@@ -154,10 +161,10 @@ pub(crate) fn derive_authoritative_preparation(
             })
             .collect(),
     };
-    let canonical_model_input = CanonicalDigestV1::canonicalize(&model_input_document)
+    let model_input_seed = CanonicalDigestV1::canonicalize(&model_input_document)
         .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
-    let model_input_digest = canonical_digest("agent-input:v1", &model_input_document)?;
-    let model_input_id = format!("frozen-input:{model_input_digest}");
+    let model_input_seed_digest = canonical_digest("agent-input:v1", &model_input_document)?;
+    let model_input_id = format!("frozen-input:{model_input_seed_digest}");
     let mut source_revisions = vec![
         HostSourceRevision {
             source_id: format!("agent-profile:{}", request.agent_profile_id().as_str()),
@@ -183,7 +190,14 @@ pub(crate) fn derive_authoritative_preparation(
             digest: canonical_digest("source-revisions:v1", &document)?,
         });
     }
-    let source_revisions_digest = canonical_digest("source-revisions:v1", &source_revisions)?;
+    let source_revisions_digest = canonical_digest(
+        "source-revisions:v1",
+        &SourceRevisionDigestDocument {
+            resolved_attachments: [],
+            schema_version: "1",
+            source_revision_document: &source_revisions,
+        },
+    )?;
     let attachment_ids: BTreeSet<_> = frame
         .attachment_refs()
         .iter()
@@ -276,13 +290,16 @@ pub(crate) fn derive_authoritative_preparation(
     let payload_digest = payload
         .expected_digest()
         .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
+    let canonical_model_input = payload
+        .canonical_agent_input()
+        .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
     let content_digest = payload
         .agent_input_digest()
         .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
     let disclosure = GenerationDisclosureDocument {
         schema_version: "1".into(),
-        generation_turn_id: format!("generation-turn:{model_input_digest}"),
-        content_digest,
+        generation_turn_id: format!("generation-turn:{model_input_seed_digest}"),
+        content_digest: content_digest.clone(),
         source_revision_digest: source_revisions_digest.clone(),
         data_classes: data_classes.iter().map(ToString::to_string).collect(),
         highest_sensitivity: "private".into(),
@@ -299,7 +316,7 @@ pub(crate) fn derive_authoritative_preparation(
                     },
                 })
                 .collect(),
-            approximate_added_size: canonical_model_input.len().to_string(),
+            approximate_added_size: size_bucket(model_input_seed.len()).into(),
             triggering_tool_display_keys: Vec::new(),
         },
     };
@@ -315,7 +332,7 @@ pub(crate) fn derive_authoritative_preparation(
             requirements_hash,
             tool_schema_digest,
             model_input_id,
-            model_input_digest,
+            content_digest,
             source_revisions_digest,
             initial_disclosure_digest.clone(),
         )
@@ -348,5 +365,15 @@ fn slot_kind(kind: AgentSlotKind) -> &'static str {
         AgentSlotKind::Toolset => "toolset",
         AgentSlotKind::Memory => "memory",
         AgentSlotKind::Voice => "voice",
+    }
+}
+
+fn size_bucket(byte_count: usize) -> &'static str {
+    match byte_count {
+        0 => "none",
+        1..=1023 => "less_than_1_kib",
+        1024..=102_399 => "1_to_100_kib",
+        102_400..=1_048_575 => "100_kib_to_1_mib",
+        _ => "greater_than_1_mib",
     }
 }

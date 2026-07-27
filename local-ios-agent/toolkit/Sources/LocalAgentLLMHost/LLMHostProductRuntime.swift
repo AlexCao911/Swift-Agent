@@ -125,8 +125,7 @@ public final class LLMHostProductRuntime: @unchecked Sendable {
         _ request: StartExecutionRequestDTO,
         subsystem: CloudLLMSubsystem,
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision,
-        context: @Sendable (String, String) throws -> CloudSessionPreparationContext
+        target: LLMTargetRevision
     ) async throws -> RunHandleDTO {
         try validateExactBinding(request, configuration: configuration, target: target)
         guard subsystem.hostProcessEpoch == hostProcessEpoch else {
@@ -138,7 +137,6 @@ public final class LLMHostProductRuntime: @unchecked Sendable {
             registry: runtime.bridgeActor,
             reserver: CloudHostSessionReserver(
                 runtime: subsystem.runtime,
-                context: try context(ids.preparationID, ids.proposedRunID),
                 configuration: configuration,
                 target: target
             ),

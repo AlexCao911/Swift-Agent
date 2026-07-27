@@ -336,7 +336,11 @@ impl RunPreparationService {
             proposed_run_id,
             derived.binding,
         );
-        match self.preview_derived(request, derived.frozen_turn.disclosure, now_millis) {
+        let frozen_initial_turn = crate::llm_contracts::FrozenInitialTurn::new(
+            derived.frozen_turn.payload,
+            derived.frozen_turn.disclosure,
+        );
+        match self.preview_derived(request, frozen_initial_turn, now_millis) {
             Ok(preview) => Ok(preview),
             Err(error) => {
                 self.frozen_inputs
@@ -372,7 +376,7 @@ impl RunPreparationService {
     fn preview_derived(
         &self,
         request: RunPreparationRequest,
-        initial_disclosure: crate::llm_contracts::GenerationDisclosureDocument,
+        frozen_initial_turn: crate::llm_contracts::FrozenInitialTurn,
         now_millis: u64,
     ) -> Result<RunPreparationPreview, PreparationError> {
         if let Some(existing) = self.state_store.with_preparation(|store| {
@@ -412,7 +416,7 @@ impl RunPreparationService {
                 token,
                 token_digest,
                 binding_digest,
-                initial_disclosure,
+                frozen_initial_turn,
                 self.host_process_epoch.clone(),
                 0,
                 expiration,

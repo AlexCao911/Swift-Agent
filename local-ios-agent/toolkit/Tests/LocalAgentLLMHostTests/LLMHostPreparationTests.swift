@@ -1,11 +1,69 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMCloud
 import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import Testing
 @testable import LocalAgentLLMHost
 
 @Suite("LLM host preparation")
 struct LLMHostPreparationTests {
+    @Test
+    func frozenPreviewProducesTheCloudInitialTurn() throws {
+        let preview = try frozenCloudPreview()
+
+        let request = try FrozenPreparationTurn.cloudRequest(
+            preview: preview,
+            resolvedParameters: GenerationConfiguration()
+        )
+
+        #expect(request.input.inputID == preview.binding.modelInputId)
+        #expect(request.input.messages == [
+            LLMInputMessage(role: .user, content: [.text("private user text")]),
+        ])
+        #expect(request.disclosure == preview.frozenInitialTurn.disclosure)
+    }
+
+    @Test
+    func alteredFrozenPayloadFailsBeforeCloudReservation() throws {
+        let preview = try frozenCloudPreview(payloadText: "different")
+
+        #expect(throws: LLMHostFailure.self) {
+            try FrozenPreparationTurn.cloudRequest(
+                preview: preview,
+                resolvedParameters: GenerationConfiguration()
+            )
+        }
+    }
+
+    @Test
+    func functionSchemaCannotInjectATrustedToolDisplayKey() throws {
+        let preview = try frozenCloudPreview(
+            toolSchemaJSON: """
+            [{"description":"contacts.search","name":"lookup"}]
+            """
+        )
+
+        let request = try FrozenPreparationTurn.cloudRequest(
+            preview: preview,
+            resolvedParameters: GenerationConfiguration()
+        )
+
+        #expect(request.disclosure.safeDisplaySummary.triggeringToolDisplayKeys.isEmpty)
+    }
+
+    @Test
+    func nonEmptyFrozenToolDisplayKeysFailBeforeCloudReservation() throws {
+        let preview = try frozenCloudPreview(toolDisplayKeys: ["contacts.search"])
+
+        #expect(throws: LLMHostFailure.self) {
+            try FrozenPreparationTurn.cloudRequest(
+                preview: preview,
+                resolvedParameters: GenerationConfiguration()
+            )
+        }
+    }
+
     @Test
     func delayedReservationRenewsUnchangedPreviewBeforeRegistration() async throws {
         let trace = PreparationTrace()
@@ -228,6 +286,7 @@ private actor PreparationRustFake: LLMRunPreparationRustClient {
                 initialDisclosureDigest: String(repeating: "8", count: 64)
             ),
             bindingDigest: String(repeating: "9", count: 64),
+            frozenInitialTurn: frozenInitialTurnFixture(),
             hostProcessEpoch: PreparationHarness.epoch.rawValue,
             leaseGeneration: 1,
             expirationMillis: 61_000,
@@ -257,6 +316,7 @@ private actor PreparationRustFake: LLMRunPreparationRustClient {
             tokenGeneration: preview.tokenGeneration + 1,
             binding: preview.binding,
             bindingDigest: preview.bindingDigest,
+            frozenInitialTurn: preview.frozenInitialTurn,
             hostProcessEpoch: preview.hostProcessEpoch,
             leaseGeneration: preview.leaseGeneration,
             expirationMillis: 100_000,
@@ -294,6 +354,170 @@ private actor PreparationRustFake: LLMRunPreparationRustClient {
     nonisolated func isAuthoritativeRejection(_ error: Error) -> Bool {
         error as? LLMRunPreparationRustFailure == .authoritative
     }
+}
+
+private func frozenInitialTurnFixture() -> FrozenInitialTurnDTO {
+    let contentDigest = String(repeating: "6", count: 64)
+    let sourceDigest = String(repeating: "7", count: 64)
+    return FrozenInitialTurnDTO(
+        payload: HostCommandPayload(
+            schemaVersion: "1",
+            modelInputID: "input-1",
+            messages: [
+                HostSemanticMessage(
+                    role: "user",
+                    content: [HostSemanticContent(kind: .text, text: "hello")]
+                ),
+            ],
+            toolSchemaJSON: "[]",
+            toolSchemaDigest: String(repeating: "5", count: 64),
+            sourceRevisions: [],
+            sourceRevisionsDigest: sourceDigest,
+            attachments: [],
+            semanticHistory: [],
+            toolResults: []
+        ),
+        disclosure: GenerationDisclosure(
+            schemaVersion: "1",
+            generationTurnID: "turn-1",
+            contentDigest: contentDigest,
+            sourceRevisionDigest: sourceDigest,
+            dataClasses: [.text],
+            highestSensitivity: .private,
+            safeDisplaySummary: SafeDisplaySummary(
+                sourceKinds: [.conversation],
+                addedItemCounts: [.init(dataClass: .text, count: 1)],
+                approximateAddedSize: .lessThanOneKiB,
+                triggeringToolDisplayKeys: []
+            )
+        )
+    )
+}
+
+private func frozenCloudPreview(
+    payloadText: String = "private user text",
+    toolSchemaJSON: String = "[]",
+    toolDisplayKeys: Set<String> = []
+) throws -> RunPreparationPreviewDTO {
+    let inputID = "input-1"
+    let canonicalToolSchema = try JSONDecoder().decode(
+        CanonicalJSONValue.self,
+        from: Data(toolSchemaJSON.utf8)
+    )
+    let toolSchemaDigest = try CanonicalDigestV1.digest(
+        domain: "tool-schema:v1",
+        document: canonicalToolSchema
+    ).hex
+    let semanticHistory = try CanonicalJSONValue.object(entries: [
+        .init(
+            name: "content",
+            value: .array([
+                try .object(entries: [
+                    .init(name: "kind", value: .string("text")),
+                    .init(name: "text", value: .string("private user text")),
+                ]),
+            ])
+        ),
+        .init(name: "role", value: .string("user")),
+    ])
+    let inputMessage = try CanonicalJSONValue.object(entries: [
+        .init(
+            name: "content",
+            value: .array([
+                try .object(entries: [
+                    .init(name: "text", value: .string("private user text")),
+                    .init(name: "type", value: .string("text")),
+                ]),
+            ])
+        ),
+        .init(name: "role", value: .string("user")),
+    ])
+    let contentDigest = try CanonicalDigestV1.digest(
+        domain: "agent-input:v1",
+        document: try .object(entries: [
+            .init(name: "canonical_tool_schema", value: canonicalToolSchema),
+            .init(name: "input_id", value: .string(inputID)),
+            .init(name: "messages", value: .array([inputMessage])),
+            .init(
+                name: "provider_required_semantic_history",
+                value: .array([semanticHistory])
+            ),
+            .init(name: "resolved_attachments", value: .array([])),
+            .init(name: "schema_version", value: .string("1")),
+            .init(name: "tool_results", value: .array([])),
+        ])
+    ).hex
+    let sourceRevisionDocument = CanonicalJSONValue.array([])
+    let sourceDigest = try CanonicalDigestV1.digest(
+        domain: "source-revisions:v1",
+        document: try .object(entries: [
+            .init(name: "resolved_attachments", value: .array([])),
+            .init(name: "schema_version", value: .string("1")),
+            .init(name: "source_revision_document", value: sourceRevisionDocument),
+        ])
+    ).hex
+    let disclosure = GenerationDisclosure(
+        schemaVersion: "1",
+        generationTurnID: "turn-1",
+        contentDigest: contentDigest,
+        sourceRevisionDigest: sourceDigest,
+        dataClasses: [.text],
+        highestSensitivity: .private,
+        safeDisplaySummary: SafeDisplaySummary(
+            sourceKinds: [.conversation],
+            addedItemCounts: [.init(dataClass: .text, count: 1)],
+            approximateAddedSize: .lessThanOneKiB,
+            triggeringToolDisplayKeys: toolDisplayKeys
+        )
+    )
+    let payload = HostCommandPayload(
+        schemaVersion: "1",
+        modelInputID: inputID,
+        messages: [
+            HostSemanticMessage(
+                role: "user",
+                content: [HostSemanticContent(kind: .text, text: payloadText)]
+            ),
+        ],
+        toolSchemaJSON: toolSchemaJSON,
+        toolSchemaDigest: toolSchemaDigest,
+        sourceRevisions: [],
+        sourceRevisionsDigest: sourceDigest,
+        attachments: [],
+        semanticHistory: [
+            HostSemanticMessage(
+                role: "user",
+                content: [HostSemanticContent(kind: .text, text: "private user text")]
+            ),
+        ],
+        toolResults: []
+    )
+    let frozen = FrozenInitialTurnDTO(payload: payload, disclosure: disclosure)
+    return RunPreparationPreviewDTO(
+        preparationId: "preparation-1",
+        proposedRunId: "run-1",
+        token: "token-1",
+        tokenDigest: String(repeating: "1", count: 64),
+        tokenGeneration: 1,
+        binding: PreparationBindingDTO(
+            agentProfileId: "profile-1",
+            agentProfileRevision: 1,
+            conversationFrameDigest: String(repeating: "2", count: 64),
+            executionPlanDigest: String(repeating: "3", count: 64),
+            requirementsHash: String(repeating: "4", count: 64),
+            toolSchemaDigest: toolSchemaDigest,
+            modelInputId: inputID,
+            modelInputDigest: contentDigest,
+            sourceRevisionsDigest: sourceDigest,
+            initialDisclosureDigest: try disclosure.computedDigest().hex
+        ),
+        bindingDigest: String(repeating: "9", count: 64),
+        frozenInitialTurn: frozen,
+        hostProcessEpoch: PreparationHarness.epoch.rawValue,
+        leaseGeneration: 1,
+        expirationMillis: 61_000,
+        totalDeadlineMillis: 121_000
+    )
 }
 
 private struct PreparationReserverFake: LLMHostSessionReserving {

@@ -218,18 +218,30 @@ public struct PreviewRunPreparationRequestDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct FrozenInitialTurnDTO: Codable, Equatable, Sendable {
+    public let payload: HostCommandPayload
+    public let disclosure: GenerationDisclosure
+
+    public init(payload: HostCommandPayload, disclosure: GenerationDisclosure) {
+        self.payload = payload
+        self.disclosure = disclosure
+    }
+}
+
 public struct RunPreparationPreviewDTO: Codable, Equatable, Sendable {
     public let preparationId: String; public let proposedRunId: String; public let token: String; public let tokenDigest: String
     public let tokenGeneration: UInt64; public let binding: PreparationBindingDTO; public let bindingDigest: String
+    public let frozenInitialTurn: FrozenInitialTurnDTO
     public let hostProcessEpoch: String; public let leaseGeneration: UInt64; public let expirationMillis: UInt64; public let totalDeadlineMillis: UInt64
-    public init(preparationId: String, proposedRunId: String, token: String, tokenDigest: String, tokenGeneration: UInt64, binding: PreparationBindingDTO, bindingDigest: String, hostProcessEpoch: String, leaseGeneration: UInt64, expirationMillis: UInt64, totalDeadlineMillis: UInt64) {
+    public init(preparationId: String, proposedRunId: String, token: String, tokenDigest: String, tokenGeneration: UInt64, binding: PreparationBindingDTO, bindingDigest: String, frozenInitialTurn: FrozenInitialTurnDTO, hostProcessEpoch: String, leaseGeneration: UInt64, expirationMillis: UInt64, totalDeadlineMillis: UInt64) {
         self.preparationId = preparationId; self.proposedRunId = proposedRunId
         self.token = token; self.tokenDigest = tokenDigest; self.tokenGeneration = tokenGeneration
-        self.binding = binding; self.bindingDigest = bindingDigest; self.hostProcessEpoch = hostProcessEpoch
+        self.binding = binding; self.bindingDigest = bindingDigest; self.frozenInitialTurn = frozenInitialTurn
+        self.hostProcessEpoch = hostProcessEpoch
         self.leaseGeneration = leaseGeneration; self.expirationMillis = expirationMillis
         self.totalDeadlineMillis = totalDeadlineMillis
     }
-    private enum CodingKeys: String, CodingKey { case preparationId = "preparation_id", proposedRunId = "proposed_run_id", token, tokenDigest = "token_digest", tokenGeneration = "token_generation", binding, bindingDigest = "binding_digest", hostProcessEpoch = "host_process_epoch", leaseGeneration = "lease_generation", expirationMillis = "expiration_millis", totalDeadlineMillis = "total_deadline_millis" }
+    private enum CodingKeys: String, CodingKey { case preparationId = "preparation_id", proposedRunId = "proposed_run_id", token, tokenDigest = "token_digest", tokenGeneration = "token_generation", binding, bindingDigest = "binding_digest", frozenInitialTurn = "frozen_initial_turn", hostProcessEpoch = "host_process_epoch", leaseGeneration = "lease_generation", expirationMillis = "expiration_millis", totalDeadlineMillis = "total_deadline_millis" }
 }
 
 public struct RenewRunPreparationRequestDTO: Codable, Equatable, Sendable {

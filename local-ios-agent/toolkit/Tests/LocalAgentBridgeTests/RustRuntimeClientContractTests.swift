@@ -7,6 +7,87 @@ import CLocalAgentRuntime
 
 @Suite("Runtime clients")
 struct RustRuntimeClientContractTests {
+    @Test
+    func preparationPreviewDecodesTheRustFrozenInitialTurn() throws {
+        let preview = try JSONDecoder().decode(
+            RunPreparationPreviewDTO.self,
+            from: Data(
+                """
+                {
+                  "preparation_id":"preparation-1",
+                  "proposed_run_id":"run-1",
+                  "token":"token-1",
+                  "token_digest":"\(String(repeating: "1", count: 64))",
+                  "token_generation":1,
+                  "binding":{
+                    "agent_profile_id":"profile-1",
+                    "agent_profile_revision":1,
+                    "conversation_frame_digest":"\(String(repeating: "2", count: 64))",
+                    "execution_plan_digest":"\(String(repeating: "3", count: 64))",
+                    "requirements_hash":"\(String(repeating: "4", count: 64))",
+                    "tool_schema_digest":"\(String(repeating: "5", count: 64))",
+                    "model_input_id":"input-1",
+                    "model_input_digest":"\(String(repeating: "6", count: 64))",
+                    "source_revisions_digest":"\(String(repeating: "7", count: 64))",
+                    "initial_disclosure_digest":"\(String(repeating: "8", count: 64))"
+                  },
+                  "binding_digest":"\(String(repeating: "9", count: 64))",
+                  "initial_disclosure":{
+                    "schema_version":"1",
+                    "generation_turn_id":"turn-1",
+                    "content_digest":"\(String(repeating: "6", count: 64))",
+                    "source_revision_digest":"\(String(repeating: "7", count: 64))",
+                    "data_classes":["text"],
+                    "highest_sensitivity":"private",
+                    "safe_display_summary":{
+                      "source_kinds":["conversation"],
+                      "added_item_counts":[{"data_class":"text","count":"1"}],
+                      "approximate_added_size":"less_than_1_kib",
+                      "triggering_tool_display_keys":[]
+                    }
+                  },
+                  "frozen_initial_turn":{
+                    "payload":{
+                      "schema_version":"1",
+                      "model_input_id":"input-1",
+                      "messages":[{"role":"user","content":[{"kind":"text","text":"private user text"}]}],
+                      "tool_schema_json":"[]",
+                      "tool_schema_digest":"\(String(repeating: "5", count: 64))",
+                      "source_revisions":[],
+                      "source_revisions_digest":"\(String(repeating: "7", count: 64))",
+                      "attachments":[],
+                      "semantic_history":[],
+                      "tool_results":[]
+                    },
+                    "disclosure":{
+                      "schema_version":"1",
+                      "generation_turn_id":"turn-1",
+                      "content_digest":"\(String(repeating: "6", count: 64))",
+                      "source_revision_digest":"\(String(repeating: "7", count: 64))",
+                      "data_classes":["text"],
+                      "highest_sensitivity":"private",
+                      "safe_display_summary":{
+                        "source_kinds":["conversation"],
+                        "added_item_counts":[{"data_class":"text","count":"1"}],
+                        "approximate_added_size":"less_than_1_kib",
+                        "triggering_tool_display_keys":[]
+                      }
+                    }
+                  },
+                  "host_process_epoch":"epoch-1",
+                  "lease_generation":1,
+                  "expiration_millis":300000,
+                  "total_deadline_millis":1800000
+                }
+                """.utf8
+            )
+        )
+
+        #expect(preview.frozenInitialTurn.payload.messages.count == 1)
+        #expect(preview.frozenInitialTurn.disclosure.safeDisplaySummary
+            .triggeringToolDisplayKeys.isEmpty)
+    }
+
     #if canImport(CLocalAgentRuntime)
     @Test
     func llmHostCopiesBytesBeforeReturningAndQuiescesBeforeRelease() throws {
@@ -771,7 +852,28 @@ struct RustRuntimeClientContractTests {
             "model_input_id":"input-1","model_input_digest":"input-digest",
             "source_revisions_digest":"source-digest","initial_disclosure_digest":"disclosure-digest"
           },
-          "binding_digest":"binding-digest","host_process_epoch":"epoch-1",
+          "binding_digest":"binding-digest",
+          "frozen_initial_turn":{
+            "payload":{
+              "schema_version":"1","model_input_id":"input-1",
+              "messages":[{"role":"user","content":[{"kind":"text","text":"hello"}]}],
+              "tool_schema_json":"[]","tool_schema_digest":"tool-digest",
+              "source_revisions":[],"source_revisions_digest":"source-digest",
+              "attachments":[],"semantic_history":[],"tool_results":[]
+            },
+            "disclosure":{
+              "schema_version":"1","generation_turn_id":"turn-1",
+              "content_digest":"input-digest","source_revision_digest":"source-digest",
+              "data_classes":["text"],"highest_sensitivity":"private",
+              "safe_display_summary":{
+                "source_kinds":["conversation"],
+                "added_item_counts":[{"data_class":"text","count":"1"}],
+                "approximate_added_size":"less_than_1_kib",
+                "triggering_tool_display_keys":[]
+              }
+            }
+          },
+          "host_process_epoch":"epoch-1",
           "lease_generation":1,"expiration_millis":300000,"total_deadline_millis":1800000
         }
         """
