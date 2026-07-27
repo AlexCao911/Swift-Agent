@@ -14,7 +14,7 @@ pub struct ToolRecipe {
     kind: ToolRecipeKind,
     content: ToolRecipeContent,
     requested_approval: Option<ApprovalRequirement>,
-    credential_ref: Option<CredentialRef>,
+    credential: Option<CredentialRef>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,7 +125,7 @@ impl ToolRecipe {
                 policy: HttpConnectorPolicy::default(),
             },
             requested_approval: None,
-            credential_ref: None,
+            credential: None,
         }
     }
 
@@ -137,7 +137,7 @@ impl ToolRecipe {
                 expression: expression.into(),
             },
             requested_approval: None,
-            credential_ref: None,
+            credential: None,
         }
     }
 
@@ -149,7 +149,7 @@ impl ToolRecipe {
                 base_tool_name: base_tool_name.into(),
             },
             requested_approval: None,
-            credential_ref: None,
+            credential: None,
         }
     }
 
@@ -159,7 +159,7 @@ impl ToolRecipe {
             kind: ToolRecipeKind::Workflow,
             content: ToolRecipeContent::Workflow { steps },
             requested_approval: None,
-            credential_ref: None,
+            credential: None,
         }
     }
 
@@ -179,8 +179,8 @@ impl ToolRecipe {
         self.requested_approval.clone()
     }
 
-    pub fn credential_ref(&self) -> Option<&CredentialRef> {
-        self.credential_ref.as_ref()
+    pub fn credential(&self) -> Option<&CredentialRef> {
+        self.credential.as_ref()
     }
 
     pub fn with_requested_approval(mut self, approval: ApprovalRequirement) -> Self {
@@ -188,8 +188,8 @@ impl ToolRecipe {
         self
     }
 
-    pub fn with_credential_ref(mut self, credential_ref: CredentialRef) -> Self {
-        self.credential_ref = Some(credential_ref);
+    pub fn with_credential(mut self, credential: CredentialRef) -> Self {
+        self.credential = Some(credential);
         self
     }
 

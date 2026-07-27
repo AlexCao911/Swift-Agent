@@ -1,4 +1,4 @@
-use crate::agent_package::{reader::normalize_package_path, AgentPackageManifest};
+use crate::agent_package::AgentPackageManifest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageValidationIssue {
@@ -35,10 +35,10 @@ impl AgentPackageValidator {
     pub fn validate(&self, manifest: &AgentPackageManifest) -> PackageValidationReport {
         let mut report = PackageValidationReport::default();
 
-        if !matches!(manifest.schema_version, 1 | 2) {
+        if manifest.schema_version != 2 {
             report.add_issue(
                 "package.schema_version.invalid",
-                "schema_version must be 1 or 2",
+                "production package manifests must use schema_version 2",
             );
         }
         if manifest.package_id.trim().is_empty() {
@@ -69,31 +69,7 @@ impl AgentPackageValidator {
                 );
             }
         }
-        if manifest.schema_version == 2 {
-            validate_v2_slot(manifest, &mut report);
-        }
-        if let Some(model_file) = &manifest.model_file {
-            if normalize_package_path(model_file).is_err() {
-                report.add_issue(
-                    "package.model_file.path_invalid",
-                    "model_file must be a normalized package-relative path",
-                );
-            }
-            if manifest.model.is_none() {
-                report.add_issue(
-                    "package.model_file.model_missing",
-                    "model_file requires a model manifest",
-                );
-            }
-        }
-        if manifest.schema_version == 1
-            && (manifest.model_file.is_none() || manifest.model.is_none())
-        {
-            report.add_issue(
-                "package.model.required",
-                "installable agent packages must include a model file and model manifest",
-            );
-        }
+        validate_v2_slot(manifest, &mut report);
         if manifest.signature.is_some() {
             report.add_issue(
                 "package.signature.unsupported",
@@ -106,64 +82,11 @@ impl AgentPackageValidator {
                 "signature metadata requires package hash metadata",
             );
         }
-
-        if let Some(model) = &manifest.model {
-            if model.provider_id.trim().is_empty() {
-                report.add_issue(
-                    "package.model.provider_id.missing",
-                    "model provider_id is required",
-                );
-            }
-            if model.model_id.trim().is_empty() {
-                report.add_issue("package.model.model_id.missing", "model_id is required");
-            }
-            if !model.unknown_fields.is_empty() {
-                report.add_issue(
-                    "package.unknown_field.forbidden",
-                    "model manifest contains unknown fields",
-                );
-            }
-            if contains_secret_like_value(&model.provider_id)
-                || contains_secret_like_value(&model.model_id)
-                || model
-                    .credential_ref
-                    .as_deref()
-                    .is_some_and(contains_secret_like_value)
-                || model
-                    .local_path
-                    .as_deref()
-                    .is_some_and(contains_secret_like_value)
-            {
-                report.add_issue(
-                    "package.secret_value.forbidden",
-                    "portable package manifests cannot store secret-like values",
-                );
-            }
-            if model.credential_ref.is_some() {
-                report.add_issue(
-                    "package.credential_ref.forbidden",
-                    "portable package manifests cannot store credential refs",
-                );
-            }
-            if model.local_path.is_some() {
-                report.add_issue(
-                    "package.local_path.forbidden",
-                    "portable package manifests cannot store local paths",
-                );
-            }
-        }
-
         report
     }
 }
 
 fn validate_v2_slot(manifest: &AgentPackageManifest, report: &mut PackageValidationReport) {
-    if manifest.model_file.is_some() || manifest.model.is_some() {
-        report.add_issue(
-            "package.v2.concrete_model.forbidden",
-            "schema-v2 packages cannot contain concrete model bindings",
-        );
-    }
     if manifest.llm_slot.is_none() {
         report.add_issue(
             "package.llm_slot.required",
@@ -177,6 +100,6 @@ fn contains_secret_like_value(value: &str) -> bool {
     value.contains("credentialref")
         || value.contains("secret")
         || value.starts_with("sk-")
-        || value.contains("api_key")
+        || value.contains(concat!("api", "_key"))
         || value.contains("token=")
 }

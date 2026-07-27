@@ -169,17 +169,15 @@ fi
 
 "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 
-LOCAL_AGENT_INFERENCE_XCFRAMEWORK="$ARTIFACT" \
-  cargo build --manifest-path "$ROOT/rust-core/Cargo.toml" \
-    --features link-llama-cpp-local-inference
+cargo build --manifest-path "$ROOT/rust-core/Cargo.toml"
 RUST_ARCHIVE="$ROOT/rust-core/target/debug/liblocal_ios_agent_runtime.a"
 require_file "$RUST_ARCHIVE"
 rust_symbols="$("$NM" "$RUST_ARCHIVE" 2>/dev/null || true)"
 if printf '%s\n' "$rust_symbols" | grep -E ' [Tt] _local_agent_(engine|model|generation|string|last_error)' >/dev/null; then
   fail "Rust staticlib must not define the local inference C ABI"
 fi
-if ! printf '%s\n' "$rust_symbols" | grep ' U _local_agent_engine_create' >/dev/null; then
-  fail "legacy Rust local inference must remain an unbundled consumer of the shared C ABI"
+if printf '%s\n' "$rust_symbols" | grep -E ' U _local_agent_(engine|model|generation|string|last_error)' >/dev/null; then
+  fail "Rust staticlib must not consume the local inference C ABI"
 fi
 
 DEVELOPER_DIR="$DEVELOPER_DIR" \

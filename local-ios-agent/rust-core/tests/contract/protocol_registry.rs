@@ -1,6 +1,6 @@
 use local_ios_agent_runtime::protocol::{
-    ComponentDefinition, DefinitionCompatibility, DefinitionId, ModuleId, ProviderDefinition,
-    RegistryError, SchemaVersion, TypedRegistry,
+    ComponentDefinition, DefinitionCompatibility, DefinitionId, ModuleId, RegistryError,
+    SchemaVersion, TypedRegistry,
 };
 
 #[derive(Clone, Debug)]
@@ -93,39 +93,6 @@ fn registry_rejects_incompatible_definition() {
             "provider.future",
             "schema too new",
         ))
-        .unwrap_err();
-
-    assert!(matches!(
-        error,
-        RegistryError::IncompatibleDefinition { .. }
-    ));
-}
-
-#[test]
-fn production_definition_can_carry_metadata_and_compatibility() {
-    let definition = ProviderDefinition::new("provider.future")
-        .with_display_name("Future Provider")
-        .with_schema_version(SchemaVersion::new(2, 1))
-        .with_compatibility(DefinitionCompatibility::incompatible("requires host v2"));
-
-    assert_eq!(definition.display_name(), "Future Provider");
-    assert_eq!(definition.schema_version(), SchemaVersion::new(2, 1));
-    assert!(!definition.compatibility().is_compatible());
-    assert_eq!(
-        definition.compatibility().reason(),
-        Some("requires host v2")
-    );
-}
-
-#[test]
-fn registry_rejects_incompatible_production_definition() {
-    let mut registry = TypedRegistry::new();
-
-    let error = registry
-        .insert(
-            ProviderDefinition::new("provider.future")
-                .with_compatibility(DefinitionCompatibility::incompatible("schema too new")),
-        )
         .unwrap_err();
 
     assert!(matches!(

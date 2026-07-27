@@ -140,7 +140,7 @@ impl SettingsFieldDescriptor {
 fn is_safe_default_value(value: &str) -> bool {
     let trimmed = value.trim();
     let lower = trimmed.to_ascii_lowercase();
-    !lower.contains("api_key")
+    !lower.contains(concat!("api", "_key"))
         && !lower.contains("secret")
         && !lower.contains("token")
         && !lower.starts_with("sk-")

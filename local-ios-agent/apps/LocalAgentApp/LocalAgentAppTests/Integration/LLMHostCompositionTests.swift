@@ -14,7 +14,6 @@ struct LLMHostCompositionTests {
 
         let container = try await AppBootstrapper.makeReadyContainer(
             hostProcessEpoch: epoch,
-            environment: [:],
             store: .inMemory,
             localAppSupportRoot: root
         )
@@ -25,12 +24,11 @@ struct LLMHostCompositionTests {
         #expect(container.llmHostRuntime?.hostProcessEpoch == epoch)
         #expect(await container.hostRunStarter?.canStart == true)
         #expect(container.legacyMigration != nil)
-        let active = try #require(container.activeAgentProfile)
         let shellSelection = await MainActor.run {
             container.makeAppShellViewModel().activeAgent
         }
-        #expect(shellSelection?.profileId == active.profileId)
-        #expect(shellSelection?.profileRevisionId == active.profileRevisionId)
+        #expect(container.activeAgentProfile == nil)
+        #expect(shellSelection == nil)
 
         container.suspendLLMHost()
         container.resumeLLMHost()

@@ -4,7 +4,6 @@ use local_ios_agent_runtime::agent_package::{
     AgentPackageInstaller, AgentPackageManifest, InMemoryPackageInstallStore,
     InstalledAgentProfileReference,
 };
-use local_ios_agent_runtime::model::InMemoryModelBindingCatalog;
 use local_ios_agent_runtime::security::{
     EgressDestination, SecurityManager, StaticSecurityPermissionService,
 };
@@ -17,7 +16,6 @@ use local_ios_agent_runtime::user_customization::{
 pub struct AgentOsTestWorld {
     pub package_store: InMemoryPackageInstallStore,
     pub profile_repository: InMemoryAgentProfileRepository,
-    pub model_catalog: InMemoryModelBindingCatalog,
     pub component_catalog: ComponentCatalogService,
     pub security: SecurityManager,
 }
@@ -33,7 +31,6 @@ impl AgentOsTestWorld {
         Self {
             package_store: InMemoryPackageInstallStore::default(),
             profile_repository: InMemoryAgentProfileRepository::default(),
-            model_catalog: InMemoryModelBindingCatalog::default(),
             component_catalog: ComponentCatalogService::default(),
             security: SecurityManager::with_permission_service(permission_service),
         }

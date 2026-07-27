@@ -7,7 +7,6 @@ struct ExecutionDomainAdapter: ExecutionDomain {
     private let events: RunEventStreamService
     private let tools: ToolApprovalService
     private let debug: RunDebugService
-    private let inference: InferenceSettingsService
 
     init(
         profiles: AgentProfileService,
@@ -15,8 +14,7 @@ struct ExecutionDomainAdapter: ExecutionDomain {
         lifecycle: RunLifecycleService,
         events: RunEventStreamService,
         tools: ToolApprovalService,
-        debug: RunDebugService,
-        inference: InferenceSettingsService
+        debug: RunDebugService
     ) {
         self.profiles = profiles
         self.composition = composition
@@ -24,7 +22,6 @@ struct ExecutionDomainAdapter: ExecutionDomain {
         self.events = events
         self.tools = tools
         self.debug = debug
-        self.inference = inference
     }
 
     func listAgentProfiles() async throws -> [AgentProfileDTO] {
@@ -33,10 +30,6 @@ struct ExecutionDomainAdapter: ExecutionDomain {
 
     func buildAgent(templateId: String) async throws -> AgentProfileDTO {
         try await composition.buildAgent(templateId: templateId)
-    }
-
-    func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await lifecycle.startRun(request)
     }
 
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
@@ -61,9 +54,5 @@ struct ExecutionDomainAdapter: ExecutionDomain {
 
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
         try await debug.loadDebugArchive(runId)
-    }
-
-    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
-        try await inference.updateRuntimeOptions(options)
     }
 }

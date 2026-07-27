@@ -1,13 +1,14 @@
 use crate::{
-    model::{ModelBindingCatalog, ModelBindingId, ModelCatalogVersion, ModelSelection},
+    llm_contracts::{
+        AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
+    },
     storage::{InMemoryTransactionRunner, StorageError},
     user_customization::{
         AgentAssemblyPlan, AgentProfile, AgentProfileDraft, AgentProfileId,
-        AgentProfileModelBinding, AgentProfilePublisher, AgentReadinessIssue, AgentReadinessReport,
-        AgentSlotId, AgentSlotKind, AgentTemplate, BindingRequest, ComponentBinding,
-        ComponentCatalogService, ComponentContent, ComponentGraphBuilder, ComponentNode,
-        InMemoryAgentProfileRepository, MissingRequirement, UserComponentVersionId,
-        UserFacingCapabilityId, UserProvidedBindings,
+        AgentProfilePublisher, AgentReadinessIssue, AgentReadinessReport, AgentSlotId,
+        AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent,
+        ComponentGraphBuilder, ComponentNode, InMemoryAgentProfileRepository, MissingRequirement,
+        UserComponentVersionId, UserFacingCapabilityId, UserProvidedBindings,
     },
 };
 
@@ -19,8 +20,7 @@ pub struct AgentBuilderResolver {
     has_web_search_tool: bool,
     component_catalog: ComponentCatalogService,
     persona_version_id: Option<UserComponentVersionId>,
-    model_catalog: ModelBindingCatalog,
-    model_selection: Option<ModelSelection>,
+    llm_slot: Option<LLMSlotV2>,
     profile_repository: InMemoryAgentProfileRepository,
 }
 
@@ -86,8 +86,7 @@ impl AgentBuilderResolver {
             has_web_search_tool,
             component_catalog: catalog_fixture.component_catalog,
             persona_version_id: catalog_fixture.persona_version_id,
-            model_catalog: catalog_fixture.model_catalog,
-            model_selection: catalog_fixture.model_selection,
+            llm_slot: catalog_fixture.llm_slot,
             profile_repository: InMemoryAgentProfileRepository::default(),
         }
     }
@@ -136,23 +135,13 @@ impl AgentBuilderResolver {
             ));
         }
 
-        if input.template.supports_slot(AgentSlotKind::Model) && self.has_model {
-            plan = plan.binding(BindingRequest::credential(
-                "provider.openai",
-                "credential.openai.api_key",
-            ));
-            plan = plan.with_safety_review(
-                crate::user_customization::SafetyReview::fixture_high_egress_risk(),
-            );
-        }
-
         if self.has_model || self.has_persona_component {
             let profile_draft = profile_draft_for_template(
                 input.template(),
                 self.has_persona_component,
                 self.has_model,
                 self.persona_version_id,
-                self.model_selection.clone(),
+                self.llm_slot.clone(),
             );
             plan = self.add_profile_validation_readiness(
                 plan,
@@ -177,17 +166,13 @@ impl AgentBuilderResolver {
         let template = AgentTemplate::assistant_default();
 
         AgentAssemblyPlan::new(graph)
-            .binding(BindingRequest::credential(
-                "provider.openai",
-                "credential.openai.api_key",
-            ))
             .with_profile_draft(
                 profile_draft_for_template(
                     &template,
                     true,
                     true,
                     self.persona_version_id,
-                    self.model_selection.clone(),
+                    self.llm_slot.clone(),
                 ),
                 template,
             )
@@ -196,25 +181,13 @@ impl AgentBuilderResolver {
     pub fn finalize(
         &self,
         plan: AgentAssemblyPlan,
-        bindings: UserProvidedBindings,
+        _bindings: UserProvidedBindings,
     ) -> Result<AgentProfile, AgentBuilderError> {
         if !plan.readiness_report().is_ready() {
             return Err(AgentBuilderError::new(
                 "assembly_plan.not_ready",
                 "agent assembly plan still has blocking readiness issues",
             ));
-        }
-
-        for request in plan.required_bindings() {
-            if request.is_required() && bindings.credential_ref(request.binding_key()).is_none() {
-                return Err(AgentBuilderError::new(
-                    "binding.required.unresolved",
-                    format!(
-                        "required binding {} has not been provided",
-                        request.binding_key()
-                    ),
-                ));
-            }
         }
 
         let (draft, template) = plan.into_profile_draft_and_template().ok_or_else(|| {
@@ -235,7 +208,6 @@ impl AgentBuilderResolver {
             ));
         }
 
-        let draft = draft.with_local_bindings(bindings.into_local_bindings());
         let publisher = AgentProfilePublisher::new(
             Box::new(InMemoryTransactionRunner::default()),
             self.profile_repository.clone(),
@@ -245,7 +217,6 @@ impl AgentBuilderResolver {
                 draft,
                 &template,
                 &self.component_catalog,
-                &self.model_catalog,
             )
             .map_err(AgentBuilderError::from)?;
 
@@ -294,8 +265,8 @@ impl AgentBuilderResolver {
         for slot in template.slots().iter().filter(|slot| slot.is_required()) {
             let satisfied = match slot.kind() {
                 AgentSlotKind::Model => draft
-                    .model_binding()
-                    .map(|binding| binding.slot_id() == slot.id())
+                    .llm_slot()
+                    .map(|binding| binding.requirements().slot_id() == slot.id().as_str())
                     .unwrap_or(false),
                 _ => draft
                     .bindings()
@@ -360,7 +331,6 @@ impl AgentBuilderResolver {
             draft,
             template,
             &self.component_catalog,
-            &self.model_catalog,
         ) {
             Ok(_) => plan,
             Err(error) => plan.with_readiness_issue(AgentReadinessIssue::new(
@@ -371,13 +341,15 @@ impl AgentBuilderResolver {
     }
 }
 
-fn openai_fixture_model_selection() -> ModelSelection {
-    ModelSelection::new(
-        ModelBindingId::new("model_binding.openai.default"),
-        "credential.openai.api_key",
-        "provider.openai",
-        "gpt-4.1-mini",
-        ModelCatalogVersion::new(1),
+fn fixture_llm_slot() -> LLMSlotV2 {
+    LLMSlotV2::new(
+        AgentLLMRequirements::new(
+            "slot.model.primary",
+            4_096,
+            true,
+            LLMToolCallingMode::Allowed,
+        )
+        .requiring_input_modality(LLMInputModality::Text),
     )
 }
 
@@ -386,12 +358,12 @@ fn profile_draft_for_template(
     include_persona: bool,
     include_model: bool,
     persona_version_id: Option<UserComponentVersionId>,
-    model_selection: Option<ModelSelection>,
+    llm_slot: Option<LLMSlotV2>,
 ) -> AgentProfileDraft {
     let mut draft = AgentProfileDraft::new(
         AgentProfileId::new("profile.fixture.openai"),
         template.id().clone(),
-        "OpenAI fixture",
+        "Hosted fixture",
     );
 
     if include_persona && template.supports_slot(AgentSlotKind::Persona) {
@@ -402,11 +374,8 @@ fn profile_draft_for_template(
     }
 
     if include_model && template.supports_slot(AgentSlotKind::Model) {
-        if let Some(selection) = model_selection {
-            draft = draft.with_model_binding(AgentProfileModelBinding::new(
-                AgentSlotId::new("slot.model.primary"),
-                selection,
-            ));
+        if let Some(slot) = llm_slot {
+            draft = draft.with_llm_slot(slot);
         }
     }
 
@@ -423,8 +392,7 @@ enum CatalogFixtureMode {
 struct CatalogFixture {
     component_catalog: ComponentCatalogService,
     persona_version_id: Option<UserComponentVersionId>,
-    model_catalog: ModelBindingCatalog,
-    model_selection: Option<ModelSelection>,
+    llm_slot: Option<LLMSlotV2>,
 }
 
 impl CatalogFixture {
@@ -442,18 +410,16 @@ impl CatalogFixture {
             )
         };
 
-        let model_selection = openai_fixture_model_selection();
-        let model_catalog = if mode == CatalogFixtureMode::MissingModelSelection {
-            ModelBindingCatalog::default()
+        let llm_slot = if mode == CatalogFixtureMode::MissingModelSelection {
+            None
         } else {
-            ModelBindingCatalog::default().with_selection(model_selection.clone())
+            Some(fixture_llm_slot())
         };
 
         Self {
             component_catalog,
             persona_version_id,
-            model_catalog,
-            model_selection: Some(model_selection),
+            llm_slot,
         }
     }
 }

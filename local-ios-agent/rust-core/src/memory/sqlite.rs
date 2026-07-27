@@ -7,7 +7,6 @@ use rusqlite::{params, Connection};
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
 use crate::memory::{
     AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord, MemoryCandidate,
-    ProviderSetting,
 };
 use crate::storage::agent_os_state::SqliteAgentOSStateStore;
 
@@ -240,10 +239,6 @@ impl SqliteEventStore {
                   primary key (session_id, leaf_id)
                 );
 
-                create table if not exists provider_settings (
-                  key text primary key,
-                  value text not null
-                );
                 ",
             )
             .map_err(storage_error)?;
@@ -583,36 +578,6 @@ impl SqliteEventStore {
         Ok(audit_rows)
     }
 
-    pub fn save_provider_setting(&self, key: &str, value: &str) -> Result<(), AgentError> {
-        self.connection()?
-            .execute(
-                "
-                insert into provider_settings(key, value)
-                values (?1, ?2)
-                on conflict(key) do update set value = excluded.value
-                ",
-                params![key, value],
-            )
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
-    pub fn provider_setting(&self, key: &str) -> Result<Option<String>, AgentError> {
-        let connection = self.connection()?;
-        match connection.query_row(
-            "
-            select value
-            from provider_settings
-            where key = ?1
-            ",
-            params![key],
-            |row| row.get(0),
-        ) {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(error) => Err(storage_error(error)),
-        }
-    }
 }
 
 impl EventStore for SqliteEventStore {
@@ -965,16 +930,6 @@ impl EventStore for SqliteEventStore {
         Ok(())
     }
 
-    fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError> {
-        SqliteEventStore::save_provider_setting(self, &setting.key, &setting.value)
-    }
-
-    fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError> {
-        Ok(self.provider_setting(key)?.map(|value| ProviderSetting {
-            key: key.to_string(),
-            value,
-        }))
-    }
 }
 
 fn storage_error(error: rusqlite::Error) -> AgentError {

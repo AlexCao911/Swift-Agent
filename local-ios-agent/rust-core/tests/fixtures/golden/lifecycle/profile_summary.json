@@ -4,7 +4,6 @@
   "template_id": "template.package.installed.v1",
   "name": "Fixture Agent",
   "component_bindings": [],
-  "llm_binding_schema": "host_slot_v2",
   "llm_slot": {
     "slot_id": "slot.model.primary",
     "capabilities": [
@@ -20,7 +19,5 @@
     "model_family_hint": null,
     "model_id_hint": "gpt-fixture"
   },
-  "model_binding": null,
-  "local_bindings": [],
   "host_binding_state": "pending_host_binding"
 }

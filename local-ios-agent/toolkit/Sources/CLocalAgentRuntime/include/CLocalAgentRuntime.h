@@ -73,10 +73,6 @@ char *local_agent_runtime_bridge_rename_session(
     const char *session_id,
     const char *title
 );
-char *local_agent_runtime_bridge_update_runtime_options(
-    LocalAgentRuntimeBridge *runtime,
-    const char *options_json
-);
 char *local_agent_runtime_bridge_delete_session(
     LocalAgentRuntimeBridge *runtime,
     const char *session_id
@@ -89,16 +85,6 @@ char *local_agent_runtime_bridge_set_permission_state(
     LocalAgentRuntimeBridge *runtime,
     const char *state_json
 );
-char *local_agent_runtime_bridge_send_message(
-    LocalAgentRuntimeBridge *runtime,
-    const char *input_json
-);
-char *local_agent_runtime_bridge_send_message_streaming(
-    LocalAgentRuntimeBridge *runtime,
-    const char *input_json,
-    LocalAgentRuntimeEventCallback callback,
-    void *user_data
-);
 char *local_agent_runtime_bridge_pending_tool_requests(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_pending_approval_requests(LocalAgentRuntimeBridge *runtime);
 char *local_agent_runtime_bridge_submit_tool_result(
@@ -106,39 +92,6 @@ char *local_agent_runtime_bridge_submit_tool_result(
     const char *run_id,
     const char *result_json
 );
-char *local_agent_runtime_bridge_submit_tool_result_streaming(
-    LocalAgentRuntimeBridge *runtime,
-    const char *run_id,
-    const char *result_json,
-    LocalAgentRuntimeEventCallback callback,
-    void *user_data
-);
-char *local_agent_runtime_bridge_submit_approval_response(
-    LocalAgentRuntimeBridge *runtime,
-    const char *response_json
-);
-char *local_agent_runtime_bridge_cancel(
-    LocalAgentRuntimeBridge *runtime,
-    const char *run_id
-);
-char *local_agent_runtime_bridge_latest_prompt_debug_snapshot(
-    LocalAgentRuntimeBridge *runtime
-);
-char *local_agent_runtime_bridge_provider_profiles(
-    LocalAgentRuntimeBridge *runtime
-);
-char *local_agent_runtime_bridge_active_provider(
-    LocalAgentRuntimeBridge *runtime
-);
-char *local_agent_runtime_bridge_set_provider(
-    LocalAgentRuntimeBridge *runtime,
-    const char *request_json
-);
-char *local_agent_runtime_bridge_start_run(
-    LocalAgentRuntimeBridge *runtime,
-    const char *request_json
-);
-char *local_agent_runtime_bridge_profile_execution_route(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_prepare_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_commit_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_begin_package_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);

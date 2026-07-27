@@ -13,7 +13,6 @@ import EventKit
 enum AppBootstrapper {
     static func makeReadyContainer(
         hostProcessEpoch: HostProcessEpoch,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
         store: RustRuntimeStoreConfiguration? = nil,
         localAppSupportRoot: URL? = nil,
         remoteCatalog: Data? = nil,
@@ -21,7 +20,6 @@ enum AppBootstrapper {
     ) async throws -> AppContainer {
         let container = try makeContainer(
             hostProcessEpoch: hostProcessEpoch,
-            environment: environment,
             store: store
         )
         let appSupportRoot = try localAppSupportRoot ?? FileManager.default.url(
@@ -113,11 +111,9 @@ enum AppBootstrapper {
 
     static func makeContainer(
         hostProcessEpoch: HostProcessEpoch,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
         store: RustRuntimeStoreConfiguration? = nil
     ) throws -> AppContainer {
         LocalInferenceNativeLinkProbe.requireAllExports()
-        let providers = simulatorProviders(environment: environment)
         let runtimeStore: RustRuntimeStoreConfiguration
         if let store {
             runtimeStore = store
@@ -125,8 +121,6 @@ enum AppBootstrapper {
             runtimeStore = .sqlite(path: try sqliteURL().path)
         }
         let client = try makeRuntimeClient(
-            environment: environment,
-            providers: providers,
             store: runtimeStore,
             hostProcessEpoch: hostProcessEpoch
         )
@@ -300,50 +294,28 @@ enum AppBootstrapper {
     }
 
     private static func makeRuntimeClient(
-        environment: [String: String],
-        providers: [RustRuntimeProviderConfiguration],
         store: RustRuntimeStoreConfiguration,
         hostProcessEpoch: HostProcessEpoch
     ) throws -> RustRuntimeClient {
-        let requestedProviderId = runtimeProviderId(environment: environment, providers: providers)
-
-        func client(
-            for store: RustRuntimeStoreConfiguration,
-            providerId: String
-        ) throws -> RustRuntimeClient {
+        func client(for store: RustRuntimeStoreConfiguration) throws -> RustRuntimeClient {
             try RustRuntimeClient(configuration: RustRuntimeConfiguration(
-                systemPrompt: AgentPromptDefaults.systemPrompt,
-                runtimePolicy: AgentPromptDefaults.runtimePolicy,
-                providerId: providerId,
                 hostProcessEpoch: hostProcessEpoch,
                 store: store,
-                providers: providers,
                 agentOS: agentOSConfiguration()
             ))
         }
 
-        func resilientClient(for store: RustRuntimeStoreConfiguration) throws -> RustRuntimeClient {
-            do {
-                return try client(for: store, providerId: requestedProviderId)
-            } catch {
-                guard requestedProviderId != "mock" else {
-                    throw error
-                }
-                return try client(for: store, providerId: "mock")
-            }
-        }
-
         do {
-            return try resilientClient(for: store)
+            return try client(for: store)
         } catch {
             guard case .sqlite(let path) = store else {
                 throw error
             }
 
-            let inMemoryClient = try resilientClient(for: .inMemory)
+            let inMemoryClient = try client(for: .inMemory)
             do {
                 try recoverSQLiteStore(atPath: path)
-                return try resilientClient(for: store)
+                return try client(for: store)
             } catch {
                 return inMemoryClient
             }
@@ -411,8 +383,7 @@ enum AppBootstrapper {
             lifecycle: RunLifecycleService(bridge: executionBridge),
             events: RunEventStreamService(bridge: executionBridge),
             tools: ToolApprovalService(bridge: executionBridge),
-            debug: RunDebugService(bridge: executionBridge),
-            inference: InferenceSettingsService(bridge: executionBridge)
+            debug: RunDebugService(bridge: executionBridge)
         )
         let coordinator = ChatInteractionCoordinator(
             conversation: conversationDomain,
@@ -526,88 +497,6 @@ enum AppBootstrapper {
         )
     }
 
-    static func runtimeProviderId(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        providers: [RustRuntimeProviderConfiguration]? = nil
-    ) -> String {
-        let configuredProviders = providers ?? simulatorProviders(environment: environment)
-        if let providerId = environment["LOCAL_AGENT_DEFAULT_PROVIDER_ID"], !providerId.isEmpty {
-            if configuredProviders.contains(where: { $0.bootstrapProviderId == providerId }) {
-                return providerId
-            }
-            if providerId == "local_llm",
-               let localProviderId = configuredProviders.first(where: { provider in
-                   switch provider {
-                   case .localLLM, .namedLocalLLM:
-                       true
-                   default:
-                       false
-                   }
-               })?.bootstrapProviderId {
-                return localProviderId
-            }
-            if providerId == "local_llm" || providerId.hasPrefix("local_llm.") {
-                return "mock"
-            }
-            return providerId
-        }
-
-        if let localProviderId = configuredProviders.first(where: { provider in
-            switch provider {
-            case .localLLM, .namedLocalLLM:
-                true
-            default:
-                false
-            }
-        })?.bootstrapProviderId {
-            return localProviderId
-        }
-
-        return "mock"
-    }
-
-    static func simulatorProviders(
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> [RustRuntimeProviderConfiguration] {
-        var providers: [RustRuntimeProviderConfiguration] = []
-
-        let legacyLlamaConfig = environment["LOCAL_AGENT_SIMULATOR_MODEL_CONFIG_JSON"]
-        let llamaConfig = environment["LOCAL_AGENT_LLAMA_CPP_MODEL_CONFIG_JSON"] ?? legacyLlamaConfig
-        if let llamaConfig, localModelConfigHasExistingModelPath(llamaConfig) {
-            providers.append(.namedLocalLLM(
-                providerId: "local_llm.llama_cpp",
-                displayName: "llama.cpp",
-                model: "local.gguf.simulator",
-                modelConfigJson: llamaConfig,
-                maxContextTokens: 2048
-            ))
-        }
-
-        if let litertConfig = environment["LOCAL_AGENT_LITERT_MODEL_CONFIG_JSON"],
-           localModelConfigHasExistingModelPath(litertConfig) {
-            providers.append(.namedLocalLLM(
-                providerId: "local_llm.litert",
-                displayName: "LiteRT",
-                model: "local.litert.simulator",
-                modelConfigJson: litertConfig,
-                maxContextTokens: 2048
-            ))
-        }
-
-        return providers
-    }
-
-    private static func localModelConfigHasExistingModelPath(_ modelConfigJson: String) -> Bool {
-        guard !modelConfigJson.isEmpty,
-              let data = modelConfigJson.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let modelPath = object["model_path"] as? String,
-              !modelPath.isEmpty
-        else {
-            return false
-        }
-        return FileManager.default.fileExists(atPath: modelPath)
-    }
 }
 
 private final class NativeCatalogBox: @unchecked Sendable {

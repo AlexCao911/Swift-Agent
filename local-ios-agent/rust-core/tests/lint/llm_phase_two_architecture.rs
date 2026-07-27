@@ -171,7 +171,8 @@ fn cpp_and_artifact_link_ownership_remain_provider_neutral() {
     assert!(!package.contains("../artifacts/"));
 
     let build = fs::read_to_string(root.join("rust-core/build.rs")).unwrap();
-    assert!(build.contains("cargo:rustc-link-lib=static:-bundle=local_agent_inference_native"));
+    assert!(!build.contains("local_agent_inference_native"));
+    assert!(!build.contains("LOCAL_AGENT_INFERENCE_XCFRAMEWORK"));
     assert!(!build.contains("Command::new"));
     assert!(!build.contains("cc::Build"));
 

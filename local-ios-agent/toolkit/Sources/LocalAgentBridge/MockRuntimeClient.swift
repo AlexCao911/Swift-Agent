@@ -1,18 +1,6 @@
 import Foundation
 
 public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, ConversationBridgeClient, ExecutionBridgeClient {
-    public struct SentMessage: Equatable, Sendable {
-        public var sessionId: String
-        public var parentEventId: String?
-        public var text: String
-
-        public init(sessionId: String, parentEventId: String?, text: String) {
-            self.sessionId = sessionId
-            self.parentEventId = parentEventId
-            self.text = text
-        }
-    }
-
     public struct ToolResultSubmission: Equatable, Sendable {
         public var runId: String
         public var result: ToolResultDTO
@@ -49,28 +37,20 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
     private var storedAgentProfiles: [AgentProfileDTO]
     private nonisolated let splitState: MockRuntimeSplitState
     private var turnResult: AgentTurnResultDTO
-    private var promptDebugSnapshot: PromptDebugSnapshotDTO?
-    private var storedProviderProfiles: [ProviderProfileDTO]
-    private var storedActiveProvider: ProviderProfileDTO
     private var toolRequests: [ToolExecutionRequestDTO]
     private var approvalRequests: [ApprovalProtocolRequestDTO]
     private var debugArchive: RunDebugUIModel
 
     public private(set) var registeredToolSchemas: [ToolSchemaDTO] = []
     public private(set) var permissionStates: [PermissionStateSubmission] = []
-    public private(set) var startedRunRequests: [StartRunRequestDTO] = []
-    public private(set) var sentMessages: [SentMessage] = []
     public private(set) var submittedToolResults: [ToolResultSubmission] = []
-    public private(set) var submittedApprovalResponses: [ApprovalProtocolResponseDTO] = []
     public private(set) var cancelledRunIds: [String] = []
-    public private(set) var selectedProviders: [(sessionId: String, providerId: String)] = []
     public private(set) var preparedUserTurnRequests: [PrepareUserTurnRequestDTO] = []
     public private(set) var commitAssistantResultRequests: [CommitAssistantResultRequestDTO] = []
     public private(set) var startedExecutionRequests: [StartExecutionRequestDTO] = []
     public private(set) var approvedTools: [ToolApprovalSubmission] = []
     public private(set) var builtAgentTemplateIds: [String] = []
     public private(set) var builtAgentRequests: [BuildAgentRequestDTO] = []
-    public private(set) var updatedRuntimeOptions: [RuntimeOptionsDTO] = []
 
     public init(
         sessionIds: [String] = [],
@@ -90,21 +70,6 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
             events: [],
             pendingToolCallId: nil
         ),
-        promptDebugSnapshot: PromptDebugSnapshotDTO? = nil,
-        providerProfiles: [ProviderProfileDTO] = [
-            ProviderProfileDTO(
-                id: "mock",
-                displayName: "Mock Provider",
-                kind: .mock,
-                maxContextTokens: 100
-            )
-        ],
-        activeProvider: ProviderProfileDTO = ProviderProfileDTO(
-            id: "mock",
-            displayName: "Mock Provider",
-            kind: .mock,
-            maxContextTokens: 100
-        ),
         toolRequests: [ToolExecutionRequestDTO] = [],
         approvalRequests: [ApprovalProtocolRequestDTO] = [],
         debugArchive: RunDebugUIModel = RunDebugUIModel(
@@ -120,17 +85,9 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
         self.storedAgentProfiles = agentProfiles
         self.splitState = MockRuntimeSplitState(executionEventsByRunId: executionEventsByRunId)
         self.turnResult = turnResult
-        self.promptDebugSnapshot = promptDebugSnapshot
-        self.storedProviderProfiles = providerProfiles
-        self.storedActiveProvider = activeProvider
         self.toolRequests = toolRequests
         self.approvalRequests = approvalRequests
         self.debugArchive = debugArchive
-    }
-
-    public func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
-        startedRunRequests.append(request)
-        return RunHandleDTO(runId: turnResult.runId)
     }
 
     public func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
@@ -224,19 +181,6 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
         permissionStates.append(PermissionStateSubmission(scope: scope, state: state))
     }
 
-    public func sendMessage(
-        sessionId: String,
-        parentEventId: String?,
-        text: String
-    ) async throws -> AgentTurnResultDTO {
-        sentMessages.append(SentMessage(
-            sessionId: sessionId,
-            parentEventId: parentEventId,
-            text: text
-        ))
-        return turnResult
-    }
-
     public func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
         toolRequests
     }
@@ -253,14 +197,7 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
         return turnResult
     }
 
-    public func submitApprovalResponse(
-        _ response: ApprovalProtocolResponseDTO
-    ) async throws -> AgentTurnResultDTO {
-        submittedApprovalResponses.append(response)
-        return turnResult
-    }
-
-    public func cancel(runId: String) async throws -> RuntimeEventDTO {
+    public func cancelRun(runId: String) async throws -> RuntimeEventDTO {
         cancelledRunIds.append(runId)
         return RuntimeEventDTO(
             id: "entry_mock_cancelled",
@@ -273,14 +210,6 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
             payload: "cancelled",
             blobRefs: []
         )
-    }
-
-    public func cancelRun(runId: String) async throws -> RuntimeEventDTO {
-        try await cancel(runId: runId)
-    }
-
-    public func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
-        promptDebugSnapshot
     }
 
     public func listAgentProfiles() async throws -> [AgentProfileDTO] {
@@ -326,35 +255,6 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
         approvedTools.append(ToolApprovalSubmission(id: id, decision: decision))
     }
 
-    public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
-        updatedRuntimeOptions.append(options)
-    }
-
-    public func providerProfiles() async throws -> [ProviderProfileDTO] {
-        storedProviderProfiles
-    }
-
-    public func activeProvider() async throws -> ProviderProfileDTO {
-        storedActiveProvider
-    }
-
-    public func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO {
-        selectedProviders.append((sessionId: sessionId, providerId: providerId))
-        if let profile = storedProviderProfiles.first(where: { $0.id == providerId }) {
-            storedActiveProvider = profile
-        }
-        return RuntimeEventDTO(
-            id: "entry_mock_provider_changed",
-            sessionId: sessionId,
-            parentId: nil,
-            runId: nil,
-            sequence: 0,
-            depth: 0,
-            kind: .providerChanged,
-            payload: #"{"provider_id":"\#(providerId)"}"#,
-            blobRefs: []
-        )
-    }
 }
 
 private final class MockRuntimeSplitState: @unchecked Sendable {

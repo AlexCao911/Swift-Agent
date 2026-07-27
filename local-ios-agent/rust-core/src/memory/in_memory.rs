@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
-use crate::memory::{EventStore, ProviderSetting};
+use crate::memory::EventStore;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct PathKey {
@@ -23,7 +23,6 @@ pub struct InMemoryEventStore {
     children: HashMap<(SessionId, EntryId), HashSet<EntryId>>,
     archived_sessions: HashSet<SessionId>,
     session_title_overrides: HashMap<SessionId, String>,
-    provider_settings: HashMap<String, ProviderSetting>,
 }
 
 impl InMemoryEventStore {
@@ -253,12 +252,4 @@ impl EventStore for InMemoryEventStore {
         Ok(())
     }
 
-    fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError> {
-        self.provider_settings.insert(setting.key.clone(), setting);
-        Ok(())
-    }
-
-    fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError> {
-        Ok(self.provider_settings.get(key).cloned())
-    }
 }

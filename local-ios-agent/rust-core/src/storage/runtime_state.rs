@@ -467,6 +467,12 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
     fn agent_component_revisions(
         &self,
     ) -> Result<Vec<PublishedUserComponentVersion>, RuntimeStateError>;
+    fn legacy_agent_profile_record(
+        &self,
+        id: &AgentProfileId,
+        version: AgentProfileVersion,
+    ) -> Result<Option<String>, RuntimeStateError>;
+    fn legacy_agent_profile_records(&self) -> Result<Vec<String>, RuntimeStateError>;
     fn begin_legacy_profile_migration(
         &self,
         record: LegacyProfileMigrationRecord,
@@ -853,6 +859,18 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .values()
             .cloned()
             .collect())
+    }
+
+    fn legacy_agent_profile_record(
+        &self,
+        _id: &AgentProfileId,
+        _version: AgentProfileVersion,
+    ) -> Result<Option<String>, RuntimeStateError> {
+        Ok(None)
+    }
+
+    fn legacy_agent_profile_records(&self) -> Result<Vec<String>, RuntimeStateError> {
+        Ok(Vec::new())
     }
 
     fn begin_legacy_profile_migration(

@@ -12,16 +12,6 @@ impl AgentPackageExporter {
             "agent.yaml".to_string(),
             profile.manifest().to_portable_text(),
         );
-        if let (Some(model_file), Some(model)) = (
-            profile.manifest().model_file.as_ref(),
-            profile.manifest().model.as_ref(),
-        ) {
-            files.insert(
-                normalize_package_path(model_file)?,
-                model.to_portable_text(),
-            );
-        }
-
         for path in files.keys() {
             normalize_package_path(path)?;
         }

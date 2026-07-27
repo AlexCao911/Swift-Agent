@@ -7,10 +7,6 @@ struct RunLifecycleService: Sendable {
         self.bridge = bridge
     }
 
-    func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await bridge.startRun(request)
-    }
-
     func cancelRun(runId: String) async throws -> RuntimeEventDTO {
         try await bridge.cancelRun(runId: runId)
     }

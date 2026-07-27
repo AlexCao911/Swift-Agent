@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path};
 
-use crate::agent_package::{AgentPackageManifest, PackageModelBinding};
+use crate::{
+    agent_package::{manifest::fixture_llm_slot, AgentPackageManifest},
+    llm_contracts::LLMSlotV2,
+};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PackageError {
@@ -142,20 +145,24 @@ impl AgentPackageReader {
             })?;
         let package_id = required_field(&agent_map, "package_id")?.to_string();
         let name = required_field(&agent_map, "name")?.to_string();
-        let model_file = agent_map.get("model_file").cloned();
         let package_hash = agent_map.get("package_hash").cloned();
         let signature = agent_map.get("signature").cloned();
-        let llm_slot = agent_map
-            .get("llm_slot_json")
-            .map(|encoded| {
-                serde_json::from_str(encoded).map_err(|error| {
-                    PackageError::new(
-                        "package.llm_slot.invalid",
-                        format!("portable LLM slot is invalid: {error}"),
-                    )
+        let llm_slot = if schema_version == 1 {
+            let model_file = required_field(&agent_map, "model_file")?;
+            Some(self.read_schema_v1_llm_slot(model_file)?)
+        } else {
+            agent_map
+                .get("llm_slot_json")
+                .map(|encoded| {
+                    serde_json::from_str(encoded).map_err(|error| {
+                        PackageError::new(
+                            "package.llm_slot.invalid",
+                            format!("portable LLM slot is invalid: {error}"),
+                        )
+                    })
                 })
-            })
-            .transpose()?;
+                .transpose()?
+        };
         let unknown_fields = unknown_fields(
             &agent_map,
             &[
@@ -168,17 +175,14 @@ impl AgentPackageReader {
                 "signature",
             ],
         );
-        let model = model_file
-            .as_ref()
-            .map(|model_path| self.read_model_binding(model_path))
-            .transpose()?;
-
         Ok(AgentPackageManifest {
-            schema_version,
+            schema_version: if schema_version == 1 {
+                2
+            } else {
+                schema_version
+            },
             package_id,
             name,
-            model_file,
-            model,
             llm_slot,
             package_hash,
             signature,
@@ -186,22 +190,25 @@ impl AgentPackageReader {
         })
     }
 
-    fn read_model_binding(&self, model_path: &str) -> Result<PackageModelBinding, PackageError> {
+    fn read_schema_v1_llm_slot(&self, model_path: &str) -> Result<LLMSlotV2, PackageError> {
         let normalized = normalize_package_path(model_path)?;
         let text = self.files.get(&normalized).ok_or_else(|| {
             PackageError::new("package.required_file_missing", "model file is missing")
         })?;
         let model_map = parse_simple_yaml_map(text)?;
-        Ok(PackageModelBinding {
-            provider_id: required_field(&model_map, "provider_id")?.to_string(),
-            model_id: required_field(&model_map, "model_id")?.to_string(),
-            credential_ref: model_map.get("credential_ref").cloned(),
-            local_path: model_map.get("local_path").cloned(),
-            unknown_fields: unknown_fields(
-                &model_map,
-                &["provider_id", "model_id", "credential_ref", "local_path"],
-            ),
-        })
+        let provider_hint = required_field(&model_map, "provider_id")?;
+        let model_hint = required_field(&model_map, "model_id")?;
+        let unknown = unknown_fields(
+            &model_map,
+            &["provider_id", "model_id", "credential_ref", "local_path"],
+        );
+        if !unknown.is_empty() {
+            return Err(PackageError::new(
+                "package.schema_v1.model_unknown_field",
+                "schema-v1 model manifest contains unknown fields",
+            ));
+        }
+        Ok(fixture_llm_slot(model_hint).with_model_family_hint(provider_hint))
     }
 }
 

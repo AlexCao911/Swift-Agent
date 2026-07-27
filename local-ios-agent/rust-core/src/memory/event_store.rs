@@ -1,5 +1,4 @@
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
-use crate::memory::ProviderSetting;
 
 pub trait EventStore {
     fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError>;
@@ -27,6 +26,4 @@ pub trait EventStore {
     fn session_title_override(&self, session_id: &SessionId) -> Result<Option<String>, AgentError>;
     fn archive_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
     fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError>;
-    fn save_provider_setting(&mut self, setting: ProviderSetting) -> Result<(), AgentError>;
-    fn load_provider_setting(&self, key: &str) -> Result<Option<ProviderSetting>, AgentError>;
 }

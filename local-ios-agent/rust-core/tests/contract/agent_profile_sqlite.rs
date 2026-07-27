@@ -72,7 +72,6 @@ fn v2_profile_and_components_reopen_from_agent_sqlite() {
 
     assert_eq!(loaded, profile);
     assert!(loaded.llm_slot().is_some());
-    assert!(loaded.model_binding().is_none());
     assert!(reopened
         .agent_component_exact(component_id)
         .unwrap()

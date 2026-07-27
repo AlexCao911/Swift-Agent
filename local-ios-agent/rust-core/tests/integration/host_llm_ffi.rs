@@ -238,9 +238,6 @@ fn dispatcher_drop_waits_for_blocked_callback_before_releasing_context() {
 fn c_abi_install_uninstall_reinstall_and_runtime_free_release_each_context_once() {
     let config = CString::new(
         r#"{
-          "system_prompt":"system",
-          "runtime_policy":"policy",
-          "provider_id":"mock",
           "host_process_epoch":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
           "store":{"kind":"in_memory"}
         }"#,

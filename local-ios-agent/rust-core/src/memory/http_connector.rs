@@ -11,7 +11,7 @@ pub struct HttpMemoryConnectorSpec {
     can_query: bool,
     write_configured: bool,
     write_authorized: bool,
-    credential_ref: Option<CredentialRef>,
+    credential: Option<CredentialRef>,
     safety_disclosure: Option<String>,
 }
 
@@ -22,13 +22,13 @@ impl HttpMemoryConnectorSpec {
             can_query: true,
             write_configured: false,
             write_authorized: false,
-            credential_ref: None,
+            credential: None,
             safety_disclosure: None,
         }
     }
 
-    pub fn with_credential_ref(mut self, credential_ref: CredentialRef) -> Self {
-        self.credential_ref = Some(credential_ref);
+    pub fn with_credential(mut self, credential: CredentialRef) -> Self {
+        self.credential = Some(credential);
         self
     }
 
@@ -69,7 +69,7 @@ impl HttpMemoryConnectorSpec {
                 )
             })?;
 
-        if self.credential_ref.is_none() {
+        if self.credential.is_none() {
             return Err(AgentError::PolicyDenied(
                 "external memory write requires credential ref".to_string(),
             ));

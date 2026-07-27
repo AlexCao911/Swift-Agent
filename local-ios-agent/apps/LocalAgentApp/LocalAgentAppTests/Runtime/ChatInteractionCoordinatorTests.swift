@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMHost
 import LocalNativeToolkit
 import Testing
 @testable import LocalAgentApp
@@ -36,7 +37,8 @@ struct ChatInteractionCoordinatorTests {
         )
         let coordinator = ChatInteractionCoordinator(
             conversation: conversation,
-            execution: execution
+            execution: execution,
+            runStarter: execution
         )
         var observed: [RuntimeEventDTO] = []
 
@@ -88,7 +90,8 @@ struct ChatInteractionCoordinatorTests {
         ])
         let coordinator = ChatInteractionCoordinator(
             conversation: conversation,
-            execution: execution
+            execution: execution,
+            runStarter: execution
         )
 
         do {
@@ -169,7 +172,8 @@ struct ChatInteractionCoordinatorTests {
         let coordinator = ChatInteractionCoordinator(
             conversation: conversation,
             execution: execution,
-            toolDriver: MinimalHostToolDriver()
+            toolDriver: MinimalHostToolDriver(),
+            runStarter: execution
         )
         var observed: [RuntimeEventDTO] = []
 
@@ -232,7 +236,8 @@ struct ChatInteractionCoordinatorTests {
         let coordinator = ChatInteractionCoordinator(
             conversation: conversation,
             execution: execution,
-            toolDriver: PendingInteractionToolDriver()
+            toolDriver: PendingInteractionToolDriver(),
+            runStarter: execution
         )
         var observed: [RuntimeEventDTO] = []
 
@@ -274,7 +279,8 @@ struct ChatInteractionCoordinatorTests {
         let execution = FakeExecutionDomain()
         let coordinator = ChatInteractionCoordinator(
             conversation: FakeConversationDomain(),
-            execution: execution
+            execution: execution,
+            runStarter: execution
         )
 
         try await coordinator.approveTool(
@@ -339,7 +345,7 @@ private actor FakeConversationDomain: ConversationDomain {
     }
 }
 
-private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
+private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain, LLMProductRunStarting {
     struct ObserveCall: Equatable {
         var runId: String
         var fromSequence: UInt64
@@ -422,8 +428,6 @@ private final class FakeExecutionDomain: @unchecked Sendable, ExecutionDomain {
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
         RunDebugUIModel(runId: runId, state: .completed, events: [], checkpoints: [])
     }
-
-    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {}
 }
 
 private enum CommitFailure: Error {

@@ -11,10 +11,5 @@ fn agent_package_export_matches_golden_files() {
             "../fixtures/golden/agent_package_export/agent.yaml"
         ))
     );
-    assert_eq!(
-        exported.files.get("model.yaml").map(String::as_str),
-        Some(include_str!(
-            "../fixtures/golden/agent_package_export/model.yaml"
-        ))
-    );
+    assert_eq!(exported.files.len(), 1);
 }

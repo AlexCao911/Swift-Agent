@@ -12,21 +12,17 @@ use crate::llm_contracts::{
     RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationRequest,
     RunPreparationState,
 };
-use crate::model::InMemoryModelBindingCatalog;
 use crate::run_snapshot::{
     derive_authoritative_preparation, FrozenGenerationTurn, OpaqueHostBindingCrossLink,
-    ProfileExecutionRoute, ResolvedRunSnapshot, RunSnapshotPreview, RunSnapshotRepository,
-    RunSnapshotResolveInput, RunSnapshotResolver, RunSnapshotSourceCatalog, StartRunRequest,
+    ResolvedRunSnapshot, RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog,
+    StartRunRequest,
 };
-use crate::security::{CredentialRefResolver, PermissionState, SecurityPermissionService};
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
 use crate::storage::{
-    InMemoryTransactionRunner, PreparedHostRunCommit, StorageError, TransactionName,
-    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
+    InMemoryTransactionRunner, PreparedHostRunCommit, StorageError, TransactionRunner,
+    UnifiedRuntimeStateRepository,
 };
-use crate::user_customization::{
-    AgentProfileId, AgentProfileVersion, ComponentCatalogService, InMemoryAgentProfileRepository,
-};
+use crate::user_customization::{ComponentCatalogService, InMemoryAgentProfileRepository};
 
 pub type RunSnapshotResult<T> = Result<T, RunSnapshotError>;
 
@@ -37,11 +33,7 @@ pub struct RunSnapshotError {
 }
 
 pub struct RunSnapshotService {
-    sources: RunSnapshotSourceCatalog,
     resolver: RunSnapshotResolver,
-    repository: RunSnapshotRepository,
-    runner: Box<dyn TransactionRunner>,
-    runtime_started: bool,
 }
 
 #[derive(Clone)]
@@ -51,14 +43,6 @@ pub struct RunPreparationService {
     snapshot_service: Option<Arc<RunSnapshotService>>,
     frozen_inputs: Arc<Mutex<BTreeMap<String, FrozenGenerationTurn>>>,
     runtime_state: Option<Arc<dyn UnifiedRuntimeStateRepository>>,
-}
-
-struct SnapshotPersistOperation<'a> {
-    sources: &'a RunSnapshotSourceCatalog,
-    resolver: &'a RunSnapshotResolver,
-    repository: RunSnapshotRepository,
-    preview: RunSnapshotPreview,
-    committed_snapshot: Arc<Mutex<Option<ResolvedRunSnapshot>>>,
 }
 
 impl RunSnapshotError {
@@ -99,30 +83,19 @@ impl RunSnapshotService {
         runner: Box<dyn TransactionRunner>,
     ) -> Self {
         let resolver = RunSnapshotResolver::new(sources.clone());
-        Self {
-            sources,
-            resolver,
-            repository,
-            runner,
-            runtime_started: false,
-        }
+        let _ = (repository, runner);
+        Self { resolver }
     }
 
     pub fn from_real_repositories(
         profile_repository: InMemoryAgentProfileRepository,
         component_catalog: ComponentCatalogService,
-        model_catalog: InMemoryModelBindingCatalog,
-        security: Arc<dyn SecurityPermissionService>,
-        credential_resolver: Arc<dyn CredentialRefResolver>,
         runner: Box<dyn TransactionRunner>,
     ) -> Self {
         Self::new(
             RunSnapshotSourceCatalog::new(
                 profile_repository,
                 component_catalog,
-                model_catalog,
-                security,
-                credential_resolver,
             ),
             RunSnapshotRepository::default(),
             runner,
@@ -133,9 +106,6 @@ impl RunSnapshotService {
         runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
         profile_repository: InMemoryAgentProfileRepository,
         component_catalog: ComponentCatalogService,
-        model_catalog: InMemoryModelBindingCatalog,
-        security: Arc<dyn SecurityPermissionService>,
-        credential_resolver: Arc<dyn CredentialRefResolver>,
         runner: Box<dyn TransactionRunner>,
     ) -> Self {
         Self::new(
@@ -143,9 +113,6 @@ impl RunSnapshotService {
                 runtime_state,
                 profile_repository,
                 component_catalog,
-                model_catalog,
-                security,
-                credential_resolver,
             ),
             RunSnapshotRepository::default(),
             runner,
@@ -176,38 +143,6 @@ impl RunSnapshotService {
         )
     }
 
-    pub fn fixture_with_model_catalog_version(catalog_version: u64) -> Self {
-        Self::new(
-            RunSnapshotSourceCatalog::fixture_with_model_catalog_version(catalog_version),
-            RunSnapshotRepository::default(),
-            Box::new(InMemoryTransactionRunner::default()),
-        )
-    }
-
-    pub fn fixture_with_model_id_at_same_catalog_version(model_id: impl Into<String>) -> Self {
-        Self::new(
-            RunSnapshotSourceCatalog::fixture_with_model_id_at_same_catalog_version(model_id),
-            RunSnapshotRepository::default(),
-            Box::new(InMemoryTransactionRunner::default()),
-        )
-    }
-
-    pub fn fixture_with_permission_state(permission_state: PermissionState) -> Self {
-        Self::new(
-            RunSnapshotSourceCatalog::fixture_with_permission_state(permission_state),
-            RunSnapshotRepository::default(),
-            Box::new(InMemoryTransactionRunner::default()),
-        )
-    }
-
-    pub fn fixture_without_credentials() -> Self {
-        Self::new(
-            RunSnapshotSourceCatalog::fixture_without_credentials(),
-            RunSnapshotRepository::default(),
-            Box::new(InMemoryTransactionRunner::default()),
-        )
-    }
-
     pub fn fixture_with_host_slot_v2() -> Self {
         Self::new(
             RunSnapshotSourceCatalog::fixture_with_host_slot_v2(),
@@ -216,68 +151,6 @@ impl RunSnapshotService {
         )
     }
 
-    pub fn preview(&self, request: StartRunRequest) -> RunSnapshotResult<RunSnapshotPreview> {
-        let trusted_host_state = self.sources.capture_trusted_host_state(&request)?;
-        let snapshot = self.resolver.resolve(RunSnapshotResolveInput::new(
-            request.clone(),
-            trusted_host_state,
-        ))?;
-        Ok(RunSnapshotPreview::new(request, snapshot))
-    }
-
-    pub fn resolve_and_persist(
-        &self,
-        request: StartRunRequest,
-    ) -> RunSnapshotResult<ResolvedRunSnapshot> {
-        let preview = self.preview(request)?;
-        self.resolve_preview_and_persist(preview)
-    }
-
-    pub fn resolve_preview_and_persist(
-        &self,
-        preview: RunSnapshotPreview,
-    ) -> RunSnapshotResult<ResolvedRunSnapshot> {
-        let committed_snapshot = Arc::new(Mutex::new(None));
-        let mut operation = SnapshotPersistOperation {
-            sources: &self.sources,
-            resolver: &self.resolver,
-            repository: self.repository.clone(),
-            preview,
-            committed_snapshot: committed_snapshot.clone(),
-        };
-
-        self.runner
-            .run(TransactionName::new("run_snapshot.persist"), &mut operation)?;
-
-        let result = committed_snapshot
-            .lock()
-            .expect("committed snapshot mutex poisoned")
-            .clone()
-            .ok_or_else(|| {
-                RunSnapshotError::new(
-                    "snapshot.persist_failed",
-                    "run snapshot persist operation did not produce a snapshot",
-                )
-            });
-        result
-    }
-
-    pub fn repository(&self) -> RunSnapshotRepository {
-        self.repository.clone()
-    }
-
-    pub fn profile_execution_route(
-        &self,
-        profile_id: &AgentProfileId,
-        profile_revision: AgentProfileVersion,
-    ) -> RunSnapshotResult<ProfileExecutionRoute> {
-        self.resolver
-            .profile_execution_route(profile_id, profile_revision)
-    }
-
-    pub fn runtime_was_started(&self) -> bool {
-        self.runtime_started
-    }
 }
 
 impl RunPreparationService {
@@ -1158,68 +1031,4 @@ fn close_mismatch() -> PreparationError {
         "preparation.close_receipt_mismatch",
         "prepared-session close receipt does not match the cleanup envelope",
     )
-}
-
-impl TransactionOperation for SnapshotPersistOperation<'_> {
-    fn execute(&mut self, tx: &mut UnitOfWork) -> crate::storage::StorageResult<()> {
-        let current = self
-            .resolver
-            .resolve(RunSnapshotResolveInput::new(
-                self.preview.request().clone(),
-                self.sources
-                    .capture_trusted_host_state(self.preview.request())
-                    .map_err(|error| {
-                        StorageError::new(error.code().to_string(), error.to_string())
-                    })?,
-            ))
-            .map_err(|error| StorageError::new(error.code().to_string(), error.to_string()))?;
-        ensure_preview_still_current(self.preview.snapshot(), &current)
-            .map_err(|error| StorageError::new(error.code().to_string(), error.to_string()))?;
-        if !current.readiness_report().is_ready() {
-            return Err(StorageError::new(
-                "snapshot.not_ready",
-                "run snapshot cannot be persisted until readiness issues are resolved",
-            ));
-        }
-        self.repository
-            .stage_snapshot(tx, current, self.committed_snapshot.clone())?;
-        Ok(())
-    }
-}
-
-fn ensure_preview_still_current(
-    preview: &ResolvedRunSnapshot,
-    current: &ResolvedRunSnapshot,
-) -> RunSnapshotResult<()> {
-    if preview.profile_version() != current.profile_version() {
-        return Err(RunSnapshotError::new(
-            "snapshot.profile_version_conflict",
-            "agent profile changed between snapshot preview and persist",
-        ));
-    }
-
-    if preview.component_versions().len() != current.component_versions().len()
-        || preview
-            .component_versions()
-            .iter()
-            .zip(current.component_versions())
-            .any(|(preview, current)| {
-                preview.version_id() != current.version_id()
-                    || preview.entity_version() != current.entity_version()
-            })
-    {
-        return Err(RunSnapshotError::new(
-            "snapshot.component_version_conflict",
-            "component version changed between snapshot preview and persist",
-        ));
-    }
-
-    if preview.legacy_model_binding() != current.legacy_model_binding() {
-        return Err(RunSnapshotError::new(
-            "snapshot.model_version_conflict",
-            "model binding changed between snapshot preview and persist",
-        ));
-    }
-
-    Ok(())
 }

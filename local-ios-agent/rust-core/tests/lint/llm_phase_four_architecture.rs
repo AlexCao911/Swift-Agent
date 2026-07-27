@@ -33,10 +33,9 @@ fn v2_snapshot_binding_is_tagged_and_provider_neutral() {
     let snapshot = fs::read_to_string(root.join("rust-core/src/run_snapshot/snapshot.rs")).unwrap();
     let bindings =
         fs::read_to_string(root.join("rust-core/src/run_snapshot/resolved_bindings.rs")).unwrap();
-    assert!(bindings.contains("pub enum ResolvedLLMBinding"));
-    assert!(bindings.contains("HostSlotV2(ResolvedHostSlotBinding)"));
+    assert!(bindings.contains("pub struct ResolvedHostSlotBinding"));
     assert!(bindings.contains("pub struct OpaqueHostBindingCrossLink"));
-    assert!(snapshot.contains("llm_binding: ResolvedLLMBinding"));
+    assert!(snapshot.contains("llm_binding: ResolvedHostSlotBinding"));
     let snapshot_fields = snapshot
         .split("pub struct ResolvedRunSnapshot")
         .nth(1)
@@ -48,17 +47,10 @@ fn v2_snapshot_binding_is_tagged_and_provider_neutral() {
     assert!(!snapshot_fields.contains("trusted_host_state: TrustedHostRunState"));
 
     let persisted_binding = snapshot
-        .split("pub enum PersistedResolvedLLMBinding")
+        .split("pub struct PersistedResolvedHostSlotBinding")
         .nth(1)
-        .expect("persisted tagged binding must exist")
-        .split("pub struct PersistedLegacyModelBinding")
-        .next()
-        .unwrap();
-    let host_variant = persisted_binding
-        .split("HostSlotV2 {")
-        .nth(1)
-        .expect("host V2 persisted variant must exist")
-        .split("},")
+        .expect("persisted host-slot binding must exist")
+        .split('}')
         .next()
         .unwrap();
     for forbidden in [
@@ -71,13 +63,12 @@ fn v2_snapshot_binding_is_tagged_and_provider_neutral() {
         "adapter",
     ] {
         assert!(
-            !host_variant.contains(forbidden),
+            !persisted_binding.contains(forbidden),
             "host V2 persisted binding contains {forbidden}"
         );
     }
-    assert!(persisted_binding.contains("LegacyV1"));
-    assert!(snapshot.contains("pub struct PersistedLegacyModelBinding"));
-    assert!(snapshot.contains("provider_account_id: String"));
+    assert!(!snapshot.contains("PersistedLegacyModelBinding"));
+    assert!(!snapshot.contains("LegacyV1"));
     assert!(snapshot.contains("PersistedResolvedRunSnapshotV2::try_from(self)"));
 }
 
@@ -96,7 +87,7 @@ fn production_bridge_uses_unified_phase_c_and_reconciliation_authority() {
 }
 
 #[test]
-fn production_route_is_enabled_without_growing_the_legacy_allowlist() {
+fn production_route_is_host_only() {
     let root = root();
     let rust_root = root.join("rust-core/src");
     for path in rust_sources(&rust_root) {
@@ -110,23 +101,11 @@ fn production_route_is_enabled_without_growing_the_legacy_allowlist() {
 
     let resolver = fs::read_to_string(rust_root.join("run_snapshot/resolver.rs")).unwrap();
     let bridge = fs::read_to_string(rust_root.join("ffi_bridge.rs")).unwrap();
-    assert!(resolver.contains("pub struct ProfileExecutionRoute"));
+    assert!(!resolver.contains("ProfileExecutionRoute"));
     assert!(resolver.contains("execution.host_slot_v2_requires_preparation"));
-    assert!(bridge.contains("profile_execution_route_json"));
-    assert!(bridge.contains("local_agent_runtime_bridge_profile_execution_route"));
-
-    let allowlist = fs::read_to_string(
-        root.join("rust-core/tests/fixtures/architecture/legacy_llm_allowlist.txt"),
-    )
-    .unwrap();
-    assert_eq!(
-        allowlist
-            .lines()
-            .filter(|line| !line.starts_with('#') && !line.is_empty())
-            .count(),
-        16,
-        "Phase 4 must not grow the temporary legacy Rust LLM allowlist"
-    );
+    assert!(!bridge.contains("profile_execution_route_json"));
+    assert!(!bridge.contains("local_agent_runtime_bridge_profile_execution_route"));
+    assert!(bridge.contains("RunPreparationService::with_host_runtime"));
 }
 
 #[test]

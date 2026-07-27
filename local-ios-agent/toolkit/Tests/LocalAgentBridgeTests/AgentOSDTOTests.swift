@@ -4,28 +4,6 @@ import Testing
 
 @Suite("Agent OS bridge DTOs")
 struct AgentOSDTOTests {
-    @Test
-    func profileExecutionRouteUsesExactRevisionAndExplicitSchemaTag() throws {
-        let request = ProfileExecutionRouteRequestDTO(
-            profileID: "profile-v2",
-            profileRevision: 7
-        )
-        let encoded = try JSONEncoder().encode(request)
-        let object = try #require(
-            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
-        )
-        #expect(object["profile_id"] as? String == "profile-v2")
-        #expect((object["profile_revision"] as? NSNumber)?.uint64Value == 7)
-
-        let response = try JSONDecoder().decode(
-            ProfileExecutionRouteDTO.self,
-            from: Data(
-                #"{"schema_version":1,"profile_id":"profile-v2","profile_revision":7,"llm_binding_schema":"host_slot_v2"}"#.utf8
-            )
-        )
-        #expect(response.llmBindingSchema == .hostSlotV2)
-    }
-
     @Test("StartExecutionRequestDTO encodes only ConversationRunFrameRef as trusted execution input")
     func startExecutionRequestEncodesConversationRunFrameRefOnly() throws {
         let request = StartExecutionRequestDTO(
@@ -61,19 +39,6 @@ struct AgentOSDTOTests {
 
         #expect(handle.runId == "run_1")
         #expect(handle.replayFromSequence == 0)
-    }
-
-    @Test("StartRunRequestDTO does not encode trusted host state")
-    func startRunRequestDoesNotEncodeTrustedHostState() throws {
-        let dto = StartRunRequestDTO(agentProfileId: "profile_1", userIntent: "hello")
-        let data = try JSONEncoder().encode(dto)
-        let json = String(data: data, encoding: .utf8)!
-
-        #expect(json.contains("agent_profile_id"))
-        #expect(json.contains("user_intent"))
-        #expect(!json.contains("permission_state"))
-        #expect(!json.contains("local_bindings"))
-        #expect(!json.contains("credential_availability"))
     }
 
     @Test("BuildAgentRequestDTO omits empty card-backed fields")
@@ -163,17 +128,6 @@ struct AgentOSDTOTests {
         #expect(readiness.profileId == "profile_1")
         #expect(readiness.isReady)
         #expect(permissions.issues.count == 2)
-    }
-
-    @Test("runtime client startRun records request without trusted state")
-    func runtimeClientStartRunRecordsRequestWithoutTrustedState() async throws {
-        let client = MockRuntimeClient()
-        let request = StartRunRequestDTO(agentProfileId: "profile_1", userIntent: "research this")
-
-        let handle = try await client.startRun(request)
-
-        #expect(handle.runId == "run_mock")
-        #expect(await client.startedRunRequests == [request])
     }
 
     @Test("debug archive UI model decodes runtime trace payload")

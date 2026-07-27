@@ -86,17 +86,6 @@ fn create_plan_does_not_inject_research_skill_for_default_assistant_template() {
 }
 
 #[test]
-fn create_plan_flags_remote_model_for_safety_review() {
-    let resolver = AgentBuilderResolver::fixture_with_openai_binding_request();
-    let input = AgentBuilderInput::from_template(AgentTemplate::research_assistant());
-    let plan = resolver
-        .create_plan(input, &UserEnvironment::fixture_ready())
-        .unwrap();
-
-    assert!(plan.safety_review().requires_user_review());
-}
-
-#[test]
 fn create_plan_reports_unknown_component_version_before_finalize() {
     let resolver = AgentBuilderResolver::fixture_with_missing_component_catalog_entry();
     let input = AgentBuilderInput::from_template(AgentTemplate::assistant_default());
@@ -107,19 +96,6 @@ fn create_plan_reports_unknown_component_version_before_finalize() {
     assert!(plan
         .readiness_report()
         .has_issue("agent_profile.component_version_missing"));
-}
-
-#[test]
-fn create_plan_reports_unknown_model_selection_before_finalize() {
-    let resolver = AgentBuilderResolver::fixture_with_missing_model_catalog_entry();
-    let input = AgentBuilderInput::from_template(AgentTemplate::assistant_default());
-    let plan = resolver
-        .create_plan(input, &UserEnvironment::fixture_ready())
-        .unwrap();
-
-    assert!(plan
-        .readiness_report()
-        .has_issue("agent_profile.model_binding_missing"));
 }
 
 #[test]
@@ -175,17 +151,6 @@ fn settings_schema_drops_secret_like_and_local_path_defaults() {
 }
 
 #[test]
-fn finalize_rejects_unresolved_required_binding() {
-    let resolver = AgentBuilderResolver::fixture_with_openai_binding_request();
-    let plan = resolver.fixture_plan_with_openai_binding_request();
-    let error = resolver
-        .finalize(plan, UserProvidedBindings::empty())
-        .unwrap_err();
-
-    assert_eq!(error.code(), "binding.required.unresolved");
-}
-
-#[test]
 fn finalize_publishes_profile_with_component_versions_and_bindings() {
     let resolver = AgentBuilderResolver::fixture_with_openai_binding_request();
     let plan = resolver.fixture_plan_with_openai_binding_request();
@@ -198,12 +163,7 @@ fn finalize_publishes_profile_with_component_versions_and_bindings() {
         .bindings()
         .iter()
         .all(|binding| binding.component_version_id().is_published()));
-    assert_eq!(
-        profile
-            .local_bindings()
-            .credential_ref("credential.openai.api_key"),
-        Some("credential_ref.openai.default")
-    );
+    assert!(profile.llm_slot().is_some());
 }
 
 #[test]
@@ -216,16 +176,4 @@ fn finalize_rejects_profile_draft_with_unknown_component_version() {
     let error = resolver.finalize(plan, bindings).unwrap_err();
 
     assert_eq!(error.code(), "agent_profile.component_version_missing");
-}
-
-#[test]
-fn finalize_rejects_profile_draft_with_unknown_model_selection() {
-    let resolver = AgentBuilderResolver::fixture_with_missing_model_catalog_entry();
-    let plan = resolver.fixture_plan_with_openai_binding_request();
-    let bindings = UserProvidedBindings::default()
-        .credential("credential.openai.api_key", "credential_ref.openai.default");
-
-    let error = resolver.finalize(plan, bindings).unwrap_err();
-
-    assert_eq!(error.code(), "agent_profile.model_binding_missing");
 }

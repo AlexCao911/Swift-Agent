@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -240,7 +239,6 @@ impl AgentPackageInstaller {
         &self,
         manifest: AgentPackageManifest,
     ) -> StorageResult<InstalledAgentProfileReference> {
-        let manifest = manifest.translated_for_install();
         let plan = PackageInstallPlan::from_manifest(&manifest);
         if !plan.validation_issues.is_empty() {
             return Err(StorageError::new(
@@ -268,7 +266,7 @@ impl AgentPackageInstaller {
     }
 
     pub fn preview(&self, manifest: &AgentPackageManifest) -> PackageInstallPreview {
-        PackageInstallPlan::from_manifest(&manifest.translated_for_install()).into_preview()
+        PackageInstallPlan::from_manifest(manifest).into_preview()
     }
 }
 
@@ -387,7 +385,7 @@ impl TransactionOperation for PackageInstallOperation {
                 host_binding_state: PackageHostBindingState::NeedsLLMBinding,
             },
             profile: profile.clone(),
-            lock: AgentPackageLock::from_installed_manifest(self.manifest.clone(), BTreeMap::new()),
+            lock: AgentPackageLock::from_installed_manifest(self.manifest.clone()),
         };
         tx.events().append(EventRecord::new(
             &self.manifest.package_id,

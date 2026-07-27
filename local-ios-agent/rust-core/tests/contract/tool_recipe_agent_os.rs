@@ -111,7 +111,7 @@ fn http_connector_requires_timeout_allowlist_and_egress_disclosure() {
 fn http_connector_credential_ref_requires_http_tool_purpose() {
     let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com")
         .with_policy(HttpConnectorPolicy::complete_for_test().without_credential_purpose_for_test())
-        .with_credential_ref(CredentialRef::new("tool.api"));
+        .with_credential(CredentialRef::new("tool.api"));
 
     let report = local_ios_agent_runtime::tool::ToolRecipeCompiler::default().validate(&recipe);
 
@@ -222,19 +222,19 @@ fn compiled_http_connector_preserves_runtime_definition() {
 }
 
 #[test]
-fn compiled_http_connector_preserves_credential_ref() {
+fn compiled_http_connector_preserves_credential() {
     let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com/search")
         .with_policy(HttpConnectorPolicy::complete_for_test())
-        .with_credential_ref(CredentialRef::new("tool.remote_lookup"));
+        .with_credential(CredentialRef::new("tool.remote_lookup"));
 
     let compiled = local_ios_agent_runtime::tool::ToolRecipeCompiler::default()
         .compile(recipe)
         .unwrap();
 
     match compiled.content {
-        CompiledToolRecipeContent::HttpConnector { credential_ref, .. } => {
+        CompiledToolRecipeContent::HttpConnector { credential, .. } => {
             assert_eq!(
-                credential_ref,
+                credential,
                 Some(CredentialRef::new("tool.remote_lookup"))
             );
         }
@@ -371,7 +371,7 @@ fn http_connector_compiled_recipe_requires_egress_approval_without_requested_app
 fn http_connector_egress_approval_includes_credential_purpose_when_credential_used() {
     let recipe = ToolRecipe::http_connector("remote.lookup", "https://api.example.com/search")
         .with_policy(HttpConnectorPolicy::complete_for_test())
-        .with_credential_ref(CredentialRef::new("tool.remote_lookup"));
+        .with_credential(CredentialRef::new("tool.remote_lookup"));
     let compiled = local_ios_agent_runtime::tool::ToolRecipeCompiler::default()
         .compile(recipe)
         .unwrap();

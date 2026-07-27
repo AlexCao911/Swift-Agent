@@ -15,10 +15,7 @@ use crate::app_service::{
     AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
 };
 use crate::canonical_digest::CanonicalDigestV1;
-use crate::context::{
-    ContextAssembler, ContextSegment, InferenceOptions, ModelInputMessages, PromptFrame,
-    TokenizerAdapter,
-};
+use crate::context::{ContextAssembler, ContextSegment};
 use crate::conversation::{
     ConversationCommitError, ConversationCommitService, ConversationFrameId,
     ConversationFrameMessage, ConversationFrameRepository, ConversationRunFrame,
@@ -26,23 +23,18 @@ use crate::conversation::{
     PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader,
 };
 use crate::core::{
-    register_desktop_minicpm_provider, AgentError, AgentRuntime, AgentRuntimeConfig,
-    AgentTurnResult, CAbiV2LocalInferenceBackend, DesktopMiniCPMSettings, EntryId, EventKind,
-    LocalLLMProvider, ProviderBundle, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
-    ProviderRegistry, RunId, RunState, RuntimeEvent, SendMessageInput, SessionId,
+    AgentError, AgentRuntime, AgentRuntimeConfig, EntryId, EventKind, RunId, RuntimeEvent,
+    SessionId,
 };
 use crate::execution::{
-    CompletedRunRecord, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog,
-    ExecutionModelClient, ExecutionModelTurn, ExecutionPlanner, ExecutionService,
-    ExecutionStartError, ExecutionToolCall, ExecutionToolExecutor, ExecutionToolObservation,
-    ExecutionToolOutcome, ExecutionWorkerDependencies, HostLLMDispatcherConfig,
-    HostLLMDispatcherRuntime, HostToolBatchExecutor, LocalAgentLLMHostVTable, RunHandle,
-    RuntimeOptions, StartExecutionRequest,
+    CompletedRunRecord, CompletedRunRegistry, ExecutionEvent, ExecutionEventLog, ExecutionService,
+    ExecutionStartError, ExecutionToolCall, ExecutionToolOutcome, HostLLMDispatcherConfig,
+    HostLLMDispatcherRuntime, HostToolBatchExecutor, LocalAgentLLMHostVTable,
 };
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
-    HostBindingSubjectCatalog, HostCommandAcknowledgement, HostToolResult, LLMBindingSchema,
-    LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult, LegacyProfileMigrationRecord,
+    HostBindingSubjectCatalog, HostCommandAcknowledgement, HostToolResult, LLMEventEnvelope,
+    LLMEventKind, LLMEventSubmissionResult, LegacyProfileMigrationRecord,
     LegacyProfileMigrationService, LegacyProfileMigrationState, PackageBindingPreparation,
     PreparationAbortReason, PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
     PreparedSessionRegistration, ProfilePublishPreparation,
@@ -63,7 +55,7 @@ use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
     Sensitivity, ToolCall, ToolExecutionRequest, ToolRecipeKind, ToolResult, ToolSchema,
 };
-use crate::user_customization::{AgentProfile, AgentProfileId, AgentProfileVersion};
+use crate::user_customization::{AgentProfile, AgentProfileVersion};
 
 pub type RuntimeEventCallback =
     Option<unsafe extern "C" fn(event_json: *const c_char, user_data: *mut c_void) -> c_int>;
@@ -111,123 +103,10 @@ fn validate_host_process_epoch(value: &str) -> Result<(), AgentError> {
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-struct BridgeWhitespaceTokenizer {
-    provider_id: String,
-    max_context_tokens: usize,
-}
-
-impl BridgeWhitespaceTokenizer {
-    fn new(provider_id: impl Into<String>, max_context_tokens: usize) -> Self {
-        Self {
-            provider_id: provider_id.into(),
-            max_context_tokens,
-        }
-    }
-}
-
-impl TokenizerAdapter for BridgeWhitespaceTokenizer {
-    fn provider_id(&self) -> &str {
-        &self.provider_id
-    }
-
-    fn max_context_tokens(&self) -> usize {
-        self.max_context_tokens
-    }
-
-    fn safety_margin_tokens(&self) -> usize {
-        let scaled = self.max_context_tokens / 16;
-        scaled.max(32).min(512).min(self.max_context_tokens / 2)
-    }
-
-    fn count_text(&self, text: &str) -> usize {
-        text.split_whitespace().count()
-    }
-
-    fn count_prompt_frame(&self, frame: &PromptFrame) -> usize {
-        let mut count = self.count_text(&frame.system_prompt);
-        count += self.count_text(&frame.runtime_policy);
-        count += frame
-            .tool_schemas
-            .iter()
-            .map(|tool| self.count_text(tool))
-            .sum::<usize>();
-        count += frame
-            .messages
-            .iter()
-            .map(|message| self.count_text(message.content()))
-            .sum::<usize>();
-        count
-    }
-
-    fn boxed_clone(&self) -> Box<dyn TokenizerAdapter> {
-        Box::new(self.clone())
-    }
-}
-
-#[derive(Clone)]
-struct BridgeExecutionModelClient<S: EventStore + Send + 'static> {
-    runtime: Arc<Mutex<AgentRuntime<S>>>,
-}
-
-#[derive(Clone)]
-struct BridgeExecutionToolExecutor<S: EventStore + Send + 'static> {
-    runtime: Arc<Mutex<AgentRuntime<S>>>,
-}
-
 #[derive(Clone)]
 struct BridgeHostToolBatchExecutor<S: EventStore + Send + 'static> {
     runtime: Arc<Mutex<AgentRuntime<S>>>,
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
-}
-
-impl<S: EventStore + Send + 'static> BridgeExecutionModelClient<S> {
-    fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
-        Self { runtime }
-    }
-}
-
-impl<S: EventStore + Send + 'static> BridgeExecutionToolExecutor<S> {
-    fn new(runtime: Arc<Mutex<AgentRuntime<S>>>) -> Self {
-        Self { runtime }
-    }
-}
-
-impl<S: EventStore + Send + 'static> ExecutionModelClient for BridgeExecutionModelClient<S> {
-    fn next_turn(
-        &self,
-        run_id: &str,
-        input: &ModelInputMessages,
-    ) -> Result<ExecutionModelTurn, String> {
-        self.runtime
-            .lock()
-            .map_err(|_| "runtime bridge mutex poisoned".to_string())?
-            .next_execution_model_turn(&RunId(run_id.to_string()), input)
-            .map_err(|error| error.to_string())
-    }
-}
-
-impl<S: EventStore + Send + 'static> ExecutionToolExecutor for BridgeExecutionToolExecutor<S> {
-    fn execute_tool(
-        &self,
-        run_id: &str,
-        frame_ref: &ConversationRunFrameRef,
-        call: &ExecutionToolCall,
-    ) -> Result<ExecutionToolOutcome, String> {
-        self.runtime
-            .lock()
-            .map_err(|_| "runtime bridge mutex poisoned".to_string())?
-            .route_execution_tool_call(
-                &RunId(run_id.to_string()),
-                frame_ref.session_id(),
-                ToolCall {
-                    id: call.call_id.clone(),
-                    name: call.name.clone(),
-                    arguments_json: call.arguments_json.clone(),
-                },
-            )
-            .map_err(|error| error.to_string())
-    }
 }
 
 impl<S: EventStore + Send + 'static> HostToolBatchExecutor for BridgeHostToolBatchExecutor<S> {
@@ -268,13 +147,11 @@ pub enum RuntimeJsonBridge {
 
 pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     runtime: Arc<Mutex<AgentRuntime<S>>>,
-    cancellations: ProviderCancellationRegistry,
     debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
-    next_agent_os_run_id: Mutex<u64>,
     frames: InMemoryConversationFrameRepository,
     conversation:
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
-    execution: ExecutionService<InMemoryConversationFrameRepository>,
+    execution: ExecutionService,
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
     host_binding: AgentHostBindingService,
@@ -322,24 +199,14 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             runtime.replay_provider_independent_state()?;
         }
         let frames = InMemoryConversationFrameRepository::default();
-        let cancellations = runtime.provider_cancellation_registry();
         let runtime = Arc::new(Mutex::new(runtime));
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let completed_runs = CompletedRunRegistry::default();
         let snapshot_service = app_services.snapshot_service();
-        let execution_tools = Arc::new(BridgeExecutionToolExecutor::new(runtime.clone()));
-        let worker_dependencies = ExecutionWorkerDependencies::new(
-            Arc::new(BridgeExecutionModelClient::new(runtime.clone())),
-            execution_tools,
-        );
         let completion_event_log = event_log.clone();
-        let execution = ExecutionService::with_runtime_parts_and_agent_os_state(
-            frames.clone(),
-            snapshot_service.clone(),
-            ExecutionPlanner,
+        let execution = ExecutionService::with_agent_os_state(
             event_log,
             completed_runs.clone(),
-            worker_dependencies,
             agent_os_state.clone(),
             host_process_epoch.clone(),
         );
@@ -379,9 +246,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         let profile_migration = LegacyProfileMigrationService::new(app_services.runtime_state());
         let bridge = Self {
             runtime,
-            cancellations,
             debug_archives: Mutex::new(BTreeMap::new()),
-            next_agent_os_run_id: Mutex::new(1),
             frames,
             conversation,
             execution,
@@ -455,7 +320,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         &self.conversation
     }
 
-    fn execution(&self) -> &ExecutionService<InMemoryConversationFrameRepository> {
+    fn execution(&self) -> &ExecutionService {
         &self.execution
     }
 
@@ -467,10 +332,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         &self.frames
     }
 
-    fn signal_provider_cancellation(&self, run_id: &RunId) {
-        self.cancellations.signal(run_id);
-    }
-
     fn load_debug_archive(&self, run_id: &str) -> Result<RunDebugArchiveJson, AgentError> {
         self.debug_archives
             .lock()
@@ -478,16 +339,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .get(run_id)
             .cloned()
             .ok_or_else(|| AgentError::Storage(format!("missing debug archive for run: {run_id}")))
-    }
-
-    fn reserve_agent_os_run_id(&self) -> Result<String, AgentError> {
-        let mut next = self
-            .next_agent_os_run_id
-            .lock()
-            .map_err(|_| AgentError::Ffi("agent os run id mutex poisoned".into()))?;
-        let run_id = format!("run_{}", *next);
-        *next += 1;
-        Ok(run_id)
     }
 
     fn list_agent_profiles_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -499,19 +350,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .map(AgentProfileJson::from)
             .collect();
         to_json(&profiles)
-    }
-
-    fn profile_execution_route_json(&self, request_json: &str) -> Result<String, AgentError> {
-        let request: ProfileExecutionRouteRequestJson = from_json(request_json)?;
-        let route = self
-            .app_services
-            .snapshot_service()
-            .profile_execution_route(
-                &AgentProfileId::new(request.profile_id),
-                AgentProfileVersion::new(request.profile_revision),
-            )
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        to_json(&route)
     }
 
     fn build_agent_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -594,40 +432,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             prepared,
             frame_preview,
         ))
-    }
-
-    fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
-        let request: StartRunRequestJson = from_json(request_json)?;
-        let route = self
-            .app_services
-            .snapshot_service()
-            .profile_execution_route(
-                &AgentProfileId::new(&request.agent_profile_id),
-                AgentProfileVersion::new(request.profile_revision_id),
-            )
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        if route.llm_binding_schema() == LLMBindingSchema::HostSlotV2 {
-            return Err(AgentError::Storage(
-                "execution.host_slot_v2_requires_preparation: host-backed LLM slots must enter through authoritative preparation".into(),
-            ));
-        }
-        let options = self.runtime_options_for_start_run(request.options)?;
-        self.execution()
-            .update_runtime_options(options)
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        let frame_ref = request.conversation_run_frame_ref.into_domain();
-        let run_id = self.reserve_agent_os_run_id()?;
-        let handle = self
-            .execution()
-            .start_run(StartExecutionRequest::new(
-                run_id,
-                request.agent_profile_id,
-                AgentProfileVersion::new(request.profile_revision_id),
-                request.user_intent,
-                frame_ref,
-            ))
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        to_json(&RunHandleJson::from(handle))
     }
 
     fn prepare_profile_publish_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -1016,24 +820,6 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             })
     }
 
-    fn runtime_options_for_start_run(&self, options: Value) -> Result<RuntimeOptions, AgentError> {
-        let start_options = StartRunOptionsJson::from_value(options)?;
-        let defaults = self
-            .execution()
-            .runtime_options()
-            .map(Ok)
-            .unwrap_or_else(|| {
-                let (system_prompt, runtime_policy) = self.lock()?.runtime_prompt_defaults();
-                Ok(RuntimeOptions {
-                    system_prompt,
-                    runtime_policy,
-                    temperature: None,
-                    top_p: None,
-                })
-            })?;
-        Ok(start_options.into_domain(defaults))
-    }
-
     fn observe_events_stream_json<F>(
         &self,
         request_json: &str,
@@ -1204,22 +990,9 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
                 .ok_or_else(|| AgentError::Storage("cancel event is missing".into()))?;
             return to_json(&RuntimeEventJson::from_execution_event(&event));
         }
-        let event = self.lock()?.cancel(run_id.clone())?;
-        self.execution()
-            .record_external_event(&run_id, "run.cancelled", "{}")
-            .map_err(execution_start_agent_error)?;
-        to_json(&RuntimeEventJson::from_event(&event))
-    }
-
-    fn update_execution_runtime_options_json(
-        &self,
-        request_json: &str,
-    ) -> Result<String, AgentError> {
-        let request: RuntimeOptionsJson = from_json(request_json)?;
-        self.execution()
-            .update_runtime_options(request.into_domain())
-            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-        to_json(&EmptyAgentOSResponseJson {})
+        Err(AgentError::Storage(format!(
+            "execution.host_run_missing: {run_id}"
+        )))
     }
 
     fn submit_tool_result_json(
@@ -1285,31 +1058,9 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             return to_json(&AgentTurnResultJson::from_execution_events(run_id, &events));
         }
 
-        if self.execution().has_active_run(run_id) {
-            let run_id_key = RunId(run_id.to_string());
-            let request = self
-                .lock()?
-                .consume_execution_pending_tool_request(&run_id_key)?;
-            if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
-                result.provenance = format!("tool.{}", request.tool_name());
-            }
-            let events = self
-                .execution()
-                .submit_tool_observation(
-                    run_id,
-                    ExecutionToolObservation {
-                        call_id: request.tool_call_id().to_string(),
-                        model_text: result.model_text,
-                    },
-                )
-                .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
-            return to_json(&AgentTurnResultJson::from_execution_events(run_id, &events));
-        }
-
-        let turn = self
-            .lock()?
-            .submit_tool_result(run_id.to_string(), result)?;
-        to_json(&AgentTurnResultJson::from_result(&turn))
+        Err(AgentError::Storage(format!(
+            "execution.host_run_missing: {run_id}"
+        )))
     }
 }
 
@@ -1332,8 +1083,7 @@ impl RuntimeJsonBridge {
     pub fn from_config_json(config_json: &str) -> Result<Self, AgentError> {
         let config: RuntimeBridgeConfigJson = from_json(config_json)?;
         validate_host_process_epoch(&config.host_process_epoch)?;
-        let registry = config.provider_registry()?;
-        let runtime_config = config.runtime_config(&registry)?;
+        let runtime_config = AgentRuntimeConfig::default();
         let host_process_epoch = config.host_process_epoch.clone();
         match config.store {
             StoreConfigJson::InMemory { .. } => {
@@ -1350,11 +1100,7 @@ impl RuntimeJsonBridge {
                 )
                 .map_err(|error| AgentError::Storage(error.to_string()))?;
                 Ok(Self::InMemory(BridgeRuntime::try_new(
-                    AgentRuntime::open_without_replay(
-                        runtime_config,
-                        InMemoryEventStore::new(),
-                        registry,
-                    )?,
+                    AgentRuntime::open_without_replay(runtime_config, InMemoryEventStore::new())?,
                     app_services,
                     runtime_state.agent_os_state(),
                     host_process_epoch,
@@ -1380,11 +1126,7 @@ impl RuntimeJsonBridge {
                 )
                 .map_err(|error| AgentError::Storage(error.to_string()))?;
                 Ok(Self::Sqlite(BridgeRuntime::try_new(
-                    AgentRuntime::open_without_replay(
-                        runtime_config,
-                        conversation_event_store,
-                        registry,
-                    )?,
+                    AgentRuntime::open_without_replay(runtime_config, conversation_event_store)?,
                     app_services,
                     agent_os_state,
                     host_process_epoch,
@@ -1528,35 +1270,6 @@ impl RuntimeJsonBridge {
         Ok("null".to_string())
     }
 
-    pub fn update_runtime_options_json(&self, options_json: &str) -> Result<String, AgentError> {
-        let options: RuntimeOptionsJson = from_json(options_json)?;
-        let inference_options = InferenceOptions {
-            temperature: options.temperature,
-            top_p: options.top_p,
-        };
-        match self {
-            Self::InMemory(runtime) => runtime.lock()?.update_runtime_options(
-                options.system_prompt,
-                options.runtime_policy,
-                inference_options,
-            )?,
-            Self::Sqlite(runtime) => runtime.lock()?.update_runtime_options(
-                options.system_prompt,
-                options.runtime_policy,
-                inference_options,
-            )?,
-        }
-        match self {
-            Self::InMemory(runtime) => {
-                runtime.update_execution_runtime_options_json(options_json)?;
-            }
-            Self::Sqlite(runtime) => {
-                runtime.update_execution_runtime_options_json(options_json)?;
-            }
-        }
-        Ok("null".to_string())
-    }
-
     pub fn delete_session_json(&self, session_id: &str) -> Result<String, AgentError> {
         let session_id = SessionId(session_id.to_string());
         match self {
@@ -1605,48 +1318,6 @@ impl RuntimeJsonBridge {
         Ok("null".to_string())
     }
 
-    pub fn send_message_json(&self, input_json: &str) -> Result<String, AgentError> {
-        let input: SendMessageJson = from_json(input_json)?;
-        let input = SendMessageInput {
-            session_id: SessionId(input.session_id),
-            parent_event_id: input.parent_event_id.map(EntryId),
-            text: input.text,
-            blob_refs: input.blob_refs,
-        };
-        let result = match self {
-            Self::InMemory(runtime) => runtime.lock()?.send_message_turn(input)?,
-            Self::Sqlite(runtime) => runtime.lock()?.send_message_turn(input)?,
-        };
-        to_json(&AgentTurnResultJson::from_result(&result))
-    }
-
-    pub fn send_message_streaming_json(
-        &self,
-        input_json: &str,
-        mut on_event: impl FnMut(&str) -> Result<(), AgentError>,
-    ) -> Result<String, AgentError> {
-        let input: SendMessageJson = from_json(input_json)?;
-        let input = SendMessageInput {
-            session_id: SessionId(input.session_id),
-            parent_event_id: input.parent_event_id.map(EntryId),
-            text: input.text,
-            blob_refs: input.blob_refs,
-        };
-        let mut emit_event = |event: RuntimeEvent| {
-            let event_json = to_json(&RuntimeEventJson::from_event(&event))?;
-            on_event(&event_json)
-        };
-        let result = match self {
-            Self::InMemory(runtime) => runtime
-                .lock()?
-                .send_message_streaming(input, &mut emit_event)?,
-            Self::Sqlite(runtime) => runtime
-                .lock()?
-                .send_message_streaming(input, &mut emit_event)?,
-        };
-        to_json(&AgentTurnResultJson::from_result(&result))
-    }
-
     pub fn pending_tool_requests_json(&self) -> Result<String, AgentError> {
         let requests: Vec<_> = match self {
             Self::InMemory(runtime) => {
@@ -1688,108 +1359,6 @@ impl RuntimeJsonBridge {
         match self {
             Self::InMemory(runtime) => runtime.submit_tool_result_json(run_id, result_json),
             Self::Sqlite(runtime) => runtime.submit_tool_result_json(run_id, result_json),
-        }
-    }
-
-    pub fn submit_tool_result_streaming_json(
-        &self,
-        run_id: &str,
-        result_json: &str,
-        mut on_event: impl FnMut(&str) -> Result<(), AgentError>,
-    ) -> Result<String, AgentError> {
-        let result: ToolResultJson = from_json(result_json)?;
-        let result = result.into_tool_result()?;
-        let mut emit_event = |event: RuntimeEvent| {
-            let event_json = to_json(&RuntimeEventJson::from_event(&event))?;
-            on_event(&event_json)
-        };
-        let turn = match self {
-            Self::InMemory(runtime) => runtime.lock()?.submit_tool_result_streaming(
-                run_id.to_string(),
-                result,
-                &mut emit_event,
-            ),
-            Self::Sqlite(runtime) => runtime.lock()?.submit_tool_result_streaming(
-                run_id.to_string(),
-                result,
-                &mut emit_event,
-            ),
-        };
-        to_json(&AgentTurnResultJson::from_result(&turn?))
-    }
-
-    pub fn submit_approval_response_json(&self, response_json: &str) -> Result<String, AgentError> {
-        let response: ApprovalProtocolResponseJson = from_json(response_json)?;
-        let response = response.into_approval_response();
-        let turn = match self {
-            Self::InMemory(runtime) => runtime.lock()?.submit_approval_response(response),
-            Self::Sqlite(runtime) => runtime.lock()?.submit_approval_response(response),
-        };
-        to_json(&AgentTurnResultJson::from_result(&turn?))
-    }
-
-    pub fn cancel_json(&self, run_id: &str) -> Result<String, AgentError> {
-        let run_id_key = RunId(run_id.to_string());
-        match self {
-            Self::InMemory(runtime) => runtime.signal_provider_cancellation(&run_id_key),
-            Self::Sqlite(runtime) => runtime.signal_provider_cancellation(&run_id_key),
-        }
-        let event = match self {
-            Self::InMemory(runtime) => runtime.lock()?.cancel(run_id.to_string())?,
-            Self::Sqlite(runtime) => runtime.lock()?.cancel(run_id.to_string())?,
-        };
-        to_json(&RuntimeEventJson::from_event(&event))
-    }
-
-    pub fn latest_prompt_debug_snapshot_json(&self) -> Result<String, AgentError> {
-        let snapshot = match self {
-            Self::InMemory(runtime) => runtime.lock()?.latest_prompt_debug_snapshot(),
-            Self::Sqlite(runtime) => runtime.lock()?.latest_prompt_debug_snapshot(),
-        };
-        to_json(&snapshot)
-    }
-
-    pub fn provider_profiles_json(&self) -> Result<String, AgentError> {
-        let profiles = match self {
-            Self::InMemory(runtime) => runtime.lock()?.provider_profiles(),
-            Self::Sqlite(runtime) => runtime.lock()?.provider_profiles(),
-        };
-        to_json(&profiles)
-    }
-
-    pub fn active_provider_json(&self) -> Result<String, AgentError> {
-        let profile = match self {
-            Self::InMemory(runtime) => runtime.lock()?.active_provider(),
-            Self::Sqlite(runtime) => runtime.lock()?.active_provider(),
-        };
-        to_json(&profile)
-    }
-
-    pub fn set_provider_json(&self, request_json: &str) -> Result<String, AgentError> {
-        let request: SetProviderJson = from_json(request_json)?;
-        let event = match self {
-            Self::InMemory(runtime) => runtime
-                .lock()?
-                .set_provider(SessionId(request.session_id), &request.provider_id)?,
-            Self::Sqlite(runtime) => runtime
-                .lock()?
-                .set_provider(SessionId(request.session_id), &request.provider_id)?,
-        };
-        to_json(&RuntimeEventJson::from_event(&event))
-    }
-
-    pub fn start_run_json(&self, request_json: &str) -> Result<String, AgentError> {
-        let handle = match self {
-            Self::InMemory(runtime) => runtime.start_run_json(request_json),
-            Self::Sqlite(runtime) => runtime.start_run_json(request_json),
-        }?;
-        Ok(handle)
-    }
-
-    pub fn profile_execution_route_json(&self, request_json: &str) -> Result<String, AgentError> {
-        match self {
-            Self::InMemory(runtime) => runtime.profile_execution_route_json(request_json),
-            Self::Sqlite(runtime) => runtime.profile_execution_route_json(request_json),
         }
     }
 
@@ -2182,17 +1751,6 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_rename_session(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_update_runtime_options(
-    runtime: *mut RuntimeJsonBridge,
-    options_json: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let options_json = c_str_arg(options_json, "options_json")?;
-        bridge_ref(runtime)?.update_runtime_options_json(options_json)
-    })
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_delete_session(
     runtime: *mut RuntimeJsonBridge,
     session_id: *const c_char,
@@ -2226,32 +1784,6 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_set_permission_state(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_send_message(
-    runtime: *mut RuntimeJsonBridge,
-    input_json: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let input_json = c_str_arg(input_json, "input_json")?;
-        bridge_ref(runtime)?.send_message_json(input_json)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_send_message_streaming(
-    runtime: *mut RuntimeJsonBridge,
-    input_json: *const c_char,
-    on_event: RuntimeEventCallback,
-    user_data: *mut c_void,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let input_json = c_str_arg(input_json, "input_json")?;
-        bridge_ref(runtime)?.send_message_streaming_json(input_json, |event_json| {
-            dispatch_stream_event(on_event, user_data, event_json)
-        })
-    })
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_pending_tool_requests(
     runtime: *mut RuntimeJsonBridge,
 ) -> *mut c_char {
@@ -2279,90 +1811,6 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result(
         let run_id = c_str_arg(run_id, "run_id")?;
         let result_json = c_str_arg(result_json, "result_json")?;
         bridge_ref(runtime)?.submit_tool_result_json(run_id, result_json)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_submit_tool_result_streaming(
-    runtime: *mut RuntimeJsonBridge,
-    run_id: *const c_char,
-    result_json: *const c_char,
-    on_event: RuntimeEventCallback,
-    user_data: *mut c_void,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let run_id = c_str_arg(run_id, "run_id")?;
-        let result_json = c_str_arg(result_json, "result_json")?;
-        bridge_ref(runtime)?.submit_tool_result_streaming_json(run_id, result_json, |event_json| {
-            dispatch_stream_event(on_event, user_data, event_json)
-        })
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_submit_approval_response(
-    runtime: *mut RuntimeJsonBridge,
-    response_json: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let response_json = c_str_arg(response_json, "response_json")?;
-        bridge_ref(runtime)?.submit_approval_response_json(response_json)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_cancel(
-    runtime: *mut RuntimeJsonBridge,
-    run_id: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let run_id = c_str_arg(run_id, "run_id")?;
-        bridge_ref(runtime)?.cancel_json(run_id)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_latest_prompt_debug_snapshot(
-    runtime: *mut RuntimeJsonBridge,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        bridge_ref(runtime)?.latest_prompt_debug_snapshot_json()
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_provider_profiles(
-    runtime: *mut RuntimeJsonBridge,
-) -> *mut c_char {
-    c_runtime_result(runtime, || bridge_ref(runtime)?.provider_profiles_json())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_active_provider(
-    runtime: *mut RuntimeJsonBridge,
-) -> *mut c_char {
-    c_runtime_result(runtime, || bridge_ref(runtime)?.active_provider_json())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_set_provider(
-    runtime: *mut RuntimeJsonBridge,
-    request_json: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let request_json = c_str_arg(request_json, "request_json")?;
-        bridge_ref(runtime)?.set_provider_json(request_json)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn local_agent_runtime_bridge_start_run(
-    runtime: *mut RuntimeJsonBridge,
-    request_json: *const c_char,
-) -> *mut c_char {
-    c_runtime_result(runtime, || {
-        let request_json = c_str_arg(request_json, "request_json")?;
-        bridge_ref(runtime)?.start_run_json(request_json)
     })
 }
 
@@ -2420,10 +1868,6 @@ json_bridge_function!(
 json_bridge_function!(
     local_agent_runtime_bridge_complete_legacy_profile_migration,
     complete_legacy_profile_migration_json
-);
-json_bridge_function!(
-    local_agent_runtime_bridge_profile_execution_route,
-    profile_execution_route_json
 );
 json_bridge_function!(
     local_agent_runtime_bridge_preview_run_preparation,
@@ -2571,21 +2015,6 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_load_debug_archive(
         let run_id = c_str_arg(run_id, "run_id")?;
         bridge_ref(runtime)?.load_debug_archive_json(run_id)
     })
-}
-
-#[derive(Deserialize)]
-struct SendMessageJson {
-    session_id: String,
-    parent_event_id: Option<String>,
-    text: String,
-    #[serde(default)]
-    blob_refs: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SetProviderJson {
-    session_id: String,
-    provider_id: String,
 }
 
 #[derive(Deserialize)]
@@ -2918,34 +2347,6 @@ struct ConversationRunFrameRefJson {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StartRunRequestJson {
-    agent_profile_id: String,
-    profile_revision_id: u64,
-    user_intent: String,
-    conversation_run_frame_ref: ConversationRunFrameRefJson,
-    #[serde(default)]
-    options: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProfileExecutionRouteRequestJson {
-    profile_id: String,
-    profile_revision: u64,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartRunOptionsJson {
-    model_id: Option<String>,
-    system_prompt: Option<String>,
-    runtime_policy: Option<String>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ObserveExecutionEventsRequestJson {
     run_id: String,
     from_sequence: u64,
@@ -2963,12 +2364,6 @@ struct CommitAssistantResultRequestJson {
 struct ConversationCommitResultJson {
     committed_message_id: String,
     already_committed: bool,
-}
-
-#[derive(Serialize)]
-struct RunHandleJson {
-    run_id: String,
-    replay_from_sequence: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -3010,13 +2405,9 @@ struct CheckpointJson {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RuntimeBridgeConfigJson {
-    system_prompt: String,
-    runtime_policy: String,
-    provider_id: String,
     host_process_epoch: String,
-    #[serde(default)]
-    providers: Vec<RuntimeProviderConfigJson>,
     store: StoreConfigJson,
     #[serde(default)]
     agent_os: RuntimeAgentOSConfigJson,
@@ -3091,143 +2482,6 @@ impl From<RuntimeAgentOSConfigJson> for AgentOSApplicationServiceConfig {
     }
 }
 
-impl RuntimeBridgeConfigJson {
-    fn provider_registry(&self) -> Result<ProviderRegistry, AgentError> {
-        let mut registry = ProviderRegistry::with_mock();
-        for provider in &self.providers {
-            provider.register(&mut registry)?;
-        }
-        Ok(registry)
-    }
-
-    fn runtime_config(
-        &self,
-        registry: &ProviderRegistry,
-    ) -> Result<AgentRuntimeConfig, AgentError> {
-        if registry.profile(&self.provider_id).is_none() {
-            return Err(AgentError::Provider(format!(
-                "unknown provider_id for bridge runtime: {}",
-                self.provider_id
-            )));
-        }
-        let bundle = registry.build(&self.provider_id)?;
-        Ok(AgentRuntimeConfig {
-            system_prompt: self.system_prompt.clone(),
-            runtime_policy: self.runtime_policy.clone(),
-            tool_schemas: Vec::new(),
-            tokenizer: bundle.tokenizer,
-            provider: bundle.provider,
-            tool_router: None,
-        })
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind")]
-enum RuntimeProviderConfigJson {
-    #[serde(rename = "desktop_minicpm", alias = "desktop_mini_cpm")]
-    DesktopMiniCpm {
-        endpoint: String,
-        model: String,
-        max_context_tokens: usize,
-    },
-    #[serde(rename = "local_llm")]
-    LocalLlm {
-        #[serde(default)]
-        provider_id: Option<String>,
-        #[serde(default)]
-        display_name: Option<String>,
-        model: String,
-        model_config_json: String,
-        max_context_tokens: usize,
-    },
-}
-
-impl RuntimeProviderConfigJson {
-    fn register(&self, registry: &mut ProviderRegistry) -> Result<(), AgentError> {
-        match self {
-            Self::DesktopMiniCpm {
-                endpoint,
-                model,
-                max_context_tokens,
-            } => register_desktop_minicpm_provider(
-                registry,
-                DesktopMiniCPMSettings {
-                    endpoint: endpoint.clone(),
-                    model: model.clone(),
-                    max_context_tokens: *max_context_tokens,
-                },
-            ),
-            Self::LocalLlm {
-                provider_id,
-                display_name,
-                model,
-                model_config_json,
-                max_context_tokens,
-            } => {
-                let provider_id = provider_id
-                    .clone()
-                    .unwrap_or_else(|| "local_llm".to_string());
-                let display_name = display_name
-                    .clone()
-                    .unwrap_or_else(|| "Local LLM".to_string());
-                let model = model.clone();
-                let model_config_json = model_config_json.clone();
-                let max_context_tokens = *max_context_tokens;
-                let engine_id = local_engine_id(&model_config_json, &provider_id)?;
-                let tokenizer_id = provider_id.clone();
-                let provider_factory_id = provider_id.clone();
-                registry.register_fallible_factory(
-                    ProviderProfile {
-                        id: provider_id,
-                        display_name,
-                        kind: ProviderKind::LocalLlm,
-                        max_context_tokens,
-                    },
-                    move || {
-                        Ok(ProviderBundle {
-                            provider: Box::new(LocalLLMProvider::with_provider_id(
-                                provider_factory_id.clone(),
-                                model.clone(),
-                                model_config_json.clone(),
-                                Box::new(CAbiV2LocalInferenceBackend::new(engine_id.clone())?),
-                            )),
-                            tokenizer: Box::new(BridgeWhitespaceTokenizer::new(
-                                tokenizer_id.clone(),
-                                max_context_tokens,
-                            )),
-                        })
-                    },
-                )
-            }
-        }
-    }
-}
-
-fn local_engine_id(model_config_json: &str, provider_id: &str) -> Result<String, AgentError> {
-    let value: Value = serde_json::from_str(model_config_json).map_err(|error| {
-        AgentError::Provider(format!("invalid local model config JSON: {error}"))
-    })?;
-    if let Some(engine) = value.get("engine").and_then(Value::as_str) {
-        if !engine.trim().is_empty() {
-            return Ok(engine.to_string());
-        }
-    }
-    if let Some(backend) = value.get("backend").and_then(Value::as_str) {
-        if !backend.trim().is_empty() {
-            return Ok(backend.to_string());
-        }
-    }
-    if let Some(engine) = provider_id.strip_prefix("local_llm.") {
-        if !engine.trim().is_empty() {
-            return Ok(engine.to_string());
-        }
-    }
-    Err(AgentError::Provider(format!(
-        "local provider {provider_id} missing engine/backend in model_config_json"
-    )))
-}
-
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum StoreConfigJson {
@@ -3300,23 +2554,6 @@ impl ToolResultJson {
     }
 }
 
-#[derive(Deserialize)]
-struct ApprovalProtocolResponseJson {
-    approval_id: String,
-    approved: bool,
-    reason: Option<String>,
-}
-
-impl ApprovalProtocolResponseJson {
-    fn into_approval_response(self) -> ApprovalProtocolResponse {
-        ApprovalProtocolResponse {
-            approval_id: self.approval_id,
-            approved: self.approved,
-            reason: self.reason,
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct AgentTurnResultJson {
     run_id: String,
@@ -3326,19 +2563,6 @@ struct AgentTurnResultJson {
 }
 
 impl AgentTurnResultJson {
-    fn from_result(result: &AgentTurnResult) -> Self {
-        Self {
-            run_id: result.run_id.clone(),
-            state: run_state_json(&result.state),
-            events: result
-                .events
-                .iter()
-                .map(RuntimeEventJson::from_event)
-                .collect(),
-            pending_tool_call_id: result.pending_tool_call_id.clone(),
-        }
-    }
-
     fn from_execution_events(run_id: &str, events: &[ExecutionEvent]) -> Self {
         let state = execution_turn_state_json(events);
         Self {
@@ -3475,46 +2699,6 @@ impl From<&ConversationFrameMessage> for ConversationFrameMessageJson {
     }
 }
 
-impl From<RunHandle> for RunHandleJson {
-    fn from(handle: RunHandle) -> Self {
-        Self {
-            run_id: handle.run_id().to_string(),
-            replay_from_sequence: handle.replay_from_sequence(),
-        }
-    }
-}
-
-impl RuntimeOptionsJson {
-    fn into_domain(self) -> RuntimeOptions {
-        RuntimeOptions {
-            system_prompt: self.system_prompt,
-            runtime_policy: self.runtime_policy,
-            temperature: self.temperature.map(f64::from),
-            top_p: self.top_p.map(f64::from),
-        }
-    }
-}
-
-impl StartRunOptionsJson {
-    fn from_value(value: Value) -> Result<Self, AgentError> {
-        if value.is_null() {
-            return Ok(Self::default());
-        }
-        serde_json::from_value(value)
-            .map_err(|error| AgentError::Ffi(format!("invalid start run options: {error}")))
-    }
-
-    fn into_domain(self, defaults: RuntimeOptions) -> RuntimeOptions {
-        let _model_id = self.model_id;
-        RuntimeOptions {
-            system_prompt: self.system_prompt.unwrap_or(defaults.system_prompt),
-            runtime_policy: self.runtime_policy.unwrap_or(defaults.runtime_policy),
-            temperature: self.temperature.map(f64::from).or(defaults.temperature),
-            top_p: self.top_p.map(f64::from).or(defaults.top_p),
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct ConversationSummaryJson {
     session_id: String,
@@ -3524,15 +2708,6 @@ struct ConversationSummaryJson {
     last_event_id: Option<String>,
     last_updated_sequence: u64,
     last_updated_at_millis: u64,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RuntimeOptionsJson {
-    system_prompt: String,
-    runtime_policy: String,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -3594,7 +2769,8 @@ enum CompiledToolRecipeContentJson {
     HttpConnector {
         endpoint: String,
         policy: HttpConnectorPolicyJson,
-        credential_ref: Option<String>,
+        #[serde(rename = "credential\u{5f}ref")]
+        credential: Option<String>,
     },
     PureTransform {
         expression: String,
@@ -3613,7 +2789,7 @@ impl CompiledToolRecipeContentJson {
             CompiledToolRecipeContent::HttpConnector {
                 endpoint,
                 policy,
-                credential_ref,
+                credential,
             } => Self::HttpConnector {
                 endpoint: endpoint.clone(),
                 policy: HttpConnectorPolicyJson {
@@ -3633,7 +2809,7 @@ impl CompiledToolRecipeContentJson {
                         .response_sensitivity
                         .map(http_response_sensitivity_json),
                 },
-                credential_ref: credential_ref
+                credential: credential
                     .as_ref()
                     .map(|reference| reference.as_str().to_string()),
             },
@@ -4055,17 +3231,6 @@ fn http_response_sensitivity_json(sensitivity: HttpResponseSensitivity) -> &'sta
     }
 }
 
-fn run_state_json(state: &RunState) -> &'static str {
-    match state {
-        RunState::Running => "running",
-        RunState::WaitingTool => "waiting_tool",
-        RunState::Suspended => "suspended",
-        RunState::Failed => "failed",
-        RunState::Cancelled => "cancelled",
-        RunState::Completed => "completed",
-    }
-}
-
 fn execution_turn_state_json(events: &[ExecutionEvent]) -> &'static str {
     for event in events.iter().rev() {
         match event.code() {
@@ -4186,11 +3351,6 @@ mod ffi_boundary_tests {
     fn caught_panic_taints_runtime_and_follow_up_call_returns_stable_error() {
         let runtime = Box::into_raw(Box::new(RuntimeJsonBridge::new(AgentRuntime::new(
             AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             },
         ))));
@@ -4253,11 +3413,6 @@ mod tests {
     fn accepted_host_delta_is_consumed_and_wakes_the_execution_stream() {
         let bridge = BridgeRuntime::new(
             AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             }),
             AgentOSApplicationService::empty(),
@@ -4344,11 +3499,6 @@ mod tests {
     fn duplicate_host_event_recovers_a_pending_execution_projection() {
         let bridge = BridgeRuntime::new(
             AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             }),
             AgentOSApplicationService::empty(),
@@ -4435,11 +3585,6 @@ mod tests {
     fn duplicate_host_event_does_not_repeat_an_already_persisted_projection() {
         let bridge = BridgeRuntime::new(
             AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             }),
             AgentOSApplicationService::empty(),
@@ -4573,11 +3718,6 @@ mod tests {
 
         let bridge = BridgeRuntime::try_new(
             AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             }),
             AgentOSApplicationService::empty(),
@@ -4609,114 +3749,9 @@ mod tests {
     }
 
     #[test]
-    fn approving_a_host_tool_waits_for_the_granted_pending_request_result() {
-        let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
-                tool_router: Some(crate::tool::ToolRouter::new(
-                    crate::tool::ToolRegistry::new(),
-                )),
-            }),
-            AgentOSApplicationService::from_config(
-                AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
-            )
-            .unwrap(),
-        );
-        let schema: ToolSchemaJson = from_json(
-            r#"{"name":"debug.echo","description":"Echo","parameters_json_schema":"{\"type\":\"object\"}","risk_level":"confirm"}"#,
-        )
-        .unwrap();
-        bridge
-            .lock()
-            .unwrap()
-            .register_tool(schema.into_tool_schema().unwrap())
-            .unwrap();
-        let prepared: Value = serde_json::from_str(
-            &bridge
-                .prepare_user_turn_json(
-                    r#"{"session_id":null,"parent_event_id":null,"text":"use tool debug.echo","blob_refs":[]}"#,
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        let run: Value = serde_json::from_str(
-            &bridge
-                .start_run_json(
-                    &json!({
-                        "agent_profile_id": "profile_1",
-                        "profile_revision_id": 1,
-                        "user_intent": "use tool debug.echo",
-                        "conversation_run_frame_ref": prepared["conversation_run_frame_ref"],
-                        "options": {},
-                    })
-                    .to_string(),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        let run_id = run["run_id"].as_str().unwrap();
-        let approval_id = bridge.lock().unwrap().pending_approval_requests()[0]
-            .approval_id
-            .clone();
-        bridge
-            .runtime_state
-            .insert_worker_and_session(
-                crate::llm_contracts::HostWorkerRecord::new(
-                    run_id,
-                    "session-host",
-                    TEST_HOST_PROCESS_EPOCH,
-                )
-                .with_execution_phase(Some(
-                    crate::llm_contracts::HostExecutionPhase::SuspendedForToolApproval,
-                ))
-                .with_generation_turn_id(Some("turn-host".into()))
-                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
-                crate::llm_contracts::HostSessionRecord::new(
-                    run_id,
-                    "session-host",
-                    TEST_HOST_PROCESS_EPOCH,
-                    "binding-host",
-                    1,
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                ),
-            )
-            .unwrap();
-
-        bridge
-            .approve_tool_json(
-                &json!({
-                    "id": approval_id,
-                    "decision": {"approved": true, "reason": null},
-                })
-                .to_string(),
-            )
-            .unwrap();
-
-        assert_eq!(bridge.lock().unwrap().pending_tool_requests().len(), 1);
-        assert_eq!(
-            bridge
-                .runtime_state
-                .host_worker(run_id)
-                .unwrap()
-                .unwrap()
-                .execution_phase(),
-            Some(crate::llm_contracts::HostExecutionPhase::SuspendedForToolApproval)
-        );
-    }
-
-    #[test]
     fn cancel_run_routes_v2_to_the_durable_host_outbox() {
         let bridge = BridgeRuntime::new(
             AgentRuntime::new(AgentRuntimeConfig {
-                system_prompt: "system".into(),
-                runtime_policy: "policy".into(),
-                tool_schemas: Vec::new(),
-                tokenizer: Box::new(crate::context::MockTokenizer::new(100)),
-                provider: Box::new(crate::core::MockStreamingProvider::new()),
                 tool_router: None,
             }),
             AgentOSApplicationService::empty(),

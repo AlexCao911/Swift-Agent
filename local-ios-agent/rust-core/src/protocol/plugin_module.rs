@@ -3,9 +3,6 @@ use super::{
     RegistryResult, SchemaVersion,
 };
 
-#[cfg(feature = "link-llama-cpp-local-inference")]
-use super::RegistryError;
-
 pub trait PluginModule: Send + Sync {
     fn module_id(&self) -> ModuleId;
     fn required_host_capabilities(&self) -> &'static [&'static str] {
@@ -71,113 +68,8 @@ macro_rules! protocol_definition {
     };
 }
 
-protocol_definition!(ProviderDefinition);
-protocol_definition!(ModelDefinition);
-protocol_definition!(InferenceBackendDefinition);
 protocol_definition!(PromptCompilerDefinition);
 protocol_definition!(ToolDefinition);
 protocol_definition!(MemoryDefinition);
 protocol_definition!(ContextPolicyDefinition);
 protocol_definition!(VoiceDefinition);
-
-#[cfg(feature = "builtin-openai-compatible")]
-#[derive(Clone, Debug)]
-pub struct BuiltinProviderPlugin {
-    module_id: ModuleId,
-}
-
-#[cfg(feature = "builtin-openai-compatible")]
-impl BuiltinProviderPlugin {
-    pub fn openai_compatible() -> Self {
-        Self {
-            module_id: ModuleId::new("builtin.provider.openai_compatible"),
-        }
-    }
-
-    pub fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
-        PluginModule::register(self, builder)
-    }
-}
-
-#[cfg(feature = "builtin-openai-compatible")]
-impl PluginModule for BuiltinProviderPlugin {
-    fn module_id(&self) -> ModuleId {
-        self.module_id.clone()
-    }
-
-    fn required_host_capabilities(&self) -> &'static [&'static str] {
-        &["network"]
-    }
-
-    fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
-        builder.require_host_capability("network")?;
-        builder.register_provider(ProviderDefinition::new("provider.openai_compatible"))
-    }
-}
-
-#[cfg(feature = "link-llama-cpp-local-inference")]
-#[derive(Clone, Debug)]
-pub struct BuiltinInferencePlugin {
-    module_id: ModuleId,
-    required_capability: &'static str,
-}
-
-#[cfg(feature = "link-llama-cpp-local-inference")]
-impl BuiltinInferencePlugin {
-    pub fn llama_cpp() -> Self {
-        Self {
-            module_id: ModuleId::new("builtin.inference.llama_cpp"),
-            required_capability: "native_inference",
-        }
-    }
-
-    pub fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
-        PluginModule::register(self, builder)
-    }
-}
-
-#[cfg(feature = "link-llama-cpp-local-inference")]
-impl PluginModule for BuiltinInferencePlugin {
-    fn module_id(&self) -> ModuleId {
-        self.module_id.clone()
-    }
-
-    fn required_host_capabilities(&self) -> &'static [&'static str] {
-        &["native_inference"]
-    }
-
-    fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
-        if !builder.host_supports(self.required_capability) {
-            return Err(RegistryError::MissingHostCapability(
-                self.required_capability.to_string(),
-            ));
-        }
-
-        builder.register_inference_backend(InferenceBackendDefinition::new("inference.llama_cpp"))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct LegacyRuntimeAdapterPlugin {
-    module_id: ModuleId,
-}
-
-impl LegacyRuntimeAdapterPlugin {
-    pub fn runtime_adapter() -> Self {
-        Self {
-            module_id: ModuleId::new("legacy.runtime_adapter"),
-        }
-    }
-}
-
-impl PluginModule for LegacyRuntimeAdapterPlugin {
-    fn module_id(&self) -> ModuleId {
-        self.module_id.clone()
-    }
-
-    fn register(&self, builder: &mut PluginRegistryBuilder) -> RegistryResult<()> {
-        builder.register_inference_backend(InferenceBackendDefinition::new(
-            "inference.legacy_runtime_adapter",
-        ))
-    }
-}

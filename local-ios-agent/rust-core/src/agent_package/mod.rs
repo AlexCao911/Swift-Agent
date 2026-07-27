@@ -13,7 +13,7 @@ pub use installer::{
     PackageInstallPreviewIssue, PackageInstallPreviewOperation, PackageInstallationRecord,
 };
 pub use lockfile::{AgentPackageLock, LockedPackageComponent};
-pub use manifest::{AgentPackageManifest, PackageModelBinding};
+pub use manifest::AgentPackageManifest;
 pub use reader::{AgentPackageReader, PackageError, PackageInspectReport, PackagePath};
 pub use upgrade_planner::{
     AgentProfileUpgradePlanner, AgentProfileUpgradeReport, ComponentUpgradeIssue,

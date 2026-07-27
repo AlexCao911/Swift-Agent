@@ -10,7 +10,6 @@ pub mod long_term;
 pub mod memory_candidate;
 pub mod profile;
 pub mod provider;
-pub mod provider_settings;
 pub mod resolver;
 pub mod sqlite;
 
@@ -33,7 +32,6 @@ pub use provider::{
     MemoryProvider, MemoryProviderId, MemoryQuery, MemoryQueryResult, MemoryReadinessIssue,
     MemoryRetrievalTrace,
 };
-pub use provider_settings::ProviderSetting;
 pub use resolver::{
     MemoryResolver, MemoryResolverInput, MemoryResolverResult, StaticMemoryResolver,
 };

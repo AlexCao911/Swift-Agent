@@ -486,6 +486,45 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         revisions
     }
 
+    fn legacy_agent_profile_record(
+        &self,
+        id: &AgentProfileId,
+        version: AgentProfileVersion,
+    ) -> Result<Option<String>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        store
+            .connection()
+            .query_row(
+                "select revision_json
+                 from agent_profile_revisions
+                 where profile_id = ?1 and profile_revision = ?2
+                   and binding_schema = 'legacy_v1'",
+                params![id.as_str(), version.as_u64().to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_error)
+    }
+
+    fn legacy_agent_profile_records(&self) -> Result<Vec<String>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        let mut statement = store
+            .connection()
+            .prepare(
+                "select revision_json
+                 from agent_profile_revisions
+                 where binding_schema = 'legacy_v1'
+                 order by profile_id, cast(profile_revision as integer)",
+            )
+            .map_err(sqlite_error)?;
+        let records = statement
+            .query_map([], |row| row.get(0))
+            .map_err(sqlite_error)?
+            .map(|row| row.map_err(sqlite_error))
+            .collect();
+        records
+    }
+
     fn begin_legacy_profile_migration(
         &self,
         record: LegacyProfileMigrationRecord,
@@ -2145,10 +2184,11 @@ fn insert_profile_revision(
     profile: &AgentProfile,
 ) -> Result<(), RuntimeStateError> {
     const SCHEMA: &str = "agent-profile-revision:v1";
-    let binding_schema = profile
-        .llm_binding()
-        .map(|binding| binding.schema().as_str())
-        .unwrap_or("none");
+    let binding_schema = if profile.llm_slot().is_some() {
+        "host_slot_v2"
+    } else {
+        "none"
+    };
     let json = serde_json::to_string(profile).map_err(record_json_error)?;
     let digest = sha256_text(&json);
     let existing: Option<(String, String, String, String, String, String)> = transaction

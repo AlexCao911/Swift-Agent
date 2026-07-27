@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::migration::LegacyAgentProfileTranslator;
 use crate::storage::{RuntimeStateError, UnifiedRuntimeStateRepository};
-use crate::user_customization::{
-    AgentProfileId, AgentProfileVersion, PublishedUserComponentVersion,
-};
+use crate::user_customization::{AgentProfileId, AgentProfileVersion};
 
 use super::{AgentLLMRequirements, HostBindingActivationConfirmation};
 
@@ -256,9 +254,9 @@ impl LegacyProfileMigrationService {
                 "migration attempt ID is empty",
             ));
         }
-        let source = self
+        let source_json = self
             .repository
-            .agent_profile_exact(
+            .legacy_agent_profile_record(
                 &AgentProfileId::new(request.profile_id()),
                 AgentProfileVersion::new(request.profile_revision()),
             )
@@ -269,10 +267,10 @@ impl LegacyProfileMigrationService {
                     "legacy migration source Profile does not exist",
                 )
             })?;
-        let translated = LegacyAgentProfileTranslator::translate_known_profile(&source)
+        let translated = LegacyAgentProfileTranslator::translate_record(&source_json)
             .map_err(translation_error)?;
         let source_digest =
-            LegacyAgentProfileTranslator::source_digest(&source).map_err(translation_error)?;
+            LegacyAgentProfileTranslator::source_digest(&source_json).map_err(translation_error)?;
         let requirements = translated.llm_slot().requirements().clone();
         if let Some(existing) = self
             .repository
@@ -283,11 +281,11 @@ impl LegacyProfileMigrationService {
                 LegacyProfileMigrationState::Pending {
                     attempt: Some(attempt),
                 } if attempt.attempt_id() == request.attempt_id() => {
-                    return Ok(action_from_record(&existing, &source, &requirements));
+                    return Ok(action_from_record(&existing, &translated, &requirements));
                 }
                 LegacyProfileMigrationState::Migrated { .. }
                 | LegacyProfileMigrationState::Archived => {
-                    return Ok(action_from_record(&existing, &source, &requirements));
+                    return Ok(action_from_record(&existing, &translated, &requirements));
                 }
                 LegacyProfileMigrationState::Pending { attempt: Some(_) } => {
                     return Err(error(
@@ -308,16 +306,7 @@ impl LegacyProfileMigrationService {
             .as_str()
             .to_string();
         let operation_id = format!("legacy-migration.{}", request.attempt_id());
-        let successor_revision = self
-            .repository
-            .agent_profile_latest(source.id())
-            .map_err(storage_error)?
-            .map(|profile| AgentProfileVersion::new(profile.version().as_u64() + 1))
-            .unwrap_or_else(|| AgentProfileVersion::new(source.version().as_u64() + 1));
-        let successor = translated
-            .successor()
-            .clone()
-            .with_version(successor_revision);
+        let successor = translated.successor().clone();
         let subject = LegacyProfileSuccessorSubject::new(
             successor.id().as_str(),
             successor.version().as_u64(),
@@ -331,13 +320,13 @@ impl LegacyProfileMigrationService {
             &operation_id,
         );
         let record = LegacyProfileMigrationRecord::new_pending(
-            source.id().clone(),
-            source.version(),
+            translated.source_profile_id().clone(),
+            translated.source_revision(),
             &source_digest,
             attempt,
         );
-        let components = source
-            .bindings()
+        let components = translated
+            .component_bindings()
             .iter()
             .map(|binding| {
                 self.repository
@@ -350,12 +339,12 @@ impl LegacyProfileMigrationService {
                         )
                     })
             })
-            .collect::<Result<Vec<PublishedUserComponentVersion>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let record = self
             .repository
             .begin_legacy_profile_migration(record, successor, components)
             .map_err(storage_error)?;
-        Ok(action_from_record(&record, &source, &requirements))
+        Ok(action_from_record(&record, &translated, &requirements))
     }
 
     pub fn complete(
@@ -370,22 +359,21 @@ impl LegacyProfileMigrationService {
     pub fn records(
         &self,
     ) -> Result<Vec<LegacyProfileMigrationRecord>, LegacyProfileMigrationError> {
-        for source in self
+        for source_json in self
             .repository
-            .latest_agent_profiles()
+            .legacy_agent_profile_records()
             .map_err(storage_error)?
-            .into_iter()
-            .filter(|profile| {
-                profile.llm_binding_schema() == Some(super::LLMBindingSchema::LegacyV1)
-            })
         {
+            let source = LegacyAgentProfileTranslator::translate_record(&source_json)
+                .map_err(translation_error)?;
             let source_digest =
-                LegacyAgentProfileTranslator::source_digest(&source).map_err(translation_error)?;
+                LegacyAgentProfileTranslator::source_digest(&source_json)
+                    .map_err(translation_error)?;
             self.repository
                 .ensure_legacy_profile_migration_record(
                     LegacyProfileMigrationRecord::pending_source(
-                        source.id().clone(),
-                        source.version(),
+                        source.source_profile_id().clone(),
+                        source.source_revision(),
                         source_digest,
                     ),
                 )
@@ -400,9 +388,12 @@ impl LegacyProfileMigrationService {
         self.records()?
             .into_iter()
             .map(|record| {
-                let source = self
+                let source_json = self
                     .repository
-                    .agent_profile_exact(record.source_profile_id(), record.source_revision())
+                    .legacy_agent_profile_record(
+                        record.source_profile_id(),
+                        record.source_revision(),
+                    )
                     .map_err(storage_error)?
                     .ok_or_else(|| {
                         error(
@@ -410,11 +401,11 @@ impl LegacyProfileMigrationService {
                             "legacy migration source Profile does not exist",
                         )
                     })?;
-                let translated = LegacyAgentProfileTranslator::translate_known_profile(&source)
+                let translated = LegacyAgentProfileTranslator::translate_record(&source_json)
                     .map_err(translation_error)?;
                 Ok(action_from_record(
                     &record,
-                    &source,
+                    &translated,
                     translated.llm_slot().requirements(),
                 ))
             })
@@ -466,7 +457,7 @@ impl std::error::Error for LegacyProfileMigrationError {}
 
 fn action_from_record(
     record: &LegacyProfileMigrationRecord,
-    source: &crate::user_customization::AgentProfile,
+    source: &crate::migration::PortableLegacyAgentProfileDraft,
     requirements: &AgentLLMRequirements,
 ) -> LegacyMigrationAction {
     let successor = match record.state() {
@@ -488,11 +479,9 @@ fn action_from_record(
             record.source_revision().as_u64()
         ),
         source_digest: record.source_digest().to_string(),
-        display_name: source.name().to_string(),
+        display_name: source.display_name().to_string(),
         requirements: requirements.clone(),
-        redacted_model_hint: source
-            .model_binding()
-            .map(|binding| binding.selection().model_id().to_string()),
+        redacted_model_hint: source.redacted_model_hint().map(str::to_string),
         state: state.to_string(),
         successor,
     }

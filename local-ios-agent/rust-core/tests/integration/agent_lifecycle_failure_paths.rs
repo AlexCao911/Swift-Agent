@@ -16,7 +16,6 @@ fn package_install_does_not_require_model_credential_before_host_binding() {
         .profile(installed.profile())
         .unwrap();
 
-    assert!(profile.local_bindings().is_empty());
     assert!(profile.readiness().has_issue("host_binding.missing"));
 }
 

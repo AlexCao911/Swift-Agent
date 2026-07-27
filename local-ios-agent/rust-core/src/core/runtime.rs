@@ -1,87 +1,26 @@
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
-
-use crate::context::{
-    ContextController, InferenceOptions, ModelInputMessages, ModelInputRole, PromptDebugSnapshot,
-    PromptFrame, PromptMessage, TokenizerAdapter,
-};
 use crate::conversation::ConversationRunFrameRef;
-use crate::core::{
-    AgentError, AgentTurnResult, CancellationToken, EntryId, EventKind, ModelProvider,
-    ModelProviderOutput, ProviderCancellationRegistry, ProviderKind, ProviderProfile,
-    ProviderRegistry as LegacyProviderRegistry, RunId, RunRecord, RunState, RuntimeEvent,
-    SessionCursor, SessionId, StreamBatcher,
-};
-use crate::execution::{
-    ExecutionModelTurn, ExecutionPlan, ExecutionToolObservation, ExecutionToolOutcome,
-};
-use crate::memory::{EventStore, InMemoryEventStore, ProviderSetting};
-use crate::runtime::{EffectDriver, RunMachine, RuntimeExecutionDebugTrace};
+use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionCursor, SessionId};
+use crate::execution::{ExecutionToolObservation, ExecutionToolOutcome};
+use crate::memory::{EventStore, InMemoryEventStore};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
     PermissionScope,
 };
 use crate::tool::{
-    RetentionPolicy, Sensitivity, ToolCall, ToolExecutionRequest, ToolRegistry, ToolResult,
-    ToolRouteOutcome, ToolRouter, ToolSchema,
+    ToolCall, ToolExecutionRequest, ToolRegistry, ToolRouteOutcome, ToolRouter, ToolSchema,
 };
 use crate::utils::id::IdGenerator;
 
-#[derive(Clone, Debug)]
-struct RoutedToolCall {
-    event_id: EntryId,
-    suspension_event_id: Option<EntryId>,
-    pending_tool_call_id: String,
-    denied_result: Option<ToolResult>,
-}
-
-type RuntimeEventSink<'a> = &'a mut dyn FnMut(RuntimeEvent) -> Result<(), AgentError>;
-
-#[derive(Debug)]
-enum ProviderOutputAction {
-    Completed,
-    WaitingTool {
-        state: RunState,
-        pending_tool_call_id: String,
-    },
-    AutoSubmitDenied(ToolResult),
-}
-
-struct ProviderSlotEmpty;
-
-impl ModelProvider for ProviderSlotEmpty {
-    fn id(&self) -> &str {
-        "__provider_slot_empty__"
-    }
-
-    fn stream_chat(
-        &self,
-        _frame: &PromptFrame,
-        _cancellation: CancellationToken,
-        _on_output: &mut dyn FnMut(ModelProviderOutput) -> Result<(), AgentError>,
-    ) -> Result<(), AgentError> {
-        Err(AgentError::Provider(
-            "provider is temporarily unavailable during a streaming call".into(),
-        ))
-    }
-}
-
 pub struct AgentRuntimeConfig {
-    pub system_prompt: String,
-    pub runtime_policy: String,
-    pub tool_schemas: Vec<String>,
-    pub tokenizer: Box<dyn TokenizerAdapter>,
-    pub provider: Box<dyn ModelProvider>,
     pub tool_router: Option<ToolRouter>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendMessageInput {
-    pub session_id: SessionId,
-    pub parent_event_id: Option<EntryId>,
-    pub text: String,
-    pub blob_refs: Vec<String>,
+impl Default for AgentRuntimeConfig {
+    fn default() -> Self {
+        Self { tool_router: None }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,10 +38,6 @@ pub struct ExecutionApprovalResolution {
     pub message: String,
 }
 
-const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
-const LEGACY_COMPATIBILITY_STREAMING_PATH: &str =
-    "AgentRuntime.send_message_streaming bypasses ConversationRunFrameRef and ExecutionPlan during migration";
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationSummary {
     pub session_id: SessionId,
@@ -114,18 +49,13 @@ pub struct ConversationSummary {
     pub last_updated_at_millis: u64,
 }
 
+const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
+
 pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
-    config: AgentRuntimeConfig,
-    context_controller: ContextController,
     ids: IdGenerator,
     store: S,
-    provider_registry: LegacyProviderRegistry,
-    active_provider_profile: ProviderProfile,
     sessions: HashMap<SessionId, SessionCursor>,
-    runs: HashMap<RunId, RunRecord>,
-    provider_cancellations: ProviderCancellationRegistry,
-    latest_prompt_debug_snapshot: Option<PromptDebugSnapshot>,
-    latest_runtime_execution_trace: Option<RuntimeExecutionDebugTrace>,
+    tool_router: Option<ToolRouter>,
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
@@ -138,23 +68,12 @@ impl AgentRuntime<InMemoryEventStore> {
 
 impl<S: EventStore> AgentRuntime<S> {
     pub fn with_store(config: AgentRuntimeConfig, store: S) -> Result<Self, AgentError> {
-        Self::with_store_and_registry(config, store, LegacyProviderRegistry::with_mock())
-    }
-
-    pub fn with_store_and_registry(
-        config: AgentRuntimeConfig,
-        store: S,
-        provider_registry: LegacyProviderRegistry,
-    ) -> Result<Self, AgentError> {
-        let mut runtime = Self::open_without_replay(config, store, provider_registry)?;
-        runtime.replay_provider_independent_state()?;
-        Ok(runtime)
+        Self::open_without_replay(config, store)
     }
 
     pub(crate) fn open_without_replay(
-        mut config: AgentRuntimeConfig,
+        config: AgentRuntimeConfig,
         store: S,
-        provider_registry: LegacyProviderRegistry,
     ) -> Result<Self, AgentError> {
         let mut sessions = HashMap::new();
         for session_id in store.list_all_sessions()? {
@@ -164,35 +83,17 @@ impl<S: EventStore> AgentRuntime<S> {
         }
         let session_ids: Vec<_> = sessions.keys().cloned().collect();
         let next_id = next_replayed_id(&store, &session_ids)?;
-        let mut active_provider_profile = active_profile_for_config(&config, &provider_registry);
-        if let Some(provider_id) = persisted_provider_id(&store)? {
-            let bundle = provider_registry.build(&provider_id)?;
-            active_provider_profile = provider_registry.profile(&provider_id).ok_or_else(|| {
-                AgentError::Provider(format!("unknown provider profile: {provider_id}"))
-            })?;
-            config.provider = bundle.provider;
-            config.tokenizer = bundle.tokenizer;
-        }
-
-        let context_controller = build_context_controller(&config);
         Ok(Self {
-            config,
-            context_controller,
             ids: IdGenerator::starting_at(next_id),
             store,
-            provider_registry,
-            active_provider_profile,
             sessions,
-            runs: HashMap::new(),
-            provider_cancellations: ProviderCancellationRegistry::default(),
-            latest_prompt_debug_snapshot: None,
-            latest_runtime_execution_trace: None,
+            tool_router: config.tool_router,
             pending_tool_requests: Vec::new(),
         })
     }
 
     pub(crate) fn replay_provider_independent_state(&mut self) -> Result<(), AgentError> {
-        self.replay_waiting_runs()
+        Ok(())
     }
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
@@ -203,7 +104,7 @@ impl<S: EventStore> AgentRuntime<S> {
         &mut self,
         run_id: &RunId,
     ) -> Result<ToolExecutionRequest, AgentError> {
-        let request_index = self
+        let index = self
             .pending_tool_requests
             .iter()
             .position(|request| request.run_id() == run_id)
@@ -213,73 +114,7 @@ impl<S: EventStore> AgentRuntime<S> {
                     run_id.0
                 ))
             })?;
-        Ok(self.pending_tool_requests.remove(request_index))
-    }
-
-    pub fn provider_profiles(&self) -> Vec<ProviderProfile> {
-        self.provider_registry.profiles()
-    }
-
-    pub fn active_provider(&self) -> ProviderProfile {
-        self.active_provider_profile.clone()
-    }
-
-    pub fn latest_prompt_debug_snapshot(&self) -> Option<PromptDebugSnapshot> {
-        self.latest_prompt_debug_snapshot.clone()
-    }
-
-    pub fn runtime_prompt_defaults(&self) -> (String, String) {
-        (
-            self.config.system_prompt.clone(),
-            self.config.runtime_policy.clone(),
-        )
-    }
-
-    pub fn latest_runtime_execution_trace(&self) -> Option<RuntimeExecutionDebugTrace> {
-        self.latest_runtime_execution_trace.clone()
-    }
-
-    pub fn next_execution_model_turn(
-        &mut self,
-        run_id: &RunId,
-        input: &ModelInputMessages,
-    ) -> Result<ExecutionModelTurn, AgentError> {
-        let frame = self.execution_prompt_frame(input);
-        let cancellation = self.start_provider_call(run_id);
-        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
-        let mut text_buffer = String::new();
-        let mut completed_text = None;
-        let mut tool_call = None;
-        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
-            match provider_event {
-                ModelProviderOutput::TextDelta(text) => {
-                    text_buffer.push_str(&text);
-                }
-                ModelProviderOutput::Completed(text) => {
-                    completed_text = Some(text);
-                }
-                ModelProviderOutput::ToolCall(call) => {
-                    tool_call = Some(call);
-                }
-            }
-            Ok(())
-        });
-        self.config.provider = provider;
-        self.finish_provider_call(run_id);
-        provider_result?;
-
-        if let Some(call) = tool_call {
-            return Ok(ExecutionModelTurn::ToolCall {
-                call_id: call.id,
-                name: call.name,
-                arguments_json: call.arguments_json,
-            });
-        }
-
-        Ok(ExecutionModelTurn::Final {
-            message_id: "final_1".to_string(),
-            text: completed_text.unwrap_or(text_buffer),
-        })
+        Ok(self.pending_tool_requests.remove(index))
     }
 
     pub fn route_execution_tool_call(
@@ -289,14 +124,12 @@ impl<S: EventStore> AgentRuntime<S> {
         call: ToolCall,
     ) -> Result<ExecutionToolOutcome, AgentError> {
         let call_id = call.id.clone();
-        let tool_call_entry_id = EntryId(format!("execution_tool_call_{call_id}"));
+        let entry_id = EntryId(format!("execution_tool_call_{call_id}"));
         let router = self
-            .config
             .tool_router
             .as_mut()
             .ok_or_else(|| AgentError::ToolValidation("no tool router configured".into()))?;
-
-        match router.route(run_id, session_id, &tool_call_entry_id, call)? {
+        match router.route(run_id, session_id, &entry_id, call)? {
             ToolRouteOutcome::ExecuteInSwift(request) => {
                 let call_id = request.tool_call_id().to_string();
                 self.pending_tool_requests.push(request);
@@ -319,220 +152,24 @@ impl<S: EventStore> AgentRuntime<S> {
         }
     }
 
-    pub fn execute_plan<D>(
-        &mut self,
-        plan: ExecutionPlan,
-        effect_driver: D,
-    ) -> Result<RuntimeExecutionDebugTrace, AgentError>
-    where
-        D: EffectDriver + 'static,
-    {
-        self.execute_plan_with_run_id(plan, "run_1", effect_driver)
-    }
-
-    pub fn execute_plan_with_run_id<D>(
-        &mut self,
-        plan: ExecutionPlan,
-        run_id: impl Into<String>,
-        effect_driver: D,
-    ) -> Result<RuntimeExecutionDebugTrace, AgentError>
-    where
-        D: EffectDriver + 'static,
-    {
-        let mut machine =
-            RunMachine::from_plan_with_effect_driver_and_run_id(plan, effect_driver, run_id);
-        machine.run_to_completion().map_err(|error| {
-            AgentError::Storage(format!(
-                "runtime execution failed ({}): {error}",
-                error.code()
-            ))
-        })?;
-        let trace = machine.debug_trace();
-        self.latest_runtime_execution_trace = Some(trace.clone());
-        Ok(trace)
-    }
-
-    pub fn provider_cancellation_registry(&self) -> ProviderCancellationRegistry {
-        self.provider_cancellations.clone()
-    }
-
-    pub fn set_provider(
-        &mut self,
-        session_id: SessionId,
-        provider_id: &str,
-    ) -> Result<RuntimeEvent, AgentError> {
-        if !self.sessions.contains_key(&session_id) {
-            return Err(AgentError::Storage(format!(
-                "missing session: {}",
-                session_id.0
-            )));
-        }
-        if let Some(run_id) = self.blocking_provider_switch_run() {
-            return Err(AgentError::Provider(format!(
-                "provider_switch_blocked({})",
-                run_id.0
-            )));
-        }
-
-        let bundle = self.provider_registry.build(provider_id)?;
-        let profile = self
-            .provider_registry
-            .profile(provider_id)
-            .ok_or_else(|| AgentError::Provider(format!("unknown provider: {provider_id}")))?;
-
-        self.config.provider = bundle.provider;
-        self.config.tokenizer = bundle.tokenizer;
-        self.rebuild_context_controller();
-        self.active_provider_profile = profile.clone();
-        self.store.save_provider_setting(ProviderSetting {
-            key: active_provider_key(),
-            value: profile.id.clone(),
-        })?;
-
-        let parent_id = self
-            .sessions
-            .get(&session_id)
-            .and_then(|cursor| cursor.active_leaf.clone())
-            .ok_or_else(|| {
-                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
-            })?;
-        let event_id = self.append_event(
-            &session_id,
-            Some(parent_id),
-            None,
-            EventKind::ProviderChanged,
-            json!({ "provider_id": profile.id }).to_string(),
-        )?;
-        self.store.get(&session_id, &event_id)
-    }
-
     pub fn register_tool(&mut self, schema: ToolSchema) -> Result<(), AgentError> {
         let router = self
-            .config
             .tool_router
             .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()));
-        router.register(schema)?;
-        self.config.tool_schemas = router.prompt_schemas();
-        self.rebuild_context_controller();
-        Ok(())
+        router.register(schema)
     }
 
     pub fn set_permission(&mut self, permission: PermissionScope) {
-        let router = self
-            .config
-            .tool_router
-            .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()));
-        router.set_permission(permission);
+        self.tool_router
+            .get_or_insert_with(|| ToolRouter::new(ToolRegistry::new()))
+            .set_permission(permission);
     }
 
     pub fn pending_approval_requests(&self) -> Vec<ApprovalProtocolRequest> {
-        self.config
-            .tool_router
+        self.tool_router
             .as_ref()
             .map(ToolRouter::pending_approval_requests)
             .unwrap_or_default()
-    }
-
-    pub fn submit_approval_response(
-        &mut self,
-        response: ApprovalProtocolResponse,
-    ) -> Result<AgentTurnResult, AgentError> {
-        let (approval, decision, tool_request) = self
-            .config
-            .tool_router
-            .as_mut()
-            .ok_or_else(|| AgentError::PolicyDenied("no tool router configured".into()))?
-            .resolve_approval(response)?;
-        let run_key = approval.run_id.clone();
-        let run_id = run_key.0.clone();
-        let session_id = {
-            let run = self
-                .runs
-                .get(&run_key)
-                .ok_or_else(|| AgentError::Storage(format!("missing run: {}", run_key.0)))?;
-            if run.state != RunState::Suspended {
-                return Err(AgentError::PolicyDenied(format!(
-                    "run is not suspended for approval: {}",
-                    run_key.0
-                )));
-            }
-            run.session_id.clone()
-        };
-        let parent_id = self
-            .sessions
-            .get(&session_id)
-            .and_then(|cursor| cursor.active_leaf.clone())
-            .ok_or_else(|| {
-                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
-            })?;
-        let mut emitted = Vec::new();
-        let decision_kind = match decision {
-            ApprovalDecision::Approved => EventKind::ToolCallApproved,
-            ApprovalDecision::Rejected | ApprovalDecision::Cancelled => EventKind::ToolCallRejected,
-        };
-        let decision_id = self.append_event(
-            &session_id,
-            Some(parent_id),
-            Some(run_key.clone()),
-            decision_kind,
-            approval_decision_payload(&approval.approval_id, &decision),
-        )?;
-        emitted.push(self.store.get(&session_id, &decision_id)?);
-
-        match decision {
-            ApprovalDecision::Approved => {
-                let request = tool_request.ok_or_else(|| {
-                    AgentError::PolicyDenied(format!(
-                        "approved tool request missing for approval: {}",
-                        approval.approval_id
-                    ))
-                })?;
-                let resumed_id = self.append_event(
-                    &session_id,
-                    Some(decision_id),
-                    Some(run_key.clone()),
-                    EventKind::RunResumed,
-                    format!("approval {} accepted", approval.approval_id),
-                )?;
-                emitted.push(self.store.get(&session_id, &resumed_id)?);
-                if let Some(run) = self.runs.get_mut(&run_key) {
-                    run.mark_waiting_tool()?;
-                }
-                let pending_tool_call_id = request.tool_call_id().to_string();
-                self.pending_tool_requests.push(request);
-
-                Ok(AgentTurnResult {
-                    run_id,
-                    state: RunState::WaitingTool,
-                    events: emitted,
-                    pending_tool_call_id: Some(pending_tool_call_id),
-                })
-            }
-            ApprovalDecision::Rejected | ApprovalDecision::Cancelled => {
-                if let Some(run) = self.runs.get_mut(&run_key) {
-                    run.mark_waiting_tool()?;
-                }
-                let result = ToolResult {
-                    display_text: approval.message.clone(),
-                    model_text: format!("Tool approval rejected: {}", approval.message),
-                    structured_json: "{}".into(),
-                    audit_text: format!("approval rejected: {}", approval.approval_id),
-                    sensitivity: Sensitivity::Public,
-                    retention: RetentionPolicy::RunOnly,
-                    provenance: "tool.approval".into(),
-                    is_error: true,
-                };
-                let resumed = self.submit_tool_result(run_id, result)?;
-                emitted.extend(resumed.events);
-
-                Ok(AgentTurnResult {
-                    run_id: resumed.run_id,
-                    state: resumed.state,
-                    events: emitted,
-                    pending_tool_call_id: resumed.pending_tool_call_id,
-                })
-            }
-        }
     }
 
     pub fn approve_execution_tool_request(
@@ -540,12 +177,10 @@ impl<S: EventStore> AgentRuntime<S> {
         response: ApprovalProtocolResponse,
     ) -> Result<ExecutionApprovalResolution, AgentError> {
         let (approval, decision, tool_request) = self
-            .config
             .tool_router
             .as_mut()
             .ok_or_else(|| AgentError::PolicyDenied("no tool router configured".into()))?
             .resolve_approval(response)?;
-
         match decision {
             ApprovalDecision::Approved => {
                 let request = tool_request.ok_or_else(|| {
@@ -581,7 +216,6 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub fn conversation_summaries(&self) -> Result<Vec<ConversationSummary>, AgentError> {
         let mut summaries = Vec::new();
-
         for session_id in self.session_ids()? {
             let active_leaf_id = self.store.active_leaf(&session_id)?;
             let last_event = self.store.last_event(&session_id)?;
@@ -591,7 +225,7 @@ impl<S: EventStore> AgentRuntime<S> {
             let branch = self.store.active_branch(&session_id, leaf_id)?;
             let search_text = conversation_search_text(&branch);
             let Some(first_user_event) = branch
-                .into_iter()
+                .iter()
                 .find(|event| event.kind == EventKind::UserMessage)
             else {
                 continue;
@@ -609,7 +243,6 @@ impl<S: EventStore> AgentRuntime<S> {
                 .as_ref()
                 .map(|event| event.created_at_millis)
                 .unwrap_or(0);
-
             summaries.push(ConversationSummary {
                 session_id,
                 title,
@@ -620,7 +253,6 @@ impl<S: EventStore> AgentRuntime<S> {
                 last_updated_at_millis,
             });
         }
-
         summaries.sort_by(|left, right| {
             right
                 .last_updated_sequence
@@ -650,29 +282,11 @@ impl<S: EventStore> AgentRuntime<S> {
         self.store.rename_session(session_id, title.to_string())
     }
 
-    pub fn update_runtime_options(
-        &mut self,
-        system_prompt: String,
-        runtime_policy: String,
-        inference_options: InferenceOptions,
-    ) -> Result<(), AgentError> {
-        validate_inference_options(inference_options)?;
-        self.config.system_prompt = system_prompt.clone();
-        self.config.runtime_policy = runtime_policy.clone();
-        self.context_controller.update_runtime_options(
-            system_prompt,
-            runtime_policy,
-            inference_options,
-        );
-        Ok(())
-    }
-
     pub fn delete_session(&mut self, session_id: &SessionId) -> Result<(), AgentError> {
         self.store.delete_session(session_id)?;
         self.sessions.remove(session_id);
         self.pending_tool_requests
             .retain(|request| request.session_id() != session_id);
-        self.runs.retain(|_, run| run.session_id != *session_id);
         Ok(())
     }
 
@@ -687,7 +301,6 @@ impl<S: EventStore> AgentRuntime<S> {
                 AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
             })?,
         };
-
         self.store.active_branch(session_id, &leaf_id)
     }
 
@@ -699,14 +312,12 @@ impl<S: EventStore> AgentRuntime<S> {
         blob_refs: Vec<String>,
     ) -> Result<PreparedConversationUserTurn, AgentError> {
         let session_id = match session_id {
+            Some(session_id) if self.sessions.contains_key(&session_id) => session_id,
             Some(session_id) => {
-                if !self.sessions.contains_key(&session_id) {
-                    return Err(AgentError::Storage(format!(
-                        "missing session: {}",
-                        session_id.0
-                    )));
-                }
-                session_id
+                return Err(AgentError::Storage(format!(
+                    "missing session: {}",
+                    session_id.0
+                )))
             }
             None => self.create_session()?,
         };
@@ -723,7 +334,6 @@ impl<S: EventStore> AgentRuntime<S> {
             text,
             blob_refs,
         )?;
-
         Ok(PreparedConversationUserTurn {
             session_id,
             parent_event_id,
@@ -760,13 +370,11 @@ impl<S: EventStore> AgentRuntime<S> {
             ))
         })?;
         let mut copied_ids = HashMap::new();
-
         for event in source_branch {
             if event.kind == EventKind::SessionCreated {
                 copied_ids.insert(event.id, target_root_id.clone());
                 continue;
             }
-
             let target_id = EntryId(self.ids.next_id("entry"));
             let parent_id = event
                 .parent_id
@@ -783,7 +391,6 @@ impl<S: EventStore> AgentRuntime<S> {
             )?;
             copied_ids.insert(event.id, target_id);
         }
-
         Ok(target_session_id)
     }
 
@@ -799,749 +406,6 @@ impl<S: EventStore> AgentRuntime<S> {
             "session created",
         )?;
         Ok(session_id)
-    }
-
-    pub fn send_message(
-        &mut self,
-        input: SendMessageInput,
-    ) -> Result<Vec<RuntimeEvent>, AgentError> {
-        self.send_message_turn(input).map(|turn| turn.events)
-    }
-
-    pub fn send_message_turn(
-        &mut self,
-        input: SendMessageInput,
-    ) -> Result<AgentTurnResult, AgentError> {
-        self.send_message_streaming(input, &mut |_| Ok(()))
-    }
-
-    pub fn send_message_streaming(
-        &mut self,
-        input: SendMessageInput,
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<AgentTurnResult, AgentError> {
-        let _legacy_path_marker = LEGACY_COMPATIBILITY_STREAMING_PATH;
-        let run_id = RunId(self.ids.next_id("run"));
-        let run_id_string = run_id.0.clone();
-        self.runs.insert(
-            run_id.clone(),
-            RunRecord::new(run_id.clone(), input.session_id.clone()),
-        );
-        let cursor = self.sessions.get(&input.session_id).ok_or_else(|| {
-            AgentError::Storage(format!("missing session: {}", input.session_id.0))
-        })?;
-
-        let parent_id = match input.parent_event_id.clone() {
-            Some(parent_event_id) if parent_event_id.0 == ROOT_PARENT_EVENT_ID => None,
-            Some(parent_event_id) => Some(parent_event_id),
-            None => cursor.active_leaf.clone(),
-        };
-        let (parent_id, mut emitted) = self.prepare_context_parent(
-            &input.session_id,
-            parent_id,
-            &run_id,
-            EventKind::UserMessage,
-            &input.text,
-        )?;
-        Self::emit_events(&mut emitted, on_event)?;
-        let user_id = self.append_event_with_blob_refs(
-            &input.session_id,
-            parent_id,
-            Some(run_id.clone()),
-            EventKind::UserMessage,
-            input.text,
-            input.blob_refs,
-        )?;
-        self.emit_event_by_id(&input.session_id, &user_id, &mut emitted, on_event)?;
-        let branch = self.store.active_branch(&input.session_id, &user_id)?;
-        let frame = self
-            .context_controller()
-            .build_prompt_frame_from_context_assembly(branch)?
-            .frame;
-
-        let assistant_start = self.append_event(
-            &input.session_id,
-            Some(user_id.clone()),
-            Some(run_id.clone()),
-            EventKind::AssistantMessageStarted,
-            format!("run {}", run_id_string),
-        )?;
-        self.emit_event_by_id(&input.session_id, &assistant_start, &mut emitted, on_event)?;
-
-        let mut batcher = StreamBatcher::new(24);
-        let mut parent = assistant_start;
-        let mut provider_action = None;
-        self.capture_prompt_debug_snapshot(&frame);
-        let cancellation = self.start_provider_call(&run_id);
-        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
-        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
-            if provider_action.is_some() {
-                return Ok(());
-            }
-
-            provider_action = self.process_provider_output(
-                &input.session_id,
-                &run_id,
-                &mut parent,
-                &mut batcher,
-                provider_event,
-                &mut emitted,
-                on_event,
-            )?;
-            Ok(())
-        });
-        self.config.provider = provider;
-        self.finish_provider_call(&run_id);
-        match provider_result {
-            Ok(()) => {}
-            Err(error) => {
-                let failed_id = self.append_event(
-                    &input.session_id,
-                    Some(parent),
-                    Some(run_id.clone()),
-                    EventKind::RunFailed,
-                    error.to_string(),
-                )?;
-                if let Some(run) = self.runs.get_mut(&run_id) {
-                    run.mark_failed()?;
-                }
-                self.emit_event_by_id(&input.session_id, &failed_id, &mut emitted, on_event)?;
-                return Err(error);
-            }
-        }
-
-        self.result_from_provider_action(run_id_string, provider_action, emitted, on_event)
-    }
-
-    pub fn submit_tool_result(
-        &mut self,
-        run_id: String,
-        result: ToolResult,
-    ) -> Result<AgentTurnResult, AgentError> {
-        self.submit_tool_result_streaming(run_id, result, &mut |_| Ok(()))
-    }
-
-    pub fn submit_tool_result_streaming(
-        &mut self,
-        run_id: String,
-        mut result: ToolResult,
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<AgentTurnResult, AgentError> {
-        let run_key = RunId(run_id.clone());
-        let session_id = {
-            let run = self
-                .runs
-                .get(&run_key)
-                .ok_or_else(|| AgentError::Storage(format!("missing run: {run_id}")))?;
-            if run.state != RunState::WaitingTool {
-                return Err(AgentError::ToolExecution(format!(
-                    "run is not waiting for a tool result: {run_id}"
-                )));
-            }
-            run.session_id.clone()
-        };
-        if let Some(run) = self.runs.get_mut(&run_key) {
-            run.mark_running()?;
-        }
-        let pending_tool_name = self
-            .pending_tool_requests
-            .iter()
-            .find(|request| request.run_id() == &run_key)
-            .map(|request| request.tool_name().to_string());
-        if matches!(result.provenance.as_str(), "" | "swift.tool_result") {
-            if let Some(tool_name) = pending_tool_name {
-                result.provenance = format!("tool.{tool_name}");
-            }
-        }
-        self.consume_pending_tool_requests(&run_key);
-
-        let parent_id = self
-            .sessions
-            .get(&session_id)
-            .and_then(|cursor| cursor.active_leaf.clone())
-            .ok_or_else(|| {
-                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
-            })?;
-
-        let tool_result_payload = result.to_event_payload();
-        let (parent_id, mut emitted) = self.prepare_context_parent(
-            &session_id,
-            Some(parent_id),
-            &run_key,
-            EventKind::ToolResultMessage,
-            &tool_result_payload,
-        )?;
-        Self::emit_events(&mut emitted, on_event)?;
-
-        let tool_result_id = self.append_event(
-            &session_id,
-            parent_id,
-            Some(run_key.clone()),
-            EventKind::ToolResultMessage,
-            tool_result_payload,
-        )?;
-        self.emit_event_by_id(&session_id, &tool_result_id, &mut emitted, on_event)?;
-        let branch = self.store.active_branch(&session_id, &tool_result_id)?;
-        let frame = self
-            .context_controller()
-            .build_prompt_frame_from_context_assembly(branch)?
-            .frame;
-        self.capture_prompt_debug_snapshot(&frame);
-        let cancellation = self.start_provider_call(&run_key);
-        let mut batcher = StreamBatcher::new(24);
-        let mut parent = tool_result_id;
-        let mut provider_action = None;
-        let provider = std::mem::replace(&mut self.config.provider, Box::new(ProviderSlotEmpty));
-        let provider_result = provider.stream_chat(&frame, cancellation, &mut |provider_event| {
-            if provider_action.is_some() {
-                return Ok(());
-            }
-
-            provider_action = self.process_provider_output(
-                &session_id,
-                &run_key,
-                &mut parent,
-                &mut batcher,
-                provider_event,
-                &mut emitted,
-                on_event,
-            )?;
-            Ok(())
-        });
-        self.config.provider = provider;
-        self.finish_provider_call(&run_key);
-        match provider_result {
-            Ok(()) => {}
-            Err(error) => {
-                let failed_id = self.append_event(
-                    &session_id,
-                    Some(parent),
-                    Some(run_key.clone()),
-                    EventKind::RunFailed,
-                    error.to_string(),
-                )?;
-                if let Some(run) = self.runs.get_mut(&run_key) {
-                    run.mark_failed()?;
-                }
-                self.emit_event_by_id(&session_id, &failed_id, &mut emitted, on_event)?;
-                return Err(error);
-            }
-        }
-
-        self.result_from_provider_action(run_id, provider_action, emitted, on_event)
-    }
-
-    pub fn cancel(&mut self, run_id: String) -> Result<RuntimeEvent, AgentError> {
-        let run_key = RunId(run_id.clone());
-        let session_id = {
-            let run = self
-                .runs
-                .get_mut(&run_key)
-                .ok_or_else(|| AgentError::Storage(format!("missing run: {run_id}")))?;
-            run.cancel()?;
-            run.session_id.clone()
-        };
-        let parent_id = self
-            .sessions
-            .get(&session_id)
-            .and_then(|cursor| cursor.active_leaf.clone())
-            .ok_or_else(|| {
-                AgentError::Storage(format!("session has no active leaf: {}", session_id.0))
-            })?;
-
-        self.provider_cancellations.signal(&run_key);
-        self.provider_cancellations.remove(&run_key);
-
-        let event_id = self.append_event(
-            &session_id,
-            Some(parent_id),
-            Some(run_key),
-            EventKind::RunCancelled,
-            format!("run {run_id} cancelled"),
-        )?;
-        self.store.get(&session_id, &event_id)
-    }
-
-    fn start_provider_call(&mut self, run_id: &RunId) -> CancellationToken {
-        let token = CancellationToken::default();
-        self.provider_cancellations
-            .insert(run_id.clone(), token.clone());
-        token
-    }
-
-    fn finish_provider_call(&mut self, run_id: &RunId) {
-        self.provider_cancellations.remove(run_id);
-    }
-
-    fn emit_events(
-        emitted: &mut [RuntimeEvent],
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<(), AgentError> {
-        for event in emitted.iter().cloned() {
-            on_event(event)?;
-        }
-        Ok(())
-    }
-
-    fn emit_event_by_id(
-        &self,
-        session_id: &SessionId,
-        event_id: &EntryId,
-        emitted: &mut Vec<RuntimeEvent>,
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<(), AgentError> {
-        let event = self.store.get(session_id, event_id)?;
-        on_event(event.clone())?;
-        emitted.push(event);
-        Ok(())
-    }
-
-    fn process_provider_output(
-        &mut self,
-        session_id: &SessionId,
-        run_id: &RunId,
-        parent: &mut EntryId,
-        batcher: &mut StreamBatcher,
-        provider_event: ModelProviderOutput,
-        emitted: &mut Vec<RuntimeEvent>,
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<Option<ProviderOutputAction>, AgentError> {
-        match provider_event {
-            ModelProviderOutput::TextDelta(delta) => {
-                if let Some(chunk) = batcher.push(&delta) {
-                    let delta_id = self.append_event(
-                        session_id,
-                        Some(parent.clone()),
-                        Some(run_id.clone()),
-                        EventKind::AssistantTextDelta,
-                        chunk,
-                    )?;
-                    *parent = delta_id.clone();
-                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
-                }
-                Ok(None)
-            }
-            ModelProviderOutput::ToolCall(tool_call) => {
-                if let Some(chunk) = batcher.flush() {
-                    let delta_id = self.append_event(
-                        session_id,
-                        Some(parent.clone()),
-                        Some(run_id.clone()),
-                        EventKind::AssistantTextDelta,
-                        chunk,
-                    )?;
-                    *parent = delta_id.clone();
-                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
-                }
-                let routed_tool_call = self.append_tool_call_requested(
-                    session_id,
-                    Some(parent.clone()),
-                    run_id,
-                    tool_call,
-                )?;
-                let state = if routed_tool_call.suspension_event_id.is_some() {
-                    RunState::Suspended
-                } else {
-                    RunState::WaitingTool
-                };
-                if let Some(run) = self.runs.get_mut(run_id) {
-                    match state {
-                        RunState::Suspended => run.mark_suspended()?,
-                        RunState::WaitingTool => run.mark_waiting_tool()?,
-                        _ => {}
-                    }
-                }
-                self.emit_event_by_id(session_id, &routed_tool_call.event_id, emitted, on_event)?;
-                if let Some(suspension_event_id) = &routed_tool_call.suspension_event_id {
-                    self.emit_event_by_id(session_id, suspension_event_id, emitted, on_event)?;
-                }
-                if let Some(result) = routed_tool_call.denied_result {
-                    return Ok(Some(ProviderOutputAction::AutoSubmitDenied(result)));
-                }
-
-                Ok(Some(ProviderOutputAction::WaitingTool {
-                    state,
-                    pending_tool_call_id: routed_tool_call.pending_tool_call_id,
-                }))
-            }
-            ModelProviderOutput::Completed(completed) => {
-                if let Some(chunk) = batcher.flush() {
-                    let delta_id = self.append_event(
-                        session_id,
-                        Some(parent.clone()),
-                        Some(run_id.clone()),
-                        EventKind::AssistantTextDelta,
-                        chunk,
-                    )?;
-                    *parent = delta_id.clone();
-                    self.emit_event_by_id(session_id, &delta_id, emitted, on_event)?;
-                }
-                let completed_id = self.append_event(
-                    session_id,
-                    Some(parent.clone()),
-                    Some(run_id.clone()),
-                    EventKind::AssistantMessageCompleted,
-                    completed,
-                )?;
-                if let Some(run) = self.runs.get_mut(run_id) {
-                    run.mark_completed()?;
-                }
-                self.emit_event_by_id(session_id, &completed_id, emitted, on_event)?;
-                Ok(Some(ProviderOutputAction::Completed))
-            }
-        }
-    }
-
-    fn result_from_provider_action(
-        &mut self,
-        run_id: String,
-        action: Option<ProviderOutputAction>,
-        mut emitted: Vec<RuntimeEvent>,
-        on_event: RuntimeEventSink<'_>,
-    ) -> Result<AgentTurnResult, AgentError> {
-        match action {
-            Some(ProviderOutputAction::Completed) => Ok(AgentTurnResult {
-                run_id,
-                state: RunState::Completed,
-                events: emitted,
-                pending_tool_call_id: None,
-            }),
-            Some(ProviderOutputAction::WaitingTool {
-                state,
-                pending_tool_call_id,
-            }) => Ok(AgentTurnResult {
-                run_id,
-                state,
-                events: emitted,
-                pending_tool_call_id: Some(pending_tool_call_id),
-            }),
-            Some(ProviderOutputAction::AutoSubmitDenied(result)) => {
-                let resumed =
-                    self.submit_tool_result_streaming(run_id.clone(), result, on_event)?;
-                let state = resumed.state;
-                let pending_tool_call_id = resumed.pending_tool_call_id;
-                emitted.extend(resumed.events);
-                Ok(AgentTurnResult {
-                    run_id,
-                    state,
-                    events: emitted,
-                    pending_tool_call_id,
-                })
-            }
-            None => Ok(AgentTurnResult {
-                run_id,
-                state: RunState::Running,
-                events: emitted,
-                pending_tool_call_id: None,
-            }),
-        }
-    }
-
-    fn capture_prompt_debug_snapshot(&mut self, frame: &PromptFrame) {
-        self.latest_prompt_debug_snapshot = Some(PromptDebugSnapshot::from_frame(frame));
-    }
-
-    fn blocking_provider_switch_run(&self) -> Option<RunId> {
-        self.runs
-            .values()
-            .find(|run| {
-                matches!(
-                    run.state,
-                    RunState::Running | RunState::WaitingTool | RunState::Suspended
-                )
-            })
-            .map(|run| run.run_id.clone())
-    }
-
-    fn replay_waiting_runs(&mut self) -> Result<(), AgentError> {
-        let session_ids: Vec<_> = self.sessions.keys().cloned().collect();
-        for session_id in session_ids {
-            let Some(active_leaf_id) = self.store.active_leaf(&session_id)? else {
-                continue;
-            };
-            let branch = self.store.active_branch(&session_id, &active_leaf_id)?;
-            let Some(last_event) = branch.last() else {
-                continue;
-            };
-            let (tool_call_event, should_suspend) = match last_event.kind {
-                EventKind::ToolCallRequested => (last_event.clone(), false),
-                EventKind::RunSuspended => {
-                    let Some(parent_id) = &last_event.parent_id else {
-                        continue;
-                    };
-                    let parent_event = self.store.get(&session_id, parent_id)?;
-                    if parent_event.kind != EventKind::ToolCallRequested {
-                        continue;
-                    }
-                    (parent_event, true)
-                }
-                _ => continue,
-            };
-            let Some(run_id) = last_event.run_id.clone() else {
-                continue;
-            };
-
-            let mut run = RunRecord::new(run_id.clone(), session_id.clone());
-            if should_suspend {
-                run.mark_suspended()?;
-            } else {
-                run.mark_waiting_tool()?;
-            }
-            self.runs.insert(run_id.clone(), run);
-
-            if let Some(router) = &mut self.config.tool_router {
-                let tool_call = match tool_call_from_event(&tool_call_event) {
-                    Ok(tool_call) => tool_call,
-                    Err(error) => {
-                        self.fail_replayed_waiting_tool(
-                            &session_id,
-                            &tool_call_event.id,
-                            &run_id,
-                            format!("replay failed pending tool call: {error}"),
-                        )?;
-                        continue;
-                    }
-                };
-                let route_outcome =
-                    router.route(&run_id, &session_id, &tool_call_event.id, tool_call);
-                match route_outcome {
-                    Ok(ToolRouteOutcome::ExecuteInSwift(request)) => {
-                        if !should_suspend {
-                            self.pending_tool_requests.push(request);
-                        }
-                    }
-                    Ok(ToolRouteOutcome::ApprovalRequired {
-                        request: _,
-                        approval: _,
-                        reason: _,
-                    }) => {
-                        if let Some(run) = self.runs.get_mut(&run_id) {
-                            run.mark_suspended()?;
-                        }
-                    }
-                    Ok(ToolRouteOutcome::Denied(result)) => {
-                        self.fail_replayed_waiting_tool(
-                            &session_id,
-                            &tool_call_event.id,
-                            &run_id,
-                            format!(
-                                "replay denied pending tool call `{}`: {}",
-                                result.audit_text, result.model_text
-                            ),
-                        )?;
-                    }
-                    Err(error) => {
-                        self.fail_replayed_waiting_tool(
-                            &session_id,
-                            &tool_call_event.id,
-                            &run_id,
-                            format!("replay failed pending tool call: {error}"),
-                        )?;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn fail_replayed_waiting_tool(
-        &mut self,
-        session_id: &SessionId,
-        parent_id: &EntryId,
-        run_id: &RunId,
-        message: String,
-    ) -> Result<(), AgentError> {
-        self.append_event(
-            session_id,
-            Some(parent_id.clone()),
-            Some(run_id.clone()),
-            EventKind::RunFailed,
-            message,
-        )?;
-        if let Some(run) = self.runs.get_mut(run_id) {
-            run.mark_failed()?;
-        }
-
-        Ok(())
-    }
-
-    fn prepare_context_parent(
-        &mut self,
-        session_id: &SessionId,
-        parent_id: Option<EntryId>,
-        run_id: &RunId,
-        pending_kind: EventKind,
-        pending_payload: &str,
-    ) -> Result<(Option<EntryId>, Vec<RuntimeEvent>), AgentError> {
-        let Some(parent_id) = parent_id else {
-            return Ok((None, Vec::new()));
-        };
-
-        let context = self.context_controller();
-        let mut branch = self.store.active_branch(session_id, &parent_id)?;
-        branch.push(RuntimeEvent::new(
-            EntryId("__pending_context_leaf__".into()),
-            session_id.clone(),
-            Some(parent_id.clone()),
-            Some(run_id.clone()),
-            0,
-            0,
-            pending_kind,
-            pending_payload,
-        ));
-        let result = context.build_prompt_frame_with_compaction(branch)?;
-        let Some(summary) = result.compaction_summary else {
-            return Ok((Some(parent_id), Vec::new()));
-        };
-
-        let compaction_id = self.append_event(
-            session_id,
-            Some(parent_id),
-            Some(run_id.clone()),
-            EventKind::CompactionCreated,
-            summary.clone(),
-        )?;
-        let summary_id = self.append_event(
-            session_id,
-            Some(compaction_id.clone()),
-            Some(run_id.clone()),
-            EventKind::BranchSummaryCreated,
-            summary,
-        )?;
-        let events = vec![
-            self.store.get(session_id, &compaction_id)?,
-            self.store.get(session_id, &summary_id)?,
-        ];
-
-        Ok((Some(summary_id), events))
-    }
-
-    fn context_controller(&self) -> &ContextController {
-        &self.context_controller
-    }
-
-    fn execution_prompt_frame(&self, input: &ModelInputMessages) -> PromptFrame {
-        let mut system_prompt = String::new();
-        let mut messages = Vec::new();
-
-        for message in input.messages() {
-            match message.role() {
-                ModelInputRole::System => {
-                    if !system_prompt.is_empty() {
-                        system_prompt.push('\n');
-                    }
-                    system_prompt.push_str(message.content());
-                }
-                ModelInputRole::User => {
-                    if message.blob_refs().is_empty() {
-                        messages.push(PromptMessage::User(message.content().to_string()));
-                    } else {
-                        messages.push(PromptMessage::UserWithBlobRefs {
-                            content: message.content().to_string(),
-                            blob_refs: message.blob_refs().to_vec(),
-                        });
-                    }
-                }
-                ModelInputRole::Assistant => {
-                    messages.push(PromptMessage::Assistant(message.content().to_string()));
-                }
-                ModelInputRole::Tool => {
-                    messages.push(PromptMessage::ToolResult(message.content().to_string()));
-                }
-                ModelInputRole::Summary => {
-                    messages.push(PromptMessage::Summary(message.content().to_string()));
-                }
-            }
-        }
-
-        PromptFrame {
-            system_prompt,
-            runtime_policy: String::new(),
-            tool_schemas: self.config.tool_schemas.clone(),
-            inference_options: InferenceOptions::default(),
-            messages,
-        }
-    }
-
-    fn rebuild_context_controller(&mut self) {
-        self.context_controller = build_context_controller(&self.config);
-    }
-
-    fn append_tool_call_requested(
-        &mut self,
-        session_id: &SessionId,
-        parent_id: Option<EntryId>,
-        run_id: &RunId,
-        tool_call: ToolCall,
-    ) -> Result<RoutedToolCall, AgentError> {
-        tool_call.validate_shape()?;
-        let entry_id = EntryId(self.ids.next_id("entry"));
-        let pending_tool_call_id = tool_call.id.clone();
-        let mut route_state = "unrouted";
-        let mut route_reason = None;
-        let mut pending_request = None;
-        let mut approval_request = None;
-        let mut denied_result = None;
-
-        if let Some(router) = &mut self.config.tool_router {
-            match router.route(run_id, session_id, &entry_id, tool_call.clone())? {
-                ToolRouteOutcome::ExecuteInSwift(request) => {
-                    route_state = "execute_in_swift";
-                    pending_request = Some(request);
-                }
-                ToolRouteOutcome::ApprovalRequired {
-                    request: _,
-                    approval,
-                    reason,
-                } => {
-                    route_state = "approval_required";
-                    route_reason = Some(reason);
-                    approval_request = Some(approval);
-                }
-                ToolRouteOutcome::Denied(result) => {
-                    route_state = "denied";
-                    route_reason = Some(result.audit_text.clone());
-                    denied_result = Some(result);
-                }
-            }
-        }
-
-        let payload = tool_call_payload(&tool_call, route_state, route_reason.as_deref());
-        let event_id = self.append_event_with_id(
-            entry_id,
-            session_id,
-            parent_id,
-            Some(run_id.clone()),
-            EventKind::ToolCallRequested,
-            payload,
-        )?;
-        if let Some(request) = pending_request {
-            self.pending_tool_requests.push(request);
-        }
-        let suspension_event_id = if let Some(approval) = approval_request {
-            Some(self.append_event(
-                session_id,
-                Some(event_id.clone()),
-                Some(run_id.clone()),
-                EventKind::RunSuspended,
-                approval_payload(&approval, &pending_tool_call_id, &event_id),
-            )?)
-        } else {
-            None
-        };
-
-        Ok(RoutedToolCall {
-            event_id,
-            suspension_event_id,
-            pending_tool_call_id,
-            denied_result,
-        })
-    }
-
-    fn consume_pending_tool_requests(&mut self, run_id: &RunId) {
-        self.pending_tool_requests
-            .retain(|request| request.run_id() != run_id);
     }
 
     fn append_event(
@@ -1570,26 +434,6 @@ impl<S: EventStore> AgentRuntime<S> {
         )
     }
 
-    fn append_event_with_id(
-        &mut self,
-        entry_id: EntryId,
-        session_id: &SessionId,
-        parent_id: Option<EntryId>,
-        run_id: Option<RunId>,
-        kind: EventKind,
-        payload: impl Into<String>,
-    ) -> Result<EntryId, AgentError> {
-        self.append_event_with_id_and_blob_refs(
-            entry_id,
-            session_id,
-            parent_id,
-            run_id,
-            kind,
-            payload,
-            Vec::new(),
-        )
-    }
-
     fn append_event_with_id_and_blob_refs(
         &mut self,
         entry_id: EntryId,
@@ -1608,108 +452,30 @@ impl<S: EventStore> AgentRuntime<S> {
             Some(parent_id) => self.store.get(session_id, parent_id)?.depth + 1,
             None => 0,
         };
-        let event = RuntimeEvent::new(
-            entry_id.clone(),
-            session_id.clone(),
-            parent_id,
-            run_id,
-            sequence,
-            depth,
-            kind,
-            payload,
-        );
-        let event = RuntimeEvent { blob_refs, ..event };
-        let audit_event_kind = format!("{:?}", event.kind);
-        let audit_summary = format!("{}: {}", audit_event_kind, event.payload);
+        let event = RuntimeEvent {
+            blob_refs,
+            ..RuntimeEvent::new(
+                entry_id.clone(),
+                session_id.clone(),
+                parent_id,
+                run_id,
+                sequence,
+                depth,
+                kind,
+                payload,
+            )
+        };
+        let audit_kind = format!("{:?}", event.kind);
+        let audit_summary = format!("{audit_kind}: {}", event.payload);
         self.store.append(event)?;
-        if AuditPolicy.should_audit_event(&audit_event_kind) {
+        if AuditPolicy.should_audit_event(&audit_kind) {
             self.store
                 .write_audit(session_id, &entry_id, &audit_summary)?;
         }
-
         cursor.active_leaf = Some(entry_id.clone());
         cursor.next_sequence = sequence + 1;
-
         Ok(entry_id)
     }
-}
-
-fn tool_call_payload(call: &ToolCall, route_state: &str, route_reason: Option<&str>) -> String {
-    json!({
-        "call_id": call.id,
-        "name": call.name,
-        "arguments_json": call.arguments_json,
-        "route_state": route_state,
-        "route_reason": route_reason,
-    })
-    .to_string()
-}
-
-fn approval_payload(
-    approval: &ApprovalProtocolRequest,
-    tool_call_id: &str,
-    tool_call_entry_id: &EntryId,
-) -> String {
-    json!({
-        "approval_id": &approval.approval_id,
-        "tool_call_id": tool_call_id,
-        "tool_call_entry_id": &tool_call_entry_id.0,
-        "message": &approval.message,
-        "requires_local_authentication": approval.requires_local_authentication,
-        "scope": &approval.scope,
-    })
-    .to_string()
-}
-
-fn approval_decision_payload(approval_id: &str, decision: &ApprovalDecision) -> String {
-    json!({
-        "approval_id": approval_id,
-        "decision": match decision {
-            ApprovalDecision::Approved => "approved",
-            ApprovalDecision::Rejected => "rejected",
-            ApprovalDecision::Cancelled => "cancelled",
-        },
-    })
-    .to_string()
-}
-
-fn tool_call_from_event(event: &RuntimeEvent) -> Result<ToolCall, AgentError> {
-    let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
-        AgentError::ToolParse(format!("invalid persisted tool call payload: {error}"))
-    })?;
-    let id = value
-        .get("call_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AgentError::ToolParse("persisted tool call missing call_id".to_string()))?
-        .to_string();
-    let name = value
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AgentError::ToolParse("persisted tool call missing name".to_string()))?
-        .to_string();
-    let arguments_json = value
-        .get("arguments_json")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            AgentError::ToolParse("persisted tool call missing arguments_json".to_string())
-        })?
-        .to_string();
-    let arguments: Value = serde_json::from_str(&arguments_json).map_err(|error| {
-        AgentError::ToolParse(format!("invalid persisted tool arguments JSON: {error}"))
-    })?;
-    if !arguments.is_object() {
-        return Err(AgentError::ToolParse(
-            "persisted tool arguments must be a JSON object".to_string(),
-        ));
-    }
-
-    let tool_call = ToolCall {
-        id,
-        name,
-        arguments_json,
-    };
-    tool_call.validate_shape()?;
-    Ok(tool_call)
 }
 
 fn next_replayed_id<S: EventStore>(
@@ -1717,22 +483,18 @@ fn next_replayed_id<S: EventStore>(
     session_ids: &[SessionId],
 ) -> Result<u64, AgentError> {
     let mut max_id = 0;
-
     for session_id in session_ids {
         max_id = max_id.max(numeric_suffix(&session_id.0).unwrap_or(0));
-
         let Some(active_leaf_id) = store.active_leaf(session_id)? else {
             continue;
         };
-        let branch = store.active_branch(session_id, &active_leaf_id)?;
-        for event in branch {
+        for event in store.active_branch(session_id, &active_leaf_id)? {
             max_id = max_id.max(numeric_suffix(&event.id.0).unwrap_or(0));
             if let Some(run_id) = event.run_id {
                 max_id = max_id.max(numeric_suffix(&run_id.0).unwrap_or(0));
             }
         }
     }
-
     Ok(max_id + 1)
 }
 
@@ -1766,400 +528,4 @@ fn conversation_search_text(events: &[RuntimeEvent]) -> String {
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn validate_inference_options(options: InferenceOptions) -> Result<(), AgentError> {
-    if let Some(temperature) = options.temperature {
-        if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
-            return Err(AgentError::Provider(format!(
-                "invalid temperature: {temperature}"
-            )));
-        }
-    }
-    if let Some(top_p) = options.top_p {
-        if !top_p.is_finite() || !(0.0..=1.0).contains(&top_p) {
-            return Err(AgentError::Provider(format!("invalid top_p: {top_p}")));
-        }
-    }
-    Ok(())
-}
-
-fn active_provider_key() -> String {
-    "active_provider".into()
-}
-
-fn build_context_controller(config: &AgentRuntimeConfig) -> ContextController {
-    ContextController::new(
-        config.system_prompt.clone(),
-        config.runtime_policy.clone(),
-        config.tool_schemas.clone(),
-        config.tokenizer.boxed_clone(),
-    )
-}
-
-fn persisted_provider_id<S: EventStore>(store: &S) -> Result<Option<String>, AgentError> {
-    Ok(store
-        .load_provider_setting(&active_provider_key())?
-        .map(|setting| setting.value))
-}
-
-fn active_profile_for_config(
-    config: &AgentRuntimeConfig,
-    registry: &LegacyProviderRegistry,
-) -> ProviderProfile {
-    registry
-        .profile(config.provider.id())
-        .unwrap_or_else(|| ProviderProfile {
-            id: config.provider.id().to_string(),
-            display_name: config.provider.id().to_string(),
-            kind: ProviderKind::Mock,
-            max_context_tokens: config.tokenizer.max_context_tokens(),
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::context::MockTokenizer;
-    use crate::core::MockStreamingProvider;
-
-    fn config() -> AgentRuntimeConfig {
-        AgentRuntimeConfig {
-            system_prompt: "system".into(),
-            runtime_policy: "policy".into(),
-            tool_schemas: Vec::new(),
-            tokenizer: Box::new(MockTokenizer::new(100)),
-            provider: Box::new(MockStreamingProvider::new()),
-            tool_router: None,
-        }
-    }
-
-    #[test]
-    fn append_event_errors_when_session_cursor_is_missing() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        runtime.sessions.remove(&session_id);
-
-        let result = runtime.append_event(
-            &session_id,
-            None,
-            None,
-            EventKind::UserMessage,
-            "orphaned event",
-        );
-
-        assert!(
-            matches!(result, Err(AgentError::Storage(message)) if message.contains("missing session cursor"))
-        );
-    }
-
-    #[test]
-    fn cancel_signals_matching_provider_cancellation_token() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        let run_id = RunId("run_active".to_string());
-        let token = CancellationToken::default();
-        runtime.runs.insert(
-            run_id.clone(),
-            RunRecord::new(run_id.clone(), session_id.clone()),
-        );
-        runtime
-            .provider_cancellations
-            .insert(run_id.clone(), token.clone());
-
-        let event = runtime.cancel(run_id.0.clone()).unwrap();
-
-        assert!(token.is_cancelled());
-        assert_eq!(event.kind, EventKind::RunCancelled);
-        assert!(!runtime.provider_cancellations.contains(&run_id));
-    }
-
-    #[test]
-    fn conversation_summary_uses_first_user_message_as_title() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "Hello from the first turn\nwith details".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let summaries = runtime.conversation_summaries().unwrap();
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].session_id, session_id);
-        assert_eq!(summaries[0].title, "Hello from the first turn");
-        assert!(summaries[0].active_leaf_id.is_some());
-        assert!(summaries[0].last_event_id.is_some());
-        assert!(summaries[0].last_updated_sequence > 0);
-        assert!(summaries[0].last_updated_at_millis > 0);
-    }
-
-    #[test]
-    fn rename_session_overrides_conversation_summary_title() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "Original title".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        runtime
-            .rename_session(&session_id, " Travel plan ".to_string())
-            .unwrap();
-        let summaries = runtime.conversation_summaries().unwrap();
-
-        assert_eq!(summaries[0].title, "Travel plan");
-    }
-
-    #[test]
-    fn conversation_summaries_omit_empty_sessions() {
-        let mut runtime = AgentRuntime::new(config());
-        runtime.create_session().unwrap();
-
-        let summaries = runtime.conversation_summaries().unwrap();
-
-        assert!(summaries.is_empty());
-    }
-
-    #[test]
-    fn conversation_summaries_sort_by_global_recency() {
-        let mut runtime = AgentRuntime::new(config());
-        let first_session = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: first_session.clone(),
-                parent_event_id: None,
-                text: "first".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let second_session = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: second_session.clone(),
-                parent_event_id: None,
-                text: "second".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let summaries = runtime.conversation_summaries().unwrap();
-
-        assert_eq!(
-            summaries
-                .iter()
-                .map(|summary| summary.session_id.clone())
-                .collect::<Vec<_>>(),
-            vec![second_session, first_session]
-        );
-    }
-
-    #[test]
-    fn archived_sessions_are_hidden_from_conversation_summaries() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "hello".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        runtime.archive_session(&session_id).unwrap();
-
-        assert!(runtime.conversation_summaries().unwrap().is_empty());
-        assert!(!runtime.session_ids().unwrap().contains(&session_id));
-    }
-
-    #[test]
-    fn deleted_sessions_are_removed_from_runtime_and_store() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        let turn = runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "hello".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-        let leaf_id = turn.events.last().unwrap().id.clone();
-
-        runtime.delete_session(&session_id).unwrap();
-
-        assert!(!runtime.session_ids().unwrap().contains(&session_id));
-        assert!(runtime
-            .active_branch_events(&session_id, Some(leaf_id))
-            .is_err());
-    }
-
-    #[test]
-    fn send_message_persists_user_blob_refs_without_changing_prompt_payload() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        let turn = runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "hello".into(),
-                blob_refs: vec!["local-agent-chat:v1:metadata".into()],
-            })
-            .unwrap();
-
-        let user_event = turn
-            .events
-            .iter()
-            .find(|event| event.kind == EventKind::UserMessage)
-            .unwrap();
-        assert_eq!(user_event.payload, "hello");
-        assert_eq!(
-            user_event.blob_refs,
-            vec!["local-agent-chat:v1:metadata".to_string()]
-        );
-        assert!(!runtime
-            .latest_prompt_debug_snapshot()
-            .unwrap()
-            .rendered_text
-            .contains("local-agent-chat"));
-    }
-
-    #[test]
-    fn active_branch_events_can_load_explicit_non_active_leaf() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        let first_turn = runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "root".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-        let root_user_id = first_turn
-            .events
-            .iter()
-            .find(|event| event.kind == EventKind::UserMessage)
-            .unwrap()
-            .id
-            .clone();
-        let first_leaf_id = first_turn.events.last().unwrap().id.clone();
-
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: Some(root_user_id),
-                text: "fork".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let explicit_branch = runtime
-            .active_branch_events(&session_id, Some(first_leaf_id))
-            .unwrap();
-        let active_branch = runtime.active_branch_events(&session_id, None).unwrap();
-
-        assert!(explicit_branch.iter().any(|event| event.payload == "root"));
-        assert!(!explicit_branch.iter().any(|event| event.payload == "fork"));
-        assert!(active_branch.iter().any(|event| event.payload == "fork"));
-    }
-
-    #[test]
-    fn fork_session_copies_selected_branch_into_new_conversation() {
-        let mut runtime = AgentRuntime::new(config());
-        let source_session = runtime.create_session().unwrap();
-        let first_turn = runtime
-            .send_message_turn(SendMessageInput {
-                session_id: source_session.clone(),
-                parent_event_id: None,
-                text: "root".into(),
-                blob_refs: vec!["local-agent-chat:v1:metadata".into()],
-            })
-            .unwrap();
-        let root_user_id = first_turn
-            .events
-            .iter()
-            .find(|event| event.kind == EventKind::UserMessage)
-            .unwrap()
-            .id
-            .clone();
-        let first_leaf_id = first_turn.events.last().unwrap().id.clone();
-
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: source_session.clone(),
-                parent_event_id: Some(root_user_id),
-                text: "alternate".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let forked_session = runtime
-            .fork_session(&source_session, &first_leaf_id)
-            .unwrap();
-        let forked_branch = runtime.active_branch_events(&forked_session, None).unwrap();
-        let copied_user = forked_branch
-            .iter()
-            .find(|event| event.kind == EventKind::UserMessage)
-            .unwrap();
-
-        assert_ne!(forked_session, source_session);
-        assert_eq!(copied_user.payload, "root");
-        assert_eq!(
-            copied_user.blob_refs,
-            vec!["local-agent-chat:v1:metadata".to_string()]
-        );
-        assert_eq!(copied_user.run_id, None);
-        assert!(forked_branch
-            .iter()
-            .any(|event| event.kind == EventKind::AssistantMessageCompleted));
-        assert!(!forked_branch
-            .iter()
-            .any(|event| event.payload == "alternate"));
-        assert!(runtime
-            .conversation_summaries()
-            .unwrap()
-            .iter()
-            .any(|summary| summary.session_id == forked_session));
-    }
-
-    #[test]
-    fn send_message_can_explicitly_branch_from_root_after_active_leaf_exists() {
-        let mut runtime = AgentRuntime::new(config());
-        let session_id = runtime.create_session().unwrap();
-        runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: None,
-                text: "first".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let root_turn = runtime
-            .send_message_turn(SendMessageInput {
-                session_id: session_id.clone(),
-                parent_event_id: Some(EntryId(ROOT_PARENT_EVENT_ID.into())),
-                text: "regenerated root".into(),
-                blob_refs: Vec::new(),
-            })
-            .unwrap();
-
-        let regenerated_user = root_turn
-            .events
-            .iter()
-            .find(|event| event.kind == EventKind::UserMessage)
-            .unwrap();
-        assert_eq!(regenerated_user.parent_id, None);
-    }
 }

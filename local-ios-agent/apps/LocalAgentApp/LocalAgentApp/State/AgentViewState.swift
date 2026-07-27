@@ -138,22 +138,6 @@ struct AgentMessageViewState: Equatable, Identifiable, Sendable {
     }
 }
 
-struct ProviderSelectionViewState: Equatable, Sendable {
-    var profiles: [ProviderProfileDTO]
-    var active: ProviderProfileDTO?
-    var errorMessage: String?
-
-    init(
-        profiles: [ProviderProfileDTO] = [],
-        active: ProviderProfileDTO? = nil,
-        errorMessage: String? = nil
-    ) {
-        self.profiles = profiles
-        self.active = active
-        self.errorMessage = errorMessage
-    }
-}
-
 struct ConversationSummaryViewState: Equatable, Identifiable, Sendable {
     var id: String { sessionId }
 
@@ -228,7 +212,6 @@ struct AgentViewState: Equatable, Sendable {
     var draft: UserDraftViewState
     var currentSessionId: String?
     var errorMessage: String?
-    var provider: ProviderSelectionViewState
     var conversations: ConversationListViewState
     var lastTerminalReason: RunTerminalReason?
     var lastAppliedRuntimeSequence: UInt64
@@ -246,7 +229,6 @@ struct AgentViewState: Equatable, Sendable {
         draft: UserDraftViewState = UserDraftViewState(),
         currentSessionId: String? = nil,
         errorMessage: String? = nil,
-        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
         lastAppliedRuntimeSequence: UInt64 = 0,
@@ -263,7 +245,6 @@ struct AgentViewState: Equatable, Sendable {
         self.draft = draft
         self.currentSessionId = currentSessionId
         self.errorMessage = errorMessage
-        self.provider = provider
         self.conversations = conversations
         self.lastTerminalReason = lastTerminalReason
         self.lastAppliedRuntimeSequence = lastAppliedRuntimeSequence
@@ -282,7 +263,6 @@ struct AgentViewState: Equatable, Sendable {
         draft: String,
         currentSessionId: String? = nil,
         errorMessage: String? = nil,
-        provider: ProviderSelectionViewState = ProviderSelectionViewState(),
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
@@ -297,7 +277,6 @@ struct AgentViewState: Equatable, Sendable {
             draft: UserDraftViewState(text: draft),
             currentSessionId: currentSessionId,
             errorMessage: errorMessage,
-            provider: provider,
             conversations: conversations,
             lastTerminalReason: lastTerminalReason,
             promptLibrary: promptLibrary,

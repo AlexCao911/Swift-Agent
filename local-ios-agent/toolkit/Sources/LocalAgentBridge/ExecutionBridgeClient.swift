@@ -2,7 +2,6 @@ public protocol ExecutionBridgeClient: Sendable {
     func listAgentProfiles() async throws -> [AgentProfileDTO]
     func buildAgent(_ request: BuildAgentRequestDTO) async throws -> AgentProfileDTO
     func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO
-    func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
     func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error>
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws
     func registerToolSchema(_ schema: ToolSchemaDTO) async throws
@@ -11,7 +10,6 @@ public protocol ExecutionBridgeClient: Sendable {
     func submitToolResult(runId: String, result: ToolResultDTO) async throws -> AgentTurnResultDTO
     func cancelRun(runId: String) async throws -> RuntimeEventDTO
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel
-    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws
 }
 
 public extension ExecutionBridgeClient {
@@ -54,10 +52,6 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
             request,
             as: BuilderContextPreviewResponseDTO.self
         )
-    }
-
-    public func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await gateway.request(.startRun, request, as: RunHandleDTO.self)
     }
 
     public func observeEvents(runId: String, fromSequence: UInt64) -> AsyncThrowingStream<RuntimeEventDTO, Error> {
@@ -107,11 +101,4 @@ public struct RustExecutionBridgeClient: ExecutionBridgeClient {
         try await legacyClient.loadDebugArchive(runId)
     }
 
-    public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
-        _ = try await gateway.request(
-            .updateRuntimeOptions,
-            options,
-            as: EmptyAgentOSResponseDTO.self
-        )
-    }
 }

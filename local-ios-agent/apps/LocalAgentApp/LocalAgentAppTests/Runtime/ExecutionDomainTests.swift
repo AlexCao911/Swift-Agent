@@ -39,24 +39,10 @@ struct ExecutionDomainTests {
             lifecycle: RunLifecycleService(bridge: bridge),
             events: RunEventStreamService(bridge: bridge),
             tools: ToolApprovalService(bridge: bridge),
-            debug: RunDebugService(bridge: bridge),
-            inference: InferenceSettingsService(bridge: bridge)
+            debug: RunDebugService(bridge: bridge)
         )
-        let frameRef = ConversationRunFrameRefDTO(
-            frameId: "frame_1",
-            sessionId: "session_1",
-            branchHeadId: "entry_user",
-            userTurnId: "entry_user"
-        )
-
         let profiles = try await domain.listAgentProfiles()
         let built = try await domain.buildAgent(templateId: "template_1")
-        let handle = try await domain.startRun(StartExecutionRequestDTO(
-            agentProfileId: "profile_1",
-            profileRevisionId: 1,
-            userIntent: "continue",
-            conversationRunFrameRef: frameRef
-        ))
         var observed: [RuntimeEventDTO] = []
         for try await event in domain.observeEvents(runId: "run_mock", fromSequence: 4) {
             observed.append(event)
@@ -79,24 +65,14 @@ struct ExecutionDomainTests {
             )
         )
         let cancelled = try await domain.cancelRun(runId: "run_mock")
-        try await domain.updateRuntimeOptions(RuntimeOptionsDTO(
-            systemPrompt: "system",
-            runtimePolicy: "policy",
-            temperature: 0.2,
-            topP: 0.9
-        ))
-
         #expect(profiles.map(\.profileId) == ["profile_1"])
         #expect(built.profileId == "profile_1")
-        #expect(handle.runId == "run_mock")
         #expect(observed == [event])
         #expect(pending.map(\.toolCallId) == ["call_1"])
         #expect(submitted.state == .completed)
         #expect(cancelled.kind == .runCancelled)
         #expect(await bridge.builtAgentTemplateIds == ["template_1"])
-        #expect(await bridge.startedExecutionRequests.count == 1)
         #expect(await bridge.approvedTools.count == 1)
         #expect(await bridge.submittedToolResults.map(\.runId) == ["run_mock"])
-        #expect(await bridge.updatedRuntimeOptions.count == 1)
     }
 }

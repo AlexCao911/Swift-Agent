@@ -35,36 +35,20 @@ mod host_llm_outbox;
 mod host_llm_recovery;
 #[path = "contract/host_llm_worker.rs"]
 mod host_llm_worker;
-#[path = "contract/inference_backend_agent_os.rs"]
-mod inference_backend_agent_os;
 #[path = "contract/llm_profile_migration.rs"]
 mod llm_profile_migration;
 #[path = "contract/llm_slot_v2.rs"]
 mod llm_slot_v2;
 #[path = "contract/memory_agent_os.rs"]
 mod memory_agent_os;
-#[path = "contract/model_inference_security_contract.rs"]
-mod model_inference_security_contract;
-#[path = "contract/model_provider_agent_os.rs"]
-mod model_provider_agent_os;
-#[path = "contract/package_profile_contract.rs"]
-mod package_profile_contract;
 #[path = "contract/prompt_archive_agent_os.rs"]
 mod prompt_archive_agent_os;
-#[path = "contract/protocol_dto_unknown.rs"]
-mod protocol_dto_unknown;
 #[path = "contract/protocol_lifecycle.rs"]
 mod protocol_lifecycle;
-#[path = "contract/protocol_plugin_module.rs"]
-mod protocol_plugin_module;
 #[path = "contract/protocol_registry.rs"]
 mod protocol_registry;
 #[path = "contract/run_preparation.rs"]
 mod run_preparation;
-#[path = "contract/run_snapshot_resolution_agent_os.rs"]
-mod run_snapshot_resolution_agent_os;
-#[path = "contract/runtime_execution_agent_os.rs"]
-mod runtime_execution_agent_os;
 #[path = "contract/runtime_state_migration.rs"]
 mod runtime_state_migration;
 #[path = "contract/security_approval_protocol.rs"]

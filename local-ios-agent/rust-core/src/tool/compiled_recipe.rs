@@ -16,7 +16,7 @@ pub enum CompiledToolRecipeContent {
     HttpConnector {
         endpoint: String,
         policy: HttpConnectorPolicy,
-        credential_ref: Option<CredentialRef>,
+        credential: Option<CredentialRef>,
     },
     PureTransform {
         expression: String,

@@ -1,6 +1,5 @@
 use local_ios_agent_runtime::memory::{
-    BlobRecord, BranchSummaryRecord, EventStore, InMemoryEventStore, LongTermMemoryRecord,
-    MemoryCandidate, ProviderSetting, SqliteEventStore,
+    BlobRecord, BranchSummaryRecord, LongTermMemoryRecord, MemoryCandidate, SqliteEventStore,
 };
 
 #[test]
@@ -157,67 +156,15 @@ fn sqlite_rejects_negative_blob_byte_count_from_storage() {
 }
 
 #[test]
-fn sqlite_persists_audit_rows_and_provider_settings() {
+fn sqlite_persists_audit_rows() {
     let tempdir = tempfile::tempdir().unwrap();
     let store = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
 
     store
         .write_audit("session_1", "entry_1", "tool executed")
         .unwrap();
-    store
-        .save_provider_setting("active_provider", "mock")
-        .unwrap();
-
     assert_eq!(
         store.audit_rows("session_1").unwrap()[0].summary,
         "tool executed"
-    );
-    assert_eq!(
-        store.provider_setting("active_provider").unwrap(),
-        Some("mock".into())
-    );
-}
-
-#[test]
-fn event_store_trait_persists_provider_settings() {
-    let mut in_memory = InMemoryEventStore::new();
-    <InMemoryEventStore as EventStore>::save_provider_setting(
-        &mut in_memory,
-        ProviderSetting {
-            key: "active_provider:session_1".into(),
-            value: "mock".into(),
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        in_memory
-            .load_provider_setting("active_provider:session_1")
-            .unwrap(),
-        Some(ProviderSetting {
-            key: "active_provider:session_1".into(),
-            value: "mock".into(),
-        })
-    );
-
-    let tempdir = tempfile::tempdir().unwrap();
-    let mut sqlite = SqliteEventStore::open(tempdir.path().join("agent.sqlite")).unwrap();
-    <SqliteEventStore as EventStore>::save_provider_setting(
-        &mut sqlite,
-        ProviderSetting {
-            key: "active_provider:session_1".into(),
-            value: "alt".into(),
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        sqlite
-            .load_provider_setting("active_provider:session_1")
-            .unwrap(),
-        Some(ProviderSetting {
-            key: "active_provider:session_1".into(),
-            value: "alt".into(),
-        })
     );
 }

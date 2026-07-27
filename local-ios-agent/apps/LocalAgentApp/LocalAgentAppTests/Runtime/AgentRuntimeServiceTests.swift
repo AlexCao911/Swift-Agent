@@ -91,7 +91,6 @@ struct AgentRuntimeServiceTests {
         }
 
         #expect(await bridge.startedExecutionRequests.isEmpty)
-        #expect(await bridge.sentMessages.isEmpty)
     }
 
     @Test
@@ -287,8 +286,7 @@ private func makeCoordinator(
             lifecycle: RunLifecycleService(bridge: bridge),
             events: RunEventStreamService(bridge: bridge),
             tools: ToolApprovalService(bridge: bridge),
-            debug: RunDebugService(bridge: bridge),
-            inference: InferenceSettingsService(bridge: bridge)
+            debug: RunDebugService(bridge: bridge)
         ),
         toolDriver: MinimalHostToolDriver(),
         runStarter: runStarter

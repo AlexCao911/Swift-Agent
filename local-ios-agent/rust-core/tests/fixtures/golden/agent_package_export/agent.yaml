@@ -1,5 +1,5 @@
-schema_version: 1
+schema_version: 2
 package_id: agent.fixture
 name: Fixture Agent
-model_file: model.yaml
+llm_slot_json: {"requirements":{"slot_id":"slot.model.primary","capabilities":["streaming","tool_calling"],"input_modalities":["text"],"context_budget":"8192","streaming_required":true,"tool_calling_mode":"required"},"model_id_hint":"gpt-fixture"}
 package_hash: sha256:fixture

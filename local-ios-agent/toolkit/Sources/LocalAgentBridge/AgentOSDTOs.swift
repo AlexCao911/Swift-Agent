@@ -1,71 +1,6 @@
 import Foundation
 import LocalAgentLLMContracts
 
-public enum LLMBindingSchemaDTO: String, Codable, Equatable, Sendable {
-    case legacyV1 = "legacy_v1"
-    case hostSlotV2 = "host_slot_v2"
-}
-
-public struct ProfileExecutionRouteRequestDTO: Codable, Equatable, Sendable {
-    public let profileID: String
-    public let profileRevision: UInt64
-
-    public init(profileID: String, profileRevision: UInt64) {
-        self.profileID = profileID
-        self.profileRevision = profileRevision
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case profileID = "profile_id"
-        case profileRevision = "profile_revision"
-    }
-}
-
-public struct ProfileExecutionRouteDTO: Codable, Equatable, Sendable {
-    public let schemaVersion: UInt32
-    public let profileID: String
-    public let profileRevision: UInt64
-    public let llmBindingSchema: LLMBindingSchemaDTO
-
-    public init(
-        schemaVersion: UInt32 = 1,
-        profileID: String,
-        profileRevision: UInt64,
-        llmBindingSchema: LLMBindingSchemaDTO
-    ) throws {
-        guard schemaVersion == 1, !profileID.isEmpty, profileRevision > 0 else {
-            throw RuntimeBridgeError(
-                kind: "execution.profile_route_invalid",
-                message: "profile execution route identity or schema is invalid"
-            )
-        }
-        self.schemaVersion = schemaVersion
-        self.profileID = profileID
-        self.profileRevision = profileRevision
-        self.llmBindingSchema = llmBindingSchema
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            schemaVersion: try container.decode(UInt32.self, forKey: .schemaVersion),
-            profileID: try container.decode(String.self, forKey: .profileID),
-            profileRevision: try container.decode(UInt64.self, forKey: .profileRevision),
-            llmBindingSchema: try container.decode(
-                LLMBindingSchemaDTO.self,
-                forKey: .llmBindingSchema
-            )
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case profileID = "profile_id"
-        case profileRevision = "profile_revision"
-        case llmBindingSchema = "llm_binding_schema"
-    }
-}
-
 public struct ProfilePublishPreparationDTO: Codable, Equatable, Sendable {
     public let idempotencyKey: String
     public let agentProfileId: String
@@ -767,22 +702,6 @@ public struct CommitPreparedStartRequestDTO: Codable, Equatable, Sendable {
     public let token: String; public let attestation: HostAttestationDTO; public let nowMillis: UInt64
     public init(token: String, attestation: HostAttestationDTO, nowMillis: UInt64) { self.token = token; self.attestation = attestation; self.nowMillis = nowMillis }
     private enum CodingKeys: String, CodingKey { case token, attestation, nowMillis = "now_millis" }
-}
-
-@available(*, deprecated, message: "Use StartExecutionRequestDTO with ConversationRunFrameRefDTO")
-public struct StartRunRequestDTO: Codable, Equatable, Sendable {
-    public var agentProfileId: String
-    public var userIntent: String
-
-    public init(agentProfileId: String, userIntent: String) {
-        self.agentProfileId = agentProfileId
-        self.userIntent = userIntent
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentProfileId = "agent_profile_id"
-        case userIntent = "user_intent"
-    }
 }
 
 public struct RunHandleDTO: Codable, Equatable, Sendable {

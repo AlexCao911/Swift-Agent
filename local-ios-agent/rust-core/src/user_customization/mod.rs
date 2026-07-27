@@ -18,10 +18,9 @@ pub mod user_component;
 
 pub use agent_profile::{
     AgentProfile, AgentProfileDraft, AgentProfileHostBindingState,
-    AgentProfileHostBindingTransition, AgentProfileId, AgentProfileLLMBinding,
-    AgentProfileLocalBindings, AgentProfileModelBinding, AgentProfilePublisher,
-    AgentProfileReference, AgentProfileVersion, ComponentBinding, ComponentSettings,
-    InMemoryAgentProfileRepository, ProfilePublicationOperation,
+    AgentProfileHostBindingTransition, AgentProfileId, AgentProfilePublisher, AgentProfileReference,
+    AgentProfileVersion, ComponentBinding, ComponentSettings, InMemoryAgentProfileRepository,
+    ProfilePublicationOperation,
 };
 pub use agent_slot::{AgentSlot, AgentSlotId, AgentSlotKind};
 pub use agent_template::{AgentTemplate, AgentTemplateId};

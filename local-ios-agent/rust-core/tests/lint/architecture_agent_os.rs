@@ -31,17 +31,20 @@ fn agent_os_runtime_execution_modules_do_not_read_builder_package_or_profile_sta
 }
 
 #[test]
-fn runtime_model_calls_flow_through_context_assembly_result_boundary() {
+fn core_runtime_has_no_llm_generation_boundary() {
     let runtime_source = include_str!("../../src/core/runtime.rs");
 
-    assert!(
-        runtime_source.contains("build_prompt_frame_from_context_assembly"),
-        "runtime model calls must go through ContextAssemblyResult before provider PromptFrame compatibility"
-    );
-    assert!(
-        !runtime_source.contains(".build_prompt_frame(branch)?"),
-        "runtime must not build provider prompt frames directly from ContextController"
-    );
+    for forbidden in [
+        "PromptFrame",
+        "ModelProvider",
+        "send_message",
+        "build_prompt_frame",
+    ] {
+        assert!(
+            !runtime_source.contains(forbidden),
+            "provider/model generation boundary remains in core runtime: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -59,21 +62,14 @@ fn core_runtime_does_not_construct_fake_agent_os_execution_trace() {
 }
 
 #[test]
-fn core_runtime_exposes_resolved_execution_plan_entrypoint() {
+fn core_runtime_leaves_llm_execution_to_the_host_worker() {
     let runtime_source = include_str!("../../src/core/runtime.rs");
+    let host_worker_source = include_str!("../../src/execution/host_llm_worker.rs");
 
-    assert!(
-        runtime_source.contains("pub fn execute_plan"),
-        "core runtime must expose a public resolved ExecutionPlan entrypoint for Agent OS execution"
-    );
-    assert!(
-        runtime_source.contains("RunMachine::from_plan_with_effect_driver"),
-        "core runtime plan entrypoint must delegate execution to RunMachine"
-    );
-    assert!(
-        runtime_source.contains("latest_runtime_execution_trace = Some"),
-        "core runtime must publish the RunMachine execution trace after a resolved plan runs"
-    );
+    assert!(!runtime_source.contains("pub fn execute_plan"));
+    assert!(!runtime_source.contains("RunMachine::from_plan_with_effect_driver"));
+    assert!(host_worker_source.contains("pub struct HostLLMWorkerService"));
+    assert!(host_worker_source.contains("pub fn submit_event"));
 }
 
 #[test]
@@ -383,30 +379,10 @@ fn swift_runtime_projection_exposes_prompt_and_context_debug_archives() {
 }
 
 #[test]
-fn swift_start_run_request_dto_does_not_model_trusted_host_state() {
+fn swift_legacy_start_run_request_is_removed() {
     let source = read_workspace_file("toolkit/Sources/LocalAgentBridge/AgentOSDTOs.swift");
-    let start = source
-        .find("public struct StartRunRequestDTO")
-        .expect("StartRunRequestDTO must exist");
-    let rest = &source[start..];
-    let end = rest
-        .find("public struct RunHandleDTO")
-        .expect("RunHandleDTO should follow StartRunRequestDTO");
-    let start_run_source = &rest[..end];
-
-    for forbidden in [
-        "permissionState",
-        "permission_state",
-        "localBindings",
-        "local_bindings",
-        "credentialAvailability",
-        "credential_availability",
-    ] {
-        assert!(
-            !start_run_source.contains(forbidden),
-            "StartRunRequestDTO must not expose trusted host state: {forbidden}"
-        );
-    }
+    assert!(!source.contains("public struct StartRunRequestDTO"));
+    assert!(source.contains("public struct AuthoritativePreparationStartRequestDTO"));
 }
 
 #[test]
@@ -787,31 +763,24 @@ fn strip_comments_and_strings(source: &str) -> String {
 }
 
 #[test]
-fn legacy_streaming_path_is_marked_as_compatibility() {
+fn legacy_streaming_path_is_removed() {
     let source = include_str!("../../src/core/runtime.rs");
 
-    assert!(
-        source.contains("LEGACY_COMPATIBILITY_STREAMING_PATH"),
-        "legacy send_message_streaming path must be explicitly marked while it bypasses snapshot/execution planning"
-    );
+    assert!(!source.contains("LEGACY_COMPATIBILITY_STREAMING_PATH"));
+    assert!(!source.contains("send_message_streaming"));
 }
 
 #[test]
-fn legacy_llm_architecture_allowlist_never_grows() {
-    let allowed = parse_legacy_llm_allowlist(include_str!(
-        "../fixtures/architecture/legacy_llm_allowlist.txt"
-    ));
+fn legacy_llm_architecture_is_absent() {
     let actual = legacy_llm_occurrences();
-    let growth = actual
-        .iter()
-        .filter(|(key, count)| allowed.get(*key).copied().unwrap_or(0) < **count)
-        .map(|(key, count)| format!("{key}\t{count}"))
-        .collect::<Vec<_>>();
-
     assert!(
-        growth.is_empty(),
-        "legacy provider/model/router occurrences may shrink but never grow; add no new allowlist entries:\n{}",
-        growth.join("\n")
+        actual.is_empty(),
+        "legacy provider/model/router occurrences remain:\n{}",
+        actual
+            .iter()
+            .map(|(key, count)| format!("{key}\t{count}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
@@ -1028,21 +997,6 @@ fn count_identifier(source: &str, symbol: &str) -> usize {
         .count()
 }
 
-fn parse_legacy_llm_allowlist(source: &str) -> std::collections::BTreeMap<String, usize> {
-    source
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            let (key, count) = line
-                .rsplit_once('\t')
-                .unwrap_or_else(|| panic!("invalid legacy LLM allowlist row: {line}"));
-            let count = count
-                .parse::<usize>()
-                .unwrap_or_else(|_| panic!("invalid legacy LLM allowlist count: {line}"));
-            (key.to_string(), count)
-        })
-        .collect()
-}
 #[test]
 fn ffi_bridge_does_not_generate_a_second_host_process_epoch() {
     let ffi_source = include_str!("../../src/ffi_bridge.rs");
@@ -1058,7 +1012,5 @@ fn rust_build_does_not_compile_or_bundle_local_inference_objects() {
 
     assert!(!build_source.contains("Command::new(&cxx.compiler)"));
     assert!(!build_source.contains("Command::new(\"ar\")"));
-    assert!(
-        build_source.contains("cargo:rustc-link-lib=static:-bundle=local_agent_inference_native")
-    );
+    assert!(!build_source.contains("local_agent_inference_native"));
 }

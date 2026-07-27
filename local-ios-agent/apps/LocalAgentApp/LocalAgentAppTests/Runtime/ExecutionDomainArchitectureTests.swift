@@ -13,8 +13,7 @@ struct ExecutionDomainArchitectureTests {
             lifecycle: RunLifecycleService(bridge: bridge),
             events: RunEventStreamService(bridge: bridge),
             tools: ToolApprovalService(bridge: bridge),
-            debug: RunDebugService(bridge: bridge),
-            inference: InferenceSettingsService(bridge: bridge)
+            debug: RunDebugService(bridge: bridge)
         )
         let domain: any ExecutionDomain = adapter
 

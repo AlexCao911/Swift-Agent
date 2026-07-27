@@ -6,17 +6,15 @@ mod snapshot_service;
 
 pub(crate) use preparation_preview::{derive_authoritative_preparation, FrozenGenerationTurn};
 pub use resolved_bindings::{
-    CredentialAvailability, LocalBindingState, OpaqueHostBindingCrossLink,
-    ResolvedComponentBinding, ResolvedHostSlotBinding, ResolvedLLMBinding, ResolvedMemoryBinding,
-    ResolvedModelBinding, ResolvedToolBinding, ResolvedVoiceBinding, TrustedHostRunState,
+    OpaqueHostBindingCrossLink, ResolvedComponentBinding, ResolvedHostSlotBinding,
+    ResolvedMemoryBinding, ResolvedToolBinding, ResolvedVoiceBinding,
 };
-pub use resolver::{
-    ProfileExecutionRoute, RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog,
-};
+pub use resolver::{RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog};
 pub use snapshot::{
-    PersistedResolvedLLMBinding, PersistedResolvedRunSnapshotV2, PersistedRunSnapshotError,
-    ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview, RunSnapshotReadinessIssue,
-    RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent, StartRunRequest,
+    PersistedResolvedHostSlotBinding, PersistedResolvedRunSnapshotV2,
+    PersistedRunSnapshotError, ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview,
+    RunSnapshotReadinessIssue, RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent,
+    StartRunRequest,
 };
 pub use snapshot_service::{
     RunPreparationService, RunSnapshotError, RunSnapshotResult, RunSnapshotService,

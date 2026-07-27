@@ -176,7 +176,7 @@ impl ToolRouter {
         let CompiledToolRecipeContent::HttpConnector {
             endpoint,
             policy,
-            credential_ref,
+            credential,
         } = &compiled_recipe.content
         else {
             return Ok(None);
@@ -193,7 +193,7 @@ impl ToolRouter {
             )));
         }
 
-        let egress_request = if credential_ref.is_some() {
+        let egress_request = if credential.is_some() {
             DataEgressRequest::http_tool_with_credential(destination.clone())
         } else {
             DataEgressRequest::http_tool(destination.clone())

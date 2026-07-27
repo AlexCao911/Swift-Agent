@@ -1,9 +1,0 @@
-{
-  "execution": {
-    "code": "execution.host_slot_v2_requires_preparation",
-    "message": "host-backed LLM slots must enter through authoritative preparation"
-  },
-  "profile_id": "profile:agent.fixture",
-  "profile_version": 1,
-  "snapshot_persisted": false
-}

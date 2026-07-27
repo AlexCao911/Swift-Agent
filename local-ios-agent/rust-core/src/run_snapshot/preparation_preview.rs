@@ -140,7 +140,7 @@ pub(crate) fn derive_authoritative_preparation(
             .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?,
     )
     .map_err(|error| RunSnapshotError::new("preparation.tool_schema_invalid", error.to_string()))?;
-    let model_input = ExecutionContextInputAssembler::new(None)
+    let model_input = ExecutionContextInputAssembler::new()
         .assemble_initial(frame)
         .map_err(|error| RunSnapshotError::new(error.code(), error.to_string()))?;
     let model_input_document = ModelInputDocument {

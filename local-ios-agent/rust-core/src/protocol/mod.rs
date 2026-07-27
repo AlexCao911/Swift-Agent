@@ -9,7 +9,6 @@ pub mod runtime_plugin_registry;
 pub mod schema_version;
 pub mod snapshot;
 pub mod typed_registry;
-pub mod unknown_enum;
 
 pub use archive::{ComponentArchive, SnapshotArchiveKind};
 pub use binding::{ComponentBinding, SlotKey};
@@ -17,20 +16,14 @@ pub use definition::DefinitionCompatibility;
 pub use host_capability::{HostCapability, HostCapabilityManifest};
 pub use ids::{ArchiveId, BindingId, DefinitionId, InstanceId, ModuleId, SnapshotId};
 pub use instance::ComponentInstance;
-#[cfg(feature = "link-llama-cpp-local-inference")]
-pub use plugin_module::BuiltinInferencePlugin;
-#[cfg(feature = "builtin-openai-compatible")]
-pub use plugin_module::BuiltinProviderPlugin;
 pub use plugin_module::{
-    ContextPolicyDefinition, InferenceBackendDefinition, LegacyRuntimeAdapterPlugin,
-    MemoryDefinition, ModelDefinition, PluginModule, PromptCompilerDefinition, ProviderDefinition,
+    ContextPolicyDefinition, MemoryDefinition, PluginModule, PromptCompilerDefinition,
     ToolDefinition, VoiceDefinition,
 };
 pub use runtime_plugin_registry::{
-    CargoFeature, PluginRegistryBuilder, RuntimePluginRegistry, StaticPluginList,
-    StaticPluginModule, StaticPluginRegistration,
+    PluginRegistryBuilder, RuntimePluginRegistry, StaticPluginList, StaticPluginModule,
+    StaticPluginRegistration,
 };
 pub use schema_version::SchemaVersion;
 pub use snapshot::{SnapshotRecord, SnapshotSource};
 pub use typed_registry::{ComponentDefinition, RegistryError, RegistryResult, TypedRegistry};
-pub use unknown_enum::ProviderKindDTO;

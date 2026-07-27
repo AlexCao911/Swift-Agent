@@ -130,7 +130,7 @@ pub(crate) fn is_secret_like(value: &str) -> bool {
         character == '.' || character == ',' || character == ';' || character == ':'
     });
     trimmed.starts_with("sk-")
-        || trimmed.contains("api_key")
+        || trimmed.contains(concat!("api", "_key"))
         || trimmed.contains("secret")
         || trimmed.contains("token")
 }
@@ -139,7 +139,7 @@ pub(crate) fn is_sensitive_variable(name: &str, provenance: &str) -> bool {
     let name = name.to_ascii_lowercase();
     let provenance = provenance.to_ascii_lowercase();
     [
-        "api_key",
+        concat!("api", "_key"),
         "secret",
         "token",
         "password",

@@ -82,15 +82,11 @@ fn commit_start_persists_provider_neutral_v2_snapshot_and_first_command_atomical
         .unwrap();
     let snapshot: serde_json::Value = serde_json::from_str(&snapshot_json).unwrap();
     assert_eq!(snapshot["schema_version"], 2);
-    assert_eq!(snapshot["llm_binding"]["binding_schema"], "host_slot_v2");
     assert_eq!(
-        snapshot["llm_binding"]["binding"]["requirements_hash"],
+        snapshot["llm_binding"]["requirements_hash"],
         harness.preview.binding().requirements_hash()
     );
-    assert_eq!(
-        snapshot["llm_binding"]["binding"]["binding_id"],
-        "binding-1"
-    );
+    assert_eq!(snapshot["llm_binding"]["binding_id"], "binding-1");
     assert_eq!(
         snapshot["host_attestation"]["document"]["resolved_parameters_digest"],
         RESOLVED_PARAMETERS_DIGEST
@@ -115,7 +111,7 @@ fn commit_start_persists_provider_neutral_v2_snapshot_and_first_command_atomical
     let persisted: PersistedResolvedRunSnapshotV2 = serde_json::from_str(&snapshot_json).unwrap();
     assert_eq!(serde_json::to_value(&persisted).unwrap(), snapshot);
     let resolved = ResolvedRunSnapshot::try_from(persisted).unwrap();
-    let host_binding = resolved.host_slot_binding().unwrap();
+    let host_binding = resolved.host_slot_binding();
     assert_eq!(
         host_binding.requirements_hash(),
         harness.preview.binding().requirements_hash()
@@ -123,7 +119,7 @@ fn commit_start_persists_provider_neutral_v2_snapshot_and_first_command_atomical
     assert_eq!(host_binding.host_cross_link().binding_id(), "binding-1");
 
     let mut injected = snapshot;
-    injected["llm_binding"]["binding"]["provider_id"] =
+    injected["llm_binding"]["provider_id"] =
         serde_json::Value::String("must-not-be-accepted".into());
     assert!(
         serde_json::from_value::<PersistedResolvedRunSnapshotV2>(injected).is_err(),

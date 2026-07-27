@@ -8,7 +8,6 @@ mod execution_planner;
 mod execution_service;
 mod host_llm_dispatcher;
 mod host_llm_worker;
-mod inference_settings;
 mod react_worker;
 mod run_lifecycle;
 mod tool_approval;
@@ -25,10 +24,7 @@ pub use event_log::{
 };
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ExecutionStepKind};
 pub use execution_planner::{ExecutionPlanner, ExecutionPlanningError, ExecutionPlanningResult};
-pub use execution_service::{
-    ActiveExecutionRunRegistry, ExecutionService, ExecutionServiceParts,
-    ExecutionWorkerDependencies, ExecutionWorkerMode,
-};
+pub use execution_service::ExecutionService;
 pub use host_llm_dispatcher::{
     HostLLMDispatcherConfig, HostLLMDispatcherRuntime, LocalAgentLLMHostCommandFn,
     LocalAgentLLMHostCopyReceipt, LocalAgentLLMHostReleaseContextFn, LocalAgentLLMHostVTable,
@@ -37,7 +33,6 @@ pub use host_llm_dispatcher::{
 pub use host_llm_worker::{
     HostLLMWorkerService, HostLLMWorkerServiceConfig, HostToolBatchExecutor,
 };
-pub use inference_settings::{InferenceSettingsService, RuntimeOptions};
 pub use react_worker::{
     ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker, ExecutionToolCall,
     ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,

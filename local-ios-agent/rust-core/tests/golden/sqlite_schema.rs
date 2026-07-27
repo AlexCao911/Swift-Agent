@@ -13,7 +13,7 @@ fn sqlite_v1_legacy_fixture_migrates_without_losing_runtime_history() {
     let store = SqliteEventStore::open(&db_path).unwrap();
 
     assert_eq!(store.schema_version().unwrap(), 1);
-    assert!(store
+    assert!(!store
         .table_names()
         .unwrap()
         .contains(&"provider_settings".to_string()));

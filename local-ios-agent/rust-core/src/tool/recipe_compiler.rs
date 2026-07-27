@@ -86,7 +86,7 @@ impl ToolRecipeCompiler {
                 if policy.data_egress_disclosure.is_none() {
                     report.push_issue("http.egress_disclosure.required");
                 }
-                if recipe.credential_ref().is_some()
+                if recipe.credential().is_some()
                     && policy.credential_purpose != Some(CredentialPurpose::HttpTool)
                 {
                     report.push_issue("http.credential_purpose.required");
@@ -191,7 +191,7 @@ impl ToolRecipeCompiler {
                 content: CompiledToolRecipeContent::HttpConnector {
                     endpoint: endpoint.clone(),
                     policy: policy.clone(),
-                    credential_ref: recipe.credential_ref().cloned(),
+                    credential: recipe.credential().cloned(),
                 },
             }),
             ToolRecipeContent::PureTransform { expression } => Ok(CompiledToolRecipe {

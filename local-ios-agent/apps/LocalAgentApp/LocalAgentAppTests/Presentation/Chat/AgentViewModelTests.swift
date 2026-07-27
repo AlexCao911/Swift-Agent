@@ -466,7 +466,6 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
     }
 
     var sentTexts: [String] = []
-    var selectedProviderIds: [String] = []
     var didCreateNewChat = false
     var didLoadConversations = false
     var regeneratedMessageIds: [String] = []
@@ -503,11 +502,6 @@ private actor ViewModelServiceStub: AgentRuntimeServicing {
 
     func cancel(state: AgentViewState) async throws -> AgentViewState {
         state
-    }
-
-    func selectProvider(_ providerId: String, state: AgentViewState) async throws -> AgentViewState {
-        selectedProviderIds.append(providerId)
-        return state
     }
 
     func newChat(state: AgentViewState) async throws -> AgentViewState {

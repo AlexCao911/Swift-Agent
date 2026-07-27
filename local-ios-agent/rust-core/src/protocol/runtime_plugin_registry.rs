@@ -1,23 +1,13 @@
 use std::collections::BTreeSet;
 
 use super::{
-    ContextPolicyDefinition, HostCapabilityManifest, InferenceBackendDefinition,
-    LegacyRuntimeAdapterPlugin, MemoryDefinition, ModelDefinition, PluginModule,
-    PromptCompilerDefinition, ProviderDefinition, RegistryError, RegistryResult, ToolDefinition,
-    TypedRegistry, VoiceDefinition,
+    ContextPolicyDefinition, HostCapabilityManifest, MemoryDefinition, PluginModule,
+    PromptCompilerDefinition, RegistryError, RegistryResult, ToolDefinition, TypedRegistry,
+    VoiceDefinition,
 };
-
-#[cfg(feature = "builtin-openai-compatible")]
-use super::BuiltinProviderPlugin;
-
-#[cfg(feature = "link-llama-cpp-local-inference")]
-use super::BuiltinInferencePlugin;
 
 #[derive(Clone, Debug)]
 pub struct RuntimePluginRegistry {
-    providers: TypedRegistry<ProviderDefinition>,
-    models: TypedRegistry<ModelDefinition>,
-    inference_backends: TypedRegistry<InferenceBackendDefinition>,
     prompt_compilers: TypedRegistry<PromptCompilerDefinition>,
     tools: TypedRegistry<ToolDefinition>,
     memory: TypedRegistry<MemoryDefinition>,
@@ -26,18 +16,6 @@ pub struct RuntimePluginRegistry {
 }
 
 impl RuntimePluginRegistry {
-    pub fn providers(&self) -> &TypedRegistry<ProviderDefinition> {
-        &self.providers
-    }
-
-    pub fn models(&self) -> &TypedRegistry<ModelDefinition> {
-        &self.models
-    }
-
-    pub fn inference_backends(&self) -> &TypedRegistry<InferenceBackendDefinition> {
-        &self.inference_backends
-    }
-
     pub fn prompt_compilers(&self) -> &TypedRegistry<PromptCompilerDefinition> {
         &self.prompt_compilers
     }
@@ -62,9 +40,6 @@ impl RuntimePluginRegistry {
 #[derive(Clone, Debug)]
 pub struct PluginRegistryBuilder {
     host: HostCapabilityManifest,
-    providers: TypedRegistry<ProviderDefinition>,
-    models: TypedRegistry<ModelDefinition>,
-    inference_backends: TypedRegistry<InferenceBackendDefinition>,
     prompt_compilers: TypedRegistry<PromptCompilerDefinition>,
     tools: TypedRegistry<ToolDefinition>,
     memory: TypedRegistry<MemoryDefinition>,
@@ -76,30 +51,12 @@ impl PluginRegistryBuilder {
     pub fn new(host: HostCapabilityManifest) -> Self {
         Self {
             host,
-            providers: TypedRegistry::new(),
-            models: TypedRegistry::new(),
-            inference_backends: TypedRegistry::new(),
             prompt_compilers: TypedRegistry::new(),
             tools: TypedRegistry::new(),
             memory: TypedRegistry::new(),
             context_policies: TypedRegistry::new(),
             voice: TypedRegistry::new(),
         }
-    }
-
-    pub fn register_provider(&mut self, definition: ProviderDefinition) -> RegistryResult<()> {
-        self.providers.insert(definition)
-    }
-
-    pub fn register_model(&mut self, definition: ModelDefinition) -> RegistryResult<()> {
-        self.models.insert(definition)
-    }
-
-    pub fn register_inference_backend(
-        &mut self,
-        definition: InferenceBackendDefinition,
-    ) -> RegistryResult<()> {
-        self.inference_backends.insert(definition)
     }
 
     pub fn register_prompt_compiler(
@@ -129,7 +86,7 @@ impl PluginRegistryBuilder {
     }
 
     pub fn require_host_capability(&self, capability: &str) -> RegistryResult<()> {
-        if self.host_supports(capability) {
+        if self.host.supports(capability) {
             Ok(())
         } else {
             Err(RegistryError::MissingHostCapability(capability.to_string()))
@@ -141,19 +98,12 @@ impl PluginRegistryBuilder {
     }
 
     pub fn freeze(mut self) -> RegistryResult<RuntimePluginRegistry> {
-        self.providers.freeze();
-        self.models.freeze();
-        self.inference_backends.freeze();
         self.prompt_compilers.freeze();
         self.tools.freeze();
         self.memory.freeze();
         self.context_policies.freeze();
         self.voice.freeze();
-
         Ok(RuntimePluginRegistry {
-            providers: self.providers,
-            models: self.models,
-            inference_backends: self.inference_backends,
             prompt_compilers: self.prompt_compilers,
             tools: self.tools,
             memory: self.memory,
@@ -163,25 +113,9 @@ impl PluginRegistryBuilder {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CargoFeature {
-    BuiltinOpenAICompatible,
-    LinkLlamaCppLocalInference,
-}
-
-impl CargoFeature {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BuiltinOpenAICompatible => "builtin-openai-compatible",
-            Self::LinkLlamaCppLocalInference => "link-llama-cpp-local-inference",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StaticPluginModule {
     pub module_id: super::ModuleId,
-    pub cargo_feature: Option<CargoFeature>,
     pub required_host_capabilities: Vec<String>,
 }
 
@@ -189,14 +123,8 @@ impl StaticPluginModule {
     pub fn new(module_id: impl Into<String>) -> Self {
         Self {
             module_id: super::ModuleId::new(module_id),
-            cargo_feature: None,
             required_host_capabilities: Vec::new(),
         }
-    }
-
-    pub fn with_cargo_feature(mut self, cargo_feature: CargoFeature) -> Self {
-        self.cargo_feature = Some(cargo_feature);
-        self
     }
 
     pub fn requires_host_capability(mut self, capability: impl Into<String>) -> Self {
@@ -228,30 +156,7 @@ impl StaticPluginList {
     }
 
     pub fn compiled() -> Self {
-        let mut entries = Vec::new();
-
-        #[cfg(feature = "builtin-openai-compatible")]
-        entries.push(StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.provider.openai_compatible")
-                .with_cargo_feature(CargoFeature::BuiltinOpenAICompatible)
-                .requires_host_capability("network"),
-            Box::new(BuiltinProviderPlugin::openai_compatible()),
-        ));
-
-        #[cfg(feature = "link-llama-cpp-local-inference")]
-        entries.push(StaticPluginRegistration::new(
-            StaticPluginModule::new("builtin.inference.llama_cpp")
-                .with_cargo_feature(CargoFeature::LinkLlamaCppLocalInference)
-                .requires_host_capability("native_inference"),
-            Box::new(BuiltinInferencePlugin::llama_cpp()),
-        ));
-
-        entries.push(StaticPluginRegistration::new(
-            StaticPluginModule::new("legacy.runtime_adapter"),
-            Box::new(LegacyRuntimeAdapterPlugin::runtime_adapter()),
-        ));
-
-        Self::new(entries)
+        Self::new(Vec::new())
     }
 
     pub fn modules(&self) -> &[StaticPluginModule] {
@@ -264,14 +169,12 @@ impl StaticPluginList {
     ) -> RegistryResult<RuntimePluginRegistry> {
         let mut builder = PluginRegistryBuilder::new(host);
         let mut module_ids = BTreeSet::new();
-
         for entry in &self.entries {
             if !module_ids.insert(entry.metadata.module_id.clone()) {
                 return Err(RegistryError::DuplicatePluginModuleId(
                     entry.metadata.module_id.clone(),
                 ));
             }
-
             let actual_module_id = entry.plugin.module_id();
             if entry.metadata.module_id != actual_module_id {
                 return Err(RegistryError::StaticPluginMetadataMismatch {
@@ -279,7 +182,6 @@ impl StaticPluginList {
                     actual: actual_module_id.as_str().to_string(),
                 });
             }
-
             let plugin_capabilities: BTreeSet<&str> = entry
                 .plugin
                 .required_host_capabilities()
@@ -292,21 +194,17 @@ impl StaticPluginList {
                 .iter()
                 .map(String::as_str)
                 .collect();
-
-            for capability in plugin_capabilities.difference(&metadata_capabilities) {
+            if plugin_capabilities != metadata_capabilities {
+                let capability = plugin_capabilities
+                    .symmetric_difference(&metadata_capabilities)
+                    .next()
+                    .copied()
+                    .unwrap_or_default();
                 return Err(RegistryError::StaticPluginCapabilityMismatch {
                     module_id: actual_module_id.as_str().to_string(),
-                    capability: (*capability).to_string(),
+                    capability: capability.to_string(),
                 });
             }
-
-            for capability in metadata_capabilities.difference(&plugin_capabilities) {
-                return Err(RegistryError::StaticPluginCapabilityMismatch {
-                    module_id: actual_module_id.as_str().to_string(),
-                    capability: (*capability).to_string(),
-                });
-            }
-
             for capability in &entry.metadata.required_host_capabilities {
                 builder.require_host_capability(capability)?;
             }

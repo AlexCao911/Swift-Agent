@@ -71,7 +71,6 @@ enum ConversationService {
             messages: [],
             draft: UserDraftViewState(),
             currentSessionId: sessionId,
-            provider: state.provider,
             conversations: state.conversations,
             promptLibrary: state.promptLibrary,
             selectedAgentProfileId: state.selectedAgentProfileId,

@@ -30,12 +30,12 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
         conversation: any ConversationDomain,
         execution: any ExecutionDomain,
         toolDriver: any HostToolDriving = MinimalHostToolDriver(),
-        runStarter: (any LLMProductRunStarting)? = nil
+        runStarter: any LLMProductRunStarting
     ) {
         self.conversation = conversation
         self.execution = execution
         self.toolDriver = toolDriver
-        self.runStarter = runStarter ?? ExecutionDomainRunStarter(execution: execution)
+        self.runStarter = runStarter
     }
 
     func sendMessage(
@@ -218,14 +218,6 @@ final class ChatInteractionCoordinator: ChatInteractionCoordinating {
 
     func cancelRun(runId: String) async throws {
         _ = try await execution.cancelRun(runId: runId)
-    }
-}
-
-private struct ExecutionDomainRunStarter: LLMProductRunStarting {
-    let execution: any ExecutionDomain
-
-    func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await execution.startRun(request)
     }
 }
 

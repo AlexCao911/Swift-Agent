@@ -11,21 +11,12 @@ fn builder_create_plan_finalize_produces_snapshot_consumable_profile() {
         .unwrap();
 
     assert!(plan.readiness_report().is_ready());
-    assert!(plan
-        .required_bindings()
-        .iter()
-        .any(|binding| binding.binding_key() == "credential.openai.api_key"));
-
     let profile = resolver
-        .finalize(
-            plan,
-            UserProvidedBindings::default()
-                .credential("credential.openai.api_key", "credential_ref.openai.default"),
-        )
+        .finalize(plan, UserProvidedBindings::default())
         .unwrap();
 
     assert!(profile.reference().profile_version().is_some());
-    assert!(profile.readiness().is_ready());
+    assert!(profile.readiness().has_issue("host_binding.missing"));
     assert!(profile
         .bindings()
         .iter()

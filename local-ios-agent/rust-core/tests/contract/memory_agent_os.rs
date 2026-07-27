@@ -74,7 +74,7 @@ fn http_memory_connector_is_query_only_by_default() {
 #[test]
 fn http_memory_connector_external_write_requires_explicit_gate() {
     let spec = HttpMemoryConnectorSpec::query_only("https://memory.example.com/search")
-        .with_credential_ref(CredentialRef::new("memory.http"));
+        .with_credential(CredentialRef::new("memory.http"));
 
     let result = spec.clone().try_configure_external_write(None);
 
@@ -88,7 +88,7 @@ fn http_memory_connector_external_write_requires_explicit_gate() {
 #[test]
 fn http_memory_connector_write_request_has_memory_egress_disclosure() {
     let spec = HttpMemoryConnectorSpec::query_only("https://memory.example.com/search")
-        .with_credential_ref(CredentialRef::new("memory.http"))
+        .with_credential(CredentialRef::new("memory.http"))
         .with_external_write_configured("Allow writing memory content to memory.example.com")
         .unwrap();
 
@@ -105,7 +105,7 @@ fn http_memory_connector_write_request_has_memory_egress_disclosure() {
 #[test]
 fn http_memory_connector_requires_matching_egress_grant_before_write() {
     let spec = HttpMemoryConnectorSpec::query_only("https://memory.example.com/search")
-        .with_credential_ref(CredentialRef::new("memory.http"))
+        .with_credential(CredentialRef::new("memory.http"))
         .with_external_write_configured("Allow writing memory content to memory.example.com")
         .unwrap();
     let decision = external_memory_write_decision(&spec);
@@ -120,7 +120,7 @@ fn http_memory_connector_requires_matching_egress_grant_before_write() {
 #[test]
 fn http_memory_connector_rejects_mismatched_egress_grant() {
     let spec = HttpMemoryConnectorSpec::query_only("https://memory.example.com/search")
-        .with_credential_ref(CredentialRef::new("memory.http"))
+        .with_credential(CredentialRef::new("memory.http"))
         .with_external_write_configured("Allow writing memory content to memory.example.com")
         .unwrap();
     let decision = external_memory_write_decision(&spec);
@@ -139,7 +139,7 @@ fn http_memory_connector_rejects_mismatched_egress_grant() {
 #[test]
 fn memory_connector_does_not_expose_plaintext_credential() {
     let spec = HttpMemoryConnectorSpec::query_only("https://memory.example.com/search")
-        .with_credential_ref(CredentialRef::new("memory.http"));
+        .with_credential(CredentialRef::new("memory.http"));
     let debug = format!("{spec:?}");
 
     assert!(debug.contains("memory.http"));

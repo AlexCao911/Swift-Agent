@@ -262,8 +262,6 @@ private final class RecordingExecutionBridgeClient: ExecutionBridgeClient, @unch
     func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
         throw AgentBuilderClientTestError.unimplemented
     }
-
-    func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {}
 }
 
 private enum AgentBuilderClientTestError: Error {

@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_AGENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-XCFRAMEWORK="$LOCAL_AGENT_ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework"
 STAGING_DIRECTORY="$LOCAL_AGENT_ROOT/rust-core/target/xcode-ios"
 CARGO_BIN="${CARGO:-$HOME/.cargo/bin/cargo}"
 if [[ ! -x "$CARGO_BIN" ]]; then
@@ -32,7 +31,6 @@ CARGO_ARGUMENTS=(
   build
   --manifest-path "$LOCAL_AGENT_ROOT/rust-core/Cargo.toml"
   --target "$RUST_TARGET"
-  --features link-llama-cpp-local-inference
 )
 if [[ "${CONFIGURATION:-Debug}" == "Release" ]]; then
   CARGO_ARGUMENTS+=(--release)
@@ -41,9 +39,6 @@ fi
 
 "$LOCAL_AGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
 
-SDKROOT="${SDKROOT:-}" \
-IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}" \
-LOCAL_AGENT_INFERENCE_XCFRAMEWORK="$XCFRAMEWORK" \
 "$CARGO_BIN" build \
   "${CARGO_ARGUMENTS[@]:1}"
 

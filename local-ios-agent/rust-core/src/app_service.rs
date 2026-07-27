@@ -1,25 +1,14 @@
 use std::sync::Arc;
 
 use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
-use crate::model::{
-    InMemoryModelBindingCatalog, ModelBindingCatalog, ModelBindingId, ModelCatalogVersion,
-    ModelSelection,
-};
-use crate::run_snapshot::{
-    ResolvedRunSnapshot, RunSnapshotError, RunSnapshotResult, RunSnapshotService, StartRunRequest,
-};
-use crate::security::{
-    CredentialPurpose, InMemoryCredentialResolver, PermissionState, StaticSecurityPermissionService,
-};
+use crate::run_snapshot::{RunSnapshotError, RunSnapshotResult, RunSnapshotService};
 use crate::storage::{
-    InMemoryRuntimeStateStore, InMemoryTransactionRunner, StorageResult, TransactionName,
-    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
+    InMemoryRuntimeStateStore, InMemoryTransactionRunner, UnifiedRuntimeStateRepository,
 };
 use crate::user_customization::{
-    AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileLocalBindings,
-    AgentProfileModelBinding, AgentProfilePublisher, AgentProfileReference, AgentProfileVersion,
-    AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent,
-    InMemoryAgentProfileRepository, ProfilePublicationOperation,
+    AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfilePublisher, AgentProfileReference,
+    AgentProfileVersion, AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService,
+    ComponentContent, InMemoryAgentProfileRepository, ProfilePublicationOperation,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -32,7 +21,6 @@ pub struct AgentOSApplicationService {
     profile_repository: InMemoryAgentProfileRepository,
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     component_catalog: ComponentCatalogService,
-    model_catalog: InMemoryModelBindingCatalog,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -84,11 +72,6 @@ impl AgentBuilderCardDraftInput {
     }
 }
 
-struct ModelSelectionStageOperation {
-    catalog: InMemoryModelBindingCatalog,
-    selection: ModelSelection,
-}
-
 impl AgentOSApplicationServiceConfig {
     pub fn new() -> Self {
         Self::default()
@@ -116,17 +99,10 @@ impl AgentOSApplicationService {
     pub fn empty() -> Self {
         let profile_repository = InMemoryAgentProfileRepository::default();
         let component_catalog = ComponentCatalogService::default();
-        let model_catalog = InMemoryModelBindingCatalog::default();
         Self::from_repositories(
             profile_repository,
             Arc::new(InMemoryRuntimeStateStore::new()),
             component_catalog,
-            model_catalog,
-            Arc::new(
-                StaticSecurityPermissionService::default()
-                    .with_permission("run.start", PermissionState::Granted),
-            ),
-            Arc::new(default_credential_resolver()),
         )
     }
 
@@ -158,12 +134,6 @@ impl AgentOSApplicationService {
                 seeded.profile_repository,
                 runtime_state,
                 seeded.component_catalog,
-                seeded.model_catalog,
-                Arc::new(
-                    StaticSecurityPermissionService::default()
-                        .with_permission("run.start", PermissionState::Granted),
-                ),
-                Arc::new(default_credential_resolver()),
             ));
         }
         let profile_repository = InMemoryAgentProfileRepository::default();
@@ -179,12 +149,6 @@ impl AgentOSApplicationService {
             profile_repository,
             runtime_state,
             component_catalog,
-            InMemoryModelBindingCatalog::default(),
-            Arc::new(
-                StaticSecurityPermissionService::default()
-                    .with_permission("run.start", PermissionState::Granted),
-            ),
-            Arc::new(default_credential_resolver()),
         );
         Ok(service)
     }
@@ -199,13 +163,6 @@ impl AgentOSApplicationService {
 
     pub fn runtime_state(&self) -> Arc<dyn UnifiedRuntimeStateRepository> {
         self.runtime_state.clone()
-    }
-
-    pub fn resolve_and_persist_snapshot(
-        &self,
-        request: StartRunRequest,
-    ) -> RunSnapshotResult<ResolvedRunSnapshot> {
-        self.snapshot_service.resolve_and_persist(request)
     }
 
     pub fn list_agent_profiles(&self) -> Vec<AgentProfile> {
@@ -255,10 +212,6 @@ impl AgentOSApplicationService {
                     error.to_string(),
                 )
             })?;
-        let model_selection = default_model_selection();
-        ensure_model_selection(&self.model_catalog, model_selection.clone())?;
-        let model_catalog_for_publish =
-            ModelBindingCatalog::default().with_selection(model_selection.clone());
         let mut draft = AgentProfileDraft::new(profile_id, template.id().clone(), display_name)
             .bind(ComponentBinding::persona(
                 template
@@ -267,17 +220,7 @@ impl AgentOSApplicationService {
                     .clone(),
                 persona_version,
             ))
-            .with_model_binding(AgentProfileModelBinding::new(
-                template
-                    .slot_id_for_kind(AgentSlotKind::Model)
-                    .expect("assistant template has model slot")
-                    .clone(),
-                model_selection,
-            ))
-            .with_local_bindings(
-                AgentProfileLocalBindings::default()
-                    .with_credential_ref("account.openai.default", "credential.openai.default"),
-            );
+            .with_llm_slot(default_llm_slot(&template));
 
         if let Some(instruction_text) = card_draft.instruction_text() {
             let instruction_component_id = self
@@ -336,7 +279,6 @@ impl AgentOSApplicationService {
             profile_version,
             &template,
             &self.component_catalog,
-            &model_catalog_for_publish,
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
         let profile = self.profile_repository.profile(&reference).ok_or_else(|| {
@@ -472,7 +414,6 @@ impl AgentOSApplicationService {
             profile_version,
             &template,
             &self.component_catalog,
-            &ModelBindingCatalog::default(),
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
         let profile = staged.profile(&reference).ok_or_else(|| {
@@ -522,7 +463,6 @@ impl AgentOSApplicationService {
         let template = AgentTemplate::assistant_default();
         let profile_repository = InMemoryAgentProfileRepository::default();
         let component_catalog = ComponentCatalogService::default();
-        let model_catalog = InMemoryModelBindingCatalog::default();
 
         let persona_component_id =
             component_catalog.create_draft(ComponentContent::persona("Researcher"));
@@ -534,11 +474,6 @@ impl AgentOSApplicationService {
                     error.to_string(),
                 )
             })?;
-
-        let model_selection = default_model_selection();
-        ensure_model_selection(&model_catalog, model_selection.clone())?;
-        let model_catalog_for_publish =
-            ModelBindingCatalog::default().with_selection(model_selection.clone());
 
         let draft = AgentProfileDraft::new(
             AgentProfileId::new("profile_1"),
@@ -552,17 +487,7 @@ impl AgentOSApplicationService {
                 .clone(),
             persona_version,
         ))
-        .with_model_binding(AgentProfileModelBinding::new(
-            template
-                .slot_id_for_kind(AgentSlotKind::Model)
-                .expect("assistant template has model slot")
-                .clone(),
-            model_selection,
-        ))
-        .with_local_bindings(
-            AgentProfileLocalBindings::default()
-                .with_credential_ref("account.openai.default", "credential.openai.default"),
-        );
+        .with_llm_slot(default_llm_slot(&template));
         AgentProfilePublisher::new(
             Box::new(InMemoryTransactionRunner::default()),
             profile_repository.clone(),
@@ -571,15 +496,9 @@ impl AgentOSApplicationService {
             draft,
             &template,
             &component_catalog,
-            &model_catalog_for_publish,
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
-        let model_slot_id = template
-            .slot_id_for_kind(AgentSlotKind::Model)
-            .expect("assistant template has model slot")
-            .as_str()
-            .to_string();
         let v2_draft = AgentProfileDraft::new(
             AgentProfileId::new("profile_v2"),
             template.id().clone(),
@@ -592,10 +511,7 @@ impl AgentOSApplicationService {
                 .clone(),
             persona_version,
         ))
-        .with_llm_slot(LLMSlotV2::new(
-            AgentLLMRequirements::new(model_slot_id, 4096, true, LLMToolCallingMode::Allowed)
-                .requiring_input_modality(LLMInputModality::Text),
-        ));
+        .with_llm_slot(default_llm_slot(&template));
         AgentProfilePublisher::new(
             Box::new(InMemoryTransactionRunner::default()),
             profile_repository.clone(),
@@ -604,7 +520,6 @@ impl AgentOSApplicationService {
             v2_draft,
             &template,
             &component_catalog,
-            &model_catalog_for_publish,
         )
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
@@ -612,12 +527,6 @@ impl AgentOSApplicationService {
             profile_repository,
             Arc::new(InMemoryRuntimeStateStore::new()),
             component_catalog,
-            model_catalog,
-            Arc::new(
-                StaticSecurityPermissionService::default()
-                    .with_permission("run.start", PermissionState::Granted),
-            ),
-            Arc::new(default_credential_resolver()),
         );
         for profile in service.profile_repository.profiles() {
             service.persist_profile_aggregate(&profile)?;
@@ -629,23 +538,16 @@ impl AgentOSApplicationService {
         profile_repository: InMemoryAgentProfileRepository,
         runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
         component_catalog: ComponentCatalogService,
-        model_catalog: InMemoryModelBindingCatalog,
-        security: Arc<dyn crate::security::SecurityPermissionService>,
-        credential_resolver: Arc<dyn crate::security::CredentialRefResolver>,
     ) -> Self {
         Self {
             snapshot_service: Arc::new(snapshot_service_from_repositories(
                 runtime_state.clone(),
                 profile_repository.clone(),
                 component_catalog.clone(),
-                model_catalog.clone(),
-                security,
-                credential_resolver,
             )),
             profile_repository,
             runtime_state,
             component_catalog,
-            model_catalog,
         }
     }
 }
@@ -665,54 +567,18 @@ fn next_profile_version(
     AgentProfileVersion::new(next)
 }
 
-impl TransactionOperation for ModelSelectionStageOperation {
-    fn execute(&mut self, tx: &mut UnitOfWork) -> StorageResult<()> {
-        self.catalog.stage(tx, self.selection.clone())
-    }
-}
-
-fn stage_model_selection(
-    catalog: &InMemoryModelBindingCatalog,
-    selection: ModelSelection,
-) -> RunSnapshotResult<()> {
-    let mut operation = ModelSelectionStageOperation {
-        catalog: catalog.clone(),
-        selection,
-    };
-    InMemoryTransactionRunner::default()
-        .run(
-            TransactionName::new("application_service.model_binding.seed"),
-            &mut operation,
+fn default_llm_slot(template: &AgentTemplate) -> LLMSlotV2 {
+    LLMSlotV2::new(
+        AgentLLMRequirements::new(
+            template
+                .slot_id_for_kind(AgentSlotKind::Model)
+                .expect("assistant template has model slot")
+                .as_str(),
+            4_096,
+            true,
+            LLMToolCallingMode::Allowed,
         )
-        .map_err(RunSnapshotError::from)
-}
-
-fn ensure_model_selection(
-    catalog: &InMemoryModelBindingCatalog,
-    selection: ModelSelection,
-) -> RunSnapshotResult<()> {
-    if catalog.contains_exact_selection(&selection) {
-        Ok(())
-    } else {
-        stage_model_selection(catalog, selection)
-    }
-}
-
-fn default_model_selection() -> ModelSelection {
-    ModelSelection::new(
-        ModelBindingId::new("model_binding.primary"),
-        "account.openai.default",
-        "provider.openai",
-        "gpt-4.1-mini",
-        ModelCatalogVersion::new(7),
-    )
-}
-
-fn default_credential_resolver() -> InMemoryCredentialResolver {
-    InMemoryCredentialResolver::default().with_secret_for(
-        "credential.openai.default",
-        "secret",
-        [CredentialPurpose::RemoteProvider],
+        .requiring_input_modality(LLMInputModality::Text),
     )
 }
 
@@ -747,17 +613,11 @@ fn snapshot_service_from_repositories(
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
     profile_repository: InMemoryAgentProfileRepository,
     component_catalog: ComponentCatalogService,
-    model_catalog: InMemoryModelBindingCatalog,
-    security: Arc<dyn crate::security::SecurityPermissionService>,
-    credential_resolver: Arc<dyn crate::security::CredentialRefResolver>,
 ) -> RunSnapshotService {
     RunSnapshotService::from_unified_repositories(
         runtime_state,
         profile_repository,
         component_catalog,
-        model_catalog,
-        security,
-        credential_resolver,
         Box::new(InMemoryTransactionRunner::default()),
     )
 }

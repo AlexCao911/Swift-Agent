@@ -1,40 +1,15 @@
-pub mod desktop_minicpm;
 pub mod event;
-pub mod local_llm;
-pub mod openai_chat;
-pub mod provider;
-pub mod provider_profile;
-pub mod provider_registry;
 pub mod run_state;
 pub mod runtime;
 pub mod session_cursor;
 pub mod session_tree;
-pub mod stream_batcher;
 pub mod turn;
 pub mod types;
 
-pub use desktop_minicpm::{
-    register_desktop_minicpm_provider, DesktopMiniCPMProvider, DesktopMiniCPMSettings,
-    DesktopMiniCPMTokenizer, DesktopMiniCPMTransport, LocalhostHttpTransport,
-};
 pub use event::{EventKind, RuntimeEvent};
-pub use local_llm::{
-    CAbiFunctions, CAbiLocalAgentBackend, CAbiLocalAgentBackendStream, CAbiLocalInferenceBackend,
-    CAbiTokenCallback, CAbiV2EngineHandle, CAbiV2Functions, CAbiV2GenerationHandle,
-    CAbiV2ImageInput, CAbiV2LocalInferenceBackend, CAbiV2ModelHandle, ImageInput, LocalAgentStatus,
-    LocalInferenceBackend, LocalLLMProvider, MockLocalInferenceBackend,
-};
-pub use openai_chat::{build_openai_chat_request, parse_openai_chat_response};
-pub use provider::{
-    CancellationToken, MockStreamingProvider, ModelProvider, ModelProviderOutput,
-    ProviderCancellationRegistry,
-};
-pub use provider_profile::{ProviderKind, ProviderProfile};
-pub use provider_registry::{ProviderBundle, ProviderRegistry};
 pub use run_state::{RunRecord, RunState};
-pub use runtime::{AgentRuntime, AgentRuntimeConfig, SendMessageInput};
+pub use runtime::{AgentRuntime, AgentRuntimeConfig};
 pub use session_cursor::SessionCursor;
 pub use session_tree::SessionTree;
-pub use stream_batcher::StreamBatcher;
 pub use turn::AgentTurnResult;
 pub use types::{AgentError, EntryId, RunId, SessionId};

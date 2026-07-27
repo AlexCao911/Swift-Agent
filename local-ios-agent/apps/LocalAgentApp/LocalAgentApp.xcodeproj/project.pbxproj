@@ -116,7 +116,6 @@
 		0B0000010000000000001008 /* RunEventStreamService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001108 /* RunEventStreamService.swift */; };
 		0B0000010000000000001009 /* ToolApprovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001109 /* ToolApprovalService.swift */; };
 		0B000001000000000000100A /* RunDebugService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B000001000000000000110A /* RunDebugService.swift */; };
-		0B000001000000000000100B /* InferenceSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B000001000000000000110B /* InferenceSettingsService.swift */; };
 		0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001120 /* ConversationDomainTests.swift */; };
 		0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001121 /* ExecutionDomainTests.swift */; };
 		0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */; };
@@ -244,7 +243,6 @@
 		0B0000010000000000001108 /* RunEventStreamService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunEventStreamService.swift; sourceTree = "<group>"; };
 		0B0000010000000000001109 /* ToolApprovalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolApprovalService.swift; sourceTree = "<group>"; };
 		0B000001000000000000110A /* RunDebugService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunDebugService.swift; sourceTree = "<group>"; };
-		0B000001000000000000110B /* InferenceSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceSettingsService.swift; sourceTree = "<group>"; };
 		0B0000010000000000001120 /* ConversationDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001121 /* ExecutionDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainArchitectureTests.swift; sourceTree = "<group>"; };
@@ -555,7 +553,6 @@
 				0B0000010000000000001108 /* RunEventStreamService.swift */,
 				0B0000010000000000001109 /* ToolApprovalService.swift */,
 				0B000001000000000000110A /* RunDebugService.swift */,
-				0B000001000000000000110B /* InferenceSettingsService.swift */,
 			);
 			path = Execution;
 			sourceTree = "<group>";
@@ -840,7 +837,6 @@
 				0B0000010000000000001008 /* RunEventStreamService.swift in Sources */,
 				0B0000010000000000001009 /* ToolApprovalService.swift in Sources */,
 				0B000001000000000000100A /* RunDebugService.swift in Sources */,
-				0B000001000000000000100B /* InferenceSettingsService.swift in Sources */,
 				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
 				0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */,
 				0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */,

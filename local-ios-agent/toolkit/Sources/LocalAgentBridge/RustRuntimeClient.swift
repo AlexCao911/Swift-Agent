@@ -28,39 +28,23 @@ public struct RuntimeBridgeError: LocalizedError, Equatable, Sendable, CustomStr
 }
 
 public struct RustRuntimeConfiguration: Codable, Equatable, Sendable {
-    public var systemPrompt: String
-    public var runtimePolicy: String
-    public var providerId: String
     public var hostProcessEpoch: HostProcessEpoch
     public var store: RustRuntimeStoreConfiguration
-    public var providers: [RustRuntimeProviderConfiguration]
     public var agentOS: RustAgentOSConfiguration?
 
     public init(
-        systemPrompt: String,
-        runtimePolicy: String,
-        providerId: String,
         hostProcessEpoch: HostProcessEpoch,
         store: RustRuntimeStoreConfiguration,
-        providers: [RustRuntimeProviderConfiguration] = [],
         agentOS: RustAgentOSConfiguration? = nil
     ) {
-        self.systemPrompt = systemPrompt
-        self.runtimePolicy = runtimePolicy
-        self.providerId = providerId
         self.hostProcessEpoch = hostProcessEpoch
         self.store = store
-        self.providers = providers
         self.agentOS = agentOS
     }
 
     private enum CodingKeys: String, CodingKey {
-        case systemPrompt = "system_prompt"
-        case runtimePolicy = "runtime_policy"
-        case providerId = "provider_id"
         case hostProcessEpoch = "host_process_epoch"
         case store
-        case providers
         case agentOS = "agent_os"
     }
 }
@@ -74,96 +58,6 @@ public struct RustAgentOSConfiguration: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case seedDevelopmentProfile = "seed_development_profile"
-    }
-}
-
-public enum RustRuntimeProviderConfiguration: Codable, Equatable, Sendable {
-    case desktopMiniCPM(endpoint: String, model: String, maxContextTokens: Int)
-    case localLLM(model: String, modelConfigJson: String, maxContextTokens: Int)
-    case namedLocalLLM(providerId: String, displayName: String, model: String, modelConfigJson: String, maxContextTokens: Int)
-
-    public var bootstrapProviderId: String {
-        switch self {
-        case .desktopMiniCPM:
-            "desktop_minicpm"
-        case .localLLM:
-            "local_llm"
-        case .namedLocalLLM(let providerId, _, _, _, _):
-            providerId
-        }
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try container.decode(String.self, forKey: .kind)
-        switch kind {
-        case "desktop_minicpm", "desktop_mini_cpm":
-            self = .desktopMiniCPM(
-                endpoint: try container.decode(String.self, forKey: .endpoint),
-                model: try container.decode(String.self, forKey: .model),
-                maxContextTokens: try container.decode(Int.self, forKey: .maxContextTokens)
-            )
-        case "local_llm":
-            let model = try container.decode(String.self, forKey: .model)
-            let modelConfigJson = try container.decode(String.self, forKey: .modelConfigJson)
-            let maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
-            let providerId = try container.decodeIfPresent(String.self, forKey: .providerId)
-            let displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
-            if providerId != nil || displayName != nil {
-                self = .namedLocalLLM(
-                    providerId: providerId ?? "local_llm",
-                    displayName: displayName ?? "Local LLM",
-                    model: model,
-                    modelConfigJson: modelConfigJson,
-                    maxContextTokens: maxContextTokens
-                )
-            } else {
-                self = .localLLM(
-                    model: model,
-                    modelConfigJson: modelConfigJson,
-                    maxContextTokens: maxContextTokens
-                )
-            }
-        default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind,
-                in: container,
-                debugDescription: "Unknown provider kind: \(kind)"
-            )
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .desktopMiniCPM(let endpoint, let model, let maxContextTokens):
-            try container.encode("desktop_minicpm", forKey: .kind)
-            try container.encode(endpoint, forKey: .endpoint)
-            try container.encode(model, forKey: .model)
-            try container.encode(maxContextTokens, forKey: .maxContextTokens)
-        case .localLLM(let model, let modelConfigJson, let maxContextTokens):
-            try container.encode("local_llm", forKey: .kind)
-            try container.encode(model, forKey: .model)
-            try container.encode(modelConfigJson, forKey: .modelConfigJson)
-            try container.encode(maxContextTokens, forKey: .maxContextTokens)
-        case .namedLocalLLM(let providerId, let displayName, let model, let modelConfigJson, let maxContextTokens):
-            try container.encode("local_llm", forKey: .kind)
-            try container.encode(providerId, forKey: .providerId)
-            try container.encode(displayName, forKey: .displayName)
-            try container.encode(model, forKey: .model)
-            try container.encode(modelConfigJson, forKey: .modelConfigJson)
-            try container.encode(maxContextTokens, forKey: .maxContextTokens)
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case kind
-        case endpoint
-        case providerId = "provider_id"
-        case displayName = "display_name"
-        case model
-        case modelConfigJson = "model_config_json"
-        case maxContextTokens = "max_context_tokens"
     }
 }
 
@@ -235,17 +129,9 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> StringResult
-    public var updateRuntimeOptions: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var deleteSession: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var registerToolSchema: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var setPermissionState: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
-    public var sendMessage: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
-    public var sendMessageStreaming: (
-        RuntimeHandle?,
-        UnsafePointer<CChar>?,
-        RuntimeEventCallback?,
-        UnsafeMutableRawPointer?
-    ) -> StringResult
     public var pendingToolRequests: (RuntimeHandle?) -> StringResult
     public var pendingApprovalRequests: (RuntimeHandle?) -> StringResult
     public var submitToolResult: (
@@ -253,20 +139,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> StringResult
-    public var submitToolResultStreaming: (
-        RuntimeHandle?,
-        UnsafePointer<CChar>?,
-        UnsafePointer<CChar>?,
-        RuntimeEventCallback?,
-        UnsafeMutableRawPointer?
-    ) -> StringResult
-    public var submitApprovalResponse: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
-    public var cancel: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
-    public var latestPromptDebugSnapshot: (RuntimeHandle?) -> StringResult
-    public var providerProfiles: (RuntimeHandle?) -> StringResult
-    public var activeProvider: (RuntimeHandle?) -> StringResult
-    public var setProvider: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
-    public var startRun: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var loadDebugArchive: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var listAgentProfiles: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var buildAgent: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -311,17 +183,9 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             UnsafePointer<CChar>?,
             UnsafePointer<CChar>?
         ) -> StringResult,
-        updateRuntimeOptions: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         deleteSession: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         registerToolSchema: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         setPermissionState: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        sendMessage: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        sendMessageStreaming: @escaping (
-            RuntimeHandle?,
-            UnsafePointer<CChar>?,
-            RuntimeEventCallback?,
-            UnsafeMutableRawPointer?
-        ) -> StringResult,
         pendingToolRequests: @escaping (RuntimeHandle?) -> StringResult,
         pendingApprovalRequests: @escaping (RuntimeHandle?) -> StringResult,
         submitToolResult: @escaping (
@@ -329,20 +193,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             UnsafePointer<CChar>?,
             UnsafePointer<CChar>?
         ) -> StringResult,
-        submitToolResultStreaming: @escaping (
-            RuntimeHandle?,
-            UnsafePointer<CChar>?,
-            UnsafePointer<CChar>?,
-            RuntimeEventCallback?,
-            UnsafeMutableRawPointer?
-        ) -> StringResult,
-        submitApprovalResponse: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        cancel: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        latestPromptDebugSnapshot: @escaping (RuntimeHandle?) -> StringResult,
-        providerProfiles: @escaping (RuntimeHandle?) -> StringResult,
-        activeProvider: @escaping (RuntimeHandle?) -> StringResult,
-        setProvider: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
-        startRun: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         loadDebugArchive: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult,
         listAgentProfiles: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
         buildAgent: @escaping (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult = { _, _ in nil },
@@ -374,23 +224,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.activeBranch = activeBranch
         self.archiveSession = archiveSession
         self.renameSession = renameSession
-        self.updateRuntimeOptions = updateRuntimeOptions
         self.deleteSession = deleteSession
         self.registerToolSchema = registerToolSchema
         self.setPermissionState = setPermissionState
-        self.sendMessage = sendMessage
-        self.sendMessageStreaming = sendMessageStreaming
         self.pendingToolRequests = pendingToolRequests
         self.pendingApprovalRequests = pendingApprovalRequests
         self.submitToolResult = submitToolResult
-        self.submitToolResultStreaming = submitToolResultStreaming
-        self.submitApprovalResponse = submitApprovalResponse
-        self.cancel = cancel
-        self.latestPromptDebugSnapshot = latestPromptDebugSnapshot
-        self.providerProfiles = providerProfiles
-        self.activeProvider = activeProvider
-        self.setProvider = setProvider
-        self.startRun = startRun
         self.loadDebugArchive = loadDebugArchive
         self.listAgentProfiles = listAgentProfiles
         self.buildAgent = buildAgent
@@ -457,12 +296,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     title
                 )
             },
-            updateRuntimeOptions: { runtime, optionsJson in
-                local_agent_runtime_bridge_update_runtime_options(
-                    runtime.map { OpaquePointer($0) },
-                    optionsJson
-                )
-            },
             deleteSession: { runtime, sessionId in
                 local_agent_runtime_bridge_delete_session(
                     runtime.map { OpaquePointer($0) },
@@ -481,17 +314,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     stateJson
                 )
             },
-            sendMessage: { runtime, inputJson in
-                local_agent_runtime_bridge_send_message(runtime.map { OpaquePointer($0) }, inputJson)
-            },
-            sendMessageStreaming: { runtime, inputJson, callback, userData in
-                local_agent_runtime_bridge_send_message_streaming(
-                    runtime.map { OpaquePointer($0) },
-                    inputJson,
-                    callback,
-                    userData
-                )
-            },
             pendingToolRequests: { runtime in
                 local_agent_runtime_bridge_pending_tool_requests(runtime.map { OpaquePointer($0) })
             },
@@ -503,47 +325,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     runtime.map { OpaquePointer($0) },
                     runId,
                     resultJson
-                )
-            },
-            submitToolResultStreaming: { runtime, runId, resultJson, callback, userData in
-                local_agent_runtime_bridge_submit_tool_result_streaming(
-                    runtime.map { OpaquePointer($0) },
-                    runId,
-                    resultJson,
-                    callback,
-                    userData
-                )
-            },
-            submitApprovalResponse: { runtime, responseJson in
-                local_agent_runtime_bridge_submit_approval_response(
-                    runtime.map { OpaquePointer($0) },
-                    responseJson
-                )
-            },
-            cancel: { runtime, runId in
-                local_agent_runtime_bridge_cancel(runtime.map { OpaquePointer($0) }, runId)
-            },
-            latestPromptDebugSnapshot: { runtime in
-                local_agent_runtime_bridge_latest_prompt_debug_snapshot(
-                    runtime.map { OpaquePointer($0) }
-                )
-            },
-            providerProfiles: { runtime in
-                local_agent_runtime_bridge_provider_profiles(runtime.map { OpaquePointer($0) })
-            },
-            activeProvider: { runtime in
-                local_agent_runtime_bridge_active_provider(runtime.map { OpaquePointer($0) })
-            },
-            setProvider: { runtime, requestJson in
-                local_agent_runtime_bridge_set_provider(
-                    runtime.map { OpaquePointer($0) },
-                    requestJson
-                )
-            },
-            startRun: { runtime, requestJson in
-                local_agent_runtime_bridge_start_run(
-                    runtime.map { OpaquePointer($0) },
-                    requestJson
                 )
             },
             loadDebugArchive: { runtime, runId in
@@ -631,8 +412,6 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_list_legacy_profile_migration_actions(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.completeLegacyProfileMigration.rawValue:
                     return local_agent_runtime_bridge_complete_legacy_profile_migration(runtime.map { OpaquePointer($0) }, requestJson)
-                case RustAgentOSOperation.profileExecutionRoute.rawValue:
-                    return local_agent_runtime_bridge_profile_execution_route(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.previewRunPreparation.rawValue:
                     return local_agent_runtime_bridge_preview_run_preparation(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.renewRunPreparation.rawValue:
@@ -692,27 +471,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
         try decode(functions.createSession(handle), as: String.self)
     }
 
-    public func startRun(_ request: StartRunRequestDTO) async throws -> RunHandleDTO {
-        let json = try encode(request)
-        return try json.withCString { pointer in
-            try decode(functions.startRun(handle, pointer), as: RunHandleDTO.self)
-        }
-    }
-
-    public func profileExecutionRoute(
-        profileID: String,
-        profileRevision: UInt64
-    ) async throws -> ProfileExecutionRouteDTO {
-        try await request(
-            .profileExecutionRoute,
-            ProfileExecutionRouteRequestDTO(
-                profileID: profileID,
-                profileRevision: profileRevision
-            ),
-            as: ProfileExecutionRouteDTO.self
-        )
-    }
-
     public func loadDebugArchive(_ runId: String) async throws -> RunDebugUIModel {
         try runId.withCString { pointer in
             try decode(functions.loadDebugArchive(handle, pointer), as: RunDebugUIModel.self)
@@ -736,8 +494,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                 result = functions.prepareUserTurn(handle, pointer)
             case .commitAssistantResult:
                 result = functions.commitAssistantResult(handle, pointer)
-            case .startRun:
-                result = functions.startRun(handle, pointer)
             case .approveTool:
                 result = functions.approveTool(handle, pointer)
             case .submitToolResult:
@@ -753,8 +509,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                 }
             case .cancelRun:
                 result = functions.cancelRun(handle, pointer)
-            case .updateRuntimeOptions:
-                result = functions.updateRuntimeOptions(handle, pointer)
             case .previewContext:
                 result = functions.previewContext(handle, pointer)
             case .buildAgentV2, .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
@@ -764,8 +518,7 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                  .ackPreparedSessionCleanup, .confirmPreparedSessionClosed,
                  .beginLegacyProfileMigration, .listLegacyProfileMigrations,
                  .listLegacyProfileMigrationActions,
-                 .completeLegacyProfileMigration,
-                 .profileExecutionRoute:
+                 .completeLegacyProfileMigration:
                 result = operation.rawValue.withCString { operationPointer in
                     functions.llmContractRequest(handle, operationPointer, pointer)
                 }
@@ -861,13 +614,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
         }
     }
 
-    public func updateRuntimeOptions(_ options: RuntimeOptionsDTO) async throws {
-        let json = try encode(options)
-        _ = try json.withCString { pointer in
-            try consume(functions.updateRuntimeOptions(handle, pointer))
-        }
-    }
-
     public func deleteSession(sessionId: String) async throws {
         _ = try sessionId.withCString { sessionPointer in
             try consume(functions.deleteSession(handle, sessionPointer))
@@ -886,79 +632,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
         let json = try encode(request)
         _ = try json.withCString { pointer in
             try consume(functions.setPermissionState(handle, pointer))
-        }
-    }
-
-    public func sendMessage(
-        sessionId: String,
-        parentEventId: String?,
-        text: String
-    ) async throws -> AgentTurnResultDTO {
-        try await sendMessage(
-            sessionId: sessionId,
-            parentEventId: parentEventId,
-            text: text,
-            blobRefs: []
-        )
-    }
-
-    public func sendMessage(
-        sessionId: String,
-        parentEventId: String?,
-        text: String,
-        blobRefs: [String]
-    ) async throws -> AgentTurnResultDTO {
-        let request = SendMessageRequest(
-            sessionId: sessionId,
-            parentEventId: parentEventId,
-            text: text,
-            blobRefs: blobRefs
-        )
-        let json = try encode(request)
-        return try json.withCString { pointer in
-            try decode(functions.sendMessage(handle, pointer), as: AgentTurnResultDTO.self)
-        }
-    }
-
-    public func sendMessageStream(
-        sessionId: String,
-        parentEventId: String?,
-        text: String
-    ) -> AgentTurnStreamDTO {
-        sendMessageStream(
-            sessionId: sessionId,
-            parentEventId: parentEventId,
-            text: text,
-            blobRefs: []
-        )
-    }
-
-    public func sendMessageStream(
-        sessionId: String,
-        parentEventId: String?,
-        text: String,
-        blobRefs: [String]
-    ) -> AgentTurnStreamDTO {
-        do {
-            let request = SendMessageRequest(
-                sessionId: sessionId,
-                parentEventId: parentEventId,
-                text: text,
-                blobRefs: blobRefs
-            )
-            let json = try encode(request)
-            return makeTurnStream { callback, userData in
-                json.withCString { pointer in
-                    self.functions.sendMessageStreaming(
-                        self.handle,
-                        pointer,
-                        callback,
-                        userData
-                    )
-                }
-            }
-        } catch {
-            return failedTurnStream(error)
         }
     }
 
@@ -991,142 +664,12 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
         }
     }
 
-    public func submitToolResultStream(
-        runId: String,
-        result: ToolResultDTO
-    ) -> AgentTurnStreamDTO {
-        do {
-            let json = try encode(result)
-            return makeTurnStream(initialRunId: runId) { callback, userData in
-                runId.withCString { runIdPointer in
-                    json.withCString { resultPointer in
-                        self.functions.submitToolResultStreaming(
-                            self.handle,
-                            runIdPointer,
-                            resultPointer,
-                            callback,
-                            userData
-                        )
-                    }
-                }
-            }
-        } catch {
-            return failedTurnStream(error)
-        }
-    }
-
-    public func submitApprovalResponse(
-        _ response: ApprovalProtocolResponseDTO
-    ) async throws -> AgentTurnResultDTO {
-        let json = try encode(response)
-        return try json.withCString { pointer in
-            try decode(
-                functions.submitApprovalResponse(handle, pointer),
-                as: AgentTurnResultDTO.self
-            )
-        }
-    }
-
-    public func cancel(runId: String) async throws -> RuntimeEventDTO {
-        try runId.withCString { pointer in
-            try decode(functions.cancel(handle, pointer), as: RuntimeEventDTO.self)
-        }
-    }
-
-    public func latestPromptDebugSnapshot() async throws -> PromptDebugSnapshotDTO? {
-        try decode(
-            functions.latestPromptDebugSnapshot(handle),
-            as: Optional<PromptDebugSnapshotDTO>.self
-        )
-    }
-
-    public func providerProfiles() async throws -> [ProviderProfileDTO] {
-        try decode(functions.providerProfiles(handle), as: [ProviderProfileDTO].self)
-    }
-
-    public func activeProvider() async throws -> ProviderProfileDTO {
-        try decode(functions.activeProvider(handle), as: ProviderProfileDTO.self)
-    }
-
-    public func setProvider(sessionId: String, providerId: String) async throws -> RuntimeEventDTO {
-        let request = SetProviderRequest(sessionId: sessionId, providerId: providerId)
-        let json = try encode(request)
-        return try json.withCString { pointer in
-            try decode(functions.setProvider(handle, pointer), as: RuntimeEventDTO.self)
-        }
-    }
-
     private func decode<T: Decodable>(
         _ response: RustRuntimeCFunctionTable.StringResult,
         as type: T.Type
     ) throws -> T {
         let data = try consume(response)
         return try JSONDecoder().decode(T.self, from: data)
-    }
-
-    private func makeTurnStream(
-        initialRunId: String? = nil,
-        call: @escaping @Sendable (
-            RustRuntimeCFunctionTable.RuntimeEventCallback?,
-            UnsafeMutableRawPointer?
-        ) -> RustRuntimeCFunctionTable.StringResult
-    ) -> AgentTurnStreamDTO {
-        let (events, continuation) = AsyncThrowingStream.makeStream(
-            of: RuntimeEventDTO.self,
-            throwing: Error.self,
-            bufferingPolicy: .bufferingOldest(runtimeEventStreamBufferLimit)
-        )
-        let callbackBox = RuntimeEventCallbackBox(
-            continuation: continuation,
-            initialRunId: initialRunId,
-            dropPolicy: .allowDroppedEvents,
-            onCancelRun: { [self] runId in
-                Task.detached { [self] in
-                    _ = try? await self.cancel(runId: runId)
-                }
-            }
-        )
-        continuation.onTermination = { @Sendable termination in
-            if case .cancelled = termination {
-                callbackBox.terminate(cancelRun: true)
-                continuation.finish(throwing: CancellationError())
-            } else {
-                callbackBox.terminate(cancelRun: false)
-            }
-        }
-        let result = Task.detached { [self, callbackBox] in
-            let opaqueCallbackBox = Unmanaged.passRetained(callbackBox).toOpaque()
-            defer {
-                Unmanaged<RuntimeEventCallbackBox>
-                    .fromOpaque(opaqueCallbackBox)
-                    .release()
-            }
-
-            do {
-                let response = call(rustRuntimeEventCallback, opaqueCallbackBox)
-                let result = try decode(response, as: AgentTurnResultDTO.self)
-                continuation.finish()
-                return result
-            } catch {
-                continuation.finish(throwing: error)
-                throw error
-            }
-        }
-        return AgentTurnStreamDTO(events: events, result: result)
-    }
-
-    private func failedTurnStream(_ error: Error) -> AgentTurnStreamDTO {
-        let bridgeError = RuntimeBridgeError(
-            kind: "swift",
-            message: error.localizedDescription
-        )
-        let events = AsyncThrowingStream<RuntimeEventDTO, Error> { continuation in
-            continuation.finish(throwing: bridgeError)
-        }
-        let result = Task<AgentTurnResultDTO, Error> {
-            throw bridgeError
-        }
-        return AgentTurnStreamDTO(events: events, result: result)
     }
 
     private func makeEventStream(
@@ -1197,20 +740,6 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
     private func encode<T: Encodable>(_ value: T) throws -> String {
         let data = try JSONEncoder().encode(value)
         return String(decoding: data, as: UTF8.self)
-    }
-}
-
-private struct SendMessageRequest: Encodable {
-    var sessionId: String
-    var parentEventId: String?
-    var text: String
-    var blobRefs: [String] = []
-
-    private enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case parentEventId = "parent_event_id"
-        case text
-        case blobRefs = "blob_refs"
     }
 }
 
@@ -1340,16 +869,6 @@ private func rustRuntimeEventCallback(
 private struct SetPermissionStateRequest: Encodable {
     var scope: String
     var state: PermissionStateDTO
-}
-
-private struct SetProviderRequest: Encodable {
-    var sessionId: String
-    var providerId: String
-
-    private enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case providerId = "provider_id"
-    }
 }
 
 private struct BridgeErrorEnvelope: Decodable {
