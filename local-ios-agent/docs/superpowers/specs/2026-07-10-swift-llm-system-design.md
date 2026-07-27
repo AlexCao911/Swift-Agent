@@ -3360,8 +3360,8 @@ handle borrows.
 
 The native product is one package-contained
 `LocalAgentInferenceNative.xcframework`. It is the only owner of the C ABI and
-enabled vendor runtime objects; Rust links it only as a non-bundling legacy
-consumer. Deterministic evidence is provided by
+enabled vendor runtime objects; only Swift `LocalAgentLLMLocal` links and uses
+it. Deterministic evidence is provided by
 `scripts/run-llm-phase-2-contracts.sh`: Phase 1 regressions, C++ lifecycle and
 cancel-arbiter contracts, Rust architecture lints, the complete Swift suite,
 and Simulator/iPhoneOS final-link and catalog-resource checks. A separate
@@ -3530,6 +3530,32 @@ Phase 5 remains deliberately separate: it adds the iPhone/iPad Model Center
 and Provider Profile UI, publishes real user-selected exact host bindings,
 migrates existing profiles, and removes the temporary legacy Rust
 provider/local-inference path only after migration and parity evidence pass.
+
+## Phase 5 implementation evidence (2026-07-28)
+
+Phase 5 completes the single product cutover. The iPhone and iPad App expose
+Model Center and Provider Profile flows backed by the Swift-owned LLM store.
+Agent Builder publishes an exact V2 target revision and host binding only after
+capability and parameter validation; local and cloud targets then enter the
+same host-session route.
+
+Pre-cutover migration tests prove that a failed translation leaves the V1
+record unchanged. The final tree removes V1 product execution and all Rust
+provider, concrete-model, local-inference, and inference-router ownership. A
+narrow read-only Rust translator remains so a device can upgrade directly from
+an old store while preserving the complete portable Agent Profile component,
+tool, memory, voice, and requirements graph. The private Agent Package reader
+similarly converts known schema-v1 wire directly into the public V2 manifest;
+neither boundary can execute a legacy route.
+
+Swift is the sole owner of local/cloud target selection and runtime
+configuration. API keys remain in Keychain, local model files remain under
+Swift product control, C++ is linked only by `LocalAgentLLMLocal`, and Rust
+receives only portable requirements plus opaque host cross-links. Deterministic
+evidence is provided by `scripts/run-llm-phase-5-contracts.sh`, which maps
+explicit iPhone and iPad Simulator UDIDs into the complete Phase 4 regression
+gate once, then appends the Phase 5 architecture, product UI, migration,
+host-only runtime, and source-deletion checks without using live API keys.
 
 ## Official API References
 

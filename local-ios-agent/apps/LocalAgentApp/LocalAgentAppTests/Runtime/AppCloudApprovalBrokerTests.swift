@@ -50,8 +50,11 @@ private func waitForRequestCount(
     _ expected: Int,
     broker: AppCloudApprovalBroker
 ) async {
-    for _ in 0..<100 where await broker.totalRequestCount < expected {
-        await Task.yield()
+    for _ in 0..<100 {
+        if await broker.totalRequestCount == expected {
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(10))
     }
     #expect(await broker.totalRequestCount == expected)
 }

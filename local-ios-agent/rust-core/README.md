@@ -1,43 +1,44 @@
 # Rust Core
 
-`rust-core` owns the local Agent OS semantics for the iOS app: package/profile
-resolution, security gates, context assembly, execution planning, runtime state,
-and the JSON/C ABI consumed by Swift.
+`rust-core` is the provider-neutral Agent OS kernel for the iOS app. It owns
+portable packages and profiles, security gates, context assembly, execution
+planning, durable run state, tool policy, and the JSON/C ABI consumed by Swift.
 
-Swift owns UI, native iOS tool execution, and presentation state. C++ owns
-low-level on-device inference backends. Rust owns the contracts between them.
+Swift owns all LLM product state and runtime configuration, including local and
+cloud target selection, Provider Profiles, credentials, model installations,
+and host sessions. C++ owns only on-device inference. Rust does not link an
+inference engine or interpret provider/model details.
 
 ## Run Boundary
 
-The intended Agent OS run path is:
+The production LLM run path is:
 
 ```text
-StartRunRequestDTO
-  -> AgentOSApplicationService
-  -> RunSnapshotService
-  -> ExecutionPlanner
-  -> RunMachine
-  -> debug archive / runtime events
+Swift start request
+  -> Rust authoritative preview + global run lease
+  -> Swift prepares one exact local/cloud host session
+  -> Rust commits a provider-neutral V2 snapshot + host command outbox
+  -> Swift streams normalized host events
+  -> Rust executes tool policy and commits the final Agent output
 ```
 
-Swift sends only profile id and user intent. Rust captures trusted permission,
-credential, local binding, snapshot, and execution state.
+Durable commands, receipts, event sequences, watchdogs, cancellation, and
+restart recovery cross the host boundary without exposing Provider Profile,
+API key, Base URL, model path, or engine state to Rust.
 
 ## Modules
 
-- `protocol`: shared ids, definitions, registries, plugin and DTO safety shells.
-- `agent_package`: portable agent package read/validate/install/export boundary.
-- `user_customization`: user components, agent profiles, templates, builder graph.
-- `model` / `inference`: provider accounts, model bindings, backend routing.
-- `prompt` / `context`: prompt compilation, context graph, model input, archives.
-- `tool` / `memory`: tool recipes/results and memory provider contributions.
-- `security`: permissions, approvals, credentials, data egress, audit contracts.
-- `run_snapshot`: immutable run snapshot resolution from published profile state.
-- `execution` / `runtime`: execution plans, effects, checkpoints, run machine.
-- `storage`: transaction, event store, archive store, migration contracts.
-- `core`: legacy conversation runtime and provider/session infrastructure.
-- `ffi_bridge`: JSON/C ABI for Swift bridge clients.
-- `app_service`: application-service facade that wires shared repositories/services.
+- `agent_package`: portable V2 package read, validation, install, and export.
+- `user_customization`: components, V2 Agent Profiles, templates, and builder graph.
+- `prompt` / `context`: prompt compilation, context graph, model input, and archives.
+- `tool` / `memory`: tool policy, recipes/results, and memory contributions.
+- `security`: permissions, approvals, egress policy, and audit contracts.
+- `run_snapshot`: authoritative preview and provider-neutral immutable snapshots.
+- `execution`: host worker, tool turns, cancellation, completion, and recovery.
+- `storage`: the unified transactional runtime state and durable outboxes.
+- `ffi_bridge`: the provider-neutral JSON/C ABI used by Swift.
+- `migration`: the narrow read-only legacy Profile translator used during direct
+  old-version upgrades.
 
 ## Testing
 
@@ -63,11 +64,10 @@ For Rust-only work:
 cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml
 ```
 
-## Current Limits
+The deterministic complete Swift LLM gate is:
 
-- Some Swift app target tests require a full Xcode developer directory, not only
-  Command Line Tools.
-- Agent OS debug archives exposed through the current bridge are process-local;
-  durable debug archive loading belongs in the storage-backed application service.
-- Package/builder/snapshot/permission live Swift clients exist as DTO/protocol
-  boundaries first; full shared-repository live facades are the next service layer.
+```bash
+LOCAL_AGENT_PHASE5_IPHONE_UDID="<iPhone Simulator UDID>" \
+LOCAL_AGENT_PHASE5_IPAD_UDID="<iPad Simulator UDID>" \
+  scripts/run-llm-phase-5-contracts.sh
+```
