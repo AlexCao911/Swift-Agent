@@ -255,6 +255,178 @@ public struct PendingAgentProfileDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct BeginLegacyProfileMigrationDTO: Codable, Equatable, Sendable {
+    public let attemptId: String
+    public let profileId: String
+    public let profileRevision: UInt64
+
+    public init(attemptId: String, profileId: String, profileRevision: UInt64) {
+        self.attemptId = attemptId
+        self.profileId = profileId
+        self.profileRevision = profileRevision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptId = "attempt_id"
+        case profileId = "profile_id"
+        case profileRevision = "profile_revision"
+    }
+}
+
+public struct LegacyProfileSuccessorSubjectDTO: Codable, Equatable, Sendable {
+    public let profileId: String
+    public let profileRevision: UInt64
+    public let llmSlotId: String
+    public let requirementsHash: String
+    public let hostBindingOperationId: String
+
+    public init(
+        profileId: String,
+        profileRevision: UInt64,
+        llmSlotId: String,
+        requirementsHash: String,
+        hostBindingOperationId: String
+    ) {
+        self.profileId = profileId
+        self.profileRevision = profileRevision
+        self.llmSlotId = llmSlotId
+        self.requirementsHash = requirementsHash
+        self.hostBindingOperationId = hostBindingOperationId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileId = "profile_id"
+        case profileRevision = "profile_revision"
+        case llmSlotId = "llm_slot_id"
+        case requirementsHash = "requirements_hash"
+        case hostBindingOperationId = "host_binding_operation_id"
+    }
+}
+
+public struct LegacyMigrationActionDTO: Codable, Equatable, Sendable {
+    public let migrationSubject: String
+    public let sourceDigest: String
+    public let displayName: String
+    public let requirements: AgentLLMRequirementsDTO
+    public let redactedModelHint: String?
+    public let state: String
+    public let successor: LegacyProfileSuccessorSubjectDTO?
+
+    private enum CodingKeys: String, CodingKey {
+        case migrationSubject = "migration_subject"
+        case sourceDigest = "source_digest"
+        case displayName = "display_name"
+        case requirements
+        case redactedModelHint = "redacted_model_hint"
+        case state
+        case successor
+    }
+}
+
+public struct LegacyProfileMigrationAttemptDTO: Codable, Equatable, Sendable {
+    public let attemptId: String
+    public let successor: LegacyProfileSuccessorSubjectDTO
+    public let hostBindingOperationId: String
+
+    public init(
+        attemptId: String,
+        successor: LegacyProfileSuccessorSubjectDTO,
+        hostBindingOperationId: String
+    ) {
+        self.attemptId = attemptId
+        self.successor = successor
+        self.hostBindingOperationId = hostBindingOperationId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptId = "attempt_id"
+        case successor
+        case hostBindingOperationId = "host_binding_operation_id"
+    }
+}
+
+public enum LegacyProfileMigrationRecordStateDTO: Equatable, Sendable {
+    case pending(LegacyProfileMigrationAttemptDTO?)
+    case migrated(LegacyProfileSuccessorSubjectDTO)
+    case archived
+}
+
+public struct LegacyProfileMigrationRecordDTO: Codable, Equatable, Sendable {
+    public let sourceProfileId: String
+    public let sourceRevision: UInt64
+    public let sourceDigest: String
+    public let state: LegacyProfileMigrationRecordStateDTO
+
+    public init(
+        sourceProfileId: String,
+        sourceRevision: UInt64,
+        sourceDigest: String,
+        state: LegacyProfileMigrationRecordStateDTO
+    ) {
+        self.sourceProfileId = sourceProfileId
+        self.sourceRevision = sourceRevision
+        self.sourceDigest = sourceDigest
+        self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceProfileId = "source_profile_id"
+        case sourceRevision = "source_revision"
+        case sourceDigest = "source_digest"
+        case state
+        case attempt
+        case successor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceProfileId = try container.decode(String.self, forKey: .sourceProfileId)
+        sourceRevision = try container.decode(UInt64.self, forKey: .sourceRevision)
+        sourceDigest = try container.decode(String.self, forKey: .sourceDigest)
+        switch try container.decode(String.self, forKey: .state) {
+        case "pending":
+            state = .pending(
+                try container.decodeIfPresent(
+                    LegacyProfileMigrationAttemptDTO.self,
+                    forKey: .attempt
+                )
+            )
+        case "migrated":
+            state = .migrated(
+                try container.decode(
+                    LegacyProfileSuccessorSubjectDTO.self,
+                    forKey: .successor
+                )
+            )
+        case "archived":
+            state = .archived
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: container,
+                debugDescription: "unknown legacy migration state"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourceProfileId, forKey: .sourceProfileId)
+        try container.encode(sourceRevision, forKey: .sourceRevision)
+        try container.encode(sourceDigest, forKey: .sourceDigest)
+        switch state {
+        case let .pending(attempt):
+            try container.encode("pending", forKey: .state)
+            try container.encodeIfPresent(attempt, forKey: .attempt)
+        case let .migrated(successor):
+            try container.encode("migrated", forKey: .state)
+            try container.encode(successor, forKey: .successor)
+        case .archived:
+            try container.encode("archived", forKey: .state)
+        }
+    }
+}
+
 public struct PreparationBindingDTO: Codable, Equatable, Sendable {
     public let agentProfileId: String; public let agentProfileRevision: UInt64
     public let conversationFrameDigest: String; public let executionPlanDigest: String

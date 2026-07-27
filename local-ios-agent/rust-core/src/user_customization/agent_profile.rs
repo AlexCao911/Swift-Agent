@@ -65,6 +65,7 @@ pub enum AgentProfileHostBindingState {
     PendingHostBinding,
     HostUnbound,
     Active,
+    Tombstoned,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -883,6 +884,19 @@ fn expected_component_kind_for_slot(slot_kind: AgentSlotKind) -> Option<Componen
 }
 
 impl AgentProfile {
+    pub(crate) fn legacy_migration_successor(source: &Self, llm_slot: LLMSlotV2) -> Self {
+        Self {
+            id: source.id.clone(),
+            version: AgentProfileVersion::new(source.version.as_u64() + 1),
+            template_id: source.template_id.clone(),
+            name: source.name.clone(),
+            bindings: source.bindings.clone(),
+            llm_binding: Some(AgentProfileLLMBinding::HostSlotV2(llm_slot)),
+            local_bindings: AgentProfileLocalBindings::default(),
+            host_binding_state: AgentProfileHostBindingState::PendingHostBinding,
+        }
+    }
+
     pub(crate) fn installed_package_host_slot_profile(
         id: AgentProfileId,
         template: &AgentTemplate,
@@ -1083,6 +1097,7 @@ impl AgentProfile {
                 AgentProfileHostBindingState::PendingHostBinding => "pending_host_binding",
                 AgentProfileHostBindingState::HostUnbound => "host_unbound",
                 AgentProfileHostBindingState::Active => "active",
+                AgentProfileHostBindingState::Tombstoned => "tombstoned",
             }
             .to_string(),
         }

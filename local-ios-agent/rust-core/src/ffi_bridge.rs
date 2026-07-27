@@ -42,7 +42,8 @@ use crate::execution::{
 use crate::llm_contracts::{
     AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
     HostBindingSubjectCatalog, HostCommandAcknowledgement, HostToolResult, LLMBindingSchema,
-    LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult, PackageBindingPreparation,
+    LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult, LegacyProfileMigrationRecord,
+    LegacyProfileMigrationService, LegacyProfileMigrationState, PackageBindingPreparation,
     PreparationAbortReason, PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
     PreparedSessionRegistration, ProfilePublishPreparation,
 };
@@ -76,6 +77,12 @@ fn host_binding_agent_error(error: crate::llm_contracts::HostBindingError) -> Ag
 }
 
 fn runtime_state_agent_error(error: crate::storage::RuntimeStateError) -> AgentError {
+    AgentError::Storage(format!("{}: {error}", error.code()))
+}
+
+fn profile_migration_agent_error(
+    error: crate::llm_contracts::LegacyProfileMigrationError,
+) -> AgentError {
     AgentError::Storage(format!("{}: {error}", error.code()))
 }
 
@@ -271,6 +278,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
     host_binding: AgentHostBindingService,
+    profile_migration: LegacyProfileMigrationService,
     run_preparation: RunPreparationService,
     host_llm_dispatcher: HostLLMDispatcherRuntime,
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
@@ -368,6 +376,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             agent_os_state.clone(),
             HostBindingSubjectCatalog::new(app_services.runtime_state()),
         );
+        let profile_migration = LegacyProfileMigrationService::new(app_services.runtime_state());
         let bridge = Self {
             runtime,
             cancellations,
@@ -379,6 +388,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             app_services,
             conversation_commits,
             host_binding,
+            profile_migration,
             run_preparation,
             host_llm_dispatcher,
             runtime_state,
@@ -666,6 +676,47 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             .confirm_activation(request)
             .map_err(host_binding_agent_error)?;
         to_json(&cross_link)
+    }
+
+    fn begin_legacy_profile_migration_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let request = from_json(request_json)?;
+        let action = self
+            .profile_migration
+            .begin(request)
+            .map_err(profile_migration_agent_error)?;
+        to_json(&action)
+    }
+
+    fn list_legacy_profile_migrations_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let _: EmptyAgentOSRequestJson = from_json(request_json)?;
+        let records = self
+            .profile_migration
+            .records()
+            .map_err(profile_migration_agent_error)?;
+        to_json(
+            &records
+                .iter()
+                .map(LegacyProfileMigrationRecordJson::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn complete_legacy_profile_migration_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let confirmation = from_json(request_json)?;
+        let record = self
+            .profile_migration
+            .complete(confirmation)
+            .map_err(profile_migration_agent_error)?;
+        to_json(&LegacyProfileMigrationRecordJson::from(&record))
     }
 
     fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
@@ -1763,6 +1814,33 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime.confirm_host_binding_activation_json(request_json),
         }
     }
+    pub fn begin_legacy_profile_migration_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.begin_legacy_profile_migration_json(request_json),
+            Self::Sqlite(runtime) => runtime.begin_legacy_profile_migration_json(request_json),
+        }
+    }
+    pub fn list_legacy_profile_migrations_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.list_legacy_profile_migrations_json(request_json),
+            Self::Sqlite(runtime) => runtime.list_legacy_profile_migrations_json(request_json),
+        }
+    }
+    pub fn complete_legacy_profile_migration_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.complete_legacy_profile_migration_json(request_json),
+            Self::Sqlite(runtime) => runtime.complete_legacy_profile_migration_json(request_json),
+        }
+    }
     pub fn preview_run_preparation_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.preview_run_preparation_json(request_json),
@@ -2303,6 +2381,18 @@ json_bridge_function!(
     confirm_host_binding_activation_json
 );
 json_bridge_function!(
+    local_agent_runtime_bridge_begin_legacy_profile_migration,
+    begin_legacy_profile_migration_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_list_legacy_profile_migrations,
+    list_legacy_profile_migrations_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_complete_legacy_profile_migration,
+    complete_legacy_profile_migration_json
+);
+json_bridge_function!(
     local_agent_runtime_bridge_profile_execution_route,
     profile_execution_route_json
 );
@@ -2692,6 +2782,38 @@ struct AgentProfileJson {
     profile_id: String,
     profile_revision_id: u64,
     display_name: String,
+}
+
+#[derive(Serialize)]
+struct LegacyProfileMigrationRecordJson<'a> {
+    source_profile_id: &'a str,
+    source_revision: u64,
+    source_digest: &'a str,
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attempt: Option<&'a crate::llm_contracts::LegacyProfileMigrationAttempt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    successor: Option<&'a crate::llm_contracts::LegacyProfileSuccessorSubject>,
+}
+
+impl<'a> From<&'a LegacyProfileMigrationRecord> for LegacyProfileMigrationRecordJson<'a> {
+    fn from(record: &'a LegacyProfileMigrationRecord) -> Self {
+        let (state, attempt, successor) = match record.state() {
+            LegacyProfileMigrationState::Pending { attempt } => ("pending", attempt.as_ref(), None),
+            LegacyProfileMigrationState::Migrated { successor } => {
+                ("migrated", None, Some(successor))
+            }
+            LegacyProfileMigrationState::Archived => ("archived", None, None),
+        };
+        Self {
+            source_profile_id: record.source_profile_id().as_str(),
+            source_revision: record.source_revision().as_u64(),
+            source_digest: record.source_digest(),
+            state,
+            attempt,
+            successor,
+        }
+    }
 }
 
 impl From<&AgentProfile> for AgentProfileJson {

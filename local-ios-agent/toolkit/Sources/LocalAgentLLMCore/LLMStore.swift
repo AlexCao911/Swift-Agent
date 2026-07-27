@@ -339,6 +339,26 @@ public actor LLMStore {
         }?.receipt.binding
     }
 
+    func activeReceipts(
+        agentProfileID: String,
+        agentProfileRevision: UInt64,
+        llmSlotID: String,
+        requirementsHash: String
+    ) -> [HostBindingStagingReceipt] {
+        document.hostBindings.values.compactMap { record in
+            let configuration = record.request.configuration
+            guard record.state == .active,
+                  configuration.agentProfileID == agentProfileID,
+                  configuration.agentProfileRevision == agentProfileRevision,
+                  record.request.llmSlotID == llmSlotID,
+                  record.request.requirementsHash == requirementsHash
+            else {
+                return nil
+            }
+            return record.receipt
+        }
+    }
+
     func prepareSession(_ record: StoredPreparedSessionRecord) throws -> SwiftPreparedSession {
         let id = record.session.preparationID
         if let existing = document.preparedSessions[id] {

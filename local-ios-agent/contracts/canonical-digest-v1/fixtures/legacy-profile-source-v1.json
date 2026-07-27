@@ -1,0 +1,59 @@
+{
+  "name": "legacy-profile-source-v1",
+  "domain": "legacy-profile-source:v1",
+  "document": {
+    "source_profile_id": "legacy-profile",
+    "source_revision": 1,
+    "source_schema_version": 2,
+    "source_record": {
+      "id": "legacy-profile",
+      "version": 1,
+      "template_id": "template.assistant.default",
+      "name": "Legacy Agent",
+      "bindings": [
+        {
+          "slot_id": "slot.persona.primary",
+          "slot_kind": "persona",
+          "component_version_id": 101,
+          "settings": {
+            "values": {}
+          }
+        },
+        {
+          "slot_id": "slot.toolset.primary",
+          "slot_kind": "toolset",
+          "component_version_id": 102,
+          "settings": {
+            "values": {}
+          }
+        }
+      ],
+      "llm_binding": {
+        "schema": "legacy_v1",
+        "binding": {
+          "slot_id": "slot.model.primary",
+          "selection": {
+            "binding_id": "binding.legacy",
+            "provider_account_id": "account.legacy",
+            "provider_id": "openai",
+            "model_id": "gpt-4.1",
+            "catalog_version": 7
+          },
+          "settings": {
+            "values": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "local_bindings": {
+        "credential_refs": {
+          "account.legacy": "credential.legacy"
+        }
+      },
+      "host_binding_state": "not_required"
+    }
+  },
+  "expected_canonical_utf8": "{\"source_profile_id\":\"legacy-profile\",\"source_record\":{\"bindings\":[{\"component_version_id\":101,\"settings\":{\"values\":{}},\"slot_id\":\"slot.persona.primary\",\"slot_kind\":\"persona\"},{\"component_version_id\":102,\"settings\":{\"values\":{}},\"slot_id\":\"slot.toolset.primary\",\"slot_kind\":\"toolset\"}],\"host_binding_state\":\"not_required\",\"id\":\"legacy-profile\",\"llm_binding\":{\"binding\":{\"selection\":{\"binding_id\":\"binding.legacy\",\"catalog_version\":7,\"model_id\":\"gpt-4.1\",\"provider_account_id\":\"account.legacy\",\"provider_id\":\"openai\"},\"settings\":{\"values\":{\"reasoning_effort\":\"high\"}},\"slot_id\":\"slot.model.primary\"},\"schema\":\"legacy_v1\"},\"local_bindings\":{\"credential_refs\":{\"account.legacy\":\"credential.legacy\"}},\"name\":\"Legacy Agent\",\"template_id\":\"template.assistant.default\",\"version\":1},\"source_revision\":1,\"source_schema_version\":2}",
+  "expected_sha256": "2dd96e247681325b7fe5e7d10130758453c47fdddda3c206d462d772288bfbd9"
+}

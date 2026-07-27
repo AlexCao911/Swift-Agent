@@ -96,6 +96,8 @@
 		0E5000030000000000000001 /* HostBoundAgentBuilderClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000011 /* HostBoundAgentBuilderClient.swift */; };
 		0E5000030000000000000002 /* HostBoundAgentPublishTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */; };
 		0E5000030000000000000003 /* AgentLLMConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000030000000000000013 /* AgentLLMConfigurationView.swift */; };
+		0E5000040000000000000001 /* LegacyLLMMigrationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */; };
+		0E5000040000000000000002 /* LegacyLLMMigrationCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */; };
 		0C0000010000000000002025 /* PrivacySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002125 /* PrivacySettingsView.swift */; };
 		0C0000010000000000002026 /* DebugTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002126 /* DebugTraceView.swift */; };
 		0C0000010000000000002027 /* StateBadges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002127 /* StateBadges.swift */; };
@@ -221,6 +223,8 @@
 		0E5000030000000000000011 /* HostBoundAgentBuilderClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBoundAgentBuilderClient.swift; sourceTree = "<group>"; };
 		0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBoundAgentPublishTests.swift; sourceTree = "<group>"; };
 		0E5000030000000000000013 /* AgentLLMConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLLMConfigurationView.swift; sourceTree = "<group>"; };
+		0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLLMMigrationCoordinator.swift; sourceTree = "<group>"; };
+		0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLLMMigrationCoordinatorTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002125 /* PrivacySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002126 /* DebugTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002127 /* StateBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadges.swift; sourceTree = "<group>"; };
@@ -357,6 +361,7 @@
 				0B0000010000000000001150 /* ChatInteractionCoordinator.swift */,
 				0A000001000000000000010F /* ConversationService.swift */,
 				0A000001000000000000010E /* RuntimeStreamBuffer.swift */,
+				0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -523,6 +528,7 @@
 				0B0000010000000000001121 /* ExecutionDomainTests.swift */,
 				0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */,
 				0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */,
+				0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -809,6 +815,7 @@
 				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
 				0E5000020000000000000001 /* AppModelCenterClient.swift in Sources */,
 				0E5000030000000000000001 /* HostBoundAgentBuilderClient.swift in Sources */,
+				0E5000040000000000000001 /* LegacyLLMMigrationCoordinator.swift in Sources */,
 				0E5000020000000000000002 /* ProviderProfileEditorView.swift in Sources */,
 				0C0000010000000000002026 /* DebugTraceView.swift in Sources */,
 				0C0000010000000000002028 /* ProductEmptyStates.swift in Sources */,
@@ -888,6 +895,7 @@
 				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
 				0E5000010000000000000001 /* ProviderProfileEditorTests.swift in Sources */,
 				0E5000030000000000000002 /* HostBoundAgentPublishTests.swift in Sources */,
+				0E5000040000000000000002 /* LegacyLLMMigrationCoordinatorTests.swift in Sources */,
 				0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */,
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,

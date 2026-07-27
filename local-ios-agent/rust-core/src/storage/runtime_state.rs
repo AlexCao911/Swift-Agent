@@ -8,11 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution::{ExecutionEvent, ExecutionEventRepository};
 use crate::llm_contracts::{
-    GlobalRunLeaseState, HostCommandAcknowledgement, HostCommandAcknowledgementDisposition,
-    HostCommandCopyReceipt, HostCommandEnvelope, HostCommandKind, HostExecutionPhase,
-    HostRunHandle, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,
-    HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventReceiptDisposition,
-    LLMEventSubmissionResult, LogicalRunOutcome, PreparationError, PreparationReconciliation,
+    GlobalRunLeaseState, HostBindingActivationConfirmation, HostCommandAcknowledgement,
+    HostCommandAcknowledgementDisposition, HostCommandCopyReceipt, HostCommandEnvelope,
+    HostCommandKind, HostExecutionPhase, HostRunHandle, HostSessionCloseDisposition,
+    HostSessionRecord, HostWatchdogKind, HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt,
+    LLMEventReceiptDisposition, LLMEventSubmissionResult, LegacyProfileMigrationRecord,
+    LegacyProfileMigrationState, LogicalRunOutcome, PreparationError, PreparationReconciliation,
     PreparedSessionCleanupIdentity, ResourceLifecycle, RunPreparationState,
 };
 use crate::storage::agent_os_state::{PreparedRunConsumption, SharedAgentOSStateStore};
@@ -466,6 +467,36 @@ pub trait UnifiedRuntimeStateRepository: Send + Sync + 'static {
     fn agent_component_revisions(
         &self,
     ) -> Result<Vec<PublishedUserComponentVersion>, RuntimeStateError>;
+    fn begin_legacy_profile_migration(
+        &self,
+        record: LegacyProfileMigrationRecord,
+        successor: AgentProfile,
+        components: Vec<PublishedUserComponentVersion>,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError>;
+    fn ensure_legacy_profile_migration_record(
+        &self,
+        record: LegacyProfileMigrationRecord,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError>;
+    fn legacy_profile_migration_record(
+        &self,
+        source_digest: &str,
+    ) -> Result<Option<LegacyProfileMigrationRecord>, RuntimeStateError>;
+    fn legacy_profile_migration_records(
+        &self,
+    ) -> Result<Vec<LegacyProfileMigrationRecord>, RuntimeStateError>;
+    fn complete_legacy_profile_migration(
+        &self,
+        confirmation: HostBindingActivationConfirmation,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError>;
+    fn abandon_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+        attempt_id: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError>;
+    fn archive_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError>;
     fn insert_worker_and_session(
         &self,
         worker: HostWorkerRecord,
@@ -606,6 +637,7 @@ struct InMemoryRuntimeState {
     profiles: BTreeMap<(AgentProfileId, AgentProfileVersion), AgentProfile>,
     profile_publication_operations: BTreeMap<String, (AgentProfileId, AgentProfileVersion)>,
     components: BTreeMap<UserComponentVersionId, PublishedUserComponentVersion>,
+    legacy_profile_migrations: BTreeMap<String, LegacyProfileMigrationRecord>,
     workers: BTreeMap<String, HostWorkerRecord>,
     sessions: BTreeMap<String, HostSessionRecord>,
     commands: BTreeMap<String, HostCommandOutboxRow>,
@@ -757,7 +789,10 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
         let state = self.inner.lock().map_err(|_| poisoned())?;
         let mut latest = BTreeMap::<AgentProfileId, AgentProfile>::new();
         for profile in state.profiles.values().filter(|profile| {
-            profile.host_binding_state() != AgentProfileHostBindingState::PendingHostBinding
+            matches!(
+                profile.host_binding_state(),
+                AgentProfileHostBindingState::NotRequired | AgentProfileHostBindingState::Active
+            )
         }) {
             if latest
                 .get(profile.id())
@@ -818,6 +853,227 @@ impl UnifiedRuntimeStateRepository for InMemoryRuntimeStateStore {
             .values()
             .cloned()
             .collect())
+    }
+
+    fn begin_legacy_profile_migration(
+        &self,
+        record: LegacyProfileMigrationRecord,
+        successor: AgentProfile,
+        components: Vec<PublishedUserComponentVersion>,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        if let Some(existing) = state.legacy_profile_migrations.get(record.source_digest()) {
+            if existing == &record
+                || matches!(
+                    existing.state(),
+                    LegacyProfileMigrationState::Migrated { .. }
+                        | LegacyProfileMigrationState::Archived
+                )
+            {
+                return Ok(existing.clone());
+            }
+            if !matches!(
+                existing.state(),
+                LegacyProfileMigrationState::Pending { attempt: None }
+            ) {
+                return Err(conflict());
+            }
+        }
+        let mut next = state.clone();
+        for component in components {
+            if let Some(existing) = next.components.get(&component.id) {
+                if existing != &component {
+                    return Err(conflict());
+                }
+            } else {
+                next.components.insert(component.id, component);
+            }
+        }
+        if successor.bindings().iter().any(|binding| {
+            !next
+                .components
+                .contains_key(&binding.component_version_id())
+        }) {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.component_missing",
+                "migration successor references a missing component revision",
+            ));
+        }
+        let key = (successor.id().clone(), successor.version());
+        if let Some(existing) = next.profiles.get(&key) {
+            if existing != &successor {
+                return Err(conflict());
+            }
+        } else {
+            next.profiles.insert(key.clone(), successor);
+        }
+        next.profile_publication_operations.insert(
+            format!(
+                "legacy-migration.{}",
+                migration_attempt(record.state())?.attempt_id()
+            ),
+            key,
+        );
+        next.legacy_profile_migrations
+            .insert(record.source_digest().to_string(), record.clone());
+        *state = next;
+        Ok(record)
+    }
+
+    fn ensure_legacy_profile_migration_record(
+        &self,
+        record: LegacyProfileMigrationRecord,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        if !matches!(
+            record.state(),
+            LegacyProfileMigrationState::Pending { attempt: None }
+        ) {
+            return Err(conflict());
+        }
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        if let Some(existing) = state.legacy_profile_migrations.get(record.source_digest()) {
+            return Ok(existing.clone());
+        }
+        state
+            .legacy_profile_migrations
+            .insert(record.source_digest().to_string(), record.clone());
+        Ok(record)
+    }
+
+    fn legacy_profile_migration_record(
+        &self,
+        source_digest: &str,
+    ) -> Result<Option<LegacyProfileMigrationRecord>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .legacy_profile_migrations
+            .get(source_digest)
+            .cloned())
+    }
+
+    fn legacy_profile_migration_records(
+        &self,
+    ) -> Result<Vec<LegacyProfileMigrationRecord>, RuntimeStateError> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| poisoned())?
+            .legacy_profile_migrations
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn complete_legacy_profile_migration(
+        &self,
+        confirmation: HostBindingActivationConfirmation,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let (digest, record) = state
+            .legacy_profile_migrations
+            .iter()
+            .find(|(_, record)| {
+                migration_attempt(record.state()).is_ok_and(|attempt| {
+                    let successor = attempt.successor();
+                    successor.profile_id() == confirmation.agent_profile_id()
+                        && successor.profile_revision() == confirmation.agent_profile_revision()
+                })
+            })
+            .map(|(digest, record)| (digest.clone(), record.clone()))
+            .ok_or_else(not_found)?;
+        let attempt = migration_attempt(record.state())?;
+        let successor = attempt.successor().clone();
+        validate_migration_confirmation(&successor, &confirmation)?;
+        let key = (
+            AgentProfileId::new(successor.profile_id()),
+            AgentProfileVersion::new(successor.profile_revision()),
+        );
+        let profile = state.profiles.get(&key).cloned().ok_or_else(not_found)?;
+        if profile.host_binding_state() != AgentProfileHostBindingState::HostUnbound {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.successor_state_stale",
+                "migration successor is not awaiting exact Swift activation",
+            ));
+        }
+        self.agent_os_state
+            .with_host_binding_mut(|store| store.activate_matching_cross_link(&confirmation))
+            .map_err(|binding| {
+                RuntimeStateError::new(
+                    "legacy_profile.binding_activation_failed",
+                    format!("{}: {binding}", binding.code()),
+                )
+            })?;
+        state.profiles.insert(
+            key,
+            profile.with_host_binding_state(AgentProfileHostBindingState::Active),
+        );
+        let migrated = record.with_state(LegacyProfileMigrationState::Migrated { successor });
+        state
+            .legacy_profile_migrations
+            .insert(digest, migrated.clone());
+        Ok(migrated)
+    }
+
+    fn abandon_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+        attempt_id: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let record = state
+            .legacy_profile_migrations
+            .get(source_digest)
+            .cloned()
+            .ok_or_else(not_found)?;
+        let attempt = migration_attempt(record.state())?;
+        if attempt.attempt_id() != attempt_id {
+            return Err(conflict());
+        }
+        let key = (
+            AgentProfileId::new(attempt.successor().profile_id()),
+            AgentProfileVersion::new(attempt.successor().profile_revision()),
+        );
+        let profile = state.profiles.get(&key).cloned().ok_or_else(not_found)?;
+        if profile.host_binding_state() == AgentProfileHostBindingState::Active {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.successor_already_active",
+                "active migration successor cannot be abandoned",
+            ));
+        }
+        state.profiles.insert(
+            key,
+            profile.with_host_binding_state(AgentProfileHostBindingState::Tombstoned),
+        );
+        let pending = record.with_state(LegacyProfileMigrationState::Pending { attempt: None });
+        state
+            .legacy_profile_migrations
+            .insert(source_digest.to_string(), pending.clone());
+        Ok(pending)
+    }
+
+    fn archive_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut state = self.inner.lock().map_err(|_| poisoned())?;
+        let record = state
+            .legacy_profile_migrations
+            .get(source_digest)
+            .cloned()
+            .ok_or_else(not_found)?;
+        if !matches!(
+            record.state(),
+            LegacyProfileMigrationState::Pending { attempt: None }
+        ) {
+            return Err(conflict());
+        }
+        let archived = record.with_state(LegacyProfileMigrationState::Archived);
+        state
+            .legacy_profile_migrations
+            .insert(source_digest.to_string(), archived.clone());
+        Ok(archived)
     }
 
     fn insert_worker_and_session(
@@ -2438,6 +2694,37 @@ fn preparation_commit_error(error: PreparationError) -> RuntimeStateError {
         "runtime_state.preparation_cas_conflict",
         format!("{}: {error}", error.code()),
     )
+}
+
+pub(crate) fn migration_attempt(
+    state: &LegacyProfileMigrationState,
+) -> Result<&crate::llm_contracts::LegacyProfileMigrationAttempt, RuntimeStateError> {
+    match state {
+        LegacyProfileMigrationState::Pending {
+            attempt: Some(attempt),
+        } => Ok(attempt),
+        _ => Err(RuntimeStateError::new(
+            "legacy_profile.attempt_missing",
+            "legacy migration record has no active attempt",
+        )),
+    }
+}
+
+pub(crate) fn validate_migration_confirmation(
+    successor: &crate::llm_contracts::LegacyProfileSuccessorSubject,
+    confirmation: &HostBindingActivationConfirmation,
+) -> Result<(), RuntimeStateError> {
+    if successor.profile_id() != confirmation.agent_profile_id()
+        || successor.profile_revision() != confirmation.agent_profile_revision()
+        || successor.llm_slot_id() != confirmation.llm_slot_id()
+        || successor.requirements_hash() != confirmation.requirements_hash()
+    {
+        return Err(RuntimeStateError::new(
+            "legacy_profile.activation_mismatch",
+            "activation confirmation does not match the exact hidden successor",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn transaction_failed() -> RuntimeStateError {

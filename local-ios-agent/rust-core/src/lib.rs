@@ -9,6 +9,7 @@ pub mod ffi_bridge;
 pub mod inference;
 pub mod llm_contracts;
 pub mod memory;
+pub mod migration;
 pub mod model;
 pub mod prompt;
 pub mod protocol;

@@ -151,6 +151,21 @@ public struct AgentHostBindingSaga: Sendable {
         return binding
     }
 
+    public func activeReceipt(
+        agentProfileID: String,
+        agentProfileRevision: UInt64,
+        llmSlotID: String,
+        requirementsHash: String
+    ) async -> HostBindingStagingReceipt? {
+        let matches = await store.activeReceipts(
+            agentProfileID: agentProfileID,
+            agentProfileRevision: agentProfileRevision,
+            llmSlotID: llmSlotID,
+            requirementsHash: requirementsHash
+        )
+        return matches.count == 1 ? matches[0] : nil
+    }
+
     public func reconcileHostBindings(
         _ rustCrossLinks: [RustHostBindingCrossLink]
     ) async throws -> HostBindingReconciliationOutcome {

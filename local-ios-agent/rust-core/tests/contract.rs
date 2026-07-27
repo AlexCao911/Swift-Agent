@@ -37,6 +37,8 @@ mod host_llm_recovery;
 mod host_llm_worker;
 #[path = "contract/inference_backend_agent_os.rs"]
 mod inference_backend_agent_os;
+#[path = "contract/llm_profile_migration.rs"]
+mod llm_profile_migration;
 #[path = "contract/llm_slot_v2.rs"]
 mod llm_slot_v2;
 #[path = "contract/memory_agent_os.rs"]

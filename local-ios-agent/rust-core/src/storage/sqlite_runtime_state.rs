@@ -14,7 +14,8 @@ use crate::llm_contracts::{
     HostBindingCrossLink, HostBindingError, HostBindingOperation, HostCommandAcknowledgement,
     HostCommandCopyReceipt, HostRunHandle, HostSessionCloseDisposition, HostSessionRecord,
     HostWorkerRecord, LLMEventEnvelope, LLMEventReceipt, LLMEventSubmissionResult,
-    LogicalRunOutcome, PackageBindingPreparation, PreparationError, PreparationReconciliation,
+    LegacyProfileMigrationRecord, LegacyProfileMigrationState, LogicalRunOutcome,
+    PackageBindingPreparation, PreparationError, PreparationReconciliation,
     PreparedSessionCleanupAcknowledgement, PreparedSessionCleanupIdentity,
     ProfilePublishPreparation, ResourceLifecycle, RunPreparationRecord, RunPreparationState,
 };
@@ -26,10 +27,11 @@ use super::agent_os_state::{
 use super::runtime_state::{
     accepted_event_state, apply_command_acknowledgement_state, close_command_for, conflict,
     contract_error, event_kind_name, event_receipt_disposition, expired_watchdog_state,
-    is_protocol_failure, lifecycle_command, not_found, poisoned, protocol_failure_state,
-    queues_inbound_event, reconciliation_conflict, transaction_failed, validate_ack,
-    validate_command_for_worker, validate_transition, validate_worker_session, EventQueueUsage,
-    HOST_EVENT_LOW_WATER_BYTES, HOST_EVENT_LOW_WATER_EVENTS,
+    is_protocol_failure, lifecycle_command, migration_attempt, not_found, poisoned,
+    protocol_failure_state, queues_inbound_event, reconciliation_conflict, transaction_failed,
+    validate_ack, validate_command_for_worker, validate_migration_confirmation,
+    validate_transition, validate_worker_session, EventQueueUsage, HOST_EVENT_LOW_WATER_BYTES,
+    HOST_EVENT_LOW_WATER_EVENTS,
 };
 use super::{
     HostCommandOutboxRow, HostCommandOutboxStatus, PreparedHostRunCommit,
@@ -373,7 +375,7 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             .prepare(
                 "select record_schema, revision_json
                  from agent_profile_revisions
-                 where host_binding_state != 'pending_host_binding'
+                 where host_binding_state in ('not_required', 'active')
                  order by profile_id, cast(profile_revision as integer)",
             )
             .map_err(sqlite_error)?;
@@ -482,6 +484,274 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
             })
             .collect();
         revisions
+    }
+
+    fn begin_legacy_profile_migration(
+        &self,
+        record: LegacyProfileMigrationRecord,
+        successor: AgentProfile,
+        components: Vec<PublishedUserComponentVersion>,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let existing_record =
+            load_legacy_migration_record_by_source(&transaction, record.source_digest())?;
+        if let Some(existing) = existing_record.as_ref() {
+            if existing == &record
+                || matches!(
+                    existing.state(),
+                    LegacyProfileMigrationState::Migrated { .. }
+                        | LegacyProfileMigrationState::Archived
+                )
+            {
+                transaction.commit().map_err(sqlite_error)?;
+                return Ok(existing.clone());
+            }
+            if !matches!(
+                existing.state(),
+                LegacyProfileMigrationState::Pending { attempt: None }
+            ) {
+                return Err(conflict());
+            }
+        }
+        for component in &components {
+            insert_component_revision(&transaction, component)?;
+        }
+        for binding in successor.bindings() {
+            if load_component_revision(&transaction, binding.component_version_id())?.is_none() {
+                return Err(RuntimeStateError::new(
+                    "legacy_profile.component_missing",
+                    "migration successor references a missing component revision",
+                ));
+            }
+        }
+        let attempt = migration_attempt(record.state())?;
+        insert_profile_revision(
+            &transaction,
+            attempt.host_binding_operation_id(),
+            &successor,
+        )?;
+        if existing_record.is_some() {
+            update_legacy_migration_record(&transaction, &record)?;
+        } else {
+            insert_legacy_migration_record(&transaction, &record)?;
+        }
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(record)
+    }
+
+    fn ensure_legacy_profile_migration_record(
+        &self,
+        record: LegacyProfileMigrationRecord,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        if !matches!(
+            record.state(),
+            LegacyProfileMigrationState::Pending { attempt: None }
+        ) {
+            return Err(conflict());
+        }
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        if let Some(existing) =
+            load_legacy_migration_record_by_source(&transaction, record.source_digest())?
+        {
+            transaction.commit().map_err(sqlite_error)?;
+            return Ok(existing);
+        }
+        insert_legacy_migration_record(&transaction, &record)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(record)
+    }
+
+    fn legacy_profile_migration_record(
+        &self,
+        source_digest: &str,
+    ) -> Result<Option<LegacyProfileMigrationRecord>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        load_legacy_migration_record_by_source(store.connection(), source_digest)
+    }
+
+    fn legacy_profile_migration_records(
+        &self,
+    ) -> Result<Vec<LegacyProfileMigrationRecord>, RuntimeStateError> {
+        let store = self.inner.lock().map_err(|_| poisoned())?;
+        load_legacy_migration_records(store.connection())
+    }
+
+    fn complete_legacy_profile_migration(
+        &self,
+        confirmation: HostBindingActivationConfirmation,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let record = load_legacy_migration_records(&transaction)?
+            .into_iter()
+            .find(|record| match record.state() {
+                LegacyProfileMigrationState::Pending {
+                    attempt: Some(attempt),
+                } => {
+                    attempt.successor().profile_id() == confirmation.agent_profile_id()
+                        && attempt.successor().profile_revision()
+                            == confirmation.agent_profile_revision()
+                }
+                LegacyProfileMigrationState::Migrated { successor } => {
+                    successor.profile_id() == confirmation.agent_profile_id()
+                        && successor.profile_revision() == confirmation.agent_profile_revision()
+                }
+                _ => false,
+            })
+            .ok_or_else(not_found)?;
+        if matches!(record.state(), LegacyProfileMigrationState::Migrated { .. }) {
+            transaction.commit().map_err(sqlite_error)?;
+            return Ok(record);
+        }
+        let attempt = migration_attempt(record.state())?;
+        let successor = attempt.successor().clone();
+        validate_migration_confirmation(&successor, &confirmation)?;
+        let current = load_profile_exact(
+            &transaction,
+            &AgentProfileId::new(successor.profile_id()),
+            AgentProfileVersion::new(successor.profile_revision()),
+        )?
+        .ok_or_else(not_found)?;
+        if current.host_binding_state() != AgentProfileHostBindingState::HostUnbound {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.successor_state_stale",
+                "migration successor is not awaiting exact Swift activation",
+            ));
+        }
+        let cross_link: Option<(String, String, String)> = transaction
+            .query_row(
+                "select c.operation_token, c.staging_receipt_digest, c.state
+                 from host_binding_cross_links c
+                 join host_binding_operations o on o.operation_token = c.operation_token
+                 where o.idempotency_key = ?1 and o.agent_profile_id = ?2
+                   and o.agent_profile_revision = ?3 and c.llm_slot_id = ?4
+                   and c.requirements_hash = ?5 and c.binding_id = ?6
+                   and c.binding_revision = ?7 and c.binding_hash = ?8",
+                params![
+                    attempt.host_binding_operation_id(),
+                    confirmation.agent_profile_id(),
+                    confirmation.agent_profile_revision().to_string(),
+                    confirmation.llm_slot_id(),
+                    confirmation.requirements_hash(),
+                    confirmation.binding().binding_id(),
+                    confirmation.binding().binding_revision().to_string(),
+                    confirmation.binding().binding_hash(),
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sqlite_error)?;
+        let (operation_token, receipt_digest, cross_link_state) =
+            cross_link.ok_or_else(not_found)?;
+        if receipt_digest != confirmation.staging_receipt_digest()
+            || !matches!(cross_link_state.as_str(), "host_unbound" | "active")
+        {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.activation_mismatch",
+                "activation confirmation does not match the exact staged Swift binding",
+            ));
+        }
+        if cross_link_state == "host_unbound" {
+            let changed = transaction
+                .execute(
+                    "update host_binding_cross_links set state = 'active'
+                     where operation_token = ?1 and state = 'host_unbound'",
+                    params![operation_token],
+                )
+                .map_err(sqlite_error)?;
+            if changed != 1 {
+                return Err(conflict());
+            }
+            transaction
+                .execute(
+                    "update host_binding_operations set state = 'active'
+                     where operation_token = ?1 and state = 'host_unbound'",
+                    params![operation_token],
+                )
+                .map_err(sqlite_error)?;
+        }
+        let active = current.with_host_binding_state(AgentProfileHostBindingState::Active);
+        update_profile_revision(
+            &transaction,
+            &active,
+            AgentProfileHostBindingState::HostUnbound,
+        )?;
+        let migrated = record.with_state(LegacyProfileMigrationState::Migrated { successor });
+        update_legacy_migration_record(&transaction, &migrated)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(migrated)
+    }
+
+    fn abandon_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+        attempt_id: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let record = load_legacy_migration_record_by_source(&transaction, source_digest)?
+            .ok_or_else(not_found)?;
+        let attempt = migration_attempt(record.state())?;
+        if attempt.attempt_id() != attempt_id {
+            return Err(conflict());
+        }
+        let successor = attempt.successor();
+        let current = load_profile_exact(
+            &transaction,
+            &AgentProfileId::new(successor.profile_id()),
+            AgentProfileVersion::new(successor.profile_revision()),
+        )?
+        .ok_or_else(not_found)?;
+        if current.host_binding_state() == AgentProfileHostBindingState::Active {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.successor_already_active",
+                "active migration successor cannot be abandoned",
+            ));
+        }
+        let expected = current.host_binding_state();
+        let tombstoned = current.with_host_binding_state(AgentProfileHostBindingState::Tombstoned);
+        update_profile_revision(&transaction, &tombstoned, expected)?;
+        let pending = record.with_state(LegacyProfileMigrationState::Pending { attempt: None });
+        update_legacy_migration_record(&transaction, &pending)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(pending)
+    }
+
+    fn archive_legacy_profile_migration(
+        &self,
+        source_digest: &str,
+    ) -> Result<LegacyProfileMigrationRecord, RuntimeStateError> {
+        let mut store = self.inner.lock().map_err(|_| poisoned())?;
+        let transaction = store
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_error)?;
+        let record = load_legacy_migration_record_by_source(&transaction, source_digest)?
+            .ok_or_else(not_found)?;
+        if !matches!(
+            record.state(),
+            LegacyProfileMigrationState::Pending { attempt: None }
+        ) {
+            return Err(conflict());
+        }
+        let archived = record.with_state(LegacyProfileMigrationState::Archived);
+        update_legacy_migration_record(&transaction, &archived)?;
+        transaction.commit().map_err(sqlite_error)?;
+        Ok(archived)
     }
 
     fn insert_worker_and_session(
@@ -1978,6 +2248,136 @@ fn load_profile_exact(
         .transpose()
 }
 
+fn load_component_revision(
+    connection: &Connection,
+    id: UserComponentVersionId,
+) -> Result<Option<PublishedUserComponentVersion>, RuntimeStateError> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "select record_schema, revision_json
+             from agent_component_revisions where component_version_id = ?1",
+            params![id.as_u64().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    row.map(|(schema, json)| decode_component_revision(&schema, &json))
+        .transpose()
+}
+
+fn update_profile_revision(
+    transaction: &Transaction<'_>,
+    profile: &AgentProfile,
+    expected: AgentProfileHostBindingState,
+) -> Result<(), RuntimeStateError> {
+    let json = serde_json::to_string(profile).map_err(record_json_error)?;
+    let changed = transaction
+        .execute(
+            "update agent_profile_revisions
+             set host_binding_state = ?1, revision_json = ?2, canonical_digest = ?3
+             where profile_id = ?4 and profile_revision = ?5
+               and host_binding_state = ?6",
+            params![
+                host_binding_state_name(profile.host_binding_state()),
+                json,
+                sha256_text(&json),
+                profile.id().as_str(),
+                profile.version().as_u64().to_string(),
+                host_binding_state_name(expected),
+            ],
+        )
+        .map_err(sqlite_error)?;
+    if changed != 1 {
+        return Err(conflict());
+    }
+    Ok(())
+}
+
+fn insert_legacy_migration_record(
+    transaction: &Transaction<'_>,
+    record: &LegacyProfileMigrationRecord,
+) -> Result<(), RuntimeStateError> {
+    const SCHEMA: &str = "legacy-profile-migration:v1";
+    let json = serde_json::to_string(record).map_err(record_json_error)?;
+    transaction
+        .execute(
+            "insert into legacy_profile_migration_records(
+               legacy_profile_id, legacy_profile_revision, record_schema, state, record_json
+             ) values (?1, ?2, ?3, ?4, ?5)",
+            params![
+                record.source_profile_id().as_str(),
+                record.source_revision().as_u64().to_string(),
+                SCHEMA,
+                migration_state_name(record.state()),
+                json,
+            ],
+        )
+        .map_err(sqlite_error)?;
+    Ok(())
+}
+
+fn update_legacy_migration_record(
+    transaction: &Transaction<'_>,
+    record: &LegacyProfileMigrationRecord,
+) -> Result<(), RuntimeStateError> {
+    let json = serde_json::to_string(record).map_err(record_json_error)?;
+    let changed = transaction
+        .execute(
+            "update legacy_profile_migration_records
+             set state = ?1, record_json = ?2
+             where legacy_profile_id = ?3 and legacy_profile_revision = ?4",
+            params![
+                migration_state_name(record.state()),
+                json,
+                record.source_profile_id().as_str(),
+                record.source_revision().as_u64().to_string(),
+            ],
+        )
+        .map_err(sqlite_error)?;
+    if changed != 1 {
+        return Err(conflict());
+    }
+    Ok(())
+}
+
+fn load_legacy_migration_record_by_source(
+    connection: &Connection,
+    source_digest: &str,
+) -> Result<Option<LegacyProfileMigrationRecord>, RuntimeStateError> {
+    Ok(load_legacy_migration_records(connection)?
+        .into_iter()
+        .find(|record| record.source_digest() == source_digest))
+}
+
+fn load_legacy_migration_records(
+    connection: &Connection,
+) -> Result<Vec<LegacyProfileMigrationRecord>, RuntimeStateError> {
+    let mut statement = connection
+        .prepare(
+            "select record_schema, record_json
+             from legacy_profile_migration_records
+             order by legacy_profile_id, cast(legacy_profile_revision as integer)",
+        )
+        .map_err(sqlite_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sqlite_error)?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (schema, json) = row.map_err(sqlite_error)?;
+        if schema != "legacy-profile-migration:v1" {
+            return Err(RuntimeStateError::new(
+                "legacy_profile.record_schema_unknown",
+                format!("unknown legacy migration record schema: {schema}"),
+            ));
+        }
+        records.push(serde_json::from_str(&json).map_err(record_json_error)?);
+    }
+    Ok(records)
+}
+
 fn decode_profile_revision(schema: &str, json: &str) -> Result<AgentProfile, RuntimeStateError> {
     if schema != "agent-profile-revision:v1" {
         return Err(RuntimeStateError::new(
@@ -2007,6 +2407,15 @@ fn host_binding_state_name(state: AgentProfileHostBindingState) -> &'static str 
         AgentProfileHostBindingState::PendingHostBinding => "pending_host_binding",
         AgentProfileHostBindingState::HostUnbound => "host_unbound",
         AgentProfileHostBindingState::Active => "active",
+        AgentProfileHostBindingState::Tombstoned => "tombstoned",
+    }
+}
+
+fn migration_state_name(state: &LegacyProfileMigrationState) -> &'static str {
+    match state {
+        LegacyProfileMigrationState::Pending { .. } => "pending",
+        LegacyProfileMigrationState::Migrated { .. } => "migrated",
+        LegacyProfileMigrationState::Archived => "archived",
     }
 }
 

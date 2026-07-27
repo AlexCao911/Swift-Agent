@@ -204,6 +204,12 @@
       "computing_authority": "swift_and_rust",
       "required_coverage": "effect, run, turn, call, tool, normalized result, replay class, completion metadata",
       "excluded": "raw device object and private diagnostics"
+    },
+    {
+      "domain": "legacy-profile-source:v1",
+      "computing_authority": "rust",
+      "required_coverage": "source Profile ID, source revision, historical record schema version, complete immutable legacy source record",
+      "excluded": "Swift target selection and migration lifecycle state"
     }
   ]
 }

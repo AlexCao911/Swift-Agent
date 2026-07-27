@@ -7,6 +7,7 @@ mod host_worker;
 mod llm_event;
 mod preparation;
 mod prepared_start_validator;
+mod profile_migration;
 mod requirements;
 mod slot;
 
@@ -43,6 +44,11 @@ pub use preparation::{
     RenewalReplay, RunPreparationPreview, RunPreparationRecord, RunPreparationState,
 };
 pub use prepared_start_validator::{PreparedStartValidator, ValidatedPreparedStart};
+pub use profile_migration::{
+    BeginLegacyProfileMigration, LegacyMigrationAction, LegacyProfileMigrationAttempt,
+    LegacyProfileMigrationError, LegacyProfileMigrationRecord, LegacyProfileMigrationService,
+    LegacyProfileMigrationState, LegacyProfileSuccessorSubject,
+};
 pub use requirements::{
     AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMToolCallingMode,
 };

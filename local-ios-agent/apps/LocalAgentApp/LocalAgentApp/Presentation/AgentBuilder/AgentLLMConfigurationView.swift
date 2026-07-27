@@ -17,7 +17,7 @@ struct AgentLLMConfigurationView: View {
                 Picker("Target", selection: targetBinding) {
                     ForEach(viewModel.llmTargets, id: \.target.targetID.rawValue) { option in
                         Text(option.target.modelID)
-                            .tag(option.target.reference)
+                            .tag(targetKey(option.target.reference))
                     }
                 }
                 .pickerStyle(.menu)
@@ -41,14 +41,27 @@ struct AgentLLMConfigurationView: View {
         return viewModel.llmTargets.first { $0.target.reference == reference }
     }
 
-    private var targetBinding: Binding<LLMTargetReference> {
+    private var targetBinding: Binding<String> {
         Binding(
             get: {
-                viewModel.llmSelection?.target
-                    ?? viewModel.llmTargets[0].target.reference
+                targetKey(
+                    viewModel.llmSelection?.target
+                        ?? viewModel.llmTargets[0].target.reference
+                )
             },
-            set: viewModel.selectTarget
+            set: { key in
+                guard let target = viewModel.llmTargets.first(where: {
+                    targetKey($0.target.reference) == key
+                }) else {
+                    return
+                }
+                viewModel.selectTarget(target.target.reference)
+            }
         )
+    }
+
+    private func targetKey(_ reference: LLMTargetReference) -> String {
+        "\(reference.targetID.rawValue)#\(reference.revision)"
     }
 
     @ViewBuilder

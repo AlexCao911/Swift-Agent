@@ -623,6 +623,12 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_attach_host_binding(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.confirmHostBindingActivation.rawValue:
                     return local_agent_runtime_bridge_confirm_host_binding_activation(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.beginLegacyProfileMigration.rawValue:
+                    return local_agent_runtime_bridge_begin_legacy_profile_migration(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.listLegacyProfileMigrations.rawValue:
+                    return local_agent_runtime_bridge_list_legacy_profile_migrations(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.completeLegacyProfileMigration.rawValue:
+                    return local_agent_runtime_bridge_complete_legacy_profile_migration(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.profileExecutionRoute.rawValue:
                     return local_agent_runtime_bridge_profile_execution_route(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.previewRunPreparation.rawValue:
@@ -754,6 +760,8 @@ public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, Pro
                  .registerPreparedSession, .commitPreparedStart, .reconcilePreparation,
                  .beginAbortPreparation,
                  .ackPreparedSessionCleanup, .confirmPreparedSessionClosed,
+                 .beginLegacyProfileMigration, .listLegacyProfileMigrations,
+                 .completeLegacyProfileMigration,
                  .profileExecutionRoute:
                 result = operation.rawValue.withCString { operationPointer in
                     functions.llmContractRequest(handle, operationPointer, pointer)

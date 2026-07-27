@@ -214,3 +214,42 @@ func activeResolutionRequiresExactTargetConfigurationAndStoredHash() async throw
         )
     }
 }
+
+@Test
+func recoveryReturnsOnlyTheExactActiveReceipt() async throws {
+    let store = LLMStore.inMemory()
+    let saga = AgentHostBindingSaga(store: store)
+    let activeConfiguration = configuration(bindingID: "binding-recovery")
+    let request = HostBindingStageRequest(
+        operationToken: "publish-token-recovery",
+        tokenDigest: "token-digest-recovery",
+        llmSlotID: activeConfiguration.llmSlotID,
+        requirementsHash: activeConfiguration.requirementsHash,
+        configuration: activeConfiguration
+    )
+    let receipt = try await saga.stageHostBinding(request)
+
+    #expect(await saga.activeReceipt(
+        agentProfileID: activeConfiguration.agentProfileID,
+        agentProfileRevision: activeConfiguration.agentProfileRevision,
+        llmSlotID: activeConfiguration.llmSlotID,
+        requirementsHash: activeConfiguration.requirementsHash
+    ) == nil)
+
+    try await saga.activateHostBinding(
+        operationToken: request.operationToken,
+        binding: receipt.binding
+    )
+    #expect(await saga.activeReceipt(
+        agentProfileID: activeConfiguration.agentProfileID,
+        agentProfileRevision: activeConfiguration.agentProfileRevision,
+        llmSlotID: activeConfiguration.llmSlotID,
+        requirementsHash: activeConfiguration.requirementsHash
+    ) == receipt)
+    #expect(await saga.activeReceipt(
+        agentProfileID: activeConfiguration.agentProfileID,
+        agentProfileRevision: activeConfiguration.agentProfileRevision + 1,
+        llmSlotID: activeConfiguration.llmSlotID,
+        requirementsHash: activeConfiguration.requirementsHash
+    ) == nil)
+}

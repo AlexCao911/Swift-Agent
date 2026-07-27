@@ -138,7 +138,7 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
     assert!(app
         .list_agent_profiles()
         .iter()
-        .any(|profile| profile.id().as_str() == "profile_v2"));
+        .all(|profile| profile.id().as_str() != "profile_v2"));
 
     let active = service
         .confirm_activation(HostBindingActivationConfirmation::new(
@@ -160,4 +160,8 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
         AgentProfileHostBindingState::Active
     );
     assert!(profile.readiness().is_ready());
+    assert!(app
+        .list_agent_profiles()
+        .iter()
+        .any(|profile| profile.id().as_str() == "profile_v2"));
 }

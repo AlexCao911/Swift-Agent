@@ -108,6 +108,19 @@ fn host_bridge_digests_match_shared_fixtures() {
 }
 
 #[test]
+fn legacy_profile_source_digest_matches_shared_fixture() {
+    let fixture = fixture("legacy-profile-source-v1.json");
+    let canonical = CanonicalDigestV1::canonicalize(&fixture.document).unwrap();
+    assert_eq!(
+        String::from_utf8(canonical).unwrap(),
+        fixture.expected_canonical_utf8
+    );
+    let digest =
+        CanonicalDigestV1::digest(fixture.domain.as_deref().unwrap(), &fixture.document).unwrap();
+    assert_eq!(digest.as_str(), fixture.expected_sha256.as_deref().unwrap());
+}
+
+#[test]
 fn cloud_policy_digests_match_shared_fixtures_without_parsing_provider_semantics() {
     for name in [
         "generation-disclosure-cloud-v1.json",

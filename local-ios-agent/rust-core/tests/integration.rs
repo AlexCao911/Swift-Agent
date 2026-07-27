@@ -21,6 +21,8 @@ mod ffi_bridge;
 mod ffi_streaming_events;
 #[path = "integration/host_llm_ffi.rs"]
 mod host_llm_ffi;
+#[path = "integration/llm_profile_migration_ffi.rs"]
+mod llm_profile_migration_ffi;
 #[path = "integration/openai_chat_adapter.rs"]
 mod openai_chat_adapter;
 #[path = "integration/runtime_execution_lifecycle.rs"]
