@@ -480,7 +480,7 @@ struct RustRuntimeClientContractTests {
                 profileRevisionId: 1,
                 userIntent: "ship it",
                 conversationRunFrameRef: frameRef,
-                options: ExecutionOptionsDTO(modelId: "model_1", temperature: 0.2)
+                options: ExecutionOptionsDTO()
             ),
             as: RunHandleDTO.self
         )

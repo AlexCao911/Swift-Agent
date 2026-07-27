@@ -1,5 +1,6 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMHost
 import Observation
 
 @MainActor
@@ -43,6 +44,7 @@ final class AgentViewModel {
         state.draftText = ""
         state.draft.attachments.removeAll()
         state.errorMessage = nil
+        state.needsAgentConfiguration = false
         do {
             state = try await service.sendMessage(text, state: serviceState) { [weak self] event in
                 await MainActor.run {
@@ -57,6 +59,11 @@ final class AgentViewModel {
                     )
                 }
             }
+        } catch let failure as LLMHostFailure
+            where failure.code == "execution.host_binding_not_configured"
+        {
+            state.needsAgentConfiguration = true
+            markRunFailed(failure.message)
         } catch {
             markRunFailed(error.localizedDescription)
         }
@@ -67,14 +74,6 @@ final class AgentViewModel {
             state = try await service.cancel(state: state)
         } catch {
             markRunFailed(error.localizedDescription)
-        }
-    }
-
-    func selectProvider(_ providerId: String) async {
-        do {
-            state = try await service.selectProvider(providerId, state: state)
-        } catch {
-            state.provider.errorMessage = error.localizedDescription
         }
     }
 

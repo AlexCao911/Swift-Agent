@@ -1,6 +1,6 @@
 import Foundation
 
-public actor MockRuntimeClient: RuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, ConversationBridgeClient, ExecutionBridgeClient {
+public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, ConversationBridgeClient, ExecutionBridgeClient {
     public struct SentMessage: Equatable, Sendable {
         public var sessionId: String
         public var parentEventId: String?

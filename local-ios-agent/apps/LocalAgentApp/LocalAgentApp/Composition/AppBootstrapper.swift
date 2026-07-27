@@ -131,11 +131,15 @@ enum AppBootstrapper {
             hostProcessEpoch: hostProcessEpoch
         )
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
+        let conversationBridge = RustConversationBridgeClient(
+            gateway: client,
+            legacyClient: client
+        )
         let nativeBundle = try makeNativeToolkitBundle()
         let selections = AppLLMHostSelectionRegistry()
         let hostStarter = AppHostRunStarter(selections: selections)
         let coordinator = conversationExecutionCoordinator(
-            client: client,
+            conversationBridge: conversationBridge,
             executionBridge: executionBridge,
             toolDriver: nativeBundle.toolDriver,
             hostStarter: hostStarter
@@ -144,9 +148,10 @@ enum AppBootstrapper {
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
-                runtimeClient: client,
-                toolDriver: nativeBundle.toolDriver,
-                coordinator: coordinator
+                conversation: conversationBridge,
+                execution: executionBridge,
+                coordinator: coordinator,
+                toolDriver: nativeBundle.toolDriver
             ),
             runDebugService: RunDebugService(bridge: executionBridge),
             nativeToolkitClient: nativeBundle.client,
@@ -189,11 +194,21 @@ enum AppBootstrapper {
             ],
             turnResult: degradedTurnResult()
         )
+        let selections = AppLLMHostSelectionRegistry()
+        let hostStarter = AppHostRunStarter(selections: selections)
+        let coordinator = conversationExecutionCoordinator(
+            conversationBridge: client,
+            executionBridge: client,
+            toolDriver: nativeBundle.toolDriver,
+            hostStarter: hostStarter
+        )
 
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
-                runtimeClient: client,
+                conversation: client,
+                execution: client,
+                coordinator: coordinator,
                 toolDriver: nativeBundle.toolDriver
             ),
             runDebugService: nil,
@@ -213,8 +228,8 @@ enum AppBootstrapper {
             ),
             modelCenterClient: nil,
             rustRuntimeClient: nil,
-            hostRunStarter: nil,
-            llmHostSelections: nil,
+            hostRunStarter: hostStarter,
+            llmHostSelections: selections,
             legacyMigration: nil,
             readinessIssues: ["app.bootstrap.degraded"],
             activeAgentProfile: AgentProfileDTO(
@@ -235,11 +250,22 @@ enum AppBootstrapper {
     ) -> AppContainer {
         let permissionStore = PermissionStore()
         let client = MockRuntimeClient(turnResult: degradedTurnResult())
+        let toolDriver = MinimalHostToolDriver()
+        let selections = AppLLMHostSelectionRegistry()
+        let hostStarter = AppHostRunStarter(selections: selections)
+        let coordinator = conversationExecutionCoordinator(
+            conversationBridge: client,
+            executionBridge: client,
+            toolDriver: toolDriver,
+            hostStarter: hostStarter
+        )
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
             runtimeService: AgentRuntimeService(
-                runtimeClient: client,
-                toolDriver: MinimalHostToolDriver()
+                conversation: client,
+                execution: client,
+                coordinator: coordinator,
+                toolDriver: toolDriver
             ),
             runDebugService: nil,
             nativeToolkitClient: LastResortNativeToolkitClient(error: error),
@@ -261,8 +287,8 @@ enum AppBootstrapper {
             ),
             modelCenterClient: nil,
             rustRuntimeClient: nil,
-            hostRunStarter: nil,
-            llmHostSelections: nil,
+            hostRunStarter: hostStarter,
+            llmHostSelections: selections,
             legacyMigration: nil,
             readinessIssues: ["app.bootstrap.last_resort"],
             activeAgentProfile: nil,
@@ -373,12 +399,11 @@ enum AppBootstrapper {
     }
 
     private static func conversationExecutionCoordinator(
-        client: RustRuntimeClient,
-        executionBridge: RustExecutionBridgeClient,
+        conversationBridge: any ConversationBridgeClient,
+        executionBridge: any ExecutionBridgeClient,
         toolDriver: any HostToolDriving,
         hostStarter: AppHostRunStarter
     ) -> ChatInteractionCoordinator {
-        let conversationBridge = RustConversationBridgeClient(gateway: client, legacyClient: client)
         let conversationDomain = ConversationDomainAdapter(bridge: conversationBridge)
         let executionDomain = ExecutionDomainAdapter(
             profiles: AgentProfileService(bridge: executionBridge),
@@ -393,11 +418,7 @@ enum AppBootstrapper {
             conversation: conversationDomain,
             execution: executionDomain,
             toolDriver: toolDriver,
-            runStarter: LLMProductRunRouter(
-                routes: client,
-                legacy: executionBridge,
-                host: hostStarter
-            )
+            runStarter: hostStarter
         )
         return coordinator
     }

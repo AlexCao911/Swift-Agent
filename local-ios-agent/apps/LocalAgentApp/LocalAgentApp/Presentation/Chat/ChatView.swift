@@ -56,12 +56,6 @@ struct ChatView: View {
                             Label("Prompt", systemImage: "text.quote")
                         }
 
-                        Button {
-                            managementSheet = .settings
-                        } label: {
-                            Label("Settings", systemImage: "slider.horizontal.3")
-                        }
-
                         if let onInspectContext {
                             Button(action: onInspectContext) {
                                 Label("Inspect Context", systemImage: "doc.text.magnifyingglass")
@@ -175,8 +169,6 @@ struct ChatView: View {
             switch sheet {
             case .prompts:
                 PromptLibrarySheet(library: $viewModel.state.promptLibrary)
-            case .settings:
-                ModelSettingsSheet(settings: $viewModel.state.modelSettings)
             }
         }
         .alert("Edit Message", isPresented: isEditingMessagePresented) {
@@ -265,6 +257,12 @@ struct ChatView: View {
 
                     if let error = viewModel.state.errorMessage {
                         errorView(text: error)
+                        if viewModel.state.needsAgentConfiguration,
+                           let onOpenBuilder
+                        {
+                            Button("Configure Agent", action: onOpenBuilder)
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
 
                     Color.clear.frame(height: 8)
@@ -484,7 +482,7 @@ struct ChatView: View {
         case .openPromptLibrary:
             managementSheet = .prompts
         case .openSettings:
-            managementSheet = .settings
+            onOpenBuilder?()
         case .openBuilder:
             onOpenBuilder?()
         case let .captureText(text, _):
@@ -498,7 +496,6 @@ struct ChatView: View {
 
 private enum ChatManagementSheet: String, Identifiable {
     case prompts
-    case settings
 
     var id: String { rawValue }
 }

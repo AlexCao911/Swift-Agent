@@ -151,19 +151,6 @@ struct AgentViewModelTests {
         #expect(viewModel.state.messages[0].streaming == .failed("stream stopped"))
     }
 
-    @Test("select provider delegates to service")
-    func selectProviderDelegatesToService() async {
-        let service = ViewModelServiceStub()
-        let viewModel = AgentViewModel(
-            service: service,
-            initialState: AgentViewState(phase: .ready, currentSessionId: "session_1")
-        )
-
-        await viewModel.selectProvider("local_llm")
-
-        #expect(await service.selectedProviderIds == ["local_llm"])
-    }
-
     @Test("new chat delegates to service and clears messages")
     func newChatDelegatesToService() async {
         let service = ViewModelServiceStub(

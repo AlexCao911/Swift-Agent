@@ -9,49 +9,6 @@ public protocol LLMProductRunStarting: Sendable {
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO
 }
 
-extension RustExecutionBridgeClient: LLMProductRunStarting {}
-
-public struct LLMProductRunRouter: LLMProductRunStarting {
-    private let routes: any ProfileExecutionRouteClient
-    private let legacy: any LLMProductRunStarting
-    private let host: any LLMProductRunStarting
-
-    public init(
-        routes: any ProfileExecutionRouteClient,
-        legacy: any LLMProductRunStarting,
-        host: any LLMProductRunStarting
-    ) {
-        self.routes = routes
-        self.legacy = legacy
-        self.host = host
-    }
-
-    public func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        let route = try await routes.profileExecutionRoute(
-            profileID: request.agentProfileId,
-            profileRevision: request.profileRevisionId
-        )
-        guard route.profileID == request.agentProfileId,
-              route.profileRevision == request.profileRevisionId
-        else {
-            throw LLMHostFailure(
-                code: "execution.profile_route_stale",
-                message: "Rust returned a route for a different profile revision"
-            )
-        }
-        switch route.llmBindingSchema {
-        case .legacyV1:
-            return try await legacy.startRun(request)
-        case .hostSlotV2:
-            return try await host.startRun(request)
-        }
-    }
-
-    public func start(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        try await startRun(request)
-    }
-}
-
 public final class LLMHostProductRuntime: @unchecked Sendable {
     public let hostProcessEpoch: HostProcessEpoch
     private let rust: RustRuntimeClient

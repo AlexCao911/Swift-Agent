@@ -241,7 +241,13 @@ private final class RecordingExecutionBridgeClient: ExecutionBridgeClient, @unch
 
     func approveTool(id: String, decision: ApprovalDecisionDTO) async throws {}
 
+    func registerToolSchema(_ schema: ToolSchemaDTO) async throws {}
+
     func pendingToolRequests() async throws -> [ToolExecutionRequestDTO] {
+        []
+    }
+
+    func pendingApprovalRequests() async throws -> [ApprovalProtocolRequestDTO] {
         []
     }
 

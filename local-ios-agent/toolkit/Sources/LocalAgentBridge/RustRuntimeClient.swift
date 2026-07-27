@@ -657,7 +657,7 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
     }
 }
 
-public final class RustRuntimeClient: StreamingBlobReferencingRuntimeClient, ProviderControllingRuntimeClient, RuntimeOptionsControllingRuntimeClient, ConversationRuntimeClient, RustAgentOSBridgeGateway, ProfileExecutionRouteClient, @unchecked Sendable {
+public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, RustAgentOSBridgeGateway, @unchecked Sendable {
     private let functions: RustRuntimeCFunctionTable
     private let handle: RustRuntimeCFunctionTable.RuntimeHandle
 

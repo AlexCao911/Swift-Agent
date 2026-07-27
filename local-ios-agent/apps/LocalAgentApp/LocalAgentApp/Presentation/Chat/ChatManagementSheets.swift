@@ -42,37 +42,3 @@ struct PromptLibrarySheet: View {
         }
     }
 }
-
-struct ModelSettingsSheet: View {
-    @Binding var settings: ModelSettingsViewState
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Sampling") {
-                    LabeledContent("Temperature") {
-                        Text(settings.temperature.formatted(.number.precision(.fractionLength(2))))
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $settings.temperature, in: 0...2, step: 0.05)
-
-                    LabeledContent("Top-p") {
-                        Text(settings.topP.formatted(.number.precision(.fractionLength(2))))
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $settings.topP, in: 0.05...1, step: 0.01)
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
-}

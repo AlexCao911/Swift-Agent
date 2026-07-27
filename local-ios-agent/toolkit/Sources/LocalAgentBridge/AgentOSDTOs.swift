@@ -965,25 +965,7 @@ public struct ConversationCommitResultDTO: Codable, Equatable, Sendable {
 }
 
 public struct ExecutionOptionsDTO: Codable, Equatable, Sendable {
-    public var modelId: String?
-    public var temperature: Double?
-    public var topP: Double?
-
-    public init(
-        modelId: String? = nil,
-        temperature: Double? = nil,
-        topP: Double? = nil
-    ) {
-        self.modelId = modelId
-        self.temperature = temperature
-        self.topP = topP
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case modelId = "model_id"
-        case temperature
-        case topP = "top_p"
-    }
+    public init() {}
 }
 
 public struct StartExecutionRequestDTO: Codable, Equatable, Sendable {

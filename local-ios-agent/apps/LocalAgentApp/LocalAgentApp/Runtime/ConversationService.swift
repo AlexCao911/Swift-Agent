@@ -74,7 +74,8 @@ enum ConversationService {
             provider: state.provider,
             conversations: state.conversations,
             promptLibrary: state.promptLibrary,
-            modelSettings: state.modelSettings
+            selectedAgentProfileId: state.selectedAgentProfileId,
+            selectedAgentProfileRevisionId: state.selectedAgentProfileRevisionId
         )
 
         for event in events {

@@ -222,16 +222,6 @@ struct PromptLibraryViewState: Equatable, Sendable {
     }
 }
 
-struct ModelSettingsViewState: Equatable, Sendable {
-    var temperature: Double
-    var topP: Double
-
-    init(temperature: Double = 0.7, topP: Double = 0.9) {
-        self.temperature = temperature
-        self.topP = topP
-    }
-}
-
 struct AgentViewState: Equatable, Sendable {
     var phase: AppRuntimePhase
     var messages: [AgentMessageViewState]
@@ -245,10 +235,10 @@ struct AgentViewState: Equatable, Sendable {
     var lastAppliedExecutionSequenceByRunId: [String: UInt64]
     var transientRunEvents: [RuntimeEventDTO]
     var promptLibrary: PromptLibraryViewState
-    var modelSettings: ModelSettingsViewState
     var selectedAgentProfileId: String
     var selectedAgentProfileRevisionId: UInt64?
     var pendingApprovalRequest: ApprovalProtocolRequestDTO?
+    var needsAgentConfiguration: Bool
 
     init(
         phase: AppRuntimePhase = .booting,
@@ -263,10 +253,10 @@ struct AgentViewState: Equatable, Sendable {
         lastAppliedExecutionSequenceByRunId: [String: UInt64] = [:],
         transientRunEvents: [RuntimeEventDTO] = [],
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
-        modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
         selectedAgentProfileId: String = "profile_1",
         selectedAgentProfileRevisionId: UInt64? = 1,
-        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil
+        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil,
+        needsAgentConfiguration: Bool = false
     ) {
         self.phase = phase
         self.messages = messages
@@ -280,10 +270,10 @@ struct AgentViewState: Equatable, Sendable {
         self.lastAppliedExecutionSequenceByRunId = lastAppliedExecutionSequenceByRunId
         self.transientRunEvents = transientRunEvents
         self.promptLibrary = promptLibrary
-        self.modelSettings = modelSettings
         self.selectedAgentProfileId = selectedAgentProfileId
         self.selectedAgentProfileRevisionId = selectedAgentProfileRevisionId
         self.pendingApprovalRequest = pendingApprovalRequest
+        self.needsAgentConfiguration = needsAgentConfiguration
     }
 
     init(
@@ -296,10 +286,10 @@ struct AgentViewState: Equatable, Sendable {
         conversations: ConversationListViewState = ConversationListViewState(),
         lastTerminalReason: RunTerminalReason? = nil,
         promptLibrary: PromptLibraryViewState = PromptLibraryViewState(),
-        modelSettings: ModelSettingsViewState = ModelSettingsViewState(),
         selectedAgentProfileId: String = "profile_1",
         selectedAgentProfileRevisionId: UInt64? = 1,
-        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil
+        pendingApprovalRequest: ApprovalProtocolRequestDTO? = nil,
+        needsAgentConfiguration: Bool = false
     ) {
         self.init(
             phase: phase,
@@ -311,10 +301,10 @@ struct AgentViewState: Equatable, Sendable {
             conversations: conversations,
             lastTerminalReason: lastTerminalReason,
             promptLibrary: promptLibrary,
-            modelSettings: modelSettings,
             selectedAgentProfileId: selectedAgentProfileId,
             selectedAgentProfileRevisionId: selectedAgentProfileRevisionId,
-            pendingApprovalRequest: pendingApprovalRequest
+            pendingApprovalRequest: pendingApprovalRequest,
+            needsAgentConfiguration: needsAgentConfiguration
         )
     }
 
@@ -324,10 +314,7 @@ struct AgentViewState: Equatable, Sendable {
     }
 
     var executionOptions: ExecutionOptionsDTO {
-        ExecutionOptionsDTO(
-            temperature: modelSettings.temperature,
-            topP: modelSettings.topP
-        )
+        ExecutionOptionsDTO()
     }
 
     mutating func finishStreamingMessages(as terminalState: MessageStreamingState) {

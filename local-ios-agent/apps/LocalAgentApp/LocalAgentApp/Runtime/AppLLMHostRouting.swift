@@ -142,12 +142,6 @@ actor AppHostRunStarter: LLMProductRunStarting {
     }
 
     func startRun(_ request: StartExecutionRequestDTO) async throws -> RunHandleDTO {
-        guard let composition else {
-            throw LLMHostFailure(
-                code: "execution.host_runtime_unavailable",
-                message: "Swift LLM host composition is not installed"
-            )
-        }
         guard let selection = await selections.selection(
             profileID: request.agentProfileId,
             revision: request.profileRevisionId
@@ -155,6 +149,12 @@ actor AppHostRunStarter: LLMProductRunStarting {
             throw LLMHostFailure(
                 code: "execution.host_binding_not_configured",
                 message: "no exact Swift host binding is active for this profile revision"
+            )
+        }
+        guard let composition else {
+            throw LLMHostFailure(
+                code: "execution.host_runtime_unavailable",
+                message: "Swift LLM host composition is not installed"
             )
         }
         switch selection {

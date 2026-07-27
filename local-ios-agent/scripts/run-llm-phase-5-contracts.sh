@@ -14,6 +14,13 @@ fi
 unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY XAI_API_KEY
 unset DEEPSEEK_API_KEY MINIMAX_API_KEY ZHIPUAI_API_KEY
 
+if rg -n \
+  'ModelRoutingClient|ProviderControllingRuntimeClient|RuntimeOptionsControllingRuntimeClient|LLMProductRunRouter|LEGACY_COMPATIBILITY_STREAMING_PATH' \
+  "$ROOT/apps/LocalAgentApp/LocalAgentApp" "$ROOT/toolkit/Sources"; then
+  echo "legacy Swift LLM product route remains" >&2
+  exit 1
+fi
+
 LOCAL_AGENT_PHASE4_IPHONE_UDID="$IPHONE_UDID" \
 LOCAL_AGENT_PHASE4_IPAD_UDID="$IPAD_UDID" \
   "$ROOT/scripts/run-llm-phase-4-contracts.sh"
@@ -33,5 +40,6 @@ for UDID in "$IPHONE_UDID" "$IPAD_UDID"; do
       -only-testing:LocalAgentAppTests/LegacyLLMMigrationCoordinatorTests \
       -only-testing:LocalAgentAppTests/LLMProductBootstrapTests \
       -only-testing:LocalAgentAppTests/LLMHostCompositionTests \
+      -only-testing:LocalAgentAppTests/AgentRuntimeServiceTests \
       SWIFT_ENABLE_BATCH_MODE=NO
 done

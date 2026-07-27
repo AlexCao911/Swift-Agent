@@ -45,10 +45,3 @@ public protocol RustAgentOSBridgeGateway: Sendable {
         _ request: Request
     ) -> AsyncThrowingStream<RuntimeEventDTO, Error>
 }
-
-public protocol ProfileExecutionRouteClient: Sendable {
-    func profileExecutionRoute(
-        profileID: String,
-        profileRevision: UInt64
-    ) async throws -> ProfileExecutionRouteDTO
-}
