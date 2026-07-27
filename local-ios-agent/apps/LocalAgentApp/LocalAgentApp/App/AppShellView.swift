@@ -9,6 +9,7 @@ struct AppShellView: View {
     @State private var builderViewModel: AgentBuilderViewModel
     @State private var toolCenterViewModel: ToolCenterViewModel
     @State private var modelCenterViewModel: ModelCenterViewModel
+    @State private var cloudApprovalRequest: AppCloudApprovalRequest?
 
     private let primaryFamilies: [AppRouteFamily] = [.chat, .agents, .tools, .models, .settings]
 
@@ -44,6 +45,18 @@ struct AppShellView: View {
                         .tag(family)
                     }
                 }
+            }
+        }
+        .task {
+            for await request in container.cloudApprovalBroker.updates {
+                cloudApprovalRequest = request
+            }
+        }
+        .sheet(item: $cloudApprovalRequest, onDismiss: {
+            Task { await container.cloudApprovalBroker.dismissCurrent() }
+        }) { request in
+            CloudApprovalSheet(request: request) { decision in
+                Task { await container.cloudApprovalBroker.respond(decision) }
             }
         }
     }

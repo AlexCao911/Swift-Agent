@@ -263,10 +263,10 @@ public actor ProviderCredentialStore {
         vault: any CredentialVault,
         faultInjector: (@Sendable (CredentialLifecycleCheckpoint) throws -> Void)? = nil
     ) throws {
-        guard try LLMStoreSchema.userVersion(database) == 2 else {
+        guard try LLMStoreSchema.userVersion(database) == LLMStoreSchema.currentVersion else {
             throw credentialStoreFailure(
                 "credential.schema_not_ready",
-                "credential store requires the pre-created LLM schema version 2"
+                "credential store requires the current pre-created LLM schema"
             )
         }
         self.database = database

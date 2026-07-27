@@ -65,8 +65,7 @@ public actor ProviderValidationService {
             throw validationFailure("provider_validation.validity_invalid", "validation validity must be positive")
         }
         database = try SQLiteConnection(path: fileURL.path)
-        try LLMStoreSchema.ensureBaseSchema(database)
-        try LLMStoreSchema.migrateToVersionTwo(database)
+        try LLMStoreSchema.migrateToCurrent(database)
         self.profileStore = profileStore
         self.catalogStore = catalogStore
         self.credentialStore = credentialStore
@@ -503,7 +502,7 @@ public actor ProviderValidationService {
                 )
                 guard profileRows.count == 1,
                       profileRows[0].text("lifecycle") == ProviderRevisionLifecycle.active.rawValue,
-                      profileRows[0].integer("record_schema_version") == 2,
+                      profileRows[0].integer("record_schema_version") == 3,
                       let profileJSON = profileRows[0].text("record_json"),
                       let profileData = profileJSON.data(using: .utf8),
                       try JSONDecoder().decode(

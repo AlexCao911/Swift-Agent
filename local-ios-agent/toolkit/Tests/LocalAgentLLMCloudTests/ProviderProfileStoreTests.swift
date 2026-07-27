@@ -212,6 +212,87 @@ struct ProviderProfileStoreTests {
             )
         }
     }
+
+    @Test
+    func creatingRevisionRecoversCompletedCredentialAndKeepsSecretOutOfSQLite() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("llm-state.sqlite")
+        let profiles = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: FixtureOriginValidator()
+        )
+        let credentials = try ProviderCredentialStore(
+            fileURL: url,
+            vault: LifecycleCredentialVault()
+        )
+        let revision = fixtureProfile()
+        let operationID = try await profiles.prepareCreatingRevision(
+            revision,
+            proposedOperationID: "profile-create-1"
+        )
+        #expect(operationID == "profile-create-1")
+        #expect(await profiles.creatingOperationID(
+            profileID: revision.profileID,
+            revision: revision.revision
+        ) == operationID)
+
+        try await credentials.createSlot(
+            credentialRef: revision.credentialRef,
+            initialSecret: SecretBytes(utf8: "not-a-real-key"),
+            operationID: operationID
+        )
+
+        let reopened = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: FixtureOriginValidator()
+        )
+        try await reopened.reconcileCreatingRevisions(
+            credentialStore: credentials
+        )
+        #expect(await reopened.profile(
+            profileID: revision.profileID,
+            revision: revision.revision
+        )?.lifecycle == .active)
+        #expect(await reopened.state(
+            profileID: revision.profileID,
+            profileRevision: revision.revision
+        ) != nil)
+        #expect(!((try Data(contentsOf: url)).contains(Data("not-a-real-key".utf8))))
+    }
+
+    @Test
+    func creatingRevisionWithoutCredentialArchivesOnRecovery() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("llm-state.sqlite")
+        let first = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: FixtureOriginValidator()
+        )
+        let revision = fixtureProfile()
+        _ = try await first.prepareCreatingRevision(
+            revision,
+            proposedOperationID: "profile-create-missing"
+        )
+
+        let reopened = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: FixtureOriginValidator()
+        )
+        let credentials = try ProviderCredentialStore(
+            fileURL: url,
+            vault: LifecycleCredentialVault()
+        )
+        try await reopened.reconcileCreatingRevisions(
+            credentialStore: credentials
+        )
+
+        #expect(await reopened.profile(
+            profileID: revision.profileID,
+            revision: revision.revision
+        )?.lifecycle == .archived)
+    }
 }
 
 package struct FixtureOriginValidator: ProviderOriginValidating {

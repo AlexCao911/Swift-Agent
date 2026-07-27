@@ -139,8 +139,7 @@ public actor LLMStore {
             )
         } else {
             database = try SQLiteConnection(path: fileURL?.path ?? ":memory:")
-            try LLMStoreSchema.ensureBaseSchema(database)
-            try LLMStoreSchema.migrateToVersionTwo(database)
+            try LLMStoreSchema.migrateToCurrent(database)
         }
         document = try Self.loadDocument(from: database)
         targetRevisions = try Self.loadTargets(from: database)
@@ -780,8 +779,7 @@ public actor LLMStore {
         try? FileManager.default.removeItem(at: importing)
         let database = try SQLiteConnection(path: importing.path)
         do {
-            try LLMStoreSchema.ensureBaseSchema(database)
-            try LLMStoreSchema.migrateToVersionTwo(database)
+            try LLMStoreSchema.migrateToCurrent(database)
             try importLegacy(document, into: database)
         } catch {
             try? FileManager.default.removeItem(at: importing)

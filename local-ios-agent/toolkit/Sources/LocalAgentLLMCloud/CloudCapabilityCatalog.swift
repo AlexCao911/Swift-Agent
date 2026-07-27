@@ -487,8 +487,7 @@ package actor CloudCapabilityCatalogStore {
 
     package init(fileURL: URL, trustedKeyRing: Data? = nil) throws {
         database = try SQLiteConnection(path: fileURL.path)
-        try LLMStoreSchema.ensureBaseSchema(database)
-        try LLMStoreSchema.migrateToVersionTwo(database)
+        try LLMStoreSchema.migrateToCurrent(database)
         self.trustedKeyRing = try trustedKeyRing
             ?? CloudCapabilityCatalogResources.loadBundled().keyRing
     }
@@ -557,6 +556,15 @@ package actor CloudCapabilityCatalogStore {
             envelope: stored.envelope,
             keyRing: trustedKeyRing
         )
+    }
+
+    package func modelEntries(
+        presetID: ProviderPresetID
+    ) throws -> [CloudModelCatalogEntry] {
+        guard let catalog = try current() else { return [] }
+        return catalog.models.values
+            .filter { $0.identity.presetID == presetID && !catalog.isRevoked($0.identity) }
+            .sorted { $0.identity.modelID < $1.identity.modelID }
     }
 
     private func readStored() throws -> Stored? {

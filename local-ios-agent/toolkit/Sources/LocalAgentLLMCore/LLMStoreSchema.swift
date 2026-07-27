@@ -11,10 +11,32 @@ package struct LLMStoreSchemaError: Error, Equatable, Sendable {
 }
 
 package enum LLMStoreSchema {
-    package static let currentVersion = 2
+    package static let currentVersion = 3
 
     package static var versionTwoMigrationStatementCount: Int {
         versionTwoStatements.count
+    }
+
+    package static let versionThreeMigrationStatementCount = 8
+
+    package static func migrateToCurrent(
+        _ database: SQLiteConnection,
+        failVersionTwoAfterStatement: Int? = nil,
+        failVersionThreeAfterStatement: Int? = nil
+    ) throws {
+        try ensureBaseSchema(database)
+        if try userVersion(database) == 1 {
+            try migrateToVersionTwo(
+                database,
+                failAfterStatement: failVersionTwoAfterStatement
+            )
+        }
+        if try userVersion(database) == 2 {
+            try migrateToVersionThree(
+                database,
+                failAfterStatement: failVersionThreeAfterStatement
+            )
+        }
     }
 
     package static func ensureBaseSchema(_ database: SQLiteConnection) throws {
@@ -48,7 +70,7 @@ package enum LLMStoreSchema {
                 message: "LLM store schema version \(version) is newer than supported version \(currentVersion)"
             )
         }
-        guard version < currentVersion else { return }
+        guard version < 2 else { return }
         guard version == 1 else {
             throw LLMStoreSchemaError(
                 code: "llm_store.unsupported_migration",
@@ -69,6 +91,142 @@ package enum LLMStoreSchema {
             try database.execute("UPDATE llm_store_meta SET schema_version = 2")
             try database.execute("PRAGMA user_version = 2")
         }
+    }
+
+    private static func migrateToVersionThree(
+        _ database: SQLiteConnection,
+        failAfterStatement failureIndex: Int?
+    ) throws {
+        let version = try userVersion(database)
+        guard version <= currentVersion else {
+            throw LLMStoreSchemaError(
+                code: "llm_store.future_schema",
+                message: "LLM store schema version \(version) is newer than supported version \(currentVersion)"
+            )
+        }
+        guard version < 3 else { return }
+        guard version == 2 else {
+            throw LLMStoreSchemaError(
+                code: "llm_store.unsupported_migration",
+                message: "LLM store must be at schema version 2 before migrating to version 3"
+            )
+        }
+
+        try database.transaction {
+            var statementIndex = 0
+            func completedStatement() throws {
+                defer { statementIndex += 1 }
+                guard failureIndex == statementIndex else { return }
+                throw LLMStoreSchemaError(
+                    code: "llm_store.injected_migration_failure",
+                    message: "injected failure after v3 migration statement \(statementIndex)"
+                )
+            }
+
+            try database.execute(
+                """
+                CREATE TABLE provider_profile_revisions_v3(
+                  profile_id TEXT NOT NULL, revision TEXT NOT NULL, preset_id TEXT NOT NULL,
+                  origin TEXT NOT NULL, credential_ref TEXT NOT NULL, retention_mode TEXT NOT NULL,
+                  lifecycle TEXT NOT NULL, record_schema_version INTEGER NOT NULL CHECK(record_schema_version = 3),
+                  record_json TEXT NOT NULL, PRIMARY KEY(profile_id, revision)
+                )
+                """
+            )
+            try completedStatement()
+
+            for row in try database.queryRows(
+                """
+                SELECT profile_id, revision, preset_id, origin, credential_ref,
+                       retention_mode, lifecycle, record_schema_version, record_json
+                FROM provider_profile_revisions ORDER BY profile_id, revision
+                """
+            ) {
+                guard row.integer("record_schema_version") == 2,
+                      let profileID = row.text("profile_id"),
+                      let revision = row.text("revision"),
+                      let presetID = row.text("preset_id"),
+                      let origin = row.text("origin"),
+                      let credentialRef = row.text("credential_ref"),
+                      let retentionMode = row.text("retention_mode"),
+                      let lifecycle = row.text("lifecycle"),
+                      let recordJSON = row.text("record_json")
+                else {
+                    throw LLMStoreSchemaError(
+                        code: "llm_store.migration_record_invalid",
+                        message: "provider profile v2 record is incomplete"
+                    )
+                }
+                let migratedJSON = try migrateProviderProfileEnvelope(
+                    recordJSON,
+                    expectedLifecycle: lifecycle
+                )
+                try database.execute(
+                    """
+                    INSERT INTO provider_profile_revisions_v3(
+                      profile_id, revision, preset_id, origin, credential_ref,
+                      retention_mode, lifecycle, record_schema_version, record_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 3, ?8)
+                    """,
+                    bindings: [
+                        .text(profileID), .text(revision), .text(presetID), .text(origin),
+                        .text(credentialRef), .text(retentionMode), .text(lifecycle),
+                        .text(migratedJSON),
+                    ]
+                )
+            }
+            try completedStatement()
+
+            try database.execute("DROP INDEX provider_profile_revisions_lifecycle_idx")
+            try completedStatement()
+            try database.execute("DROP TABLE provider_profile_revisions")
+            try completedStatement()
+            try database.execute(
+                "ALTER TABLE provider_profile_revisions_v3 RENAME TO provider_profile_revisions"
+            )
+            try completedStatement()
+            try database.execute(
+                "CREATE INDEX provider_profile_revisions_lifecycle_idx ON provider_profile_revisions(lifecycle)"
+            )
+            try completedStatement()
+            try database.execute("UPDATE llm_store_meta SET schema_version = 3")
+            try completedStatement()
+            try database.execute("PRAGMA user_version = 3")
+            try completedStatement()
+        }
+    }
+
+    private static func migrateProviderProfileEnvelope(
+        _ json: String,
+        expectedLifecycle: String
+    ) throws -> String {
+        guard let root = try JSONSerialization.jsonObject(
+            with: Data(json.utf8)
+        ) as? [String: Any],
+            (root["record_schema_version"] as? NSNumber)?.intValue == 2,
+            let published = root["published"] as? [String: Any],
+            let revision = published["revision"] as? [String: Any],
+            let origin = published["origin"] as? [String: Any],
+            let lifecycle = published["lifecycle"] as? String,
+            lifecycle == expectedLifecycle,
+            lifecycle == "active" || lifecycle == "archived"
+        else {
+            throw LLMStoreSchemaError(
+                code: "llm_store.migration_record_invalid",
+                message: "provider profile v2 envelope is invalid"
+            )
+        }
+        let migrated: [String: Any] = [
+            "record_schema_version": 3,
+            "revision": revision,
+            "origin": origin,
+            "lifecycle": ["tag": lifecycle],
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: migrated,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
     }
 
     package static func userVersion(_ database: SQLiteConnection) throws -> Int {

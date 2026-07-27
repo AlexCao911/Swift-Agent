@@ -3,10 +3,10 @@ import LocalAgentLLMCore
 import Testing
 @testable import LocalAgentLLMCloud
 
-@Suite("LLMStore schema v2")
-struct LLMStoreSchemaV2Tests {
+@Suite("LLMStore schema v3")
+struct LLMStoreSchemaV3Tests {
     @Test
-    func emptyV1MigratesToTheCompleteVersionTwoSchema() async throws {
+    func emptyV1MigratesToTheCompleteCurrentSchema() async throws {
         let directory = temporarySchemaDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("llm-state.sqlite")
@@ -17,7 +17,7 @@ struct LLMStoreSchemaV2Tests {
             originValidator: FixtureOriginValidator()
         )
 
-        #expect(await store.schemaVersionForTesting() == 2)
+        #expect(await store.schemaVersionForTesting() == 3)
         #expect(Set(await store.tableNamesForTesting()) == expectedVersionTwoTables)
         #expect(Set(await store.indexNamesForTesting()) == expectedVersionTwoIndexes)
     }
@@ -51,7 +51,7 @@ struct LLMStoreSchemaV2Tests {
         _ = try ProviderProfileStore(fileURL: url, originValidator: FixtureOriginValidator())
         let reopened = try LLMStore(fileURL: url)
 
-        #expect(await reopened.schemaVersionForTesting() == 2)
+        #expect(await reopened.schemaVersionForTesting() == 3)
         #expect(await reopened.bindingState(token: request.tokenDigest) == .staged)
     }
 
@@ -83,6 +83,50 @@ struct LLMStoreSchemaV2Tests {
     }
 
     @Test
+    func populatedVersionTwoMigratesToTaggedVersionThreeAndReopens() async throws {
+        let directory = temporarySchemaDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("llm-state.sqlite")
+        let expected = try createVersionTwoProfileFixture(at: url)
+        let connection = try SQLiteConnection(path: url.path)
+
+        try LLMStoreSchema.migrateToCurrent(connection)
+
+        #expect(try userVersion(connection) == 3)
+        #expect(try connection.queryRows(
+            "SELECT record_schema_version FROM provider_profile_revisions ORDER BY revision"
+        ).map { $0.integer("record_schema_version") } == [3, 3])
+        let reopened = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: FixtureOriginValidator()
+        )
+        #expect(await reopened.profile(profileID: "migrated-profile", revision: 1) == expected[0])
+        #expect(await reopened.profile(profileID: "migrated-profile", revision: 2) == expected[1])
+    }
+
+    @Test
+    func everyVersionThreeMigrationBoundaryRollsBackToIntactVersionTwo() throws {
+        for failureIndex in 0..<LLMStoreSchema.versionThreeMigrationStatementCount {
+            let directory = temporarySchemaDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let url = directory.appendingPathComponent("llm-state.sqlite")
+            _ = try createVersionTwoProfileFixture(at: url)
+            let connection = try SQLiteConnection(path: url.path)
+            let before = try rawSchemaProjection(connection)
+
+            #expect(throws: LLMStoreSchemaError.self) {
+                try LLMStoreSchema.migrateToCurrent(
+                    connection,
+                    failVersionThreeAfterStatement: failureIndex
+                )
+            }
+
+            #expect(try userVersion(connection) == 2)
+            #expect(try rawSchemaProjection(connection) == before)
+        }
+    }
+
+    @Test
     func futureVersionAndUnknownPersistedShapesFailClosed() throws {
         let futureDirectory = temporarySchemaDirectory()
         defer { try? FileManager.default.removeItem(at: futureDirectory) }
@@ -93,7 +137,7 @@ struct LLMStoreSchemaV2Tests {
         let futureURL = futureDirectory.appendingPathComponent("llm-state.sqlite")
         let future = try SQLiteConnection(path: futureURL.path)
         try LLMStoreSchema.ensureBaseSchema(future)
-        try future.execute("PRAGMA user_version = 3")
+        try future.execute("PRAGMA user_version = 4")
         #expect(throws: ProviderProfileFailure.self) {
             _ = try ProviderProfileStore(
                 fileURL: futureURL,
@@ -114,7 +158,7 @@ struct LLMStoreSchemaV2Tests {
             bindings: [
                 .text("unknown-record"), .text("1"), .text("openai"),
                 .text("https://api.openai.com:443"), .text("credential"),
-                .text("stateless_required"), .text("active"), .integer(2),
+                .text("stateless_required"), .text("active"), .integer(3),
                 .text(#"{"record_schema_version":99}"#),
             ]
         )
@@ -161,7 +205,7 @@ struct LLMStoreSchemaV2Tests {
             try connection.execute(fixture.sql, bindings: fixture.bindings)
         }
 
-        #expect(try userVersion(connection) == 2)
+        #expect(try userVersion(connection) == 3)
         #expect(Set(try tableNames(connection)) == expectedVersionTwoTables)
     }
 }
@@ -223,8 +267,100 @@ private let laterTaskRowFixtures: [LaterTaskRowFixture] = [
 
 private func temporarySchemaDirectory() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
-        "llm-schema-v2-\(UUID().uuidString)",
+        "llm-schema-v3-\(UUID().uuidString)",
         isDirectory: true
+    )
+}
+
+private func createVersionTwoProfileFixture(
+    at url: URL
+) throws -> [PublishedProviderProfileRevision] {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let connection = try SQLiteConnection(path: url.path)
+    try LLMStoreSchema.ensureBaseSchema(connection)
+    try LLMStoreSchema.migrateToVersionTwo(connection)
+    let revision1 = ProviderProfileRevision(
+        profileID: "migrated-profile",
+        revision: 1,
+        presetID: .openAI,
+        displayName: "Migrated active",
+        baseURL: URL(string: "https://api.example.com/v1")!,
+        credentialRef: "credential-active"
+    )
+    let revision2 = ProviderProfileRevision(
+        profileID: "migrated-profile",
+        revision: 2,
+        presetID: .anthropic,
+        displayName: "Migrated archived",
+        baseURL: URL(string: "https://api.anthropic.com")!,
+        credentialRef: "credential-archived",
+        retentionMode: .providerStateApproved
+    )
+    let published = [
+        PublishedProviderProfileRevision(
+            revision: revision1,
+            origin: EgressOrigin(scheme: "https", host: "api.example.com", port: 443),
+            lifecycle: .active
+        ),
+        PublishedProviderProfileRevision(
+            revision: revision2,
+            origin: EgressOrigin(scheme: "https", host: "api.anthropic.com", port: 443),
+            lifecycle: .archived
+        ),
+    ]
+    for value in published {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let json = String(decoding: try encoder.encode(
+            LegacyPersistedProfileRevisionV2(published: value)
+        ), as: UTF8.self)
+        try connection.execute(
+            """
+            INSERT INTO provider_profile_revisions(
+              profile_id, revision, preset_id, origin, credential_ref, retention_mode,
+              lifecycle, record_schema_version, record_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 2, ?8)
+            """,
+            bindings: [
+                .text(value.revision.profileID),
+                .text(String(value.revision.revision)),
+                .text(value.revision.presetID.rawValue),
+                .text(value.origin.serialized),
+                .text(value.revision.credentialRef),
+                .text(value.revision.retentionMode.rawValue),
+                .text(value.lifecycle.rawValue),
+                .text(json),
+            ]
+        )
+    }
+    return published
+}
+
+private struct LegacyPersistedProfileRevisionV2: Encodable {
+    let recordSchemaVersion = 2
+    let published: PublishedProviderProfileRevision
+
+    enum CodingKeys: String, CodingKey {
+        case recordSchemaVersion = "record_schema_version"
+        case published
+    }
+}
+
+private func rawSchemaProjection(
+    _ connection: SQLiteConnection
+) throws -> [[String: String?]] {
+    try connection.query(
+        """
+        SELECT type, name, sql FROM sqlite_master
+        WHERE name NOT LIKE 'sqlite_%'
+        UNION ALL
+        SELECT 'profile-row', profile_id || ':' || revision, record_json
+        FROM provider_profile_revisions
+        ORDER BY type, name
+        """
     )
 }
 

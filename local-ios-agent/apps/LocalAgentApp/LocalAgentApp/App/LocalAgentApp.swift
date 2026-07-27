@@ -36,8 +36,14 @@ struct LocalAgentApp: App {
                 container?.resumeLLMHost()
             case .inactive, .background:
                 container?.suspendLLMHost()
+                if let broker = container?.cloudApprovalBroker {
+                    Task { await broker.denyAll() }
+                }
             @unknown default:
                 container?.suspendLLMHost()
+                if let broker = container?.cloudApprovalBroker {
+                    Task { await broker.denyAll() }
+                }
             }
         }
     }

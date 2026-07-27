@@ -173,8 +173,8 @@ public actor ProviderEgressPolicy {
         idGenerator: @escaping @Sendable () throws -> String = secureEgressID
     ) throws {
         let database = try SQLiteConnection(path: fileURL.path)
-        guard try LLMStoreSchema.userVersion(database) == 2 else {
-            throw egressFailure("egress.schema_not_ready", "egress policy requires schema version 2")
+        guard try LLMStoreSchema.userVersion(database) == LLMStoreSchema.currentVersion else {
+            throw egressFailure("egress.schema_not_ready", "egress policy requires the current schema")
         }
         self.database = database
         self.credentialStore = credentialStore
@@ -897,12 +897,15 @@ public actor ProviderEgressPolicy {
             bindings: [.text(profileID), .text(String(revision))]
         )
         guard let row = rows.first, rows.count == 1,
-              row.integer("record_schema_version") == 2,
+              row.integer("record_schema_version") == 3,
               row.text("lifecycle") == ProviderRevisionLifecycle.active.rawValue,
               let json = row.text("record_json")
         else { throw egressFailure("egress.profile_not_active", "provider profile is not active") }
-        let profile = try decodeEgressRecord(PersistedProfileRevision.self, json: json).published
-        guard profile.revision.profileID == profileID,
+        guard let profile = try decodeEgressRecord(
+            PersistedProfileRevision.self,
+            json: json
+        ).published,
+              profile.revision.profileID == profileID,
               profile.revision.revision == revision,
               profile.lifecycle == .active,
               row.text("origin") == profile.origin.serialized,

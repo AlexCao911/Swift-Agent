@@ -34,12 +34,8 @@ struct CloudProductPathIntegrationTests {
         )
         #expect(subsystem.bindingStore === llmStore)
 
-        try await subsystem.credentials.createSlot(
-            credentialRef: "manual-integration-key",
-            initialSecret: SecretBytes(utf8: "fixture-secret"),
-            operationID: "manual-integration-create-key"
-        )
-        _ = try await subsystem.profiles.publish(ProviderProfileRevision(
+        let published = try await subsystem.createProviderProfile(
+            ProviderProfileRevision(
             profileID: "manual-integration-profile",
             revision: 1,
             presetID: .openAI,
@@ -47,7 +43,11 @@ struct CloudProductPathIntegrationTests {
             baseURL: URL(string: "https://api.example.com/v1")!,
             credentialRef: "manual-integration-key",
             retentionMode: .statelessRequired
-        ))
+            ),
+            initialSecret: SecretBytes(utf8: "fixture-secret"),
+            proposedOperationID: "manual-integration-create-key"
+        )
+        #expect(published.lifecycle == .active)
         let target = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "manual-integration-target"),
             revision: 1,
@@ -191,6 +191,21 @@ struct CloudProductPathIntegrationTests {
             adapterVersion: "1"
         )
         #expect(validation.snapshot.support(for: "tool_calling") == .supported)
+        let providers = try await subsystem.providerInventory()
+        #expect(providers.count == 1)
+        #expect(providers[0].displayOrigin == "https://api.example.com:443")
+        #expect(!String(describing: providers).contains("fixture-secret"))
+        #expect(!String(describing: providers).contains("credentialGeneration"))
+        let models = try await subsystem.modelInventory(
+            profileID: "integration-profile",
+            profileRevision: 1
+        )
+        let productModel = try #require(models.first {
+            $0.modelID == "fixture-model"
+        })
+        #expect(productModel.capabilities.support(for: "tool_calling") == .supported)
+        #expect(productModel.parameterSchema.definitions.isEmpty == false)
+        #expect(productModel.validation.isCurrent)
 
         let configuration = AgentHostConfiguration(
             bindingID: "integration-binding",

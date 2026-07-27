@@ -9,6 +9,7 @@ public struct LocalLLMSubsystem: Sendable {
     public let acceptedCatalog: AcceptedLocalModelCatalog
     package let store: LocalModelStore
     package let bindingStore: LLMStore
+    private let paths: LocalModelPaths
 
     private init(
         hostProcessEpoch: HostProcessEpoch,
@@ -16,7 +17,8 @@ public struct LocalLLMSubsystem: Sendable {
         runtime: LocalModelRuntime,
         acceptedCatalog: AcceptedLocalModelCatalog,
         store: LocalModelStore,
-        bindingStore: LLMStore
+        bindingStore: LLMStore,
+        paths: LocalModelPaths
     ) {
         self.hostProcessEpoch = hostProcessEpoch
         self.downloads = downloads
@@ -24,6 +26,88 @@ public struct LocalLLMSubsystem: Sendable {
         self.acceptedCatalog = acceptedCatalog
         self.store = store
         self.bindingStore = bindingStore
+        self.paths = paths
+    }
+
+    public var downloadStateChanges: AsyncStream<Void> {
+        downloads.stateChanges
+    }
+
+    public func inventory() async throws -> [LocalModelProductState] {
+        try store.installationRecords().map { installation in
+            guard let manifest = acceptedCatalog.verified.models[installation.modelRevision] else {
+                throw LLMFailure(
+                    code: "download.catalog_revision_missing",
+                    message: "installed model revision is absent from the accepted catalog",
+                    retryable: false
+                )
+            }
+            let artifacts = try store.artifactRecords(
+                installationID: installation.installationID
+            )
+            let receivedBytes = try sum(artifacts.map(\.receivedBytes))
+            let expectedBytes = try sum(artifacts.map(\.expectedBytes))
+            return LocalModelProductState(
+                installationID: installation.installationID,
+                modelRevision: installation.modelRevision,
+                state: installation.state,
+                receivedBytes: receivedBytes,
+                expectedBytes: expectedBytes,
+                installedBytes: installation.state == .installed
+                    ? manifest.installedByteSize : 0,
+                requiredBytes: manifest.installedByteSize,
+                repairAction: repairAction(for: installation.state)
+            )
+        }
+    }
+
+    @discardableResult
+    public func enqueue(
+        modelRevision: LocalModelRevisionID,
+        installationID: String = UUID().uuidString.lowercased()
+    ) async throws -> String {
+        guard let manifest = acceptedCatalog.verified.models[modelRevision] else {
+            throw LLMFailure(
+                code: "download.catalog_revision_missing",
+                message: "model revision is absent from the accepted catalog",
+                retryable: false
+            )
+        }
+        try await downloads.enqueue(
+            installationID: installationID,
+            manifest: manifest
+        )
+        return installationID
+    }
+
+    public func pause(installationID: String) async throws {
+        try await downloads.pause(installationID: installationID)
+    }
+
+    public func resume(installationID: String) async throws {
+        try await downloads.resume(installationID: installationID)
+    }
+
+    public func cancel(installationID: String) async throws {
+        try await downloads.cancel(installationID: installationID)
+    }
+
+    public func delete(installationID: String) async throws {
+        try LocalModelDeletionService(store: store, paths: paths)
+            .delete(installationID: installationID)
+    }
+
+    public func diskState() async throws -> LocalDiskProductState {
+        let installedBytes = try sum(try store.installationRecords().compactMap {
+            guard $0.state == .installed else { return nil }
+            return acceptedCatalog.verified.models[$0.modelRevision]?.installedByteSize
+        })
+        return LocalDiskProductState(
+            availableImportantUsageBytes: try SystemLocalVolumeCapacity()
+                .availableImportantUsageBytes(at: paths.root),
+            reservedBytes: try store.totalReservedBytes(),
+            installedBytes: installedBytes
+        )
     }
 
     public static func bootstrap(
@@ -99,8 +183,33 @@ public struct LocalLLMSubsystem: Sendable {
             runtime: runtime,
             acceptedCatalog: accepted,
             store: store,
-            bindingStore: bindingStore
+            bindingStore: bindingStore,
+            paths: paths
         )
+    }
+}
+
+private func repairAction(for state: LocalInstallationState) -> LocalModelRepairAction {
+    switch state {
+    case .paused: .resume
+    case .failed: .retry
+    case .queued, .downloading, .verifying: .cancel
+    case .installed: .delete
+    case .deleting: .none
+    }
+}
+
+private func sum(_ values: [UInt64]) throws -> UInt64 {
+    try values.reduce(0) { total, value in
+        let (result, overflow) = total.addingReportingOverflow(value)
+        guard !overflow else {
+            throw LLMFailure(
+                code: "download.size_overflow",
+                message: "local model byte total overflowed",
+                retryable: false
+            )
+        }
+        return result
     }
 }
 

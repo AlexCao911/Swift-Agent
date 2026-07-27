@@ -106,7 +106,7 @@ struct LLMStoreTests {
         let store = try LLMStore(fileURL: url)
         let header = try Data(contentsOf: url).prefix(16)
         #expect(String(decoding: header, as: UTF8.self) == "SQLite format 3\0")
-        #expect(await store.schemaVersionForTesting() == 2)
+        #expect(await store.schemaVersionForTesting() == LLMStoreSchema.currentVersion)
         let tables = Set(await store.tableNamesForTesting())
         #expect(tables.isSuperset(of: [
             "llm_store_meta",
@@ -117,7 +117,7 @@ struct LLMStoreTests {
     }
 
     @Test
-    func reopeningVersionTwoNeverDowngradesSharedSchema() async throws {
+    func reopeningVersionTwoMigratesSharedSchemaToCurrent() async throws {
         let (directory, url) = try temporaryDatabase()
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try SQLiteConnection(path: url.path)
@@ -126,7 +126,7 @@ struct LLMStoreTests {
 
         let reopened = try LLMStore(fileURL: url)
 
-        #expect(await reopened.schemaVersionForTesting() == 2)
+        #expect(await reopened.schemaVersionForTesting() == LLMStoreSchema.currentVersion)
     }
 
     @Test

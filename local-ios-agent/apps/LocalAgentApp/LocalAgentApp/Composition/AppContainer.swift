@@ -18,6 +18,7 @@ struct AppContainer {
     let rustRuntimeClient: RustRuntimeClient?
     let hostRunStarter: AppHostRunStarter?
     let llmHostSelections: AppLLMHostSelectionRegistry?
+    let cloudApprovalBroker: AppCloudApprovalBroker
     let localLLMSubsystem: LocalLLMSubsystem?
     let cloudLLMSubsystem: CloudLLMSubsystem?
     let llmHostRuntime: LLMHostProductRuntime?
@@ -41,6 +42,7 @@ struct AppContainer {
             rustRuntimeClient: rustRuntimeClient,
             hostRunStarter: hostRunStarter,
             llmHostSelections: llmHostSelections,
+            cloudApprovalBroker: cloudApprovalBroker,
             localLLMSubsystem: localLLMSubsystem,
             cloudLLMSubsystem: cloudLLMSubsystem,
             llmHostRuntime: llmHostRuntime

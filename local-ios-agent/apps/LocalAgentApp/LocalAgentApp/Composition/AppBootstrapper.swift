@@ -38,7 +38,7 @@ enum AppBootstrapper {
             appSupportRoot: appSupportRoot,
             hostProcessEpoch: hostProcessEpoch,
             remoteCatalog: remoteCloudCatalog,
-            approvalPrompt: FailClosedCloudApprovalPrompt(),
+            approvalPrompt: container.cloudApprovalBroker,
             localUnloader: AppLocalRouteUnloader(runtime: local.runtime)
         )
         guard let rust = container.rustRuntimeClient,
@@ -112,6 +112,7 @@ enum AppBootstrapper {
             rustRuntimeClient: client,
             hostRunStarter: hostStarter,
             llmHostSelections: selections,
+            cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil
@@ -159,6 +160,7 @@ enum AppBootstrapper {
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
+            cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil
@@ -198,6 +200,7 @@ enum AppBootstrapper {
             rustRuntimeClient: nil,
             hostRunStarter: nil,
             llmHostSelections: nil,
+            cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil
@@ -534,30 +537,6 @@ private struct NativeToolkitBundle {
     let permissionGateway: any NativePermissionGateway
     let builderToolCatalogClient: NativeManifestToolCatalogClient
     let interactionBroker: NativeInteractionBroker
-}
-
-private actor FailClosedCloudApprovalPrompt: CloudLLMApprovalPrompting {
-    func requestOriginApproval(
-        _ origin: EgressOrigin,
-        profileName: String
-    ) async -> EgressDecision {
-        .deny
-    }
-
-    func requestScopeApproval(
-        origin: EgressOrigin,
-        summary: EgressApprovalDisplaySummary
-    ) async -> EgressDecision {
-        .deny
-    }
-
-    func requestProviderStateApproval(
-        profileName: String,
-        origin: EgressOrigin,
-        disclosure: ProviderRetentionDisclosure
-    ) async -> EgressDecision {
-        .deny
-    }
 }
 
 private struct AppLocalRouteUnloader: LocalRouteUnloading {

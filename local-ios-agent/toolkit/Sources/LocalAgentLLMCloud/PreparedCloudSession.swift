@@ -188,8 +188,7 @@ package final class PreparedCloudSessionStore: @unchecked Sendable {
 
     package init(fileURL: URL) throws {
         database = try SQLiteConnection(path: fileURL.path)
-        try LLMStoreSchema.ensureBaseSchema(database)
-        try LLMStoreSchema.migrateToVersionTwo(database)
+        try LLMStoreSchema.migrateToCurrent(database)
     }
 
     package func persistPreparedSession(

@@ -118,8 +118,8 @@ public actor ProviderRetentionPolicy {
         clock: @escaping @Sendable () -> Date = Date.init
     ) throws {
         let database = try SQLiteConnection(path: fileURL.path)
-        guard try LLMStoreSchema.userVersion(database) == 2 else {
-            throw retentionFailure("retention.schema_not_ready", "retention policy requires schema version 2")
+        guard try LLMStoreSchema.userVersion(database) == LLMStoreSchema.currentVersion else {
+            throw retentionFailure("retention.schema_not_ready", "retention policy requires the current schema")
         }
         self.database = database
         self.prompt = prompt
@@ -366,11 +366,14 @@ public actor ProviderRetentionPolicy {
             bindings: [.text(profileID), .text(String(revision))]
         )
         guard let row = rows.first, rows.count == 1,
-              row.integer("record_schema_version") == 2,
+              row.integer("record_schema_version") == 3,
               let json = row.text("record_json")
         else { throw retentionFailure("retention.profile_invalid", "provider profile is missing") }
-        let profile = try decodeEgressRecord(PersistedProfileRevision.self, json: json).published
-        guard profile.revision.profileID == profileID,
+        guard let profile = try decodeEgressRecord(
+            PersistedProfileRevision.self,
+            json: json
+        ).published,
+              profile.revision.profileID == profileID,
               profile.revision.revision == revision,
               row.text("lifecycle") == profile.lifecycle.rawValue
         else { throw retentionFailure("retention.profile_invalid", "provider profile record is invalid") }

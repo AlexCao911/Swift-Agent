@@ -18,6 +18,8 @@ public actor ModelDownloadCoordinator {
     private let paths: LocalModelPaths
     private let transport: any ModelDownloadTransport
     private let cancellationCrashPointForTesting: ModelDownloadCancellationCrashPoint?
+    public nonisolated let stateChanges: AsyncStream<Void>
+    private let stateChangeContinuation: AsyncStream<Void>.Continuation
     private var active: ActiveTransfer?
     private var bufferedEvents: [Int: [ModelDownloadTransportEvent]] = [:]
 
@@ -27,6 +29,11 @@ public actor ModelDownloadCoordinator {
         transport: any ModelDownloadTransport,
         cancellationCrashPointForTesting: ModelDownloadCancellationCrashPoint? = nil
     ) {
+        let stateSignal = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        stateChanges = stateSignal.stream
+        stateChangeContinuation = stateSignal.continuation
         self.store = store
         self.paths = paths
         self.transport = transport
@@ -71,6 +78,7 @@ public actor ModelDownloadCoordinator {
             )
         }
         try await pump()
+        stateChangeContinuation.yield()
     }
 
     package func restore(
@@ -132,6 +140,7 @@ public actor ModelDownloadCoordinator {
             to: .paused
         )
         self.active = nil
+        stateChangeContinuation.yield()
     }
 
     public func resume(installationID: String) async throws {
@@ -144,6 +153,7 @@ public actor ModelDownloadCoordinator {
             to: .downloading
         )
         try await pump()
+        stateChangeContinuation.yield()
     }
 
     public func cancel(installationID: String) async throws {
@@ -165,6 +175,7 @@ public actor ModelDownloadCoordinator {
             ),
             injectCrash: true
         )
+        stateChangeContinuation.yield()
     }
 
     private func pump() async throws {
@@ -279,6 +290,7 @@ public actor ModelDownloadCoordinator {
             bufferedEvents[taskIdentifier, default: []].append(event)
             return
         }
+        defer { stateChangeContinuation.yield() }
         do {
             switch event {
             case let .progress(_, receivedBytes, expectedBytes):

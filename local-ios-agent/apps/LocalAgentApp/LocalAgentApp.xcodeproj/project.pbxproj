@@ -30,6 +30,9 @@
 		0A00000100000000000000F3 /* LocalAgentLLMContracts in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000304 /* LocalAgentLLMContracts */; };
 		0D0000010000000000000001 /* CloudCredentialKeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */; };
 		0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 0D0000010000000000000301 /* LocalAgentLLMCloud */; };
+		0D5000010000000000000001 /* AppCloudApprovalBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5000010000000000000101 /* AppCloudApprovalBroker.swift */; };
+		0D5000010000000000000002 /* CloudApprovalSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5000010000000000000102 /* CloudApprovalSheet.swift */; };
+		0D5000010000000000000003 /* AppCloudApprovalBrokerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */; };
 		0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */ = {isa = PBXBuildFile; productRef = 0E0000010000000000000301 /* LocalAgentLLMHost */; };
 		0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000101 /* AppLLMHostRouting.swift */; };
 		0F0000010000000000000002 /* LLMHostCompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000102 /* LLMHostCompositionTests.swift */; };
@@ -151,6 +154,9 @@
 		0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceNativeLinkTests.swift; sourceTree = "<group>"; };
 		0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceReleaseSmokeTests.swift; sourceTree = "<group>"; };
 		0D0000010000000000000101 /* CloudCredentialKeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudCredentialKeychainTests.swift; sourceTree = "<group>"; };
+		0D5000010000000000000101 /* AppCloudApprovalBroker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCloudApprovalBroker.swift; sourceTree = "<group>"; };
+		0D5000010000000000000102 /* CloudApprovalSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudApprovalSheet.swift; sourceTree = "<group>"; };
+		0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCloudApprovalBrokerTests.swift; sourceTree = "<group>"; };
 		0F0000010000000000000101 /* AppLLMHostRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLLMHostRouting.swift; sourceTree = "<group>"; };
 		0F0000010000000000000102 /* LLMHostCompositionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMHostCompositionTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
@@ -326,6 +332,7 @@
 		0A0000010000000000000503 /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				0D5000010000000000000101 /* AppCloudApprovalBroker.swift */,
 				0B0000010000000000001501 /* Conversation */,
 				0B0000010000000000001502 /* Execution */,
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
@@ -428,6 +435,7 @@
 		0C0000010000000000002521 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				0D5000010000000000000102 /* CloudApprovalSheet.swift */,
 				0C0000010000000000002123 /* ModelCenterView.swift */,
 				0C0000010000000000002122 /* ModelCenterViewModel.swift */,
 			);
@@ -490,6 +498,7 @@
 		0A0000010000000000000511 /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
+				0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */,
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
 				0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */,
 				0B0000010000000000001120 /* ConversationDomainTests.swift */,
@@ -784,6 +793,8 @@
 				0C0000010000000000002021 /* ToolCenterView.swift in Sources */,
 				0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */,
 				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
+				0D5000010000000000000001 /* AppCloudApprovalBroker.swift in Sources */,
+				0D5000010000000000000002 /* CloudApprovalSheet.swift in Sources */,
 				0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */,
 				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
 				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
@@ -854,6 +865,7 @@
 				0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */,
 				0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */,
 				0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */,
+				0D5000010000000000000003 /* AppCloudApprovalBrokerTests.swift in Sources */,
 				0F0000010000000000000002 /* LLMHostCompositionTests.swift in Sources */,
 				0A00000100000000000000F5 /* LocalInferenceNativeLinkTests.swift in Sources */,
 				0A00000100000000000000F6 /* LocalInferenceReleaseSmokeTests.swift in Sources */,

@@ -286,7 +286,7 @@ private struct CredentialHarness: Sendable {
 private func credentialHarness() throws -> CredentialHarness {
     let connection = try SQLiteConnection(path: ":memory:")
     try LLMStoreSchema.ensureBaseSchema(connection)
-    try LLMStoreSchema.migrateToVersionTwo(connection)
+    try LLMStoreSchema.migrateToCurrent(connection)
     let vault = RecordingCredentialVault()
     return CredentialHarness(
         store: try ProviderCredentialStore(database: connection, vault: vault),

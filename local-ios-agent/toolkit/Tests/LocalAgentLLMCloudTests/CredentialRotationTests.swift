@@ -218,7 +218,7 @@ struct LifecycleHarness: Sendable {
 func lifecycleHarness() throws -> LifecycleHarness {
     let database = try SQLiteConnection(path: ":memory:")
     try LLMStoreSchema.ensureBaseSchema(database)
-    try LLMStoreSchema.migrateToVersionTwo(database)
+    try LLMStoreSchema.migrateToCurrent(database)
     let vault = LifecycleCredentialVault()
     let faults = LifecycleFaultInjector()
     return LifecycleHarness(

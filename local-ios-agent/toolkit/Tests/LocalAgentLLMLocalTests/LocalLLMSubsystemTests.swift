@@ -34,6 +34,32 @@ struct LocalLLMSubsystemTests {
         #expect(subsystem.store.fileURL == root.appending(path: "LocalAgent/LLM/local-models.sqlite"))
         #expect(subsystem.bindingStore === llmStore)
         #expect(await subsystem.runtime.state == .idle)
+
+        let manifest = try #require(subsystem.acceptedCatalog.verified.models.first?.value)
+        var changes = subsystem.downloadStateChanges.makeAsyncIterator()
+        let installationID = try await subsystem.enqueue(
+            modelRevision: manifest.id,
+            installationID: "product-installation"
+        )
+        #expect(installationID == "product-installation")
+        #expect(await changes.next() != nil)
+        let inventory = try await subsystem.inventory()
+        #expect(inventory.count == 1)
+        #expect(inventory[0].installationID == installationID)
+        #expect(inventory[0].modelRevision == manifest.id)
+        #expect(inventory[0].expectedBytes == manifest.artifacts.reduce(0) {
+            $0 + $1.byteSize
+        })
+        #expect(inventory[0].requiredBytes == manifest.installedByteSize)
+        #expect(!String(describing: inventory[0]).contains(root.path))
+
+        try await subsystem.pause(installationID: installationID)
+        #expect(try await subsystem.inventory()[0].state == .paused)
+        try await subsystem.resume(installationID: installationID)
+        #expect(try await subsystem.inventory()[0].state == .downloading)
+        try await subsystem.cancel(installationID: installationID)
+        #expect(try await subsystem.inventory().isEmpty)
+        _ = try await subsystem.diskState()
     }
 }
 
