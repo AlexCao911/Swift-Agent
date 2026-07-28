@@ -1,6 +1,6 @@
 # OpenMinis Product Reuse and Minimal Rust ReAct Core Design
 
-**Status:** User-approved design; pending written-spec review
+**Status:** Revised after written-spec review; pending final approval
 
 **Date:** 2026-07-28
 
@@ -8,12 +8,14 @@
 
 ## Summary
 
-The product keeps its three existing implementation layers:
+The product keeps three implementation layers, but OpenMinis becomes the
+primary Swift application trunk:
 
 ```text
-Swift
-  owns the app, OpenMinis product features, model configuration,
-  cloud execution, iSH, tools, Skills files, and iOS permissions
+OpenMinis Swift App trunk
+  keeps its app shell, UI, tools, iSH, Skills, and product facilities
+  integrates the existing Rust bridge, LocalAgentLLMCloud, and C++ adapter
+  yields agent-loop control to Rust
 
 Rust
   owns a small provider-neutral ReAct agent loop plus reusable
@@ -28,10 +30,15 @@ a business state machine. It repeatedly assembles model input, requests one
 generation, executes an ordered tool-call batch when present, appends the
 results, and continues until the model returns no tool calls.
 
-OpenMinis is reused most heavily in the Swift product and tool layers. The
-current Swift cloud security implementation remains the execution foundation;
-OpenMinis fills product, provider, OAuth, model-management, Skills, and iSH
-gaps.
+The migration starts from OpenMinis and integrates the existing project
+components into it. It does not copy OpenMinis features one by one into the
+current Swift app. OpenMinis keeps its coupled UI, `ChatStore`, tool, and iSH
+facilities; only `AIChatViewModel.runAgentLoop` loses control ownership.
+
+The current reliable Rust/Swift transport and Swift cloud security
+implementation remain the execution foundations. Logical interfaces named in
+this document are mapped onto the existing wire envelopes rather than creating
+a second bridge protocol.
 
 This document supersedes the earlier untracked
 `docs/openminis-reuse-architecture.md` draft. It also supersedes the custom
@@ -41,6 +48,8 @@ Rust Skill Package direction in
 ## Goals
 
 - Make Rust the sole owner of the ReAct model/tool loop.
+- Make OpenMinis the Swift app and product trunk, then integrate the current
+  Rust bridge, cloud runtime, security layer, and C++ adapter into that trunk.
 - Keep the loop small enough to understand as one ordinary control flow.
 - Preserve useful Rust Prompt, Context, Memory, conversation, and persistence
   work without making those components control the loop.
@@ -53,10 +62,14 @@ Rust Skill Package direction in
 - Allow future model, tool, skill, prompt, and memory implementations without
   changing the ReAct loop.
 - Remove iOS-specific lifecycle concepts from the platform-neutral Rust loop.
+- Reuse the existing sequenced, digested, backpressured, epoch-bound
+  Rust/Swift wire transport.
 
 ## Non-Goals
 
 - Reimplementing OpenMinis as a second Rust application framework.
+- Transplanting OpenMinis product features piecemeal into the current Swift app.
+- Creating a second Rust/Swift request, event, or tool transport.
 - Porting Pi's TypeScript extension framework or its full hook surface.
 - Building a dynamic native plugin loader.
 - Implementing an m_flow, Memori, Graphify, vector, or graph-memory backend now.
@@ -85,20 +98,28 @@ Rust Skill Package direction in
 10. Memory is an interface only in this work.
 11. Runtime data contracts, not a plugin framework, provide extensibility.
 12. Existing Swift cloud security remains authoritative.
+13. OpenMinis is the Swift app trunk, not a donor library for the current app.
+14. `ModelRequest`, `ModelEvent`, `ToolBatch`, and `ToolBatchResult` are logical
+    interfaces, not new wire protocols.
+15. Swift exposes one batch tool entry point; Rust never schedules individual
+    tools.
+16. `LocalAgentLLMCloud` is the only cloud HTTP execution stack.
+17. Rust is the only writer of the canonical agent transcript.
 
 ## Architecture
 
 ```text
-Swift App / OpenMinis product layer
+OpenMinis Swift App trunk
   - chat and settings UI
   - Prompt and Skill file management
   - provider/model/API key/OAuth configuration
-  - secure cloud model execution
+  - existing LocalAgentLLMCloud execution and security
   - C++ local model adapter
   - OpenMinis tools, iSH, browser, native iOS integrations
                     |
-                    | ModelRequest / ModelEvent
-                    | ToolBatch / ToolBatchResult
+                    | existing HostCommandEnvelope / LLMEventEnvelope
+                    | existing receipts, sequencing, digest, backpressure,
+                    | and host-process epoch
                     | ordered PromptDocument and SkillDescriptor snapshots
                     v
 Rust Core
@@ -118,9 +139,9 @@ C++ local inference
   - cancellation
 ```
 
-### Platform-Neutral Core Boundary
+### Logical Core Boundary and Existing Wire Transport
 
-The generic Rust loop knows only these contracts:
+The generic Rust loop is written against these logical contracts:
 
 ```text
 ModelRequest  <-> ModelEvent
@@ -129,6 +150,24 @@ PromptDocument[] -> compiled prompt
 SkillDescriptor[] -> ContextContribution
 MemoryBackend -> MemoryContribution[]
 ```
+
+These names describe responsibilities inside the core; they do not authorize a
+parallel FFI or serialization protocol. The Swift bridge continues using the
+existing:
+
+- `HostCommandEnvelope` command path;
+- `LLMEventEnvelope` event path;
+- stable command/event IDs and sequence numbers;
+- canonical payload and envelope digests;
+- event receipts and duplicate detection;
+- backpressure and capacity notifications;
+- session handles and host-process epochs.
+
+Where the existing envelope does not yet carry a whole tool batch, evolve its
+versioned command/payload schema and reuse the same delivery machinery. Do not
+add a second callback channel, queue, receipt scheme, or transport abstraction.
+The migration removes business-state-machine meaning from Agent Core while
+preserving the reliable communication layer.
 
 It does not know about:
 
@@ -141,14 +180,13 @@ OpenMinis database types
 provider wire formats
 API key bytes
 OAuth token bytes
-host process epochs
 prepared host sessions
 Swift callback lifecycles
 ```
 
-iOS-specific delivery reliability may remain in the Swift/Rust bridge adapter,
-but it must not define agent-loop semantics. A future desktop or server host
-can implement the same data contracts without Swift.
+iOS-specific delivery reliability remains in the Swift/Rust bridge adapter,
+but it does not define agent-loop semantics. A future desktop or server host
+may implement the same logical interfaces with a different transport.
 
 ## Minimal Rust ReAct Loop
 
@@ -192,27 +230,41 @@ Event persistence observes the loop; it does not control it.
 
 ### Retry and Model Fallback
 
-The retry policy is deliberately small:
+Swift `ModelRuntime` owns retry and fallback because it owns model
+configuration, OAuth, provider compatibility, and model-group ordering. Rust
+issues one logical generation request and never receives or stores a candidate
+list.
 
-- a retryable model failure receives at most three total attempts on the
-  current candidate;
-- a permanent candidate failure advances immediately;
-- after the current candidate is exhausted, Rust tries each remaining frozen
-  route candidate once in order;
-- when no candidate remains, the run fails with the last normalized error.
+The minimum safe replay rule is:
 
-Swift freezes an ordered, secret-free route candidate list at run start.
-API keys and provider-specific request construction stay in Swift.
+- before the first text, reasoning, or tool-call event, Swift may automatically
+  retry or advance to the next configured fallback candidate;
+- after any such output-bearing event, Swift must not automatically replay the
+  generation;
+- a post-output failure is returned to Rust as a terminal normalized failure
+  and requires an explicit user retry.
+
+This avoids duplicate billing, duplicate visible output, and repeated tool
+calls. API keys, OAuth tokens, provider request construction, retry counts, and
+fallback ordering all stay in Swift.
 
 ### Cancellation
 
 - Rust stops issuing new model and tool requests.
 - Swift cancels the active provider task, C++ generation, iSH processes, and
   native tool tasks.
+- The Swift batch executor owns a per-call cancellation registry keyed by call
+  ID. Each entry retains the task handle and every iSH PID created for that
+  call.
 - Every started tool call receives a terminal success, error, or cancelled
   result.
 - A cancelled batch remains correctly paired as assistant tool calls followed
   by tool results.
+
+OpenMinis's current `runningCommandPids` computed property is not sufficient:
+it maps back to one `runningCommandPid`. It must not be treated as proof that a
+concurrent batch is fully cancellable. Fixing per-call cancellation is a
+localized Swift batch-executor change and adds no Rust state.
 
 ### Process Loss and Recovery
 
@@ -364,6 +416,24 @@ No concrete backend is included in this design. Future adapters may target:
 
 The ReAct loop does not change when a backend is added or replaced.
 
+### Existing Memory Code Migration
+
+The current Rust `memory` module contains SQLite, HTTP, long-term-memory, and
+other concrete implementations. The implementation plan must audit their
+production callers rather than assuming the codebase is already interface
+only.
+
+The target surface contains only:
+
+- `MemoryBackend`;
+- the contribution and scope data needed by Context;
+- a test fake.
+
+Concrete memory implementations without production callers are deleted, not
+extended. Storage primitives that are still required for the canonical
+conversation or event log are moved to a neutral storage namespace if needed;
+they are not preserved as an accidental concrete memory backend.
+
 ## Tool Runtime
 
 ### Registration
@@ -374,18 +444,21 @@ Swift/OpenMinis publishes runtime tool definitions containing:
 name
 description
 JSON argument schema
-execution mode
 ```
 
-Execution mode is `parallel` by default and may be `sequential` for a tool that
-cannot safely share a batch.
-
 Rust maintains the active tool table for model input and validates that every
-model call references a registered name.
+model call references a registered name. Concurrency and serialization rules
+are private Swift executor policy and are not exposed across the Rust boundary.
 
 ### Batch Contract
 
-`ToolBatch` contains:
+Rust has exactly one tool execution interface:
+
+```text
+execute_batch(ordered_calls) -> ordered_results
+```
+
+The logical batch contains:
 
 ```text
 batch_id
@@ -398,15 +471,20 @@ Each call contains its source index, call ID, tool name, and arguments.
 Swift/OpenMinis:
 
 - reuses existing argument repair and tool-specific preflight;
-- executes permitted parallel calls with at most ten in flight;
-- respects sequential tools;
+- chooses its internal parallel or sequential execution policy;
+- executes concurrent calls with at most ten in flight;
 - reuses iSH, file, browser, memory-tool, and native offload implementations;
+- owns every per-call task handle and iSH PID;
 - returns progress for UI when available;
 - returns exactly one terminal result per call in source order.
 
 Rust verifies batch identity, unique call IDs, result count, and result order.
 Individual tool failures become `is_error = true` tool results and normally
 return to the model instead of failing the whole run.
+
+The existing `HostToolBatchExecutor::execute_tool` plus Rust-side sequential
+loop is replaced, not wrapped. Batch commands and results travel over the
+existing command/event envelope machinery.
 
 ### Approval Policy
 
@@ -416,10 +494,28 @@ return to the model instead of failing the whole run.
 - a security-policy denial returns an error tool result;
 - Rust does not model approval as an agent-loop state.
 
+### iSH Security Boundary
+
+Removing generic Rust approvals does not weaken the host boundary:
+
+- API keys and OAuth tokens never enter the iSH filesystem, process
+  environment, command input, logs, or tool results;
+- Skill directories, shared directories, and user mounts declare explicit
+  read-only or read-write access;
+- path traversal, symbolic-link escape, and native-offload permission checks
+  remain enforced in Swift before host access;
+- guest network access remains subject to the existing security and egress
+  policy rather than bypassing it through raw iSH networking;
+- OpenMinis `ToolLoopDetector` remains in the Swift tool executor;
+- Rust enforces one simple configurable maximum number of model/tool turns.
+
+The maximum-turn counter is a loop budget, not a state machine.
+
 ## Model Runtime
 
-Rust sends one provider-neutral `ModelRequest` at a time. Swift selects the
-concrete target using an opaque route candidate ID.
+Rust sends one logical provider-neutral generation request at a time over the
+existing command envelope. Swift resolves the configured local model or cloud
+model group internally.
 
 ### Local
 
@@ -433,8 +529,8 @@ Swift continues using the current C++ adapter for:
 
 ### Cloud
 
-The current `LocalAgentLLMCloud` layer remains the cloud execution and security
-base because it already provides:
+`LocalAgentLLMCloud` is the only executable cloud HTTP stack. It remains the
+cloud execution and security base because it already provides:
 
 - provider-semantic codecs and validation;
 - HTTPS, redirect, DNS, and SSRF restrictions;
@@ -446,7 +542,7 @@ base because it already provides:
 - OpenAI Responses, Anthropic Messages, Gemini, xAI, DeepSeek, MiniMax, and
   GLM adapters.
 
-OpenMinis product/provider code fills missing capabilities:
+OpenMinis remains responsible for the product surface:
 
 - richer provider and model configuration UI;
 - custom Base URL and `/v1` behavior;
@@ -457,10 +553,21 @@ OpenMinis product/provider code fills missing capabilities:
 - import/export without secrets by default;
 - forward-compatible unsupported-provider preservation;
 - model groups and ordered fallback configuration;
-- additional provider-specific compatibility behavior.
+- model selection, testing, and user-visible errors.
 
-The OpenMinis credential store and general HTTP transport do not replace the
-current security implementations. API keys and OAuth tokens remain Swift-only.
+Missing provider codecs and compatibility behavior discovered in OpenMinis are
+ported into `LocalAgentLLMCloud` and exercised through its existing transport
+and security policy. OpenMinis provider HTTP adapters are not retained as a
+second executable route. The same provider must never be reachable through two
+HTTP stacks.
+
+OAuth login may originate in OpenMinis UI, but token storage, refresh use, and
+authenticated provider requests flow through the existing credential and
+transport boundaries. API keys and OAuth tokens remain Swift-only and are
+never passed into Rust or iSH.
+
+Model retry and fallback are internal `ModelRuntime` behavior and obey the
+pre-output-only replay rule above.
 
 ## Extensibility
 
@@ -478,8 +585,13 @@ extension SDK is added only when a concrete second implementation needs it.
 
 ## Swift Product Reuse
 
-Subject to license review, reuse OpenMinis Swift code wherever it can remain
-the product or execution owner:
+Subject to the license gate, OpenMinis is the primary Swift application source
+tree and product trunk. The migration integrates the current Rust bridge,
+`LocalAgentLLMCloud`, security layer, and C++ local-model adapter into
+OpenMinis. It does not progressively copy OpenMinis screens and tools into the
+current `LocalAgentApp`.
+
+Keep OpenMinis ownership of:
 
 - iPhone/iPad app shell, navigation, and adaptive layouts;
 - chat/message UI, Markdown, attachments, voice, share, widgets, and intents;
@@ -490,17 +602,31 @@ the product or execution owner:
 - concurrent tool execution and result ordering;
 - relevant onboarding and diagnostics.
 
-Do not reuse OpenMinis `AIChatViewModel.runAgentLoop` as the control owner.
-Provider and tool functions are extracted behind the minimal Rust contracts,
-while its existing UI becomes a projection of Rust run events.
+Replace only the control ownership of
+`AIChatViewModel.runAgentLoop`: user actions enter the Rust ReAct loop, which
+requests model generations and complete tool batches from Swift. Existing
+OpenMinis tool code may remain colocated with `AIChatViewModel`; it does not
+need to become a standalone library before migration.
+
+The current tool code mutates `AIChatViewModel.messages`, `ChatStore`, and UI
+state directly. Preserve transient progress and presentation behavior, but
+route durable transcript changes through the Rust event projection described
+below. Localized suppression or extraction of direct `ChatStore` transcript
+writes is permitted; wholesale tool rewrites are not.
 
 ## Persistence Ownership
 
-- Rust owns the canonical provider-neutral conversation and completed ReAct
-  turns.
-- Swift may keep OpenMinis `ChatStore` as the UI/search/sync read model.
-- Swift UI data is projected from Rust events and must not independently drive
-  the loop.
+- Rust is the only writer of the canonical provider-neutral agent transcript
+  and completed ReAct turns.
+- OpenMinis `ChatStore` remains only a UI/search/sync read model.
+- Rust emits projection events with a stable event ID and monotonic cursor.
+- Swift applies each event idempotently and records the last applied cursor.
+- Projection is one-way: Rust to `ChatStore`. There is no bidirectional
+  transcript synchronization and no independent Swift transcript append.
+- Transient UI progress may update `AIChatViewModel.messages`, but it cannot
+  become canonical history or independently drive the agent loop.
+- On restart, Swift resumes projection from its last cursor; it never infers
+  missing canonical messages from `ChatStore`.
 - Swift owns provider profiles, credentials, model installations, Skill files,
   iSH filesystem data, and iOS UI preferences.
 - C++ owns no product persistence.
@@ -515,6 +641,7 @@ After production callers move to the direct loop, remove or retire:
 - generic tool-approval queue and approval FFI;
 - unused `PluginModule` / `RuntimePluginRegistry`;
 - custom Rust Skill Package types;
+- concrete memory implementations with no production callers;
 - core dependencies on iOS host lifecycle contracts.
 
 Deletion occurs only after caller searches and replacement tests confirm that
@@ -527,6 +654,8 @@ they are not compatibility requirements.
 
 - malformed model events fail the current generation without corrupting the
   last completed turn;
+- a generation failure after any output-bearing event is terminal and is not
+  automatically replayed;
 - unknown tools and invalid arguments become ordered error tool results;
 - missing or duplicate batch results reject the whole submitted batch before
   transcript commit;
@@ -542,22 +671,45 @@ The implementation is acceptable when:
 
 1. A Rust test drives `user -> model tool calls -> ordered tool results ->
    model final response` without a business state machine.
-2. Multiple tool calls execute through one Swift batch and return in source
-   order.
-3. Cancellation leaves no orphaned tool call.
-4. Prompt Markdown composition is deterministic and source traceable.
-5. Uploaded OpenMinis Skills appear as Rust-generated metadata and their
-   `SKILL.md` files are read on demand through ordinary tools.
-6. A fake `MemoryBackend` can be swapped without changing the ReAct loop.
-7. Cloud and C++ local generation satisfy the same Rust model contract.
-8. Existing cloud transport, credential, egress, and retention security tests
-   continue to pass.
-9. The platform-neutral loop imports no Apple, Swift, Keychain, URLSession, or
-   iSH-specific types.
-10. Legacy loop/state/plugin/approval paths have no production callers before
+2. The shipping Swift app is based on the OpenMinis app trunk; the migration
+   does not recreate its product features inside the current app shell.
+3. Existing `HostCommandEnvelope`, `LLMEventEnvelope`, receipt, sequence,
+   digest, backpressure, and epoch machinery carries the new loop traffic;
+   there is no second wire protocol.
+4. Multiple tool calls cross the boundary through one
+   `execute_batch(ordered_calls)` request and return in source order.
+5. Rust exposes no tool execution-mode field and performs no per-call
+   scheduling.
+6. Cancelling a batch cancels every per-call task and every recorded iSH PID;
+   no started call lacks a terminal result.
+7. A failure before model output may retry/fallback inside Swift; a failure
+   after text, reasoning, or tool output does not automatically replay.
+8. Rust never receives a model candidate list or provider secret.
+9. `ChatStore` updates are one-way, cursor-based, and idempotent; only Rust
+   writes canonical transcript events.
+10. No API key or OAuth token appears in iSH files, environment, logs, or tool
+    results.
+11. Mount permissions, path traversal, symbolic links, native offload, and
+    guest network egress have explicit security tests.
+12. OpenMinis `ToolLoopDetector` and a simple Rust maximum-turn budget both
+    stop runaway loops.
+13. Exactly one cloud HTTP execution stack exists:
+    `LocalAgentLLMCloud`.
+14. Prompt Markdown composition is deterministic and source traceable.
+15. Uploaded OpenMinis Skills appear as Rust-generated metadata and their
+    `SKILL.md` files are read on demand through ordinary tools.
+16. A fake `MemoryBackend` can be swapped without changing the ReAct loop, and
+    unused concrete memory implementations have been removed.
+17. Cloud and C++ local generation satisfy the same Rust model contract.
+18. Existing cloud transport, credential, egress, and retention security tests
+    continue to pass.
+19. The platform-neutral loop imports no Apple, Swift, Keychain, URLSession, or
+    iSH-specific types.
+20. Legacy loop/state/plugin/approval paths have no production callers before
     they are removed.
-11. One small end-to-end contract test covers the core loop; focused bridge,
-    security, and parser tests cover trust boundaries.
+21. One small end-to-end contract test covers the core loop; focused bridge,
+    security, projection, cancellation, and parser tests cover trust
+    boundaries.
 
 ## License Gate
 
@@ -566,9 +718,9 @@ documents an App Store distribution exception. Direct source reuse must not
 begin until the product owner confirms the intended distribution/license model
 and legal review confirms the obligations for the combined app.
 
-If direct GPL reuse is not acceptable, this architecture still applies, but
-OpenMinis behavior must be independently reimplemented behind the same Swift
-contracts instead of copied.
+If direct GPL reuse is not acceptable, this OpenMinis-trunk design is blocked
+and requires a separate clean-room product plan. It must not silently degrade
+into piecemeal source copying.
 
 ## Implementation Planning Boundary
 
@@ -577,12 +729,14 @@ design with:
 
 - another agent-loop abstraction;
 - a new business state machine;
+- a second Rust/Swift transport;
 - a second provider stack;
 - a second Skill store;
 - a concrete memory backend;
 - a dynamic plugin framework;
 - speculative compatibility layers.
 
-The shortest safe path is to introduce the direct loop and batch contracts,
-reuse the existing Swift/OpenMinis product facilities, then delete superseded
-Rust paths.
+The shortest safe path is to adopt OpenMinis as the Swift trunk, connect its
+model and whole-batch tool facilities to the existing reliable bridge, make
+the direct Rust loop authoritative, then delete superseded Rust paths and
+unused concrete memory implementations.
