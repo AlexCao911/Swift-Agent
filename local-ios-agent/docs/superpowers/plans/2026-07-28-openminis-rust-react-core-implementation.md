@@ -38,7 +38,7 @@
 - A Rust-owned ReAct loop completes text-only and multi-tool runs, validates batch ID plus ordered results, stops safely at all model/tool cancellation boundaries and the max-turn bound, and contains no approval/run-state machine.
 - OpenMinis executes a whole tool batch with up to ten concurrent calls and owns one cancellation handle plus every iSH PID for each call.
 - Send, retry, edit, delete, clear, branch, archive, and conversation deletion enter Rust first, are request-idempotent, and are projected idempotently into `ChatStore`.
-- On startup and after any sequence gap, Swift resumes the relevant conversation projection feed from its stored per-stream cursor before applying live events. The persistent feed set is exactly `SessionConcurrencyManager.runningSessions ∪ currentConversation`, so OpenMinis's five concurrent runs require at most six feeds. A command targeting a dormant stream may temporarily use an available slot, but every feed is released when it leaves that set or its awaited command projection is applied.
+- On startup and after any sequence gap, Swift resumes the relevant conversation projection feed from its stored per-stream cursor before applying live events. The persistent feed set is exactly `SessionConcurrencyManager.runningSessions ∪ currentConversation`, so OpenMinis's five concurrent runs require at most six persistent feeds. A command targeting a dormant stream always opens a short-lived temporary feed, even when all six persistent feeds exist, and releases it as soon as the awaited command projection is applied.
 - Prompt Markdown documents, at most 20 OpenMinis Skill descriptors, and the current OpenMinis tool name/description/JSON schemas enter Rust once as a digest-verified run-start snapshot; full Skill files are read on demand with the file tool, and the new model path never invokes OpenMinis prompt/Skill/memory injection.
 - Provider settings/OAuth/Base URL remain OpenMinis product features while every cloud request is executed by `LocalAgentLLMCloud`.
 - A provider/model/Base URL/fallback setting change during a tool round affects only the next run; the active run keeps its frozen non-secret route while credentials remain late-bound.
@@ -1672,7 +1672,7 @@ This final cutover depends on the Task 10 snapshot provider and Task 11 model/pr
   - changing the current conversation cancels the old current feed immediately unless that conversation remains in `runningSessions` or is awaiting an already-accepted command projection;
   - no LRU, eviction order, or feed-priority policy exists;
   - every `TranscriptCommandDTO` establishes a feed for its `conversationStreamId` before it enters Rust, including archive/delete from the session list;
-  - a dormant command target may use an available temporary feed, but when all six slots are occupied the coordinator returns `projectionFeedCapacity` before calling Rust;
+  - with all six persistent feeds active, archive/delete on a dormant conversation opens a seventh temporary feed and still enters Rust;
   - a temporary archive/delete feed remains alive until its terminal projection is applied, then closes immediately;
   - archive/delete and other runless projections arrive through the conversation feed;
   - the coordinator never uses `ExecutionBridgeClient.observeEvents(runId:)` for transcript projection;
@@ -1708,10 +1708,6 @@ Expected: FAIL.
 - [ ] Implement `RustAgentCoordinator` as the small UI-facing facade:
 
 ```swift
-enum RustAgentCoordinatorError: Error, Equatable {
-    case projectionFeedCapacity
-}
-
 @MainActor
 final class RustAgentCoordinator: ObservableObject {
     func submit(_ command: TranscriptCommandDTO) async throws
@@ -1732,12 +1728,11 @@ var desiredFeedStreams = SessionConcurrencyManager.shared.runningSessions
 if let currentConversationID {
     desiredFeedStreams.insert(currentConversationID)
 }
-let maxProjectionFeeds = SessionConcurrencyManager.shared.maxConcurrent + 1 // 6
 ```
 
-Start missing feeds and cancel feeds that leave `desiredFeedStreams` and have no accepted command awaiting projection; do not implement LRU, eviction, priority, or a second concurrency manager.
+`SessionConcurrencyManager.maxConcurrent == 5`, so this set is inherently at most six. Start missing feeds and cancel feeds that leave `desiredFeedStreams` and have no accepted command awaiting projection; do not implement a second counter, LRU, eviction, priority, or concurrency manager.
 - [ ] Before submitting any `TranscriptCommandDTO`, call `ensureProjectionFeed(conversationStreamId:)` for its stream, insert the cursor row at 0 when absent, and install the observation task before invoking Rust. This includes send, retry, edit, message delete, clear, branch, archive, and conversation delete; it is not limited to run-producing commands. The observer's register-before-query replay rule makes a command racing listener registration lossless.
-- [ ] A dormant command target that is not in the persistent set may occupy an unused temporary slot. Enforce one hard limit of six total feeds. If all six are already required by the persistent set or other pending commands, phase 1 immediately returns `RustAgentCoordinatorError.projectionFeedCapacity` before `submitTranscriptCommand` and does not call Rust. After an accepted command, keep the temporary feed until `ChatStoreProjectionApplier` has atomically applied through `TranscriptCommandResult.acceptedSequence`; archive/delete specifically wait for their terminal projection. Then cancel and await that feed unless the stream has joined the persistent set. A rejected Rust command releases its temporary feed immediately.
+- [ ] A dormant command target that is not in the persistent set always receives a temporary feed; temporary feeds do not count toward the six-feed persistent set and have no separate artificial capacity limit. After an accepted command, keep its temporary feed only until `ChatStoreProjectionApplier` has atomically applied through `TranscriptCommandResult.acceptedSequence`; archive/delete specifically wait for their terminal projection. Then cancel and await that feed unless the stream has joined the persistent set. A rejected Rust command releases its temporary feed immediately.
 - [ ] Reconnecting always creates a fresh subscription ID and passes the last committed Swift cursor.
 - [ ] Apply only `sequence == last_sequence + 1`. If the feed emits `sequence > last_sequence + 1`, cancel and await termination of that observation without applying the event, then immediately reopen it with `afterSequence: last_sequence`; never jump the cursor. The Rust operation replays canonical events before resuming live delivery.
 - [ ] On projection stream error or listener overflow, release the old subscription and reopen from the same last committed cursor after 250 ms, then 1 s, then 2 s for subsequent failures; reset to 250 ms after the next applied event. Do not fall back to the run observer or command response.
@@ -2036,43 +2031,24 @@ git commit -m "refactor: retain minimal execution event observation"
 - Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/RustReactProductPathTests.swift`
 - Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisUITests/RustAgentSmokeTests.swift`
 
-### RED: one product-path suite
+### RED: two product-level paths
 
-- [ ] Add an integration test that exercises:
+- [ ] Add `RustReactProductPathTests.testReactProductPath` covering only:
 
-  1. create conversation;
-  2. send a user message;
-  3. Rust assembles prompt/context/tools;
-  4. local C++ fake model emits two tool calls;
-  5. OpenMinis executes the batch out of order internally;
-  6. Rust receives ordered results and performs the next model turn;
-  7. final assistant output is persisted by Rust and projected once;
-  8. app relaunch replays no duplicate messages;
-  9. retry and edit both create new canonical events;
-  10. cancellation terminates the model and all tool processes, and cancellation before the first token never starts a fallback provider;
-  11. a simulated host exit between tool-call streaming and batch completion leaves neither assistant tool calls nor tool results in the canonical transcript;
-  12. app relaunch from a stale projection cursor replays the missing conversation events before live delivery, and an injected sequence gap is pulled rather than skipped;
-  13. retrying the same `Send` FFI payload with the same request ID returns the original result and starts one run, while a changed payload returns idempotency conflict;
-  14. two simultaneous sends on one conversation execute at most one model/tool path and the other returns `conversation_busy`, while two conversations run concurrently;
-  15. model-phase, model-to-tool boundary, and tool-phase cancellation races commit no post-cancel final/tool round;
-  16. two runs with identical tools retain independent `ToolLoopDetector` histories and both registries are empty after termination;
-  17. out-of-order child completion still records `ToolLoopDetector` history in original call order;
-  18. the Rust model request uses the digest-verified prompt/Skill/tool snapshot frozen at run start even if Swift settings change mid-run;
-  19. after a tool-call turn, changing provider/model/Base URL/fallback settings does not alter that run's second model turn, a new run sees the change, and each attempt still resolves the current credential;
-  20. cancelling an idle projection feed with no new event returns its FFI observer and leaves zero Rust listeners/subscriptions and zero Swift projection tasks;
-  21. five background runs plus a different current conversation own exactly six feeds; changing the current conversation reconciles the direct set without LRU;
-  22. every transcript command establishes its feed before entering Rust, a seventh dormant command target is rejected before canonical mutation, and an archive/delete temporary feed closes only after its terminal projection applies;
-  23. a digest-valid `ToolBatchCompleted` with missing/mixed completion or mismatched batch/run identity is rejected before transport state mutation or AgentLoop result delivery.
+  1. create a conversation and submit one user message with its frozen snapshot;
+  2. the local C++ fake model emits two tool calls;
+  3. OpenMinis completes the tools in reverse order and returns one ordered batch;
+  4. Rust performs the next model turn, commits the final assistant turn, and projects it once into `ChatStore`.
 
-- [ ] Add UI smoke tests for:
+- [ ] Add `RustReactProductPathTests.testProjectionReplayAfterRelaunch` covering only:
 
-  - iPhone chat send/tool/final flow;
-  - iPad split-view chat flow;
-  - provider/API Key/Base URL configuration screen;
-  - Skills import/enable screen;
-  - Prompt Markdown import/reorder screen;
-  - iSH guest-network disclosure;
-  - conversation sync shown as device-local.
+  1. persist and project one conversation turn, then stop its projection observer;
+  2. append one later canonical event while the stored Swift cursor remains stale;
+  3. relaunch from that cursor, replay the missing event exactly once, and then apply one new live event exactly once.
+
+- [ ] Keep cancellation races, idempotency conflicts, busy conversations, atomic tool rounds, event payload validation, provider-plan freezing, detector ordering, feed lifecycle, and idle-subscription cleanup in the focused suites from Tasks 3, 5–7, 9, 11, and 12. Do not duplicate them in `RustReactProductPathTests`.
+
+- [ ] Add one `RustAgentSmokeTests.testReactSendToolFinal` UI flow and run the same test on the selected iPhone and iPad simulators. On iPad, assert the existing split-view chat container is visible; provider settings, Skills, prompt documents, guest disclosure, and sync UI remain covered by their owning focused suites.
 
 - [ ] Run the product script before implementing it.
 
