@@ -1,6 +1,6 @@
 # OpenMinis Product Reuse and Minimal Rust ReAct Core Design
 
-**Status:** Revised after second written-spec review; pending final approval
+**Status:** Revised after third written-spec review; pending final approval
 
 **Date:** 2026-07-28
 
@@ -117,6 +117,12 @@ Rust Skill Package direction in
 20. Phase one disables cross-device conversation synchronization.
 21. Phase-one iSH guest networking is an independent high-privilege capability,
     not a protected `LocalAgentLLMCloud` egress path.
+22. Every durable transcript mutation enters Rust as a command before Swift
+    projection.
+23. Canonical conversation projection uses
+    `(conversation_stream_id, sequence)`.
+24. Phase one keeps OpenMinis raw iSH networking enabled by default and
+    discloses its risk without adding per-command approval.
 
 ## Architecture
 
@@ -567,20 +573,21 @@ public-DNS fallback, and guest processes can open sockets independently.
 Therefore phase one treats raw iSH networking as a separate high-privilege
 capability:
 
+- it remains enabled by default, matching OpenMinis behavior;
 - it is not protected by `LocalAgentLLMCloud` HTTPS, SSRF, DNS, redirect, or
   egress policy;
 - `curl`, `wget`, package managers, and other guest processes may use that
   independent network path;
 - shell-command string inspection is not a network security boundary and must
   not be presented as one;
-- product UI and security documentation must disclose this boundary wherever
-  raw guest networking is enabled;
+- onboarding, relevant settings, and tool descriptions must disclose that this
+  default-enabled path can reach destinations outside the cloud egress policy;
 - API keys and OAuth tokens remain excluded from the guest even though the
   guest has independent network access.
 
 Destination filtering, private-address denial, and DNS policy require a future
 implementation at the iSH socket/connect boundary. They are not claimed or
-scheduled in phase one.
+scheduled in phase one. No per-command network approval is added.
 
 ## Model Runtime
 
@@ -691,10 +698,14 @@ writes is permitted; wholesale tool rewrites are not.
   and completed ReAct turns.
 - OpenMinis `ChatStore` remains only a local UI/search read model for
   conversation data.
-- Projection reuses the existing per-stream event position:
-  `(stream_id or run_id, sequence)`.
-- Swift records the last applied sequence separately for each stream and
-  ignores events at or below that sequence.
+- Every conversation has one stable `conversation_stream_id`.
+- All runs and retries within that conversation append to the same canonical
+  conversation stream. A `run_id` identifies one execution attempt; it is not
+  the projection stream or cursor key.
+- Projection reuses the existing `EventStore` position:
+  `(conversation_stream_id, sequence)`.
+- Swift records the last applied sequence separately for each
+  `conversation_stream_id` and ignores events at or below that sequence.
 - Projection is one-way: Rust to `ChatStore`. There is no bidirectional
   transcript synchronization and no independent Swift transcript append.
 - Transient UI progress may update `AIChatViewModel.messages`, but it cannot
@@ -706,6 +717,39 @@ writes is permitted; wholesale tool rewrites are not.
 - Swift owns provider profiles, credentials, model installations, Skill files,
   iSH filesystem data, and iOS UI preferences.
 - C++ owns no product persistence.
+
+### Transcript Command Boundary
+
+Every operation that can change model-visible conversation history must enter
+Rust first as a transcript command:
+
+- send;
+- retry;
+- edit;
+- delete;
+- clear;
+- branch.
+
+These are logical commands carried by the existing reliable command-envelope
+and bridge machinery; they do not create another Rust/Swift protocol.
+
+Rust validates the command, appends the canonical conversation event, and then
+Swift applies the resulting projection to `AIChatViewModel.messages` and
+`ChatStore`. OpenMinis code on the new path must not directly persist,
+truncate, replace, or delete conversation messages for these operations.
+Swift may show transient or optimistic UI while awaiting Rust, but it becomes
+durable only through projection.
+
+A branch command is also resolved by Rust. If it creates a distinct
+conversation branch, Rust assigns its new `conversation_stream_id` and records
+its ancestry; Swift does not construct the branch history independently.
+
+Product metadata that does not alter model-visible history remains Swift-owned,
+including conversation title, pinned state, and model selection.
+
+Per-run transport and diagnostic events may continue using `run_id` and their
+existing per-run sequences. They are not consumed as canonical conversation
+projection events.
 
 ### Phase-One Cross-Device Sync
 
@@ -779,7 +823,8 @@ The implementation is acceptable when:
    after text, reasoning, or tool output does not automatically replay.
 8. Rust never receives a model candidate list or provider secret.
 9. `ChatStore` projection is one-way and idempotent using
-   `(stream_id or run_id, sequence)`; no global projection cursor exists.
+   `(conversation_stream_id, sequence)`; all runs for one conversation share
+   that stream and no global projection cursor exists.
 10. No API key or OAuth token appears in iSH files, environment, logs, or tool
     results.
 11. Phase-one cloud sync excludes `Session`, `Message`, `CompactMarker`, and
@@ -802,10 +847,16 @@ The implementation is acceptable when:
     iSH, `HostExecutionPhase`, `ResourceLifecycle`, receipt, or epoch types.
 20. Mount permissions, path traversal, symbolic links, and native offload have
     explicit security tests. Tests and product disclosure also demonstrate
-    that raw iSH networking is independent of cloud egress protection.
-21. Legacy loop/state/plugin/approval paths have no production callers before
+    that raw iSH networking is enabled by default and independent of cloud
+    egress protection.
+21. Send, retry, edit, delete, clear, and branch persist only through Rust
+    transcript commands and subsequent Swift projection. Direct OpenMinis
+    `ChatStore` transcript mutations have no production callers.
+22. Conversation title, pinned state, and model selection remain Swift-owned
+    product metadata and do not mutate canonical model history.
+23. Legacy loop/state/plugin/approval paths have no production callers before
     they are removed.
-22. One small end-to-end contract test covers the core loop; focused bridge,
+24. One small end-to-end contract test covers the core loop; focused bridge,
     security, projection, cancellation, and parser tests cover trust
     boundaries.
 
@@ -839,6 +890,6 @@ design with:
 
 The shortest safe path is to adopt OpenMinis as the Swift trunk, connect its
 model and whole-batch tool facilities to the existing reliable bridge, make
-the direct Rust loop authoritative, disable ChatStore conversation sync and
-Swift-side Prompt injection, then delete superseded Rust paths and unused
-concrete memory implementations.
+the direct Rust loop and transcript commands authoritative, disable ChatStore
+conversation sync and Swift-side Prompt injection, then delete superseded Rust
+paths and unused concrete memory implementations.
