@@ -85,11 +85,41 @@ LlamaPromptInput parse_llama_prompt_input(const std::string &prompt_json) {
             }
             message.content += json::require_string(part, "text");
         }
+        if (const json::Value *tool_calls = message_value.get("tool_calls")) {
+            for (const auto &call_value : tool_calls->as_array()) {
+                const auto *function = call_value.get("function");
+                if (function == nullptr || !function->is_object()) {
+                    throw std::invalid_argument("llama.cpp tool call function is required");
+                }
+                message.tool_calls.push_back(LlamaPromptToolCall{
+                    json::require_string(call_value, "id"),
+                    json::require_string(*function, "name"),
+                    json::require_string(*function, "arguments"),
+                });
+            }
+        }
+        message.tool_call_id = json::optional_string(message_value, "tool_call_id", "");
+        message.tool_name = json::optional_string(message_value, "name", "");
         input.messages.push_back(std::move(message));
     }
 
     if (const json::Value *tools = root.get("tool_schema")) {
         input.tool_schema_json = serialize_json(*tools);
+        const auto *entries = tools->get("tools");
+        if (entries == nullptr || !entries->is_array()) {
+            throw std::invalid_argument("llama.cpp tool schema tools are required");
+        }
+        for (const auto &tool : entries->as_array()) {
+            const auto *parameters = tool.get("input_schema");
+            if (parameters == nullptr || !parameters->is_object()) {
+                throw std::invalid_argument("llama.cpp tool parameters are required");
+            }
+            input.tools.push_back(LlamaPromptTool{
+                json::require_string(tool, "name"),
+                json::optional_string(tool, "description", ""),
+                serialize_json(*parameters),
+            });
+        }
     }
     const json::Value *chat_template = root.get("template");
     if (chat_template == nullptr || !chat_template->is_object()) {
@@ -110,6 +140,9 @@ std::vector<LlamaPromptMessage> llama_messages_for_rendering(const LlamaPromptIn
         messages.insert(messages.begin(), LlamaPromptMessage{
             "system",
             "Available tools (canonical JSON): " + input.tool_schema_json,
+            {},
+            "",
+            "",
         });
     }
     return messages;

@@ -7,6 +7,10 @@
 #include "llama.h"
 #endif
 
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+#include "chat.h"
+#endif
+
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD)
 #include "mtmd.h"
 #include "mtmd-helper.h"
@@ -14,6 +18,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace local_agent {
@@ -70,8 +75,63 @@ std::string render_prompt_for_llama_cpp(
 #endif
     ,
     const char *media_marker
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+    ,
+    const common_chat_templates *native_templates,
+    std::optional<common_chat_params> *native_params
+#endif
 ) {
     const LlamaPromptInput prompt_input = parse_llama_prompt_input(prompt_json);
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+    if (config.tool_call_codec_id == "llama_cpp_native_tools_v1" && !prompt_input.tools.empty()) {
+        if (native_templates == nullptr || native_params == nullptr) {
+            throw std::runtime_error("llama.cpp native tool templates are unavailable");
+        }
+        common_chat_templates_inputs inputs;
+        inputs.enable_thinking = false;
+        inputs.parallel_tool_calls = true;
+        for (const auto &message : prompt_input.messages) {
+            common_chat_msg native_message;
+            native_message.role = message.role;
+            native_message.content = message.content;
+            native_message.tool_call_id = message.tool_call_id;
+            native_message.tool_name = message.tool_name;
+            for (const auto &call : message.tool_calls) {
+                native_message.tool_calls.push_back(common_chat_tool_call{
+                    call.name,
+                    call.arguments_json,
+                    call.id,
+                });
+            }
+            inputs.messages.push_back(std::move(native_message));
+        }
+        for (const auto &tool : prompt_input.tools) {
+            inputs.tools.push_back(common_chat_tool{
+                tool.name,
+                tool.description,
+                tool.parameters_json,
+            });
+        }
+        if (media_marker != nullptr && media_marker[0] != '\0') {
+            bool injected = false;
+            for (auto message = inputs.messages.rbegin(); message != inputs.messages.rend(); ++message) {
+                if (message->role == "user") {
+                    message->content = std::string(media_marker) + "\n" + message->content;
+                    injected = true;
+                    break;
+                }
+            }
+            if (!injected) {
+                throw std::invalid_argument("image input requires a user prompt message");
+            }
+        }
+        *native_params = common_chat_templates_apply(native_templates, inputs);
+        if ((*native_params)->prompt.empty()) {
+            throw std::runtime_error("llama.cpp native tool template produced an empty prompt");
+        }
+        return (*native_params)->prompt;
+    }
+#endif
     std::vector<LlamaPromptMessage> parsed_messages = llama_messages_for_rendering(prompt_input);
     if (media_marker != nullptr && media_marker[0] != '\0') {
         bool injected = false;
@@ -180,6 +240,26 @@ public:
             throw std::runtime_error("llama.cpp failed to load model: " + config.model_path);
         }
 
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+        const std::string template_override =
+            config.chat_template.empty() || config.chat_template == "gguf"
+                ? ""
+                : config.chat_template;
+        chat_templates_ = common_chat_templates_init(model_, template_override);
+        if (config.tool_call_codec_id == "llama_cpp_native_tools_v1") {
+            const auto caps = common_chat_templates_get_caps(chat_templates_.get());
+            if (!caps.at("supports_tools") || !caps.at("supports_tool_calls")) {
+                throw std::runtime_error(
+                    "llama.cpp GGUF chat template does not support native tool calling"
+                );
+            }
+        }
+#else
+        if (config.tool_call_codec_id == "llama_cpp_native_tools_v1") {
+            throw std::runtime_error("llama.cpp native tool support is not linked");
+        }
+#endif
+
         llama_context_params context_params = llama_context_default_params();
         context_params.n_ctx = static_cast<uint32_t>(config.max_context_tokens);
         context_params.n_threads = config.llama_cpp.n_threads;
@@ -235,11 +315,41 @@ public:
 #endif
     }
 
+    LlamaNativeToolParseResult parse_native_tool_output(
+        const std::string &raw_text
+    ) override {
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+        if (!last_native_params_) {
+            throw std::runtime_error("llama.cpp native tool parser state is missing");
+        }
+        common_chat_parser_params parser(*last_native_params_);
+        const common_chat_msg parsed = common_chat_parse(raw_text, false, parser);
+        LlamaNativeToolParseResult result;
+        result.visible_text = parsed.content;
+        result.calls.reserve(parsed.tool_calls.size());
+        for (const auto &call : parsed.tool_calls) {
+            result.calls.push_back(LlamaNativeToolCall{
+                call.id,
+                call.name,
+                call.arguments,
+            });
+        }
+        last_native_params_.reset();
+        return result;
+#else
+        return LlamaNativeToolParseResult{raw_text, {}};
+#endif
+    }
+
 private:
     llama_model *model_ = nullptr;
     llama_context *context_ = nullptr;
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD)
     mtmd_context *mtmd_ = nullptr;
+#endif
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+    common_chat_templates_ptr chat_templates_;
+    std::optional<common_chat_params> last_native_params_;
 #endif
 
     void require_loaded() const {
@@ -249,6 +359,10 @@ private:
     }
 
     void release() {
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+        last_native_params_.reset();
+        chat_templates_.reset();
+#endif
 #if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD)
         if (mtmd_ != nullptr) {
             mtmd_free(mtmd_);
@@ -277,7 +391,17 @@ private:
 
         llama_memory_clear(llama_get_memory(context_), true);
 
-        const std::string prompt = render_prompt_for_llama_cpp(prompt_json, config, model_, nullptr);
+        const std::string prompt = render_prompt_for_llama_cpp(
+            prompt_json,
+            config,
+            model_,
+            nullptr
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+            ,
+            chat_templates_.get(),
+            &last_native_params_
+#endif
+        );
 
         int prompt_token_count = -llama_tokenize(
             vocab,
@@ -400,6 +524,11 @@ private:
             config,
             model_,
             mtmd_default_marker()
+#if defined(LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS)
+            ,
+            chat_templates_.get(),
+            &last_native_params_
+#endif
         );
         mtmd_input_text text;
         text.text = prompt.c_str();

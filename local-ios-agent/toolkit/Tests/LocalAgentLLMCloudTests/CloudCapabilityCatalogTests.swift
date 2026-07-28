@@ -16,6 +16,11 @@ struct CloudCapabilityCatalogTests {
         #expect(catalog.catalogRevision > 0)
         #expect(!catalog.keyID.hasPrefix("test-"))
         #expect(Set(catalog.models.values.map(\.identity.presetID)) == Set(ProviderPreset.shipped.map(\.id)))
+        #expect(catalog.models.values.allSatisfy {
+            $0.capabilities.first {
+                $0.capabilityID == "tool_calling"
+            }?.value == .support(.supported)
+        })
     }
 
     @Test

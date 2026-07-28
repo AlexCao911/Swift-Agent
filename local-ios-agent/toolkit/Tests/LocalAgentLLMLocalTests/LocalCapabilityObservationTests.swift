@@ -61,6 +61,7 @@ struct LocalCapabilityObservationTests {
             capabilities: CppEngineCapabilities(
                 supportedModelFormats: ["gguf"],
                 supportsVision: true,
+                supportsNativeToolCalling: true,
                 supportsStreaming: true,
                 supportsCancellation: true,
                 supportsTokenUsage: false,
@@ -78,6 +79,9 @@ struct LocalCapabilityObservationTests {
 
         #expect(observations.first {
             $0.capabilityID == "image_input"
+        }?.value == .support(.supported))
+        #expect(observations.first {
+            $0.capabilityID == "tool_calling"
         }?.value == .support(.supported))
     }
 }

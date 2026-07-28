@@ -159,6 +159,37 @@ struct LocalModelRuntimeTests {
         #expect(fixture.inference.startCount == 0)
         try await fixture.runtime.closeSession(sessionID: session.sessionID)
     }
+
+    @Test
+    func modelWithoutNativeToolCapabilityRejectsToolsBeforeNativeGeneration() async throws {
+        let fixture = try await RuntimeFixture.make()
+        let session = try await fixture.runtime.prepareSession(
+            hostConfiguration: fixture.configuration,
+            target: fixture.target
+        )
+        await #expect(throws: LLMFailure.self) {
+            try await fixture.runtime.startGeneration(
+                sessionID: session.sessionID,
+                input: AgentLLMInput(
+                    inputID: "turn-tools",
+                    messages: [LLMInputMessage(role: .user, content: [.text("search")])]
+                ),
+                attachments: [],
+                toolSchema: try .object(entries: [
+                    .init(name: "tools", value: .array([
+                        try .object(entries: [
+                            .init(name: "name", value: .string("search")),
+                            .init(name: "input_schema", value: try .object(entries: [
+                                .init(name: "type", value: .string("object")),
+                            ])),
+                        ]),
+                    ])),
+                ])
+            )
+        }
+        #expect(fixture.inference.startCount == 0)
+        try await fixture.runtime.closeSession(sessionID: session.sessionID)
+    }
 }
 
 private struct RuntimeFixture {
@@ -281,6 +312,7 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
             capabilities: CppEngineCapabilities(
                 supportedModelFormats: [manifest.modelFormat],
                 supportsVision: false,
+                supportsNativeToolCalling: false,
                 supportsStreaming: true,
                 supportsCancellation: true,
                 supportsTokenUsage: false,

@@ -6,13 +6,29 @@
 
 namespace local_agent {
 
+struct LlamaPromptToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments_json;
+};
+
 struct LlamaPromptMessage {
     std::string role;
     std::string content;
+    std::vector<LlamaPromptToolCall> tool_calls;
+    std::string tool_call_id;
+    std::string tool_name;
+};
+
+struct LlamaPromptTool {
+    std::string name;
+    std::string description;
+    std::string parameters_json;
 };
 
 struct LlamaPromptInput {
     std::vector<LlamaPromptMessage> messages;
+    std::vector<LlamaPromptTool> tools;
     std::string tool_schema_json;
     std::string template_source;
     std::string template_id;

@@ -9,6 +9,11 @@
       "key_id" : "local-catalog-2026-07",
       "public_key" : "NVBI3CBD_MOpK4XKVfHDk0RBj9WsC6u4y0B61t5dioQ",
       "status" : "active"
+    },
+    {
+      "key_id" : "local-catalog-2026-08",
+      "public_key" : "HnaKX6W0yvtmlaA87uszSYHsS7b7jilQkLUOZnQQCkg",
+      "status" : "active"
     }
   ],
   "schema_version" : "1"

@@ -38,6 +38,13 @@ struct OfficialModelCatalogTests {
                 "87007042419d30c1d8f38ef065424ee33870831e",
                 [.weights: (688_065_920, "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa")]
             ),
+            "minicpm-v-4.6-q4-k-m": (
+                "78e02f066e9819a60573b78a4275df8a0c27f698",
+                [
+                    .weights: (529_101_504, "6b0c74962c44bc6bf4b655b9b02c13eda9d5a0491543ae976d1ac18e4b7892e2"),
+                    .multimodalProjection: (1_108_746_944, "ca931d861d0801d9003e50697cd764721a334107c0e0415a51168ee1938462de"),
+                ]
+            ),
             "gemma-4-e2b-it-qat-q4-0": (
                 "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
                 [
@@ -88,6 +95,7 @@ struct OfficialModelCatalogTests {
         let imageModels = Set([
             "gemma-4-e2b-it-qat-q4-0",
             "lfm2.5-vl-1.6b-q4-0",
+            "minicpm-v-4.6-q4-k-m",
         ])
         for modelID in expected.keys {
             let manifest = try #require(catalog.models[
@@ -102,6 +110,14 @@ struct OfficialModelCatalogTests {
             } else {
                 #expect(imageInput == nil)
             }
+        }
+
+        for manifest in catalog.models.values {
+            #expect(manifest.declaredCapabilities.contains {
+                $0.capabilityID == "tool_calling"
+                    && $0.value == .support(.supported)
+            })
+            #expect(manifest.toolCallCodecID == "llama_cpp_native_tools_v1")
         }
     }
 
@@ -151,8 +167,8 @@ struct OfficialModelCatalogTests {
             envelope: Data(contentsOf: rollbackURL),
             keyRing: keyRing
         )
-        #expect(valid.catalogRevision == 3)
-        #expect(rollback.catalogRevision == 2)
+        #expect(valid.catalogRevision == 4)
+        #expect(rollback.catalogRevision == 3)
         #expect(valid.keyID.hasPrefix("test-"))
 
         let production = try OfficialModelCatalogResources.loadBundled()
@@ -253,7 +269,7 @@ struct OfficialModelCatalogTests {
     func schemaAndManifestInvariantsFailClosed() throws {
         let production = try bundledCatalog()
         let model = try #require(production.models[
-            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
         ])
 
         let unsupported = SignedLocalModelCatalogPayload(
@@ -332,10 +348,52 @@ struct OfficialModelCatalogTests {
     }
 
     @Test
+    func nativeToolCapabilityRequiresTheNativeLlamaCodec() throws {
+        let production = try bundledCatalog()
+        let model = try #require(production.models[
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
+        ])
+        let mismatched = LocalModelRevisionManifest(
+            id: model.id,
+            displayName: model.displayName,
+            family: model.family,
+            engineID: model.engineID,
+            modelFormat: model.modelFormat,
+            artifacts: model.artifacts,
+            installedByteSize: model.installedByteSize,
+            minimumOSMajor: model.minimumOSMajor,
+            supportedDeviceClasses: model.supportedDeviceClasses,
+            estimatedMemoryClass: model.estimatedMemoryClass,
+            declaredCapabilities: model.declaredCapabilities.filter {
+                $0.capabilityID != "tool_calling"
+            },
+            parameterSchema: model.parameterSchema,
+            parameterDefaults: model.parameterDefaults,
+            loadTemplate: model.loadTemplate,
+            chatTemplate: model.chatTemplate,
+            toolCallCodecID: model.toolCallCodecID
+        )
+        let fixture = try sign(SignedLocalModelCatalogPayload(
+            schemaVersion: "1",
+            keyID: "test-key",
+            catalogRevision: 1,
+            models: [mismatched],
+            revokedModelRevisions: []
+        ))
+
+        try expectFailure("download.catalog_manifest_invalid") {
+            try OfficialLocalModelCatalogVerifier.verify(
+                envelope: fixture.envelope,
+                keyRing: fixture.keyRing
+            )
+        }
+    }
+
+    @Test
     func unsignedDecimalStringsPreserveValuesAboveTwoToTheFiftyThird() throws {
         let production = try bundledCatalog()
         let model = try #require(production.models[
-            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
         ])
         let exact: UInt64 = 9_007_199_254_740_993
         let large = copy(
@@ -362,7 +420,7 @@ struct OfficialModelCatalogTests {
     func explicitRevocationInvalidatesObservationsButMissingEntryDoesNotImplyRevocation() throws {
         let production = try bundledCatalog()
         let model = try #require(production.models[
-            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
         ])
         let revokedPayload = SignedLocalModelCatalogPayload(
             schemaVersion: "1",

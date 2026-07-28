@@ -77,6 +77,7 @@ ModelLoadConfig parse_model_load_config(const char *model_config_json) {
     config.model_format = json::optional_string(root, "model_format", default_model_format(config.engine));
     config.mmproj_path = json::optional_string(root, "mmproj_path", "");
     config.chat_template = json::optional_string(root, "chat_template", "gguf");
+    config.tool_call_codec_id = json::optional_string(root, "tool_call_codec_id", "");
     config.chat_template_source = json::optional_string(root, "chat_template_source", "");
     config.chat_template_id = json::optional_string(root, "chat_template_id", "");
     config.tool_call_codec_id = json::optional_string(root, "tool_call_codec_id", "");

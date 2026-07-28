@@ -6,12 +6,24 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace local_agent {
 
 struct ImageInput;
 
 using LlamaTokenEmit = std::function<bool(const std::string &)>;
+
+struct LlamaNativeToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments_json;
+};
+
+struct LlamaNativeToolParseResult {
+    std::string visible_text;
+    std::vector<LlamaNativeToolCall> calls;
+};
 
 class LlamaCppSession {
 public:
@@ -28,6 +40,11 @@ public:
         const ModelConfig &config,
         const LlamaTokenEmit &emit
     ) = 0;
+    virtual LlamaNativeToolParseResult parse_native_tool_output(
+        const std::string &raw_text
+    ) {
+        return LlamaNativeToolParseResult{raw_text, {}};
+    }
 };
 
 std::unique_ptr<LlamaCppSession> make_llama_cpp_session();

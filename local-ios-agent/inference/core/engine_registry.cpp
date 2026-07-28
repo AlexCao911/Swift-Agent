@@ -89,6 +89,7 @@ EngineDescriptor mock_descriptor() {
     descriptor.engine_version = "mock-v2";
     descriptor.display_name = "Mock Test Engine";
     descriptor.capabilities.supports_vision = true;
+    descriptor.capabilities.supports_native_tool_calling = false;
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
     descriptor.capabilities.supports_token_usage = true;
@@ -116,6 +117,11 @@ EngineDescriptor llama_cpp_descriptor() {
     descriptor.capabilities.supports_vision = true;
 #else
     descriptor.capabilities.supports_vision = false;
+#endif
+#ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS
+    descriptor.capabilities.supports_native_tool_calling = true;
+#else
+    descriptor.capabilities.supports_native_tool_calling = false;
 #endif
     descriptor.capabilities.supports_streaming = true;
     descriptor.capabilities.supports_cancellation = true;
@@ -185,6 +191,8 @@ std::string engine_capabilities_json(const EngineDescriptor &descriptor) {
     std::ostringstream out;
     out << "{"
         << "\"supports_vision\":" << bool_json(capabilities.supports_vision) << ","
+        << "\"supports_native_tool_calling\":"
+        << bool_json(capabilities.supports_native_tool_calling) << ","
         << "\"supports_streaming\":" << bool_json(capabilities.supports_streaming) << ","
         << "\"supports_cancellation\":" << bool_json(capabilities.supports_cancellation) << ","
         << "\"supports_token_usage\":" << bool_json(capabilities.supports_token_usage) << ","

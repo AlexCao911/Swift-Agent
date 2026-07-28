@@ -379,11 +379,11 @@ struct LocalModelStoreTests {
         let service = OfficialModelCatalogService(store: store, keyRing: keyRing)
 
         let bundled = try service.accept(bundled: production.envelope, remote: nil)
-        #expect(bundled.verified.catalogRevision == 2)
+        #expect(bundled.verified.catalogRevision == 3)
         #expect(bundled.source == .bundled)
 
         let remote = try service.accept(bundled: production.envelope, remote: valid)
-        #expect(remote.verified.catalogRevision == 3)
+        #expect(remote.verified.catalogRevision == 4)
         #expect(remote.source == .remote)
 
         let reopened = OfficialModelCatalogService(
@@ -394,11 +394,11 @@ struct LocalModelStoreTests {
             bundled: production.envelope,
             remote: Data("not-json".utf8)
         )
-        #expect(persisted.verified.catalogRevision == 3)
+        #expect(persisted.verified.catalogRevision == 4)
         #expect(persisted.source == .persisted)
 
         let idempotent = try reopened.accept(bundled: rollback, remote: valid)
-        #expect(idempotent.verified.catalogRevision == 3)
+        #expect(idempotent.verified.catalogRevision == 4)
         #expect(idempotent.acceptedAt == persisted.acceptedAt)
 
         try expectFailure("download.catalog_revision_rollback") {
@@ -433,7 +433,7 @@ struct LocalModelStoreTests {
         try expectFailure("download.injected_persistence_failure") {
             try crashService.accept(bundled: production.envelope, remote: valid)
         }
-        #expect(try crashStore.readCatalogState()?.acceptedRevision == 2)
+        #expect(try crashStore.readCatalogState()?.acceptedRevision == 3)
 
         try crashStore.corruptCatalogKeyIDForTesting("unknown-key")
         let reopened = OfficialModelCatalogService(store: crashStore, keyRing: keyRing)

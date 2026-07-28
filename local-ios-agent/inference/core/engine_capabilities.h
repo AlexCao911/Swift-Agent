@@ -16,6 +16,7 @@ struct ParameterDescriptor {
 
 struct EngineCapabilities {
     bool supports_vision = false;
+    bool supports_native_tool_calling = false;
     bool supports_streaming = true;
     bool supports_cancellation = true;
     bool supports_token_usage = false;

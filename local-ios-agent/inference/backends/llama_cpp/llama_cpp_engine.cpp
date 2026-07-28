@@ -15,6 +15,7 @@ ModelConfig to_llama_model_config(
     config.model_id = load_config.model_id;
     config.model_path = load_config.model_path;
     config.chat_template = load_config.chat_template;
+    config.tool_call_codec_id = load_config.tool_call_codec_id;
     config.max_context_tokens = load_config.context_tokens;
     config.generation.temperature = sampling.temperature;
     config.generation.top_p = sampling.top_p;
@@ -67,6 +68,22 @@ public:
         }
 
         if (!stream_.is_cancelled() && !stopped_by_emit) {
+            if (request_.tool_call_codec_id == "llama_cpp_native_tools_v1") {
+                const auto parsed = session_.parse_native_tool_output(completed);
+                std::vector<NativeToolCallResult> calls;
+                calls.reserve(parsed.calls.size());
+                for (size_t index = 0; index < parsed.calls.size(); ++index) {
+                    const auto &call = parsed.calls[index];
+                    calls.push_back(NativeToolCallResult{
+                        call.id.empty() ? "local-call-" + std::to_string(index + 1) : call.id,
+                        call.name,
+                        call.arguments_json,
+                    });
+                }
+                if (!stream_.emit_native_tool_result(parsed.visible_text, calls, emit)) {
+                    return;
+                }
+            }
             stream_.emit_completed(completed, emit);
         }
     }
@@ -143,6 +160,11 @@ EngineCapabilities LlamaCppEngine::capabilities() const {
     capabilities.supports_vision = true;
 #else
     capabilities.supports_vision = false;
+#endif
+#ifdef LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS
+    capabilities.supports_native_tool_calling = true;
+#else
+    capabilities.supports_native_tool_calling = false;
 #endif
     capabilities.supports_streaming = true;
     capabilities.supports_cancellation = true;

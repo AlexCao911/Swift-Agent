@@ -81,8 +81,8 @@ assert_complete_native_abi() {
     fi
   done
 
-  if "$NM" -u "$binary" 2>/dev/null | grep -E '_(llama|ggml|mtmd)_' >/dev/null; then
-    fail "$binary contains unresolved llama.cpp/ggml/mtmd vendor symbols"
+  if "$NM" -u "$binary" 2>/dev/null | grep -E '_(llama|ggml|mtmd)_|common_chat_' >/dev/null; then
+    fail "$binary contains unresolved llama.cpp/ggml/mtmd/common-chat vendor symbols"
   fi
 }
 
@@ -142,7 +142,11 @@ require_text 'plutil -extract engine_ids' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_text 'LOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'LOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_text 'libmtmd.a' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'libllama-common.a' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_file "$ROOT/inference/release-engines.json"
 require_text '"llama_cpp"' "$ROOT/inference/release-engines.json"

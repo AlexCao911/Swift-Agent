@@ -209,6 +209,14 @@ public enum OfficialLocalModelCatalogVerifier {
         guard supportsImages == hasRequiredProjection else {
             throw manifestInvalid("image capability and multimodal projection do not match")
         }
+        let supportsNativeTools = model.declaredCapabilities.contains {
+            $0.capabilityID == "tool_calling" && $0.value == .support(.supported)
+        }
+        guard supportsNativeTools
+                == (model.toolCallCodecID == "llama_cpp_native_tools_v1")
+        else {
+            throw manifestInvalid("tool capability and native codec do not match")
+        }
     }
 
     private static func isSafeRelativePath(_ path: String) -> Bool {

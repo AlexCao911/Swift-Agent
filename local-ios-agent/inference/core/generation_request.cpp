@@ -116,7 +116,9 @@ GenerationRequest parse_generation_request(const char *generation_request_json) 
     if (messages == nullptr || !messages->is_array()) throw std::invalid_argument("messages required");
     const std::set<std::string> roles{"system", "user", "assistant", "tool"};
     for (const auto &message_value : messages->as_array()) {
-        reject_unknown_keys(message_value, {"role", "content"});
+        reject_unknown_keys(message_value, {
+            "role", "content", "tool_calls", "tool_call_id", "name"
+        });
         PromptMessage message;
         message.role = json::require_string(message_value, "role");
         if (roles.count(message.role) == 0) throw std::invalid_argument("unsupported message role");
@@ -131,6 +133,45 @@ GenerationRequest parse_generation_request(const char *generation_request_json) 
             part.text = json::require_string(part_value, "text");
             if (part.type != "text") throw std::invalid_argument("unsupported content type");
             message.content.push_back(std::move(part));
+        }
+        if (const auto *tool_calls = message_value.get("tool_calls")) {
+            if (message.role != "assistant" || !tool_calls->is_array() || tool_calls->as_array().empty()) {
+                throw std::invalid_argument("tool_calls require an assistant message");
+            }
+            std::set<std::string> call_ids;
+            for (const auto &call_value : tool_calls->as_array()) {
+                reject_unknown_keys(call_value, {"id", "type", "function"});
+                if (json::require_string(call_value, "type") != "function") {
+                    throw std::invalid_argument("only function tool calls are supported");
+                }
+                const auto *function = call_value.get("function");
+                if (function == nullptr || !function->is_object()) {
+                    throw std::invalid_argument("tool call function is required");
+                }
+                reject_unknown_keys(*function, {"name", "arguments"});
+                PromptToolCall call;
+                call.id = json::require_string(call_value, "id");
+                call.name = json::require_string(*function, "name");
+                call.arguments_json = json::require_string(*function, "arguments");
+                if (call.id.empty() || call.name.empty() || !call_ids.insert(call.id).second) {
+                    throw std::invalid_argument("tool call identities must be unique and non-empty");
+                }
+                const auto arguments = json::parse(call.arguments_json.c_str());
+                if (!arguments.is_object()) {
+                    throw std::invalid_argument("tool call arguments must be a JSON object");
+                }
+                call.arguments_json = serialize_json(arguments);
+                message.tool_calls.push_back(std::move(call));
+            }
+        }
+        if (message.role == "tool") {
+            message.tool_call_id = json::require_string(message_value, "tool_call_id");
+            message.tool_name = json::require_string(message_value, "name");
+            if (message.tool_call_id.empty() || message.tool_name.empty()) {
+                throw std::invalid_argument("tool result identity is required");
+            }
+        } else if (message_value.get("tool_call_id") != nullptr || message_value.get("name") != nullptr) {
+            throw std::invalid_argument("tool result fields require a tool message");
         }
         request.messages.push_back(std::move(message));
     }
@@ -208,7 +249,24 @@ std::string prompt_json_from_generation_request(const GenerationRequest &request
             out << "{\"type\":\"text\",\"text\":\""
                 << json_escape(request.messages[i].content[j].text) << "\"}";
         }
-        out << "]}";
+        out << "]";
+        if (!request.messages[i].tool_calls.empty()) {
+            out << ",\"tool_calls\":[";
+            for (size_t j = 0; j < request.messages[i].tool_calls.size(); ++j) {
+                if (j > 0) out << ',';
+                const auto &call = request.messages[i].tool_calls[j];
+                out << "{\"id\":\"" << json_escape(call.id)
+                    << "\",\"type\":\"function\",\"function\":{\"name\":\""
+                    << json_escape(call.name) << "\",\"arguments\":\""
+                    << json_escape(call.arguments_json) << "\"}}";
+            }
+            out << ']';
+        }
+        if (!request.messages[i].tool_call_id.empty()) {
+            out << ",\"tool_call_id\":\"" << json_escape(request.messages[i].tool_call_id)
+                << "\",\"name\":\"" << json_escape(request.messages[i].tool_name) << "\"";
+        }
+        out << "}";
     }
     out << ']';
     if (request.tool_schema) out << ",\"tool_schema\":" << request.tool_schema->json;

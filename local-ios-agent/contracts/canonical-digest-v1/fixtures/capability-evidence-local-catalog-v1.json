@@ -16,11 +16,11 @@
       "llm_target_revision": null,
       "model_id": "gemma-3-1b-it-q4",
       "model_revision": "1",
-      "catalog_revision": "2"
+      "catalog_revision": "3"
     },
     "engine_version": "engine-1",
     "app_build": "build-1"
   },
-  "expected_canonical_utf8": "{\"app_build\":\"build-1\",\"capability_id\":\"streaming\",\"engine_version\":\"engine-1\",\"schema_version\":\"1\",\"source\":\"signed_local_catalog\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"2\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":null,\"llm_target_revision\":null,\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null},\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
-  "expected_sha256": "180b6e1094e9675243ecaf1bacdf6f58df4ec44be0472a050370f1c7761a1763"
+  "expected_canonical_utf8": "{\"app_build\":\"build-1\",\"capability_id\":\"streaming\",\"engine_version\":\"engine-1\",\"schema_version\":\"1\",\"source\":\"signed_local_catalog\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"3\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":null,\"llm_target_revision\":null,\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null},\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
+  "expected_sha256": "757035d11cf7d0d6810631a8c0ae22e8e5dc8c76f6a87659b1bc958545bda0d8"
 }

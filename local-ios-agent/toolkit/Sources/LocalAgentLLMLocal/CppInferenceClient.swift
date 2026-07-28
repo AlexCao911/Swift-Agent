@@ -62,6 +62,7 @@ package struct CppEngineDescriptor: Decodable, Equatable, Sendable {
 package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
     package let supportedModelFormats: Set<String>
     package let supportsVision: Bool
+    package let supportsNativeToolCalling: Bool
     package let supportsStreaming: Bool
     package let supportsCancellation: Bool
     package let supportsTokenUsage: Bool
@@ -71,6 +72,7 @@ package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
     package init(
         supportedModelFormats: Set<String>,
         supportsVision: Bool,
+        supportsNativeToolCalling: Bool,
         supportsStreaming: Bool,
         supportsCancellation: Bool,
         supportsTokenUsage: Bool,
@@ -79,6 +81,7 @@ package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
     ) {
         self.supportedModelFormats = supportedModelFormats
         self.supportsVision = supportsVision
+        self.supportsNativeToolCalling = supportsNativeToolCalling
         self.supportsStreaming = supportsStreaming
         self.supportsCancellation = supportsCancellation
         self.supportsTokenUsage = supportsTokenUsage
@@ -89,6 +92,7 @@ package struct CppEngineCapabilities: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case supportedModelFormats = "supported_model_formats"
         case supportsVision = "supports_vision"
+        case supportsNativeToolCalling = "supports_native_tool_calling"
         case supportsStreaming = "supports_streaming"
         case supportsCancellation = "supports_cancellation"
         case supportsTokenUsage = "supports_token_usage"
@@ -173,6 +177,7 @@ package struct CppGenerationRequest: Equatable, Sendable {
     package let canonicalToolSchema: CanonicalJSONValue?
     package let template: LocalChatTemplateSelector
     package let toolCallCodecID: String?
+    package let continuationToolCalls: [NormalizedToolCall]
     package let concreteOptions: [String: CanonicalJSONValue]
 
     package init(
@@ -181,6 +186,7 @@ package struct CppGenerationRequest: Equatable, Sendable {
         canonicalToolSchema: CanonicalJSONValue?,
         template: LocalChatTemplateSelector,
         toolCallCodecID: String?,
+        continuationToolCalls: [NormalizedToolCall] = [],
         concreteOptions: [String: CanonicalJSONValue]
     ) {
         self.input = input
@@ -188,6 +194,7 @@ package struct CppGenerationRequest: Equatable, Sendable {
         self.canonicalToolSchema = canonicalToolSchema
         self.template = template
         self.toolCallCodecID = toolCallCodecID
+        self.continuationToolCalls = continuationToolCalls
         self.concreteOptions = concreteOptions
     }
 }
@@ -278,7 +285,15 @@ package enum CppInferenceRequestEncoder {
             }
         }
 
-        let messages = try request.input.messages.map(messageDocument)
+        var messages = try request.input.messages.map(messageDocument)
+        if !request.continuationToolCalls.isEmpty {
+            let insertion = request.input.messages.firstIndex { $0.role == .tool }
+                ?? request.input.messages.endIndex
+            messages.insert(
+                try assistantToolCallDocument(request.continuationToolCalls),
+                at: insertion
+            )
+        }
         var entries = [
             CanonicalJSONObjectEntry(name: "schema_version", value: .string("2")),
             CanonicalJSONObjectEntry(name: "messages", value: .array(messages)),
@@ -363,6 +378,40 @@ package enum CppInferenceRequestEncoder {
     }
 
     private static func messageDocument(_ message: LLMInputMessage) throws -> CanonicalJSONValue {
+        if message.role == .tool {
+            guard message.content.count == 1,
+                  case let .text(encoded) = message.content[0],
+                  let envelope = try? JSONDecoder().decode(
+                    CanonicalJSONValue.self,
+                    from: Data(encoded.utf8)
+                  ),
+                  case let .string(callID)? = envelope.objectValue(forKey: "call_id"),
+                  case let .string(toolName)? = envelope.objectValue(forKey: "tool_name"),
+                  let result = envelope.objectValue(forKey: "result"),
+                  !callID.isEmpty,
+                  !toolName.isEmpty
+            else {
+                throw failure(
+                    "local_engine.tool_result_invalid",
+                    "tool result messages require canonical call and tool identity"
+                )
+            }
+            let resultText = String(
+                decoding: try CanonicalDigestV1.canonicalize(result),
+                as: UTF8.self
+            )
+            return try .object(entries: [
+                .init(name: "role", value: .string(message.role.rawValue)),
+                .init(name: "content", value: .array([
+                    try .object(entries: [
+                        .init(name: "type", value: .string("text")),
+                        .init(name: "text", value: .string(resultText)),
+                    ]),
+                ])),
+                .init(name: "tool_call_id", value: .string(callID)),
+                .init(name: "name", value: .string(toolName)),
+            ])
+        }
         let textParts = message.content.compactMap { content -> CanonicalJSONValue? in
             guard case let .text(text) = content else { return nil }
             return try? .object(entries: [
@@ -379,6 +428,50 @@ package enum CppInferenceRequestEncoder {
         return try .object(entries: [
             .init(name: "role", value: .string(message.role.rawValue)),
             .init(name: "content", value: .array(textParts)),
+        ])
+    }
+
+    private static func assistantToolCallDocument(
+        _ calls: [NormalizedToolCall]
+    ) throws -> CanonicalJSONValue {
+        var seen = Set<String>()
+        let values = try calls.map { call -> CanonicalJSONValue in
+            guard !call.callID.isEmpty,
+                  !call.name.isEmpty,
+                  seen.insert(call.callID).inserted,
+                  let arguments = try? JSONDecoder().decode(
+                    CanonicalJSONValue.self,
+                    from: Data(call.argumentsJSON.utf8)
+                  ),
+                  case .object = arguments
+            else {
+                throw failure(
+                    "local_engine.tool_continuation_invalid",
+                    "tool continuation calls must have unique identities and valid arguments"
+                )
+            }
+            let argumentsJSON = String(
+                decoding: try CanonicalDigestV1.canonicalize(arguments),
+                as: UTF8.self
+            )
+            return try .object(entries: [
+                .init(name: "id", value: .string(call.callID)),
+                .init(name: "type", value: .string("function")),
+                .init(name: "function", value: try .object(entries: [
+                    .init(name: "name", value: .string(call.name)),
+                    .init(name: "arguments", value: .string(argumentsJSON)),
+                ])),
+            ])
+        }
+        return try .object(entries: [
+            .init(name: "role", value: .string(LLMInputRole.assistant.rawValue)),
+            .init(name: "content", value: .array([
+                try .object(entries: [
+                    .init(name: "type", value: .string("text")),
+                    .init(name: "text", value: .string("")),
+                ]),
+            ])),
+            .init(name: "tool_calls", value: .array(values)),
         ])
     }
 
@@ -686,6 +779,11 @@ private final class CppReadContext: @unchecked Sendable {
                 )
             case "completed":
                 token = .completed(rawFinishReason: "stop")
+            case "native_tool_result":
+                token = .nativeToolResult(
+                    visibleText: event.text ?? "",
+                    calls: try event.normalizedToolCalls()
+                )
             default:
                 return failDecode()
             }
@@ -717,11 +815,52 @@ private struct NativeTokenEvent: Decodable {
     let text: String?
     let promptTokens: UInt64?
     let completionTokens: UInt64?
+    let toolCalls: [NativeToolCall]?
 
     enum CodingKeys: String, CodingKey {
         case type, text
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
+        case toolCalls = "tool_calls"
+    }
+
+    func normalizedToolCalls() throws -> [NormalizedToolCall] {
+        guard let toolCalls else {
+            throw nativeFailure(code: "event_decode_failed", retryable: false)
+        }
+        var seen = Set<String>()
+        return try toolCalls.map { call in
+            guard !call.id.isEmpty,
+                  !call.name.isEmpty,
+                  seen.insert(call.id).inserted,
+                  let arguments = try? JSONDecoder().decode(
+                    CanonicalJSONValue.self,
+                    from: Data(call.argumentsJSON.utf8)
+                  ),
+                  case .object = arguments
+            else {
+                throw nativeFailure(code: "event_decode_failed", retryable: false)
+            }
+            return NormalizedToolCall(
+                callID: call.id,
+                name: call.name,
+                argumentsJSON: String(
+                    decoding: try CanonicalDigestV1.canonicalize(arguments),
+                    as: UTF8.self
+                )
+            )
+        }
+    }
+}
+
+private struct NativeToolCall: Decodable {
+    let id: String
+    let name: String
+    let argumentsJSON: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case argumentsJSON = "arguments_json"
     }
 }
 

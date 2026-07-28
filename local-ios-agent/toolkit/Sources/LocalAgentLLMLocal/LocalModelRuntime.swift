@@ -443,7 +443,8 @@ public actor LocalModelRuntime {
             session: active,
             input: input,
             attachments: attachments,
-            toolSchema: toolSchema
+            toolSchema: toolSchema,
+            continuationToolCalls: []
         )
     }
 
@@ -461,16 +462,19 @@ public actor LocalModelRuntime {
         else {
             throw failure("runtime.local_resume_state_invalid", "local session is not awaiting tool results")
         }
-        let continuation = try localContinuationInput(
-            input,
-            pendingToolCalls: active.pendingToolCalls
-        )
+        let pendingToolCalls = active.pendingToolCalls
+        let continuation = active.prepared.toolCallCodecID == "llama_cpp_native_tools_v1"
+            ? input
+            : try localContinuationInput(input, pendingToolCalls: pendingToolCalls)
         active.pendingToolCalls = []
         return try beginGeneration(
             session: active,
             input: continuation,
             attachments: attachments,
-            toolSchema: toolSchema
+            toolSchema: toolSchema,
+            continuationToolCalls: active.prepared.toolCallCodecID == "llama_cpp_native_tools_v1"
+                ? pendingToolCalls
+                : []
         )
     }
 
@@ -546,7 +550,8 @@ public actor LocalModelRuntime {
         session: ActiveSession,
         input: AgentLLMInput,
         attachments: [LocalResolvedAttachment],
-        toolSchema: CanonicalJSONValue?
+        toolSchema: CanonicalJSONValue?,
+        continuationToolCalls: [NormalizedToolCall]
     ) throws -> LLMBackendEventSequence {
         guard catalog.verified.disposition(for: session.prepared.modelRevision) == .available,
               let loaded,
@@ -566,12 +571,23 @@ public actor LocalModelRuntime {
                 "the selected local model does not support image input"
             )
         }
+        let requestedToolCount = try toolSchema.map(localRequestedToolCount) ?? 0
+        guard requestedToolCount == 0
+            || session.prepared.capabilitySnapshot.support(for: "tool_calling") == .supported
+        else {
+            throw failure(
+                "runtime.local_tool_calling_unsupported",
+                "the selected local model does not support native tool calling"
+            )
+        }
+        let effectiveToolSchema = requestedToolCount == 0 ? nil : toolSchema
         let request = CppGenerationRequest(
             input: input,
             attachments: attachments,
-            canonicalToolSchema: toolSchema,
+            canonicalToolSchema: effectiveToolSchema,
             template: session.prepared.template,
-            toolCallCodecID: toolSchema == nil ? nil : session.prepared.toolCallCodecID,
+            toolCallCodecID: effectiveToolSchema == nil ? nil : session.prepared.toolCallCodecID,
+            continuationToolCalls: continuationToolCalls,
             concreteOptions: session.concreteOptions
         )
         do {
@@ -818,4 +834,28 @@ private func iso8601(_ date: Date) -> String {
 
 private func failure(_ code: String, _ message: String) -> LLMFailure {
     LLMFailure(code: code, message: message, retryable: false)
+}
+
+private func localRequestedToolCount(_ schema: CanonicalJSONValue) throws -> Int {
+    switch schema {
+    case let .array(values):
+        return values.count
+    case .object:
+        let keys = schema.objectKeys ?? []
+        if keys.isEmpty { return 0 }
+        guard keys == Set(["tools"]),
+              case let .array(values)? = schema.objectValue(forKey: "tools")
+        else {
+            throw failure(
+                "runtime.local_tool_schema_invalid",
+                "canonical tool schema has an unsupported shape"
+            )
+        }
+        return values.count
+    default:
+        throw failure(
+            "runtime.local_tool_schema_invalid",
+            "canonical tool schema has an unsupported shape"
+        )
+    }
 }

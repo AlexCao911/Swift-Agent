@@ -319,6 +319,7 @@ private final class IntegrationInference:
             capabilities: CppEngineCapabilities(
                 supportedModelFormats: [manifest.modelFormat],
                 supportsVision: false,
+                supportsNativeToolCalling: false,
                 supportsStreaming: true,
                 supportsCancellation: true,
                 supportsTokenUsage: false,

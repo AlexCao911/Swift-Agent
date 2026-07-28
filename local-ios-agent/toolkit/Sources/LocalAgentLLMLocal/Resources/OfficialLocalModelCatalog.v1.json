@@ -1,143 +1,9 @@
 {
-  "signature" : "yCaVNVUXqrHrGI98i5xjM5qfH8AbUaWyOtDH_Tw0zwXYR3r-GdVhkudTRyKzKMVrK_oqm_CwMqCyrCtJ4GUqBw",
+  "signature" : "IqUn-SyDbpF2ScMfI2GCbf7okZr1IGouauOdhpdhpWtsy0ywKmClmOLBtCBJgMuqZlfcawtUI3P8QVajCcNiDA",
   "signed" : {
-    "catalog_revision" : "2",
-    "key_id" : "local-catalog-2026-07",
+    "catalog_revision" : "3",
+    "key_id" : "local-catalog-2026-08",
     "models" : [
-      {
-        "artifacts" : [
-          {
-            "artifact_id" : "weights",
-            "artifact_sha256" : "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
-            "byte_size" : "806058240",
-            "download_url" : "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/61333bac858461ec0c309b7baafdc408d7d2c381/gemma-3-1b-it-Q4_K_M.gguf?download=true",
-            "relative_path" : "gemma-3-1b-it-Q4_K_M.gguf",
-            "role" : "weights"
-          }
-        ],
-        "chat_template" : {
-          "source" : "gguf",
-          "template_id" : "gemma"
-        },
-        "declared_capabilities" : [
-          {
-            "capability_id" : "text_generation",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "streaming",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "context_window_tokens",
-            "value" : "32768",
-            "value_type" : "verified_upper_bound"
-          }
-        ],
-        "display_name" : "Gemma 3 1B Instruct (Q4_K_M)",
-        "engine_id" : "llama_cpp",
-        "estimated_memory_class" : "small",
-        "family" : "gemma-3",
-        "id" : {
-          "model_id" : "gemma-3-1b-it-q4",
-          "revision" : "1"
-        },
-        "installed_byte_size" : "806058240",
-        "load_template" : {
-          "context_tokens" : "32768",
-          "manifest_controlled_options" : {
-            "mmap" : true
-          },
-          "required_artifact_roles" : [
-            "weights"
-          ]
-        },
-        "minimum_os_major" : 17,
-        "model_format" : "gguf",
-        "parameter_defaults" : {
-          "parameters" : {
-
-          }
-        },
-        "parameter_schema" : {
-          "definitions" : {
-
-          }
-        },
-        "supported_device_classes" : [
-          "phone",
-          "tablet"
-        ]
-      },
-      {
-        "artifacts" : [
-          {
-            "artifact_id" : "weights",
-            "artifact_sha256" : "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa",
-            "byte_size" : "688065920",
-            "download_url" : "https://huggingface.co/openbmb/MiniCPM5-1B-GGUF/resolve/87007042419d30c1d8f38ef065424ee33870831e/MiniCPM5-1B-Q4_K_M.gguf?download=true",
-            "relative_path" : "MiniCPM5-1B-Q4_K_M.gguf",
-            "role" : "weights"
-          }
-        ],
-        "chat_template" : {
-          "source" : "gguf",
-          "template_id" : "minicpm5"
-        },
-        "declared_capabilities" : [
-          {
-            "capability_id" : "text_generation",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "streaming",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "context_window_tokens",
-            "value" : "32768",
-            "value_type" : "verified_upper_bound"
-          }
-        ],
-        "display_name" : "MiniCPM5 1B (Q4_K_M)",
-        "engine_id" : "llama_cpp",
-        "estimated_memory_class" : "small",
-        "family" : "minicpm5",
-        "id" : {
-          "model_id" : "minicpm5-1b-q4-k-m",
-          "revision" : "1"
-        },
-        "installed_byte_size" : "688065920",
-        "load_template" : {
-          "context_tokens" : "32768",
-          "manifest_controlled_options" : {
-            "mmap" : true
-          },
-          "required_artifact_roles" : [
-            "weights"
-          ]
-        },
-        "minimum_os_major" : 17,
-        "model_format" : "gguf",
-        "parameter_defaults" : {
-          "parameters" : {
-
-          }
-        },
-        "parameter_schema" : {
-          "definitions" : {
-
-          }
-        },
-        "supported_device_classes" : [
-          "phone",
-          "tablet"
-        ]
-      },
       {
         "artifacts" : [
           {
@@ -181,6 +47,11 @@
             "capability_id" : "context_window_tokens",
             "value" : "32768",
             "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
           }
         ],
         "display_name" : "Gemma 4 E2B Instruct QAT (Q4_0)",
@@ -217,141 +88,8 @@
         "supported_device_classes" : [
           "phone",
           "tablet"
-        ]
-      },
-      {
-        "artifacts" : [
-          {
-            "artifact_id" : "weights",
-            "artifact_sha256" : "7bbd90384d3deffe4c646ec9643b212802d32d4ce417c90a1ec9282100650062",
-            "byte_size" : "153406304",
-            "download_url" : "https://huggingface.co/LiquidAI/LFM2.5-230M-GGUF/resolve/fa224d4cb60cffe61eb58726712ef255bb64d0b7/LFM2.5-230M-Q4_K_M.gguf?download=true",
-            "relative_path" : "LFM2.5-230M-Q4_K_M.gguf",
-            "role" : "weights"
-          }
         ],
-        "chat_template" : {
-          "source" : "gguf",
-          "template_id" : "lfm2.5"
-        },
-        "declared_capabilities" : [
-          {
-            "capability_id" : "text_generation",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "streaming",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "context_window_tokens",
-            "value" : "32768",
-            "value_type" : "verified_upper_bound"
-          }
-        ],
-        "display_name" : "LFM2.5 230M (Q4_K_M)",
-        "engine_id" : "llama_cpp",
-        "estimated_memory_class" : "small",
-        "family" : "lfm2.5",
-        "id" : {
-          "model_id" : "lfm2.5-230m-q4-k-m",
-          "revision" : "1"
-        },
-        "installed_byte_size" : "153406304",
-        "load_template" : {
-          "context_tokens" : "32768",
-          "manifest_controlled_options" : {
-            "mmap" : true
-          },
-          "required_artifact_roles" : [
-            "weights"
-          ]
-        },
-        "minimum_os_major" : 17,
-        "model_format" : "gguf",
-        "parameter_defaults" : {
-          "parameters" : {
-
-          }
-        },
-        "parameter_schema" : {
-          "definitions" : {
-
-          }
-        },
-        "supported_device_classes" : [
-          "phone",
-          "tablet"
-        ]
-      },
-      {
-        "artifacts" : [
-          {
-            "artifact_id" : "weights",
-            "artifact_sha256" : "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4",
-            "byte_size" : "229312224",
-            "download_url" : "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/bb7ee58b243e4cede04187e323e760b04f8a0091/LFM2.5-350M-Q4_K_M.gguf?download=true",
-            "relative_path" : "LFM2.5-350M-Q4_K_M.gguf",
-            "role" : "weights"
-          }
-        ],
-        "chat_template" : {
-          "source" : "gguf",
-          "template_id" : "lfm2.5"
-        },
-        "declared_capabilities" : [
-          {
-            "capability_id" : "text_generation",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "streaming",
-            "value" : "supported",
-            "value_type" : "support"
-          },
-          {
-            "capability_id" : "context_window_tokens",
-            "value" : "32768",
-            "value_type" : "verified_upper_bound"
-          }
-        ],
-        "display_name" : "LFM2.5 350M (Q4_K_M)",
-        "engine_id" : "llama_cpp",
-        "estimated_memory_class" : "small",
-        "family" : "lfm2.5",
-        "id" : {
-          "model_id" : "lfm2.5-350m-q4-k-m",
-          "revision" : "1"
-        },
-        "installed_byte_size" : "229312224",
-        "load_template" : {
-          "context_tokens" : "32768",
-          "manifest_controlled_options" : {
-            "mmap" : true
-          },
-          "required_artifact_roles" : [
-            "weights"
-          ]
-        },
-        "minimum_os_major" : 17,
-        "model_format" : "gguf",
-        "parameter_defaults" : {
-          "parameters" : {
-
-          }
-        },
-        "parameter_schema" : {
-          "definitions" : {
-
-          }
-        },
-        "supported_device_classes" : [
-          "phone",
-          "tablet"
-        ]
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
       },
       {
         "artifacts" : [
@@ -383,6 +121,11 @@
             "capability_id" : "context_window_tokens",
             "value" : "32768",
             "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
           }
         ],
         "display_name" : "LFM2.5 1.2B Thinking (Q4_K_M)",
@@ -418,7 +161,154 @@
         "supported_device_classes" : [
           "phone",
           "tablet"
-        ]
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
+      },
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "7bbd90384d3deffe4c646ec9643b212802d32d4ce417c90a1ec9282100650062",
+            "byte_size" : "153406304",
+            "download_url" : "https://huggingface.co/LiquidAI/LFM2.5-230M-GGUF/resolve/fa224d4cb60cffe61eb58726712ef255bb64d0b7/LFM2.5-230M-Q4_K_M.gguf?download=true",
+            "relative_path" : "LFM2.5-230M-Q4_K_M.gguf",
+            "role" : "weights"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "lfm2.5"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "context_window_tokens",
+            "value" : "32768",
+            "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
+          }
+        ],
+        "display_name" : "LFM2.5 230M (Q4_K_M)",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "small",
+        "family" : "lfm2.5",
+        "id" : {
+          "model_id" : "lfm2.5-230m-q4-k-m",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "153406304",
+        "load_template" : {
+          "context_tokens" : "32768",
+          "manifest_controlled_options" : {
+            "mmap" : true
+          },
+          "required_artifact_roles" : [
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
+      },
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4",
+            "byte_size" : "229312224",
+            "download_url" : "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/bb7ee58b243e4cede04187e323e760b04f8a0091/LFM2.5-350M-Q4_K_M.gguf?download=true",
+            "relative_path" : "LFM2.5-350M-Q4_K_M.gguf",
+            "role" : "weights"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "lfm2.5"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "context_window_tokens",
+            "value" : "32768",
+            "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
+          }
+        ],
+        "display_name" : "LFM2.5 350M (Q4_K_M)",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "small",
+        "family" : "lfm2.5",
+        "id" : {
+          "model_id" : "lfm2.5-350m-q4-k-m",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "229312224",
+        "load_template" : {
+          "context_tokens" : "32768",
+          "manifest_controlled_options" : {
+            "mmap" : true
+          },
+          "required_artifact_roles" : [
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
       },
       {
         "artifacts" : [
@@ -463,6 +353,11 @@
             "capability_id" : "context_window_tokens",
             "value" : "32768",
             "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
           }
         ],
         "display_name" : "LFM2.5 VL 1.6B (Q4_0 + Q8_0 vision)",
@@ -499,7 +394,168 @@
         "supported_device_classes" : [
           "phone",
           "tablet"
-        ]
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
+      },
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "6b0c74962c44bc6bf4b655b9b02c13eda9d5a0491543ae976d1ac18e4b7892e2",
+            "byte_size" : "529101504",
+            "download_url" : "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/78e02f066e9819a60573b78a4275df8a0c27f698/MiniCPM-V-4_6-Q4_K_M.gguf?download=true",
+            "relative_path" : "MiniCPM-V-4_6-Q4_K_M.gguf",
+            "role" : "weights"
+          },
+          {
+            "artifact_id" : "vision-projection",
+            "artifact_sha256" : "ca931d861d0801d9003e50697cd764721a334107c0e0415a51168ee1938462de",
+            "byte_size" : "1108746944",
+            "download_url" : "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/78e02f066e9819a60573b78a4275df8a0c27f698/mmproj-model-f16.gguf?download=true",
+            "relative_path" : "mmproj-model-f16.gguf",
+            "role" : "multimodal_projection"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "minicpm-v-4.6"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "image_input",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "context_window_tokens",
+            "value" : "32768",
+            "value_type" : "verified_upper_bound"
+          }
+        ],
+        "display_name" : "MiniCPM-V 4.6 (Q4_K_M + F16 vision)",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "medium",
+        "family" : "minicpm-v-4.6",
+        "id" : {
+          "model_id" : "minicpm-v-4.6-q4-k-m",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "1637848448",
+        "load_template" : {
+          "context_tokens" : "32768",
+          "manifest_controlled_options" : {
+            "mmap" : true
+          },
+          "required_artifact_roles" : [
+            "multimodal_projection",
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
+      },
+      {
+        "artifacts" : [
+          {
+            "artifact_id" : "weights",
+            "artifact_sha256" : "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa",
+            "byte_size" : "688065920",
+            "download_url" : "https://huggingface.co/openbmb/MiniCPM5-1B-GGUF/resolve/87007042419d30c1d8f38ef065424ee33870831e/MiniCPM5-1B-Q4_K_M.gguf?download=true",
+            "relative_path" : "MiniCPM5-1B-Q4_K_M.gguf",
+            "role" : "weights"
+          }
+        ],
+        "chat_template" : {
+          "source" : "gguf",
+          "template_id" : "minicpm5"
+        },
+        "declared_capabilities" : [
+          {
+            "capability_id" : "text_generation",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "streaming",
+            "value" : "supported",
+            "value_type" : "support"
+          },
+          {
+            "capability_id" : "context_window_tokens",
+            "value" : "32768",
+            "value_type" : "verified_upper_bound"
+          },
+          {
+            "capability_id" : "tool_calling",
+            "value" : "supported",
+            "value_type" : "support"
+          }
+        ],
+        "display_name" : "MiniCPM5 1B (Q4_K_M)",
+        "engine_id" : "llama_cpp",
+        "estimated_memory_class" : "small",
+        "family" : "minicpm5",
+        "id" : {
+          "model_id" : "minicpm5-1b-q4-k-m",
+          "revision" : "1"
+        },
+        "installed_byte_size" : "688065920",
+        "load_template" : {
+          "context_tokens" : "32768",
+          "manifest_controlled_options" : {
+            "mmap" : true
+          },
+          "required_artifact_roles" : [
+            "weights"
+          ]
+        },
+        "minimum_os_major" : 17,
+        "model_format" : "gguf",
+        "parameter_defaults" : {
+          "parameters" : {
+
+          }
+        },
+        "parameter_schema" : {
+          "definitions" : {
+
+          }
+        },
+        "supported_device_classes" : [
+          "phone",
+          "tablet"
+        ],
+        "tool_call_codec_id" : "llama_cpp_native_tools_v1"
       }
     ],
     "revoked_model_revisions" : [

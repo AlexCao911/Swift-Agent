@@ -22,6 +22,7 @@ struct CppInferencePackagingTests {
         #expect(capabilities.supportsStreaming)
         #expect(capabilities.supportsCancellation)
         #expect(capabilities.supportsVision)
+        #expect(capabilities.supportsNativeToolCalling)
         #expect(capabilities.backendParameters.contains { $0.backendOption == "top_p" })
         #expect(capabilities.backendParameters.contains { $0.backendOption == "repeat_penalty" })
     }

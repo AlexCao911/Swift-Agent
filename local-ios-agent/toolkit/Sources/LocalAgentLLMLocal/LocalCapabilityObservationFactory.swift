@@ -81,6 +81,10 @@ public enum LocalCapabilityObservationFactory {
                 value = .support(descriptor.capabilities.supportsStreaming ? .supported : .unsupported)
             case "vision", "image_input":
                 value = .support(descriptor.capabilities.supportsVision ? .supported : .unsupported)
+            case "tool_calling":
+                value = .support(
+                    descriptor.capabilities.supportsNativeToolCalling ? .supported : .unsupported
+                )
             case "cancellation":
                 value = .support(descriptor.capabilities.supportsCancellation ? .supported : .unsupported)
             case "token_usage":

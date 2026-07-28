@@ -18,15 +18,15 @@
       "llm_target_revision": null,
       "model_id": "gemma-3-1b-it-q4",
       "model_revision": "1",
-      "catalog_revision": "2"
+      "catalog_revision": "3"
     },
     "adapter_or_engine_version": "engine-1",
     "observed_at": "2027-01-15T08:00:00.000Z",
     "expires_at": null,
     "validation_scope": "signed_declaration",
     "invalidation_triggers": ["app_build", "catalog_revision", "engine_version", "os_capabilities"],
-    "evidence_digest": "180b6e1094e9675243ecaf1bacdf6f58df4ec44be0472a050370f1c7761a1763"
+    "evidence_digest": "757035d11cf7d0d6810631a8c0ae22e8e5dc8c76f6a87659b1bc958545bda0d8"
   },
-  "expected_canonical_utf8": "{\"adapter_or_engine_version\":\"engine-1\",\"authority\":\"authoritative\",\"capability_id\":\"streaming\",\"dimension\":\"model_supports\",\"evidence_digest\":\"180b6e1094e9675243ecaf1bacdf6f58df4ec44be0472a050370f1c7761a1763\",\"expires_at\":null,\"invalidation_triggers\":[\"app_build\",\"catalog_revision\",\"engine_version\",\"os_capabilities\"],\"observed_at\":\"2027-01-15T08:00:00.000Z\",\"schema_version\":\"1\",\"source\":\"signed_local_catalog\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"2\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":null,\"llm_target_revision\":null,\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null},\"validation_scope\":\"signed_declaration\",\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
-  "expected_sha256": "dd5cd651b832d9d1fbcb43442283f8de6f6fd08b8f14cec5bc6ccf9768a518d6"
+  "expected_canonical_utf8": "{\"adapter_or_engine_version\":\"engine-1\",\"authority\":\"authoritative\",\"capability_id\":\"streaming\",\"dimension\":\"model_supports\",\"evidence_digest\":\"757035d11cf7d0d6810631a8c0ae22e8e5dc8c76f6a87659b1bc958545bda0d8\",\"expires_at\":null,\"invalidation_triggers\":[\"app_build\",\"catalog_revision\",\"engine_version\",\"os_capabilities\"],\"observed_at\":\"2027-01-15T08:00:00.000Z\",\"schema_version\":\"1\",\"source\":\"signed_local_catalog\",\"subject\":{\"adapter_id\":null,\"catalog_revision\":\"3\",\"credential_generation\":null,\"engine_id\":\"llama_cpp\",\"llm_target_id\":null,\"llm_target_revision\":null,\"model_id\":\"gemma-3-1b-it-q4\",\"model_revision\":\"1\",\"provider_profile_id\":null,\"provider_profile_revision\":null},\"validation_scope\":\"signed_declaration\",\"value\":{\"type\":\"support\",\"value\":\"supported\"}}",
+  "expected_sha256": "a43386eee7ba546f89ae70d5e79d859b2404aa048733c99ae5401ad107bfed58"
 }

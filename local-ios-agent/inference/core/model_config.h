@@ -45,6 +45,7 @@ struct ModelConfig {
     std::string model_id;
     std::string model_path;
     std::string chat_template;
+    std::string tool_call_codec_id;
     int max_context_tokens = 2048;
     GenerationConfig generation;
     LlamaCppConfig llama_cpp;

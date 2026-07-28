@@ -3,6 +3,7 @@ import LocalAgentLLMContracts
 
 package enum CppTokenEvent: Equatable, Sendable {
     case textDelta(String)
+    case nativeToolResult(visibleText: String, calls: [NormalizedToolCall])
     case usage(inputTokens: UInt64?, outputTokens: UInt64?)
     case completed(rawFinishReason: String)
 }
@@ -156,6 +157,10 @@ package final class CppEventChannel: @unchecked Sendable {
         switch event {
         case let .textDelta(text), let .completed(text):
             text.utf8.count
+        case let .nativeToolResult(visibleText, calls):
+            visibleText.utf8.count + calls.reduce(0) {
+                $0 + $1.callID.utf8.count + $1.name.utf8.count + $1.argumentsJSON.utf8.count
+            }
         case .usage:
             MemoryLayout<UInt64?>.size * 2
         }

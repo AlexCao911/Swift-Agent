@@ -26,9 +26,18 @@ struct PromptContentPart {
     std::string text;
 };
 
+struct PromptToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments_json;
+};
+
 struct PromptMessage {
     std::string role;
     std::vector<PromptContentPart> content;
+    std::vector<PromptToolCall> tool_calls;
+    std::string tool_call_id;
+    std::string tool_name;
 };
 
 struct CanonicalToolSchema {

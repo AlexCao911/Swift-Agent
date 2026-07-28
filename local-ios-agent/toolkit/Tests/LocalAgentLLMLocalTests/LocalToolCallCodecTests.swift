@@ -74,6 +74,49 @@ struct LocalToolCallCodecTests {
                 == #"<tool_calls>{"calls":[{"arguments":{"query":"Ada"},"id":"call-1","name":"contacts.search"}]}</tool_calls>"#
         )
     }
+
+    @Test
+    func nativeLlamaToolResultBecomesOneOrderedBatchWithoutLeakingMarkup() async throws {
+        let channel = CppEventChannel(maxEventCount: 8, maxUTF8Bytes: 4_096)
+        #expect(channel.send(.textDelta(
+            "<tool_call><function=search><parameter=q>swift</parameter></function></tool_call>"
+        )) == .accepted)
+        #expect(channel.send(.nativeToolResult(
+            visibleText: "I will search. ",
+            calls: [
+                NormalizedToolCall(
+                    callID: "local-call-1",
+                    name: "search",
+                    argumentsJSON: #"{"q":"swift"}"#
+                ),
+            ]
+        )) == .accepted)
+        #expect(channel.send(.completed(rawFinishReason: "stop")) == .accepted)
+        channel.finish()
+
+        let sequence = LLMBackendEventSequence(
+            native: channel.sequence,
+            toolCallCodecID: "llama_cpp_native_tools_v1",
+            terminal: { _ in }
+        )
+        var events: [LLMBackendEvent] = []
+        for try await event in sequence { events.append(event) }
+
+        #expect(events == [
+            .textDelta("I will search. "),
+            .toolCallStarted(callID: "local-call-1", name: "search"),
+            .toolCallCompleted(NormalizedToolCall(
+                callID: "local-call-1",
+                name: "search",
+                argumentsJSON: #"{"q":"swift"}"#
+            )),
+            .generationCompleted(LLMBackendCompletion(
+                outcome: .toolCallsReady,
+                orderedCallIDs: ["local-call-1"],
+                finishReason: .toolCalls
+            )),
+        ])
+    }
 }
 
 private func expectCodecFailure(operation: () throws -> Void) {

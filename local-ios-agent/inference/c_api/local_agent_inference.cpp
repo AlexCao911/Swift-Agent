@@ -334,6 +334,10 @@ void validate_model_config(
         config.chat_template_id.empty()) {
         throw std::invalid_argument("model config requires an approved chat template selector");
     }
+    if (config.tool_call_codec_id == "llama_cpp_native_tools_v1" &&
+        !engine_state->descriptor.capabilities.supports_native_tool_calling) {
+        throw std::invalid_argument("loaded engine does not support native tool calling");
+    }
 }
 
 void validate_generation_request(
@@ -363,6 +367,10 @@ void validate_generation_request(
         (model_state->load_config.tool_call_codec_id.empty() ||
          *request.tool_call_codec_id != model_state->load_config.tool_call_codec_id)) {
         throw std::invalid_argument("tool-call codec does not match loaded model");
+    }
+    if (request.tool_call_codec_id == std::optional<std::string>("llama_cpp_native_tools_v1") &&
+        !model_state->engine_state->descriptor.capabilities.supports_native_tool_calling) {
+        throw std::invalid_argument("loaded engine does not support native tool calling");
     }
 }
 

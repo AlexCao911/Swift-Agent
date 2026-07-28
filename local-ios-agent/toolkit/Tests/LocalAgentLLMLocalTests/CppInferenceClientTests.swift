@@ -22,7 +22,7 @@ struct CppInferenceClientTests {
                 "mmap": .bool(true),
             ],
             template: LocalChatTemplateSelector(source: .gguf, templateID: "gemma"),
-            toolCallCodecID: "json_tool_calls_v1"
+            toolCallCodecID: "llama_cpp_native_tools_v1"
         )
 
         let encoded = try CppInferenceRequestEncoder.modelJSON(request)
@@ -33,7 +33,7 @@ struct CppInferenceClientTests {
         #expect(root["context_tokens"] as? Int == 32_768)
         #expect((root["runtime"] as? [String: Any])?["n_threads"] as? Int == 4)
         #expect((root["manifest_options"] as? [String: Any])?["mmap"] as? Bool == true)
-        #expect(root["tool_call_codec_id"] as? String == "json_tool_calls_v1")
+        #expect(root["tool_call_codec_id"] as? String == "llama_cpp_native_tools_v1")
     }
 
     @Test
@@ -71,17 +71,29 @@ struct CppInferenceClientTests {
                 ])),
             ]),
             template: LocalChatTemplateSelector(source: .gguf, templateID: "gemma"),
-            toolCallCodecID: "json_tool_calls_v1",
+            toolCallCodecID: "llama_cpp_native_tools_v1",
+            continuationToolCalls: [
+                NormalizedToolCall(
+                    callID: "call-1",
+                    name: "search",
+                    argumentsJSON: #"{"q":"swift"}"#
+                ),
+            ],
             concreteOptions: ["temperature": .number(0.2), "max_new_tokens": .number(64)]
         )
 
         let encoded = try CppInferenceRequestEncoder.generationJSON(request)
         let root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(root["schema_version"] as? String == "2")
-        #expect((root["messages"] as? [[String: Any]])?.count == 2)
+        let messages = try #require(root["messages"] as? [[String: Any]])
+        #expect(messages.count == 3)
+        #expect(messages[2]["role"] as? String == "assistant")
+        let calls = try #require(messages[2]["tool_calls"] as? [[String: Any]])
+        #expect(calls.first?["id"] as? String == "call-1")
+        #expect((calls.first?["function"] as? [String: Any])?["name"] as? String == "search")
         #expect((root["images"] as? [[String: Any]])?.first?["format"] as? String == "rgb8")
         #expect((root["template"] as? [String: Any])?["id"] as? String == "gemma")
-        #expect(root["tool_call_codec_id"] as? String == "json_tool_calls_v1")
+        #expect(root["tool_call_codec_id"] as? String == "llama_cpp_native_tools_v1")
         #expect((root["sampling"] as? [String: Any])?["max_new_tokens"] as? Int == 64)
     }
 

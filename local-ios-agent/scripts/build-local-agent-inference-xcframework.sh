@@ -51,6 +51,8 @@ COMMON_SOURCES=(
 VENDOR_ARCHIVES=(
   libllama.a
   libmtmd.a
+  libllama-common.a
+  libllama-common-base.a
   libggml.a
   libggml-base.a
   libggml-cpu.a
@@ -58,17 +60,22 @@ VENDOR_ARCHIVES=(
   libggml-blas.a
 )
 
-ensure_mtmd_archive() {
+ensure_vendor_archives() {
   local vendor_build="$1"
   if find "$LLAMA_CPP_ROOT/$vendor_build" -type f -name libmtmd.a -path '*/Release*/*' -print -quit \
-    | grep -q .
+      | grep -q . \
+    && find "$LLAMA_CPP_ROOT/$vendor_build" -type f -name libllama-common.a -path '*/Release*/*' -print -quit \
+      | grep -q .
   then
     return
   fi
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    cmake -S "$LLAMA_CPP_ROOT" -B "$LLAMA_CPP_ROOT/$vendor_build" -DLLAMA_BUILD_TOOLS=ON
+    cmake -S "$LLAMA_CPP_ROOT" -B "$LLAMA_CPP_ROOT/$vendor_build" \
+      -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_COMMON=ON
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     cmake --build "$LLAMA_CPP_ROOT/$vendor_build" --config Release --target mtmd -- -quiet
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    cmake --build "$LLAMA_CPP_ROOT/$vendor_build" --config Release --target llama-common -- -quiet
 }
 
 prepare_headers() {
@@ -106,6 +113,7 @@ build_slice() {
       -target "$target" -isysroot "$sdk_path" \
       -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
       -DLOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD \
+      -DLOCAL_AGENT_ENABLE_LLAMA_CPP_NATIVE_TOOLS \
       "-DLOCAL_AGENT_LLAMA_CPP_VERSION=\"$LLAMA_CPP_ENGINE_VERSION\"" \
       -I "$ROOT/inference/include" \
       -I "$ROOT/inference/core" \
@@ -113,6 +121,8 @@ build_slice() {
       -I "$LLAMA_CPP_ROOT/include" \
       -I "$LLAMA_CPP_ROOT/ggml/include" \
       -I "$LLAMA_CPP_ROOT/tools/mtmd" \
+      -I "$LLAMA_CPP_ROOT/common" \
+      -I "$LLAMA_CPP_ROOT/vendor" \
       -c "$ROOT/$source" -o "$objects/$index.o"
     index=$((index + 1))
   done
@@ -136,9 +146,9 @@ build_slice() {
 
 rm -rf "$BUILD_ROOT" "$OUTPUT"
 mkdir -p "$BUILD_ROOT" "$(dirname "$OUTPUT")"
-ensure_mtmd_archive build-macos
-ensure_mtmd_archive build-ios-sim
-ensure_mtmd_archive build-ios-device
+ensure_vendor_archives build-macos
+ensure_vendor_archives build-ios-sim
+ensure_vendor_archives build-ios-device
 prepare_headers
 build_slice macos-arm64 macosx arm64-apple-macos14.0 build-macos
 build_slice ios-arm64-simulator iphonesimulator arm64-apple-ios17.0-simulator build-ios-sim

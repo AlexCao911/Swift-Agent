@@ -49,6 +49,7 @@ private actor LocalBackendEventIteratorState {
     private let terminal: @Sendable (LocalGenerationTerminal) async throws -> Void
     private var pending: [LLMBackendEvent] = []
     private var accumulatedText = ""
+    private var nativeToolResult: (visibleText: String, calls: [NormalizedToolCall])?
     private var ended = false
 
     init(
@@ -73,6 +74,17 @@ private actor LocalBackendEventIteratorState {
                         return .textDelta(text)
                     }
                     accumulatedText += text
+                case let .nativeToolResult(visibleText, calls):
+                    guard toolCallCodecID == "llama_cpp_native_tools_v1",
+                          nativeToolResult == nil
+                    else {
+                        throw LLMFailure(
+                            code: "local_engine.native_tool_result_unexpected",
+                            message: "native tool parser produced an unexpected result",
+                            retryable: false
+                        )
+                    }
+                    nativeToolResult = (visibleText, calls)
                 case let .usage(inputTokens, outputTokens):
                     return .usageUpdated(LLMUsage(
                         inputTokens: inputTokens,
@@ -109,6 +121,40 @@ private actor LocalBackendEventIteratorState {
 
     private func complete(rawFinishReason: String) async throws {
         let finishReason = LLMFinishReason(rawValue: rawFinishReason) ?? .other
+        if toolCallCodecID == "llama_cpp_native_tools_v1" {
+            guard let result = nativeToolResult else {
+                throw LLMFailure(
+                    code: "local_engine.native_tool_result_missing",
+                    message: "native tool parser did not produce a terminal parse result",
+                    retryable: false
+                )
+            }
+            if !result.visibleText.isEmpty {
+                pending.append(.textDelta(result.visibleText))
+            }
+            if result.calls.isEmpty {
+                pending.append(.generationCompleted(LLMBackendCompletion(
+                    outcome: .finalResponse,
+                    orderedCallIDs: [],
+                    finishReason: finishReason
+                )))
+                ended = true
+                try await terminal(.completed(.finalResponse, toolCalls: []))
+                return
+            }
+            for call in result.calls {
+                pending.append(.toolCallStarted(callID: call.callID, name: call.name))
+                pending.append(.toolCallCompleted(call))
+            }
+            pending.append(.generationCompleted(LLMBackendCompletion(
+                outcome: .toolCallsReady,
+                orderedCallIDs: result.calls.map(\.callID),
+                finishReason: .toolCalls
+            )))
+            ended = true
+            try await terminal(.completed(.toolCallsReady, toolCalls: result.calls))
+            return
+        }
         if let codecID = toolCallCodecID,
            accumulatedText.contains("<tool_calls>")
         {
