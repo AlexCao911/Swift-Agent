@@ -1,7 +1,7 @@
 {
-  "signature" : "lQtf3IyaVWwAJw0Y8HIR27dIKZODsVmVK_f7zgg3NY2LsQoa1FbiVpxCVS01l7LQ1TsXb8pmstkXJkUmVVtgCg",
+  "signature" : "nG4RdwgHkYZZFfQc663QpYhPkuOjSanE_TzLZL1P8hbk7OgTj2aN-452RFzEra3YNGLYW6AAno5mE7xKyGiOBg",
   "signed" : {
-    "catalog_revision" : "3",
+    "catalog_revision" : "4",
     "key_id" : "test-local-catalog-key",
     "models" : [
       {

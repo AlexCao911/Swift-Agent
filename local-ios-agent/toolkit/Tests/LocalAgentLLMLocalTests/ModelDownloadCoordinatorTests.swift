@@ -103,6 +103,55 @@ struct ModelDownloadCoordinatorTests {
     }
 
     @Test
+    func failedDownloadRetriesFromZeroAndQueuedDownloadCancelsWithoutActiveTask() async throws {
+        let fixture = try DownloadFixture()
+        let first = try productionManifest()
+        let second = copy(
+            first,
+            id: LocalModelRevisionID(modelID: "queued-cancel", revision: 1)
+        )
+        try await fixture.coordinator.enqueue(
+            installationID: "retry",
+            manifest: first
+        )
+        try await fixture.coordinator.enqueue(
+            installationID: "queued",
+            manifest: second
+        )
+        try await eventually { fixture.transport.snapshot().starts.count == 1 }
+        try await fixture.coordinator.cancel(installationID: "queued")
+        #expect(try fixture.store.installationSummary(installationID: "queued") == nil)
+
+        let firstTask = try #require(
+            fixture.transport.snapshot().starts.first?.taskIdentifier
+        )
+        fixture.transport.fail(
+            taskIdentifier: firstTask,
+            failure: LLMFailure(
+                code: "transport.offline",
+                message: "offline",
+                retryable: true
+            )
+        )
+        try await eventually {
+            try fixture.store.installationSummary(installationID: "retry")?.state
+                == .failed
+        }
+        try await fixture.coordinator.retry(
+            installationID: "retry",
+            manifest: first
+        )
+        try await eventually { fixture.transport.snapshot().starts.count == 2 }
+        #expect(try fixture.store.installationSummary(
+            installationID: "retry"
+        )?.state == .downloading)
+        let artifact = try #require(try fixture.store.artifactRecords(
+            installationID: "retry"
+        ).first)
+        #expect(artifact.receivedBytes == 0)
+    }
+
+    @Test
     func restoreReattachesKnownTaskAndQuarantinesUnknownTaskOnTheSameStream() async throws {
         let fixture = try DownloadFixture(autoRestore: false)
         let manifest = try productionManifest()
@@ -434,7 +483,7 @@ private func productionManifest() throws -> LocalModelRevisionManifest {
         keyRing: resources.keyRing
     )
     return try #require(catalog.models[
-        LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
     ])
 }
 

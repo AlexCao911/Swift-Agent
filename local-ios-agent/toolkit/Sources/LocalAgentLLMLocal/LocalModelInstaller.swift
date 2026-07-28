@@ -184,6 +184,7 @@ package struct LocalModelInstaller: Sendable {
             to: .failed,
             failureCode: code
         )
+        try store.releaseDiskReservation(installationID: installationID)
     }
 
     private func quarantine(_ final: URL, installationID: String) throws {

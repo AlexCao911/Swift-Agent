@@ -118,6 +118,17 @@ struct OfficialModelCatalogTests {
                     && $0.value == .support(.supported)
             })
             #expect(manifest.toolCallCodecID == "llama_cpp_native_tools_v1")
+            #expect(Set(manifest.parameterSchema.definitions.keys) == [
+                LLMParameterID.samplingTemperature.rawValue,
+                LLMParameterID.samplingTopP.rawValue,
+                LLMParameterID.samplingTopK.rawValue,
+                LLMParameterID.samplingMinP.rawValue,
+                LLMParameterID.samplingRepetitionPenalty.rawValue,
+                LLMParameterID.generationMaxOutputTokens.rawValue,
+            ])
+            #expect(manifest.parameterSchema.definitions.values.allSatisfy {
+                $0.support == .supported
+            })
         }
     }
 
@@ -167,8 +178,8 @@ struct OfficialModelCatalogTests {
             envelope: Data(contentsOf: rollbackURL),
             keyRing: keyRing
         )
-        #expect(valid.catalogRevision == 4)
-        #expect(rollback.catalogRevision == 3)
+        #expect(valid.catalogRevision == 5)
+        #expect(rollback.catalogRevision == 4)
         #expect(valid.keyID.hasPrefix("test-"))
 
         let production = try OfficialModelCatalogResources.loadBundled()

@@ -15,7 +15,26 @@ struct LegacyLLMMigrationReconciliation: Equatable, Sendable {
     let bindingRequiredSourceDigests: [String]
 }
 
-actor LegacyLLMMigrationCoordinator {
+struct LegacyLLMMigrationItem: Equatable, Identifiable, Sendable {
+    let profileID: String
+    let revision: UInt64
+    let sourceDigest: String
+    let displayName: String
+    let redactedModelHint: String?
+
+    var id: String { sourceDigest }
+}
+
+protocol LegacyLLMMigrationPresenting: Sendable {
+    func pendingItems() async throws -> [LegacyLLMMigrationItem]
+    func migrate(
+        profileID: String,
+        revision: UInt64,
+        selectedTarget: LLMTargetReference?
+    ) async throws -> LegacyProfileMigrationRecordDTO
+}
+
+actor LegacyLLMMigrationCoordinator: LegacyLLMMigrationPresenting {
     private let rust: any LegacyProfileMigrationClient
     private let targets: any AgentLLMTargetCatalog
     private let bindingSaga: AgentHostBindingSaga
@@ -32,6 +51,34 @@ actor LegacyLLMMigrationCoordinator {
 
     func pendingActions() async throws -> [LegacyMigrationActionDTO] {
         try await rust.actions().filter { $0.state == "pending" }
+    }
+
+    func pendingItems() async throws -> [LegacyLLMMigrationItem] {
+        let pending = try await pendingActions()
+        let actions = Dictionary(
+            pending.map {
+                ($0.sourceDigest, $0)
+            },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let records = try await rust.records()
+        let items: [LegacyLLMMigrationItem] = records.compactMap { record in
+            guard case .pending = record.state,
+                  let action = actions[record.sourceDigest]
+            else { return nil }
+            return LegacyLLMMigrationItem(
+                profileID: record.sourceProfileId,
+                revision: record.sourceRevision,
+                sourceDigest: record.sourceDigest,
+                displayName: action.displayName,
+                redactedModelHint: action.redactedModelHint
+            )
+        }
+        return items.sorted {
+            $0.displayName == $1.displayName
+                ? $0.sourceDigest < $1.sourceDigest
+                : $0.displayName < $1.displayName
+        }
     }
 
     func migrate(

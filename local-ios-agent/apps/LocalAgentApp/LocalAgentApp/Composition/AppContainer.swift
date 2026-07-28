@@ -127,6 +127,10 @@ struct AppContainer {
 
     @MainActor
     func makeModelCenterViewModel() -> ModelCenterViewModel {
-        ModelCenterViewModel(client: modelCenterClient)
+        ModelCenterViewModel(
+            client: modelCenterClient,
+            migration: legacyMigration,
+            readinessIssues: readinessIssues
+        )
     }
 }

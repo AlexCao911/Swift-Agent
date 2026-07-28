@@ -10,6 +10,11 @@ struct LocalModelInstallerTests {
     func validMultiArtifactPackageIsValidatedRenamedAndCommitted() throws {
         let fixture = try TestLocalInstallFixture()
         try fixture.prepareVerifyingInstallation()
+        _ = try fixture.store.createDiskReservation(
+            reservationID: "install-reservation",
+            installationID: fixture.installationID,
+            reservedBytes: 1_024
+        )
         let installer = LocalModelInstaller(
             store: fixture.store,
             paths: fixture.paths,
@@ -36,6 +41,7 @@ struct LocalModelInstallerTests {
         #expect(fixture.validator.validatedRoles == Set(fixture.manifest.artifacts.map(\.role)))
         #expect(fixture.backup.urls.contains(try fixture.paths.finalInstallation(fixture.installationID)))
         #expect(try fixture.store.unfinishedFilesystemOperations().isEmpty)
+        #expect(try fixture.store.totalReservedBytes() == 0)
     }
 
     @Test(arguments: [
@@ -276,7 +282,7 @@ private func productionInstallManifest() throws -> LocalModelRevisionManifest {
         keyRing: resources.keyRing
     )
     return try #require(catalog.models[
-        LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+        LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
     ])
 }
 

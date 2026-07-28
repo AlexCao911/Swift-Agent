@@ -54,10 +54,9 @@ package struct LocalModelReconciler: Sendable {
                     // The installer persisted a stable failed state or left a replayable intent.
                 }
             case .cancelDownload:
-                guard let taskIdentifier = operation.taskIdentifier else { continue }
                 pendingCancellations.append(PendingTransportCancellation(
                     operationID: operation.operationID,
-                    taskIdentifier: taskIdentifier,
+                    taskIdentifier: operation.taskIdentifier,
                     installationID: operation.installationID
                 ))
             case .deleteInstallation:

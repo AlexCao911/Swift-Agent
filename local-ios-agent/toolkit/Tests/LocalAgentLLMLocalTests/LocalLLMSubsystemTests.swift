@@ -25,7 +25,9 @@ struct LocalLLMSubsystemTests {
             remoteCatalog: nil,
             transport: transport,
             inference: BootstrapInference(),
-            llmStore: llmStore
+            llmStore: llmStore,
+            deviceCapabilities: capablePhone,
+            volume: BootstrapVolume(bytes: UInt64.max)
         )
 
         #expect(subsystem.hostProcessEpoch == epoch)
@@ -61,19 +63,99 @@ struct LocalLLMSubsystemTests {
         #expect(try await subsystem.inventory().isEmpty)
         _ = try await subsystem.diskState()
     }
+
+    @Test
+    func enqueueRejectsInsufficientDiskBeforeStartingTransport() async throws {
+        let fixture = try await makeSubsystem(volumeBytes: 0)
+        let manifest = try #require(
+            fixture.subsystem.compatibleModels().first
+        )
+
+        await #expect(throws: LLMFailure.self) {
+            _ = try await fixture.subsystem.enqueue(
+                modelRevision: manifest.id,
+                installationID: "no-space"
+            )
+        }
+
+        #expect(fixture.transport.startCount == 0)
+        #expect(try await fixture.subsystem.inventory().isEmpty)
+        #expect(try fixture.subsystem.store.totalReservedBytes() == 0)
+    }
+
+    @Test
+    func inventoryKeepsSupersededInstallationsManageable() async throws {
+        let fixture = try await makeSubsystem(volumeBytes: UInt64.max)
+        let revision = LocalModelRevisionID(modelID: "retired-model", revision: 9)
+        var summary = try fixture.subsystem.store.enqueueInstallation(
+            installationID: "retired-installation",
+            modelRevision: revision,
+            rootPath: "/retired"
+        )
+        summary = try fixture.subsystem.store.transitionInstallation(
+            installationID: summary.installationID,
+            expectedStateRevision: summary.stateRevision,
+            to: .downloading
+        )
+        summary = try fixture.subsystem.store.transitionInstallation(
+            installationID: summary.installationID,
+            expectedStateRevision: summary.stateRevision,
+            to: .verifying
+        )
+        _ = try fixture.subsystem.store.transitionInstallation(
+            installationID: summary.installationID,
+            expectedStateRevision: summary.stateRevision,
+            to: .installed
+        )
+
+        let inventory = try await fixture.subsystem.inventory()
+        let retired = try #require(inventory.first {
+            $0.installationID == "retired-installation"
+        })
+        #expect(retired.catalogStatus == .superseded)
+        #expect(retired.repairAction == .delete)
+    }
+
+    @Test
+    func incompatibleExistingInstallationsRemainManageableButNotSelectable() async throws {
+        let fixture = try await makeSubsystem(
+            volumeBytes: UInt64.max,
+            deviceCapabilities: LocalDeviceCapabilities(
+                osMajor: 99,
+                deviceClass: .phone,
+                physicalMemoryBytes: 1_024 * 1_024 * 1_024
+            )
+        )
+        let manifest = try #require(
+            fixture.subsystem.acceptedCatalog.verified.models.first?.value
+        )
+        _ = try fixture.subsystem.store.enqueueInstallation(
+            installationID: "incompatible-installation",
+            modelRevision: manifest.id,
+            rootPath: "/incompatible"
+        )
+
+        #expect(fixture.subsystem.compatibleModels().isEmpty)
+        #expect(try await fixture.subsystem.inventory().first?.catalogStatus == .incompatible)
+    }
 }
 
 private final class BootstrapTransport: ModelDownloadTransport, @unchecked Sendable {
     let events: AsyncStream<ModelDownloadTransportEvent>
     private let lock = NSLock()
     private var restoredCalls = 0
+    private var starts = 0
 
     init() {
         events = AsyncStream { _ in }
     }
 
     var restoredCallCount: Int { lock.withLock { restoredCalls } }
-    func start(_ request: ArtifactDownloadRequest, resumeData: Data?) async throws -> Int { 1 }
+    var startCount: Int { lock.withLock { starts } }
+    func start(_ request: ArtifactDownloadRequest, resumeData: Data?) async throws -> Int {
+        lock.withLock { starts += 1 }
+        return 1
+    }
     func restoredTasks() async throws -> [RestoredModelDownload] {
         lock.withLock { restoredCalls += 1 }
         return []
@@ -83,6 +165,38 @@ private final class BootstrapTransport: ModelDownloadTransport, @unchecked Senda
     func setBackgroundEventsCompletionHandler(
         _ handler: @escaping @Sendable () -> Void
     ) async {}
+}
+
+private let capablePhone = LocalDeviceCapabilities(
+    osMajor: 99,
+    deviceClass: .phone,
+    physicalMemoryBytes: 16 * 1_024 * 1_024 * 1_024
+)
+
+private struct BootstrapVolume: LocalVolumeCapacity {
+    let bytes: UInt64
+    func availableImportantUsageBytes(at root: URL) throws -> UInt64 { bytes }
+}
+
+private func makeSubsystem(
+    volumeBytes: UInt64,
+    deviceCapabilities: LocalDeviceCapabilities = capablePhone
+) async throws -> (subsystem: LocalLLMSubsystem, transport: BootstrapTransport) {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    let transport = BootstrapTransport()
+    let resources = try OfficialModelCatalogResources.loadBundled()
+    let subsystem = try await LocalLLMSubsystem.bootstrap(
+        appSupportRoot: root,
+        hostProcessEpoch: try HostProcessEpoch.generate(),
+        bundledCatalog: resources.envelope,
+        remoteCatalog: nil,
+        transport: transport,
+        inference: BootstrapInference(),
+        deviceCapabilities: deviceCapabilities,
+        volume: BootstrapVolume(bytes: volumeBytes)
+    )
+    return (subsystem, transport)
 }
 
 private struct BootstrapInference: CppInferenceAPI {

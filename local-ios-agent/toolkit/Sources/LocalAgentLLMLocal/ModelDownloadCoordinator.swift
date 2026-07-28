@@ -17,6 +17,8 @@ public actor ModelDownloadCoordinator {
     private let store: LocalModelStore
     private let paths: LocalModelPaths
     private let transport: any ModelDownloadTransport
+    private let installer: LocalModelInstaller?
+    private let manifestsByRevision: [LocalModelRevisionID: LocalModelRevisionManifest]
     private let cancellationCrashPointForTesting: ModelDownloadCancellationCrashPoint?
     public nonisolated let stateChanges: AsyncStream<Void>
     private let stateChangeContinuation: AsyncStream<Void>.Continuation
@@ -27,6 +29,8 @@ public actor ModelDownloadCoordinator {
         store: LocalModelStore,
         paths: LocalModelPaths,
         transport: any ModelDownloadTransport,
+        installer: LocalModelInstaller? = nil,
+        manifestsByRevision: [LocalModelRevisionID: LocalModelRevisionManifest] = [:],
         cancellationCrashPointForTesting: ModelDownloadCancellationCrashPoint? = nil
     ) {
         let stateSignal = AsyncStream<Void>.makeStream(
@@ -37,6 +41,8 @@ public actor ModelDownloadCoordinator {
         self.store = store
         self.paths = paths
         self.transport = transport
+        self.installer = installer
+        self.manifestsByRevision = manifestsByRevision
         self.cancellationCrashPointForTesting = cancellationCrashPointForTesting
         let events = transport.events
         Task { [weak self] in
@@ -156,21 +162,61 @@ public actor ModelDownloadCoordinator {
         stateChangeContinuation.yield()
     }
 
+    public func retry(
+        installationID: String,
+        manifest: LocalModelRevisionManifest
+    ) async throws {
+        guard let installation = try store.installationRecord(installationID: installationID),
+              installation.state == .failed,
+              installation.modelRevision == manifest.id
+        else {
+            throw downloadFailure("download.not_failed", "installation is not failed")
+        }
+        let staging = try paths.stagingInstallation(installationID)
+        if FileManager.default.fileExists(atPath: staging.path) {
+            try FileManager.default.removeItem(at: staging)
+        }
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try store.retryInstallation(installationID: installationID)
+        try await pump()
+        stateChangeContinuation.yield()
+    }
+
     public func cancel(installationID: String) async throws {
-        guard let active, active.installationID == installationID else {
-            throw downloadFailure("download.not_active", "installation has no active artifact transfer")
+        let taskIdentifier: Int?
+        if let active, active.installationID == installationID {
+            taskIdentifier = active.taskIdentifier
+        } else {
+            guard let installation = try store.installationRecord(
+                installationID: installationID
+            ), [.queued, .paused, .verifying, .failed].contains(installation.state)
+            else {
+                throw downloadFailure(
+                    "download.not_cancellable",
+                    "installation is not in a cancellable state"
+                )
+            }
+            let hasActiveTask = try store.artifactRecords(installationID: installationID)
+                .contains { $0.taskIdentifier != nil }
+            guard !hasActiveTask else {
+                throw downloadFailure(
+                    "download.not_active",
+                    "installation transfer ownership is inconsistent"
+                )
+            }
+            taskIdentifier = nil
         }
         let operation = try store.createFilesystemOperation(
             operationID: "cancel-\(UUID().uuidString.lowercased())",
             installationID: installationID,
             kind: .cancelDownload,
-            taskIdentifier: active.taskIdentifier
+            taskIdentifier: taskIdentifier
         )
         try injectCancellationCrash(.afterIntentPersisted)
         try await convergeCancellation(
             PendingTransportCancellation(
                 operationID: operation.operationID,
-                taskIdentifier: active.taskIdentifier,
+                taskIdentifier: taskIdentifier,
                 installationID: installationID
             ),
             injectCrash: true
@@ -195,24 +241,79 @@ public actor ModelDownloadCoordinator {
                 break
             case .paused:
                 return
-            case .failed, .verifying, .installed, .deleting:
+            case .verifying:
+                try finishVerification(installation: installation, queueEntry: entry)
+                continue
+            case .failed, .installed, .deleting:
                 continue
             }
             let artifacts = try store.artifactRecords(installationID: installation.installationID)
             if let artifact = artifacts.first(where: { $0.receivedBytes < $0.expectedBytes }) {
-                try await start(artifact)
-                return
+                do {
+                    try await start(artifact)
+                    return
+                } catch {
+                    _ = try store.transitionInstallation(
+                        installationID: installation.installationID,
+                        expectedStateRevision: installation.stateRevision,
+                        to: .failed,
+                        failureCode: "download.network_failed"
+                    )
+                    try store.releaseDiskReservation(
+                        installationID: installation.installationID
+                    )
+                    continue
+                }
             }
-            _ = try store.transitionInstallation(
+            installation = try store.transitionInstallation(
                 installationID: installation.installationID,
                 expectedStateRevision: installation.stateRevision,
                 to: .verifying
             )
-            try store.removeQueuedInstallation(
-                installationID: entry.installationID,
-                expectedPosition: entry.position
-            )
+            try finishVerification(installation: installation, queueEntry: entry)
         }
+    }
+
+    private func finishVerification(
+        installation: LocalInstallationSummary,
+        queueEntry: LocalDownloadQueueEntry
+    ) throws {
+        guard let installer else {
+            try store.removeQueuedInstallation(
+                installationID: queueEntry.installationID,
+                expectedPosition: queueEntry.position
+            )
+            return
+        }
+        guard let manifest = manifestsByRevision[installation.modelRevision] else {
+            _ = try store.transitionInstallation(
+                installationID: installation.installationID,
+                expectedStateRevision: installation.stateRevision,
+                to: .failed,
+                failureCode: "download.catalog_revision_missing"
+            )
+            try store.releaseDiskReservation(installationID: installation.installationID)
+            try store.removeQueuedInstallation(
+                installationID: queueEntry.installationID,
+                expectedPosition: queueEntry.position
+            )
+            return
+        }
+        do {
+            try installer.verifyAndInstall(
+                installationID: installation.installationID,
+                manifest: manifest
+            )
+        } catch {
+            let state = try store.installationSummary(
+                installationID: installation.installationID
+            )?.state
+            guard state != .verifying else { throw error }
+        }
+        try store.removeQueuedInstallation(
+            installationID: queueEntry.installationID,
+            expectedPosition: queueEntry.position
+        )
     }
 
     private func start(_ artifact: LocalArtifactRecord) async throws {
@@ -402,6 +503,7 @@ public actor ModelDownloadCoordinator {
                 to: .failed,
                 failureCode: "download.network_failed"
             )
+            try store.releaseDiskReservation(installationID: installation.installationID)
         }
         if active?.taskIdentifier == artifact.taskIdentifier {
             active = nil
@@ -428,7 +530,9 @@ public actor ModelDownloadCoordinator {
         _ cancellation: PendingTransportCancellation,
         injectCrash: Bool
     ) async throws {
-        await transport.cancel(taskIdentifier: cancellation.taskIdentifier)
+        if let taskIdentifier = cancellation.taskIdentifier {
+            await transport.cancel(taskIdentifier: taskIdentifier)
+        }
         if injectCrash { try injectCancellationCrash(.afterTransportCancelled) }
         let staging = try paths.stagingInstallation(cancellation.installationID)
         if FileManager.default.fileExists(atPath: staging.path) {
@@ -438,7 +542,10 @@ public actor ModelDownloadCoordinator {
         guard let operation = try store.unfinishedFilesystemOperations().first(where: {
             $0.operationID == cancellation.operationID
         }) else {
-            if active?.taskIdentifier == cancellation.taskIdentifier { active = nil }
+            if let taskIdentifier = cancellation.taskIdentifier,
+               active?.taskIdentifier == taskIdentifier {
+                active = nil
+            }
             return
         }
         if operation.state == .pending {
@@ -449,7 +556,10 @@ public actor ModelDownloadCoordinator {
             )
         }
         try store.completeDownloadCancellation(operationID: operation.operationID)
-        if active?.taskIdentifier == cancellation.taskIdentifier { active = nil }
+        if let taskIdentifier = cancellation.taskIdentifier,
+           active?.taskIdentifier == taskIdentifier {
+            active = nil
+        }
         try await pump()
     }
 

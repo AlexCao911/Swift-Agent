@@ -324,6 +324,84 @@ public final class LocalModelStore: @unchecked Sendable {
         }
     }
 
+    package func retryInstallation(installationID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                let installation = try requiredInstallationUnlocked(installationID)
+                guard installation.state == .failed else {
+                    throw storeFailure(
+                        "download.not_failed",
+                        "only a failed installation can be retried"
+                    )
+                }
+                let nextRevision = try incrementStateRevision(installation.stateRevision)
+                let changed = try database.executeChanges(
+                    """
+                    UPDATE local_installations
+                    SET state = 'queued', state_revision = ?1, failure_code = NULL
+                    WHERE installation_id = ?2 AND state = 'failed' AND state_revision = ?3
+                    """,
+                    bindings: [
+                        .integer(try sqliteInteger(nextRevision)),
+                        .text(installationID),
+                        .integer(try sqliteInteger(installation.stateRevision)),
+                    ]
+                )
+                guard changed == 1 else { throw staleState() }
+                try database.execute(
+                    """
+                    UPDATE local_artifacts
+                    SET received_bytes = '0', resume_data = NULL, etag = NULL,
+                        last_modified = NULL, task_identifier = NULL,
+                        state_revision = state_revision + 1
+                    WHERE installation_id = ?1
+                    """,
+                    bindings: [.text(installationID)]
+                )
+                let nextPosition = try database.queryRows(
+                    "SELECT COALESCE(MAX(queue_position), -1) + 1 AS next_position FROM local_download_queue"
+                ).first?.integer("next_position") ?? 0
+                try database.execute(
+                    """
+                    INSERT INTO local_download_queue(installation_id, queue_position, enqueued_at)
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(installation_id) DO NOTHING
+                    """,
+                    bindings: [
+                        .text(installationID), .integer(nextPosition),
+                        .text(Self.timestamp(Date())),
+                    ]
+                )
+            }
+        }
+    }
+
+    package func discardQueuedInstallation(installationID: String) throws {
+        try lock.withLock {
+            try database.transaction {
+                let installation = try requiredInstallationUnlocked(installationID)
+                guard installation.state == .queued else {
+                    throw storeFailure(
+                        "download.state_transition_invalid",
+                        "only a queued installation can be discarded before download"
+                    )
+                }
+                let activeTasks = try database.queryRows(
+                    """
+                    SELECT COUNT(*) AS count FROM local_artifacts
+                    WHERE installation_id = ?1 AND task_identifier IS NOT NULL
+                    """,
+                    bindings: [.text(installationID)]
+                ).first?.integer("count") ?? 0
+                guard activeTasks == 0 else { throw staleState() }
+                try database.execute(
+                    "DELETE FROM local_installations WHERE installation_id = ?1",
+                    bindings: [.text(installationID)]
+                )
+            }
+        }
+    }
+
     package func completeDeletion(
         installationID: String,
         expectedStateRevision: UInt64
@@ -785,6 +863,15 @@ public final class LocalModelStore: @unchecked Sendable {
         }
     }
 
+    package func releaseDiskReservation(installationID: String) throws {
+        try lock.withLock {
+            try database.execute(
+                "DELETE FROM local_disk_reservations WHERE installation_id = ?1",
+                bindings: [.text(installationID)]
+            )
+        }
+    }
+
     package func createFilesystemOperation(
         operationID: String,
         installationID: String,
@@ -920,6 +1007,10 @@ public final class LocalModelStore: @unchecked Sendable {
                     ]
                 )
                 guard installationChanged == 1 else { throw staleState() }
+                try database.execute(
+                    "DELETE FROM local_disk_reservations WHERE installation_id = ?1",
+                    bindings: [.text(installationID)]
+                )
                 let operationChanged = try database.executeChanges(
                     "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state = 'filesystem_applied'",
                     bindings: [.text(operationID)]
@@ -958,6 +1049,10 @@ public final class LocalModelStore: @unchecked Sendable {
                     ]
                 )
                 guard installationChanged == 1 else { throw staleState() }
+                try database.execute(
+                    "DELETE FROM local_disk_reservations WHERE installation_id = ?1",
+                    bindings: [.text(installationID)]
+                )
                 let operationChanged = try database.executeChanges(
                     "UPDATE local_filesystem_operations SET state = 'committed' WHERE operation_id = ?1 AND state != 'committed'",
                     bindings: [.text(operationID)]

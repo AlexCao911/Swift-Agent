@@ -39,6 +39,56 @@ struct LegacyLLMMigrationCoordinatorTests {
         #expect(try await coordinator.pendingActions() == expected)
     }
 
+    @Test("pending presentation joins Rust action with its exact source revision")
+    func pendingItemsCarryExactSourceIdentity() async throws {
+        let action = try JSONDecoder().decode(
+            LegacyMigrationActionDTO.self,
+            from: """
+            {
+              "migration_subject":"legacy:7",
+              "source_digest":"source-digest",
+              "display_name":"Legacy",
+              "requirements":{
+                "slot_id":"slot.model.primary",
+                "capabilities":[],
+                "input_modalities":["text"],
+                "context_budget":"4096",
+                "streaming_required":true,
+                "tool_calling_mode":"allowed"
+              },
+              "redacted_model_hint":"gpt-4.1",
+              "state":"pending"
+            }
+            """.data(using: .utf8)!
+        )
+        let rust = RecordingLegacyMigrationClient(
+            records: [
+                LegacyProfileMigrationRecordDTO(
+                    sourceProfileId: "legacy",
+                    sourceRevision: 7,
+                    sourceDigest: "source-digest",
+                    state: .pending(nil)
+                ),
+            ],
+            actions: [action]
+        )
+        let coordinator = LegacyLLMMigrationCoordinator(
+            rust: rust,
+            targets: StaticAgentLLMTargetCatalog(options: []),
+            bindingSaga: AgentHostBindingSaga(store: .inMemory())
+        )
+
+        #expect(try await coordinator.pendingItems() == [
+            LegacyLLMMigrationItem(
+                profileID: "legacy",
+                revision: 7,
+                sourceDigest: "source-digest",
+                displayName: "Legacy",
+                redactedModelHint: "gpt-4.1"
+            ),
+        ])
+    }
+
     @Test("legacy model hint never selects a target automatically")
     func migrationRequiresExplicitExactTarget() async throws {
         let rust = RecordingLegacyMigrationClient()

@@ -15,6 +15,7 @@ struct ModelCenterView: View {
                         .foregroundStyle(.red)
                 }
             }
+            migrationSection
             diskSection
             localSection
             cloudSection
@@ -39,6 +40,60 @@ struct ModelCenterView: View {
                 ) {
                     editor = nil
                     Task { await viewModel.reload() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var migrationSection: some View {
+        if !viewModel.pendingMigrations.isEmpty || !viewModel.readinessIssues.isEmpty {
+            Section("Agent Migration") {
+                ForEach(viewModel.readinessIssues, id: \.self) { issue in
+                    Label(issue, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+                ForEach(viewModel.pendingMigrations) { migration in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(migration.displayName).font(.headline)
+                        if let hint = migration.redactedModelHint {
+                            Text("Previous model: \(hint)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Picker(
+                            "Replacement target",
+                            selection: Binding(
+                                get: {
+                                    viewModel.migrationTargetSelections[
+                                        migration.sourceDigest
+                                    ] ?? ""
+                                },
+                                set: {
+                                    viewModel.migrationTargetSelections[
+                                        migration.sourceDigest
+                                    ] = $0
+                                }
+                            )
+                        ) {
+                            Text("Choose a target").tag("")
+                            ForEach(
+                                Array(viewModel.migrationTargets.enumerated()),
+                                id: \.offset
+                            ) { _, target in
+                                Text(target.modelID)
+                                    .tag(viewModel.migrationTargetKey(target))
+                            }
+                        }
+                        Button("Migrate") {
+                            perform { try await viewModel.migrate(migration) }
+                        }
+                        .disabled(
+                            (viewModel.migrationTargetSelections[
+                                migration.sourceDigest
+                            ] ?? "").isEmpty
+                        )
+                    }
                 }
             }
         }
@@ -71,6 +126,13 @@ struct ModelCenterView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let installation = model.installation {
+                        if installation.catalogStatus != .current {
+                            Text(installation.catalogStatus == .superseded
+                                ? "No longer in the download catalog"
+                                : "Not compatible with this device")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Text(installation.state.rawValue.capitalized)
                             .font(.caption)
                         if installation.expectedBytes > 0,
@@ -99,7 +161,7 @@ struct ModelCenterView: View {
     ) -> some View {
         HStack {
             switch installation.state {
-            case .downloading, .queued, .verifying:
+            case .downloading:
                 Button("Pause") {
                     perform {
                         try await viewModel.pauseLocalModel(
@@ -114,7 +176,15 @@ struct ModelCenterView: View {
                         )
                     }
                 }
-            case .paused, .failed:
+            case .queued, .verifying:
+                Button("Cancel", role: .destructive) {
+                    perform {
+                        try await viewModel.cancelLocalModel(
+                            installationID: installation.installationID
+                        )
+                    }
+                }
+            case .paused:
                 Button("Resume") {
                     perform {
                         try await viewModel.resumeLocalModel(
@@ -122,16 +192,35 @@ struct ModelCenterView: View {
                         )
                     }
                 }
-                Button("Delete", role: .destructive) {
+                Button("Cancel", role: .destructive) {
                     perform {
-                        try await viewModel.deleteLocalModel(
+                        try await viewModel.cancelLocalModel(
+                            installationID: installation.installationID
+                        )
+                    }
+                }
+            case .failed:
+                if installation.catalogStatus == .current {
+                    Button("Retry") {
+                        perform {
+                            try await viewModel.resumeLocalModel(
+                                installationID: installation.installationID
+                            )
+                        }
+                    }
+                }
+                Button("Remove", role: .destructive) {
+                    perform {
+                        try await viewModel.cancelLocalModel(
                             installationID: installation.installationID
                         )
                     }
                 }
             case .installed:
-                Button("Create Target") {
-                    perform { try await viewModel.createTarget(modelID: model.id) }
+                if installation.catalogStatus == .current {
+                    Button("Create Target") {
+                        perform { try await viewModel.createTarget(modelID: model.id) }
+                    }
                 }
                 Button("Delete", role: .destructive) {
                     perform {

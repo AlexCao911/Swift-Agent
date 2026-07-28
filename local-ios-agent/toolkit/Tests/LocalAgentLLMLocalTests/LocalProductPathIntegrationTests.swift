@@ -27,10 +27,32 @@ struct LocalProductPathIntegrationTests {
         #expect(accepted.verified.models[fixture.manifest.id] == fixture.manifest)
 
         let transport = IntegrationDownloadTransport(bytesByArtifactID: fixture.artifactData)
+        let inference = IntegrationInference(manifest: fixture.manifest)
+        _ = try fixture.store.enqueueInstallation(
+            installationID: fixture.installationID,
+            modelRevision: fixture.manifest.id,
+            rootPath: try fixture.paths.finalInstallation(fixture.installationID).path
+        )
+        _ = try await LocalDiskPolicy(
+            store: fixture.store,
+            root: fixture.paths.root
+        ).preflight(
+            installationID: fixture.installationID,
+            manifest: fixture.manifest,
+            completedArtifactBytes: 0,
+            volume: IntegrationVolume(bytes: UInt64.max)
+        )
         let downloads = ModelDownloadCoordinator(
             store: fixture.store,
             paths: fixture.paths,
-            transport: transport
+            transport: transport,
+            installer: LocalModelInstaller(
+                store: fixture.store,
+                paths: fixture.paths,
+                validator: inference,
+                backupExclusion: fixture.backup
+            ),
+            manifestsByRevision: [fixture.manifest.id: fixture.manifest]
         )
         try await downloads.enqueue(
             installationID: fixture.installationID,
@@ -48,7 +70,7 @@ struct LocalProductPathIntegrationTests {
         var completedStartCount = 1
         while try fixture.store.installationSummary(
             installationID: fixture.installationID
-        )?.state != .verifying {
+        )?.state != .installed {
             let previousStartCount = completedStartCount
             try await eventuallyPhaseTwo { transport.starts.count > previousStartCount }
             let start = try #require(transport.starts.last)
@@ -57,16 +79,7 @@ struct LocalProductPathIntegrationTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        let inference = IntegrationInference(manifest: fixture.manifest)
-        try LocalModelInstaller(
-            store: fixture.store,
-            paths: fixture.paths,
-            validator: inference,
-            backupExclusion: fixture.backup
-        ).verifyAndInstall(
-            installationID: fixture.installationID,
-            manifest: fixture.manifest
-        )
+        #expect(try fixture.store.totalReservedBytes() == 0)
 
         let reopened = try LocalModelStore(
             fileURL: fixture.root.appending(path: "local-models.sqlite"),
@@ -319,7 +332,7 @@ private final class IntegrationInference:
             capabilities: CppEngineCapabilities(
                 supportedModelFormats: [manifest.modelFormat],
                 supportsVision: false,
-                supportsNativeToolCalling: false,
+                supportsNativeToolCalling: true,
                 supportsStreaming: true,
                 supportsCancellation: true,
                 supportsTokenUsage: false,

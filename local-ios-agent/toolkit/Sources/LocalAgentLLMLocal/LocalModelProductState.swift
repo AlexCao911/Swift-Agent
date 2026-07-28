@@ -8,6 +8,12 @@ public enum LocalModelRepairAction: String, Equatable, Sendable {
     case delete
 }
 
+public enum LocalModelCatalogStatus: String, Equatable, Sendable {
+    case current
+    case incompatible
+    case superseded
+}
+
 public struct LocalModelProductState: Equatable, Identifiable, Sendable {
     public let installationID: String
     public let modelRevision: LocalModelRevisionID
@@ -17,6 +23,7 @@ public struct LocalModelProductState: Equatable, Identifiable, Sendable {
     public let installedBytes: UInt64
     public let requiredBytes: UInt64
     public let repairAction: LocalModelRepairAction
+    public let catalogStatus: LocalModelCatalogStatus
 
     public init(
         installationID: String,
@@ -26,7 +33,8 @@ public struct LocalModelProductState: Equatable, Identifiable, Sendable {
         expectedBytes: UInt64,
         installedBytes: UInt64,
         requiredBytes: UInt64,
-        repairAction: LocalModelRepairAction
+        repairAction: LocalModelRepairAction,
+        catalogStatus: LocalModelCatalogStatus = .current
     ) {
         self.installationID = installationID
         self.modelRevision = modelRevision
@@ -36,6 +44,7 @@ public struct LocalModelProductState: Equatable, Identifiable, Sendable {
         self.installedBytes = installedBytes
         self.requiredBytes = requiredBytes
         self.repairAction = repairAction
+        self.catalogStatus = catalogStatus
     }
 
     public var id: String { installationID }

@@ -97,7 +97,7 @@ actor AppModelCenterClient: ModelCenterClient {
 
     func snapshot() async throws -> ModelCenterSnapshot {
         let installations = try await local.inventory()
-        let localModels = local.acceptedCatalog.verified.models.values
+        var localModels = local.compatibleModels()
             .map { manifest in
                 LocalModelCenterState(
                     modelRevision: manifest.id,
@@ -111,10 +111,28 @@ actor AppModelCenterClient: ModelCenterClient {
                         .last
                 )
             }
-            .sorted {
+        let representedInstallations = Set(localModels.compactMap {
+            $0.installation?.installationID
+        })
+        for installation in installations where
+            !representedInstallations.contains(installation.installationID) {
+            let manifest = local.acceptedCatalog.verified.models[installation.modelRevision]
+            localModels.append(LocalModelCenterState(
+                modelRevision: installation.modelRevision,
+                displayName: manifest?.displayName
+                    ?? "\(installation.modelRevision.modelID) (Previously Installed)",
+                requiredBytes: installation.requiredBytes,
+                parameterSchema: manifest?.parameterSchema
+                    ?? LLMParameterSchema(definitions: []),
+                parameterDefaults: manifest?.parameterDefaults
+                    ?? GenerationConfiguration(),
+                installation: installation
+            ))
+        }
+        localModels.sort {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
                     == .orderedAscending
-            }
+        }
         let providers = try await cloud.providerInventory()
         var cloudModels: [ModelCenterCloudModelState] = []
         for provider in providers {
@@ -218,6 +236,7 @@ extension AppModelCenterClient: AgentLLMTargetCatalog {
                 state.localModels.first {
                     $0.installation?.installationID == installationID
                         && $0.installation?.state == .installed
+                        && $0.installation?.catalogStatus == .current
                         && $0.modelRevision.modelID == target.modelID
                 }?.parameterSchema
             case let .cloud(profileID, revision):

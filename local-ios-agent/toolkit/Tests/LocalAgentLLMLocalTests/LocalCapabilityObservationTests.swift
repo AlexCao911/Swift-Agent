@@ -13,7 +13,7 @@ struct LocalCapabilityObservationTests {
             keyRing: resources.keyRing
         )
         let model = try #require(catalog.models[
-            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
         ])
         let observations = try LocalCapabilityObservationFactory.observations(
             for: model.id,

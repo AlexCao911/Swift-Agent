@@ -12,19 +12,30 @@ final class ModelCenterViewModel {
     private(set) var selectedModelID: String?
     var targetDefaults = GenerationConfiguration()
     private(set) var parameterNotice: String?
+    private(set) var pendingMigrations: [LegacyLLMMigrationItem] = []
+    private(set) var readinessIssues: [String]
+    var migrationTargetSelections: [String: String] = [:]
     var errorMessage: String?
     var showingProviderEditor = false
 
     private let client: (any ModelCenterClient)?
+    private let migration: (any LegacyLLMMigrationPresenting)?
 
-    init(client: (any ModelCenterClient)? = nil) {
+    init(
+        client: (any ModelCenterClient)? = nil,
+        migration: (any LegacyLLMMigrationPresenting)? = nil,
+        readinessIssues: [String] = []
+    ) {
         self.client = client
+        self.migration = migration
+        self.readinessIssues = readinessIssues
     }
 
     func reload() async {
         guard let client else { return }
         do {
             snapshot = try await client.snapshot()
+            pendingMigrations = try await migration?.pendingItems() ?? []
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -59,7 +70,8 @@ final class ModelCenterViewModel {
         let target: LLMTargetRevision
         if let local = snapshot.localModels.first(where: { $0.id == modelID }),
            let installation = local.installation,
-           installation.state == .installed {
+           installation.state == .installed,
+           installation.catalogStatus == .current {
             let defaults = try LLMParameterSystem.resolve(
                 modelDefaults: local.parameterDefaults,
                 targetDefaults: targetDefaults,
@@ -113,6 +125,35 @@ final class ModelCenterViewModel {
 
     func deleteLocalModel(installationID: String) async throws {
         try await client?.deleteLocalModel(installationID: installationID)
+    }
+
+    var migrationTargets: [LLMTargetRevision] {
+        AppModelCenterClient.availableTargetOptions(in: snapshot)
+            .map(\.target)
+            .sorted { migrationTargetKey($0) < migrationTargetKey($1) }
+    }
+
+    func migrate(_ item: LegacyLLMMigrationItem) async throws {
+        guard let migration else { return }
+        let selectedKey = migrationTargetSelections[item.sourceDigest]
+        let target = migrationTargets.first {
+            migrationTargetKey($0) == selectedKey
+        }
+        _ = try await migration.migrate(
+            profileID: item.profileID,
+            revision: item.revision,
+            selectedTarget: target?.reference
+        )
+        readinessIssues.removeAll {
+            $0 == "migration.target_selection_required"
+                || $0 == "migration.binding_incomplete"
+        }
+        migrationTargetSelections[item.sourceDigest] = nil
+        await reload()
+    }
+
+    func migrationTargetKey(_ target: LLMTargetRevision) -> String {
+        "\(target.targetID.rawValue):\(target.revision)"
     }
 
     func validate(_ model: ModelCenterCloudModelState) async throws {

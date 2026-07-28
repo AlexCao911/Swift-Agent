@@ -10,6 +10,9 @@ public struct LocalLLMSubsystem: Sendable {
     package let store: LocalModelStore
     package let bindingStore: LLMStore
     private let paths: LocalModelPaths
+    private let diskPolicy: LocalDiskPolicy
+    private let volume: any LocalVolumeCapacity
+    private let compatibilityPolicy: LocalDeviceCompatibilityPolicy
 
     private init(
         hostProcessEpoch: HostProcessEpoch,
@@ -18,7 +21,9 @@ public struct LocalLLMSubsystem: Sendable {
         acceptedCatalog: AcceptedLocalModelCatalog,
         store: LocalModelStore,
         bindingStore: LLMStore,
-        paths: LocalModelPaths
+        paths: LocalModelPaths,
+        volume: any LocalVolumeCapacity,
+        compatibilityPolicy: LocalDeviceCompatibilityPolicy
     ) {
         self.hostProcessEpoch = hostProcessEpoch
         self.downloads = downloads
@@ -27,6 +32,9 @@ public struct LocalLLMSubsystem: Sendable {
         self.store = store
         self.bindingStore = bindingStore
         self.paths = paths
+        diskPolicy = LocalDiskPolicy(store: store, root: paths.root)
+        self.volume = volume
+        self.compatibilityPolicy = compatibilityPolicy
     }
 
     public var downloadStateChanges: AsyncStream<Void> {
@@ -35,18 +43,20 @@ public struct LocalLLMSubsystem: Sendable {
 
     public func inventory() async throws -> [LocalModelProductState] {
         try store.installationRecords().map { installation in
-            guard let manifest = acceptedCatalog.verified.models[installation.modelRevision] else {
-                throw LLMFailure(
-                    code: "download.catalog_revision_missing",
-                    message: "installed model revision is absent from the accepted catalog",
-                    retryable: false
-                )
-            }
+            let manifest = acceptedCatalog.verified.models[installation.modelRevision]
             let artifacts = try store.artifactRecords(
                 installationID: installation.installationID
             )
             let receivedBytes = try sum(artifacts.map(\.receivedBytes))
             let expectedBytes = try sum(artifacts.map(\.expectedBytes))
+            let requiredBytes = manifest?.installedByteSize ?? expectedBytes
+            let catalogStatus: LocalModelCatalogStatus
+            if let manifest {
+                catalogStatus = compatibilityPolicy.compatibility(of: manifest)
+                    == .compatible ? .current : .incompatible
+            } else {
+                catalogStatus = .superseded
+            }
             return LocalModelProductState(
                 installationID: installation.installationID,
                 modelRevision: installation.modelRevision,
@@ -54,10 +64,17 @@ public struct LocalLLMSubsystem: Sendable {
                 receivedBytes: receivedBytes,
                 expectedBytes: expectedBytes,
                 installedBytes: installation.state == .installed
-                    ? manifest.installedByteSize : 0,
-                requiredBytes: manifest.installedByteSize,
-                repairAction: repairAction(for: installation.state)
+                    ? requiredBytes : 0,
+                requiredBytes: requiredBytes,
+                repairAction: repairAction(for: installation.state),
+                catalogStatus: catalogStatus
             )
+        }
+    }
+
+    public func compatibleModels() -> [LocalModelRevisionManifest] {
+        acceptedCatalog.verified.models.values.filter {
+            compatibilityPolicy.compatibility(of: $0) == .compatible
         }
     }
 
@@ -73,10 +90,33 @@ public struct LocalLLMSubsystem: Sendable {
                 retryable: false
             )
         }
-        try await downloads.enqueue(
-            installationID: installationID,
-            manifest: manifest
-        )
+        try compatibilityPolicy.requireCompatibility(of: manifest)
+        let existed = try store.installationRecord(installationID: installationID) != nil
+        if !existed {
+            _ = try store.enqueueInstallation(
+                installationID: installationID,
+                modelRevision: manifest.id,
+                rootPath: try paths.finalInstallation(installationID).path
+            )
+        }
+        do {
+            _ = try await diskPolicy.preflight(
+                installationID: installationID,
+                manifest: manifest,
+                completedArtifactBytes: 0,
+                volume: volume
+            )
+            try await downloads.enqueue(
+                installationID: installationID,
+                manifest: manifest
+            )
+        } catch {
+            if !existed,
+               try store.installationSummary(installationID: installationID)?.state == .queued {
+                try? store.discardQueuedInstallation(installationID: installationID)
+            }
+            throw error
+        }
         return installationID
     }
 
@@ -85,7 +125,40 @@ public struct LocalLLMSubsystem: Sendable {
     }
 
     public func resume(installationID: String) async throws {
-        try await downloads.resume(installationID: installationID)
+        guard let installation = try store.installationRecord(installationID: installationID) else {
+            throw LLMFailure(
+                code: "download.installation_not_found",
+                message: "installation is missing",
+                retryable: false
+            )
+        }
+        if installation.state == .failed {
+            guard let manifest = acceptedCatalog.verified.models[installation.modelRevision] else {
+                throw LLMFailure(
+                    code: "download.catalog_revision_missing",
+                    message: "superseded model revisions cannot be downloaded again",
+                    retryable: false
+                )
+            }
+            try compatibilityPolicy.requireCompatibility(of: manifest)
+            _ = try await diskPolicy.preflight(
+                installationID: installationID,
+                manifest: manifest,
+                completedArtifactBytes: 0,
+                volume: volume
+            )
+            do {
+                try await downloads.retry(
+                    installationID: installationID,
+                    manifest: manifest
+                )
+            } catch {
+                try? store.releaseDiskReservation(installationID: installationID)
+                throw error
+            }
+        } else {
+            try await downloads.resume(installationID: installationID)
+        }
     }
 
     public func cancel(installationID: String) async throws {
@@ -100,11 +173,17 @@ public struct LocalLLMSubsystem: Sendable {
     public func diskState() async throws -> LocalDiskProductState {
         let installedBytes = try sum(try store.installationRecords().compactMap {
             guard $0.state == .installed else { return nil }
-            return acceptedCatalog.verified.models[$0.modelRevision]?.installedByteSize
+            if let bytes = acceptedCatalog.verified.models[$0.modelRevision]?.installedByteSize {
+                return bytes
+            }
+            return try sum(try store.artifactRecords(
+                installationID: $0.installationID
+            ).map(\.expectedBytes))
         })
         return LocalDiskProductState(
-            availableImportantUsageBytes: try SystemLocalVolumeCapacity()
-                .availableImportantUsageBytes(at: paths.root),
+            availableImportantUsageBytes: try volume.availableImportantUsageBytes(
+                at: paths.root
+            ),
             reservedBytes: try store.totalReservedBytes(),
             installedBytes: installedBytes
         )
@@ -124,7 +203,9 @@ public struct LocalLLMSubsystem: Sendable {
             remoteCatalog: remoteCatalog,
             transport: URLSessionModelDownloadTransport(),
             inference: CppInferenceClient.live,
-            llmStore: llmStore
+            llmStore: llmStore,
+            deviceCapabilities: await LocalDeviceCapabilities.current(),
+            volume: SystemLocalVolumeCapacity()
         )
     }
 
@@ -135,7 +216,9 @@ public struct LocalLLMSubsystem: Sendable {
         remoteCatalog: Data?,
         transport: any ModelDownloadTransport,
         inference: any CppInferenceAPI,
-        llmStore: LLMStore? = nil
+        llmStore: LLMStore? = nil,
+        deviceCapabilities: LocalDeviceCapabilities? = nil,
+        volume: any LocalVolumeCapacity = SystemLocalVolumeCapacity()
     ) async throws -> LocalLLMSubsystem {
         let store = try LocalModelStore.default(appSupportRoot: appSupportRoot)
         let paths = try LocalModelPaths(
@@ -146,12 +229,19 @@ public struct LocalLLMSubsystem: Sendable {
             bundled: bundledCatalog,
             remote: remoteCatalog
         )
+        let validator = InferenceModelValidator(inference: inference)
+        let installer = LocalModelInstaller(
+            store: store,
+            paths: paths,
+            validator: validator
+        )
         let downloads = ModelDownloadCoordinator(
             store: store,
             paths: paths,
-            transport: transport
+            transport: transport,
+            installer: installer,
+            manifestsByRevision: accepted.verified.models
         )
-        let validator = InferenceModelValidator(inference: inference)
         let reconciler = LocalModelReconciler(
             store: store,
             paths: paths,
@@ -177,6 +267,12 @@ public struct LocalLLMSubsystem: Sendable {
                 forInfoDictionaryKey: "CFBundleVersion"
             ) as? String ?? "unknown"
         )
+        let resolvedDeviceCapabilities: LocalDeviceCapabilities
+        if let deviceCapabilities {
+            resolvedDeviceCapabilities = deviceCapabilities
+        } else {
+            resolvedDeviceCapabilities = await LocalDeviceCapabilities.current()
+        }
         return LocalLLMSubsystem(
             hostProcessEpoch: hostProcessEpoch,
             downloads: downloads,
@@ -184,7 +280,11 @@ public struct LocalLLMSubsystem: Sendable {
             acceptedCatalog: accepted,
             store: store,
             bindingStore: bindingStore,
-            paths: paths
+            paths: paths,
+            volume: volume,
+            compatibilityPolicy: LocalDeviceCompatibilityPolicy(
+                device: resolvedDeviceCapabilities
+            )
         )
     }
 }

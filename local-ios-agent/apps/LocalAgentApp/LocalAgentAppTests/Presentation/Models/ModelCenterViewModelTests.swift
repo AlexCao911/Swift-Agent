@@ -1,4 +1,5 @@
 import Foundation
+import LocalAgentBridge
 import LocalAgentLLMCloud
 import LocalAgentLLMContracts
 import LocalAgentLLMCore
@@ -53,6 +54,72 @@ struct ModelCenterViewModelTests {
             "cancel:installation-1",
             "delete:installation-1",
         ])
+    }
+
+    @Test
+    func pendingLegacyProfileCanSelectAnExactReadyTargetAndMigrate() async throws {
+        let client = ModelCenterClientSpy(snapshot: .fixture)
+        let migration = LegacyMigrationPresentingSpy()
+        let viewModel = ModelCenterViewModel(
+            client: client,
+            migration: migration,
+            readinessIssues: ["migration.target_selection_required"]
+        )
+        await viewModel.reload()
+        let item = try #require(viewModel.pendingMigrations.first)
+        let target = try #require(viewModel.migrationTargets.first)
+        viewModel.migrationTargetSelections[item.sourceDigest] =
+            viewModel.migrationTargetKey(target)
+
+        try await viewModel.migrate(item)
+
+        #expect(await migration.selectedTarget == target.reference)
+        #expect(!viewModel.readinessIssues.contains(
+            "migration.target_selection_required"
+        ))
+    }
+
+    @Test
+    func incompatibleInstalledModelCannotBecomeATarget() async {
+        let client = ModelCenterClientSpy(snapshot: .incompatibleFixture)
+        let viewModel = ModelCenterViewModel(client: client)
+        await viewModel.reload()
+
+        await #expect(throws: Error.self) {
+            try await viewModel.createTarget(modelID: "local:official-1:1")
+        }
+        #expect(viewModel.migrationTargets.isEmpty)
+        #expect(await client.publishedTargets.isEmpty)
+    }
+}
+
+private actor LegacyMigrationPresentingSpy: LegacyLLMMigrationPresenting {
+    private(set) var selectedTarget: LLMTargetReference?
+
+    func pendingItems() async throws -> [LegacyLLMMigrationItem] {
+        [
+            LegacyLLMMigrationItem(
+                profileID: "legacy",
+                revision: 1,
+                sourceDigest: "legacy-digest",
+                displayName: "Legacy Agent",
+                redactedModelHint: "old-model"
+            ),
+        ]
+    }
+
+    func migrate(
+        profileID: String,
+        revision: UInt64,
+        selectedTarget: LLMTargetReference?
+    ) async throws -> LegacyProfileMigrationRecordDTO {
+        self.selectedTarget = selectedTarget
+        return LegacyProfileMigrationRecordDTO(
+            sourceProfileId: profileID,
+            sourceRevision: revision,
+            sourceDigest: "legacy-digest",
+            state: .archived
+        )
     }
 }
 
@@ -109,6 +176,39 @@ actor ModelCenterClientSpy: ModelCenterClient {
 }
 
 extension ModelCenterSnapshot {
+    static var incompatibleFixture: Self {
+        let current = fixture
+        let localModels = current.localModels.map { model in
+            LocalModelCenterState(
+                modelRevision: model.modelRevision,
+                displayName: model.displayName,
+                requiredBytes: model.requiredBytes,
+                parameterSchema: model.parameterSchema,
+                parameterDefaults: model.parameterDefaults,
+                installation: model.installation.map {
+                    LocalModelProductState(
+                        installationID: $0.installationID,
+                        modelRevision: $0.modelRevision,
+                        state: $0.state,
+                        receivedBytes: $0.receivedBytes,
+                        expectedBytes: $0.expectedBytes,
+                        installedBytes: $0.installedBytes,
+                        requiredBytes: $0.requiredBytes,
+                        repairAction: $0.repairAction,
+                        catalogStatus: .incompatible
+                    )
+                }
+            )
+        }
+        return Self(
+            localModels: localModels,
+            cloudProviders: [],
+            cloudModels: [],
+            targets: current.targets,
+            disk: current.disk
+        )
+    }
+
     static var fixture: Self {
         let temperature = LLMParameterSchema(definitions: [
             .decimal(
@@ -175,7 +275,15 @@ extension ModelCenterSnapshot {
                     validation: .unvalidated
                 ),
             ],
-            targets: [],
+            targets: [
+                LLMTargetRevision(
+                    targetID: LLMTargetID(rawValue: "target.fixture"),
+                    revision: 1,
+                    kind: .local(installationID: "installation-1"),
+                    modelID: "official-1",
+                    defaultParameters: GenerationConfiguration()
+                ),
+            ],
             disk: LocalDiskProductState(
                 availableImportantUsageBytes: 10_000,
                 reservedBytes: 0,

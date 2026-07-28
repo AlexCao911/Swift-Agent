@@ -1,7 +1,7 @@
 {
-  "signature" : "IqUn-SyDbpF2ScMfI2GCbf7okZr1IGouauOdhpdhpWtsy0ywKmClmOLBtCBJgMuqZlfcawtUI3P8QVajCcNiDA",
+  "signature" : "9US_j-_nxvADowTJy90AFMKtQn10YlO34GypHaUVcqef9dTUfbvQOYDX5J46egbTTAe8t77wzCSeUvcnc0fnDQ",
   "signed" : {
-    "catalog_revision" : "3",
+    "catalog_revision" : "4",
     "key_id" : "local-catalog-2026-08",
     "models" : [
       {
@@ -82,7 +82,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -155,7 +232,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -228,7 +382,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -301,7 +532,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -388,7 +696,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -475,7 +860,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [
@@ -548,7 +1010,84 @@
         },
         "parameter_schema" : {
           "definitions" : {
+            "generation.max_output_tokens" : {
+              "choices" : [
 
+              ],
+              "id" : "generation.max_output_tokens",
+              "maximum" : 32768,
+              "minimum" : 1,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.min_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.min_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.repetition_penalty" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.repetition_penalty",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.temperature" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.temperature",
+              "maximum" : 2,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            },
+            "sampling.top_k" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_k",
+              "maximum" : 10000,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "integer"
+            },
+            "sampling.top_p" : {
+              "choices" : [
+
+              ],
+              "id" : "sampling.top_p",
+              "maximum" : 1,
+              "minimum" : 0,
+              "mutuallyExclusiveWith" : [
+
+              ],
+              "support" : "supported",
+              "valueType" : "decimal"
+            }
           }
         },
         "supported_device_classes" : [

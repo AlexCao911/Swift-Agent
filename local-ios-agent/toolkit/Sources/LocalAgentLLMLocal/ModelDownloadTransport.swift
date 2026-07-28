@@ -41,6 +41,6 @@ package struct RestoredModelDownload: Equatable, Sendable {
 
 package struct PendingTransportCancellation: Equatable, Sendable {
     let operationID: String
-    let taskIdentifier: Int
+    let taskIdentifier: Int?
     let installationID: String
 }

@@ -161,34 +161,15 @@ struct LocalModelRuntimeTests {
     }
 
     @Test
-    func modelWithoutNativeToolCapabilityRejectsToolsBeforeNativeGeneration() async throws {
-        let fixture = try await RuntimeFixture.make()
-        let session = try await fixture.runtime.prepareSession(
-            hostConfiguration: fixture.configuration,
-            target: fixture.target
-        )
+    func engineWithoutNativeToolCapabilityRejectsSessionBeforeLoad() async throws {
+        let fixture = try await RuntimeFixture.make(supportsNativeToolCalling: false)
         await #expect(throws: LLMFailure.self) {
-            try await fixture.runtime.startGeneration(
-                sessionID: session.sessionID,
-                input: AgentLLMInput(
-                    inputID: "turn-tools",
-                    messages: [LLMInputMessage(role: .user, content: [.text("search")])]
-                ),
-                attachments: [],
-                toolSchema: try .object(entries: [
-                    .init(name: "tools", value: .array([
-                        try .object(entries: [
-                            .init(name: "name", value: .string("search")),
-                            .init(name: "input_schema", value: try .object(entries: [
-                                .init(name: "type", value: .string("object")),
-                            ])),
-                        ]),
-                    ])),
-                ])
+            try await fixture.runtime.prepareSession(
+                hostConfiguration: fixture.configuration,
+                target: fixture.target
             )
         }
-        #expect(fixture.inference.startCount == 0)
-        try await fixture.runtime.closeSession(sessionID: session.sessionID)
+        #expect(fixture.inference.loadCount == 0)
     }
 }
 
@@ -201,7 +182,8 @@ private struct RuntimeFixture {
     let installation: LocalInstallationSummary
 
     static func make(
-        generationMode: FakeInference.GenerationMode = .immediate
+        generationMode: FakeInference.GenerationMode = .immediate,
+        supportsNativeToolCalling: Bool = true
     ) async throws -> RuntimeFixture {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -213,7 +195,7 @@ private struct RuntimeFixture {
             remote: nil
         )
         let manifest = try #require(accepted.verified.models[
-            LocalModelRevisionID(modelID: "gemma-3-1b-it-q4", revision: 1)
+            LocalModelRevisionID(modelID: "minicpm5-1b-q4-k-m", revision: 1)
         ])
         var installation = try store.enqueueInstallation(
             installationID: "installation-1",
@@ -268,7 +250,11 @@ private struct RuntimeFixture {
             operationToken: "binding-token",
             binding: staged.binding
         )
-        let inference = FakeInference(manifest: manifest, mode: generationMode)
+        let inference = FakeInference(
+            manifest: manifest,
+            mode: generationMode,
+            supportsNativeToolCalling: supportsNativeToolCalling
+        )
         let runtime = LocalModelRuntime(
             store: store,
             paths: paths,
@@ -301,7 +287,11 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
     private var releases = 0
     private var starts = 0
 
-    init(manifest: LocalModelRevisionManifest, mode: GenerationMode) {
+    init(
+        manifest: LocalModelRevisionManifest,
+        mode: GenerationMode,
+        supportsNativeToolCalling: Bool
+    ) {
         self.mode = mode
         descriptor = CppEngineDescriptor(
             engineID: manifest.engineID,
@@ -312,7 +302,7 @@ private final class FakeInference: CppInferenceAPI, @unchecked Sendable {
             capabilities: CppEngineCapabilities(
                 supportedModelFormats: [manifest.modelFormat],
                 supportsVision: false,
-                supportsNativeToolCalling: false,
+                supportsNativeToolCalling: supportsNativeToolCalling,
                 supportsStreaming: true,
                 supportsCancellation: true,
                 supportsTokenUsage: false,
