@@ -15,7 +15,7 @@
 - Work in an isolated root-repository worktree on branch `codex/openminis-rust-react`; do not alter the current dirty checkout or the nested source clone at `/Users/alexandercou/Projects/Alex-agent/OpenMinis`.
 - Preserve the existing wire transport: `HostCommandEnvelope`, `LLMEventEnvelope`, command/event IDs, sequence checks, canonical digests, receipts, backpressure, and host process epoch. The new runtime contracts are logical interfaces over that transport, not a second protocol.
 - Delete the Agent business state machine only after all production callers use the direct loop. Preserve transport lifecycle state required for reliability.
-- Rust is the only assembler of the complete system prompt, messages, context, Skill descriptors/file-tool results, memory contributions, and model-visible tool definitions. Swift supplies one frozen run-start snapshot of ordered prompt documents, Skill descriptors, and OpenMinis-owned tool schemas; Rust does not maintain a second static schema catalog.
+- Rust is the only assembler of the complete system prompt, messages, context, Skill descriptors/file-tool results, and model-visible tool definitions. Swift supplies one frozen run-start snapshot of ordered prompt documents, Skill descriptors, and OpenMinis-owned tool schemas; Rust does not maintain a second static schema catalog.
 - Rust receives at most 20 enabled Skill descriptors. Full `SKILL.md` files are never preloaded into context; the model reads a relevant file through the ordinary file tool.
 - Rust is the only canonical transcript writer. Swift may render optimistic streaming state in memory, but durable `ChatStore` changes must come from Rust projection events.
 - A tool round is one Rust storage transaction: assistant tool calls and the complete validated tool-result batch commit together or neither commits.
@@ -25,11 +25,11 @@
 - iSH raw guest networking remains enabled by default to match OpenMinis. It is an independent high-privilege network path and is not covered by `LocalAgentLLMCloud` SSRF/egress controls. The UI must disclose this; phase 1 adds no per-command approval and claims no string-based network sandbox.
 - Phase 1 disables cross-device sync for `Session`, `Message`, `CompactMarker`, and `SessionFile`. Do not add a `ChatStore → Rust` import path.
 - Projection identity is exactly `(conversation_stream_id, sequence)`. `run_id` identifies one execution only. Do not create a global projection cursor or projection bus.
-- Projection delivery has one logical path: command responses acknowledge acceptance, while `observeTranscriptProjections(conversationStreamId:afterSequence:)` replays canonical per-conversation events and then continues live. It does not use the run-scoped execution observer.
+- Projection delivery has one logical path: command responses acknowledge acceptance, while `observeTranscriptProjections(subscriptionId:conversationStreamId:afterSequence:)` replays canonical per-conversation events and then continues live. It does not use the run-scoped execution observer. Cancelling the Swift stream must cancel and wake the matching Rust subscription even if no event ever arrives.
 - OpenMinis owns the sole `ToolLoopDetector`. Rust owns only the fixed `MAX_MODEL_TURNS: usize = 16` bound.
 - Secrets never enter Rust prompt/context, iSH files, iSH environment variables, tool arguments/results, or logs. Provider sync continues to follow OpenMinis's existing Swift-only secret handling.
 - Transcript commands are durably idempotent by `(conversation_stream_id, request_id, canonical_command_digest)`. One conversation has at most one active Agent run; different conversations may run concurrently.
-- Keep the implementation small: two agent runtime traits (`ModelRuntime`, `ToolRuntime`), the existing optional `MemoryProvider` trait, one per-stream active-run guard, one run-scoped cancellation record, concrete prompt/skill/tool snapshots, and no speculative plugin framework.
+- Keep the implementation small: two agent runtime traits (`ModelRuntime`, `ToolRuntime`), the existing unwired optional `MemoryProvider` trait, one per-stream active-run guard, one run-scoped cancellation record, concrete prompt/skill/tool snapshots, and no speculative plugin framework. Do not add a memory-enabled wire flag until a production memory provider is selected.
 
 ## Definition of Done
 
@@ -37,7 +37,7 @@
 - A Rust-owned ReAct loop completes text-only and multi-tool runs, validates batch ID plus ordered results, stops safely at all model/tool cancellation boundaries and the max-turn bound, and contains no approval/run-state machine.
 - OpenMinis executes a whole tool batch with up to ten concurrent calls and owns one cancellation handle plus every iSH PID for each call.
 - Send, retry, edit, delete, clear, branch, archive, and conversation deletion enter Rust first, are request-idempotent, and are projected idempotently into `ChatStore`.
-- On startup and after any sequence gap, Swift resumes each conversation projection feed from its stored per-stream cursor before applying live events.
+- On startup and after any sequence gap, Swift resumes the relevant conversation projection feed from its stored per-stream cursor before applying live events. The product keeps at most five feeds for the open or background-running conversations and releases each Rust listener when its Swift stream ends.
 - Prompt Markdown documents, at most 20 OpenMinis Skill descriptors, and the current OpenMinis tool name/description/JSON schemas enter Rust once as a digest-verified run-start snapshot; full Skill files are read on demand with the file tool, and the new model path never invokes OpenMinis prompt/Skill/memory injection.
 - Provider settings/OAuth/Base URL remain OpenMinis product features while every cloud request is executed by `LocalAgentLLMCloud`.
 - Conversation CloudKit sync is disabled; Skills/provider product data sync still works.
@@ -316,6 +316,7 @@ git commit -m "build: link local agent runtime into Minis"
 - Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/conversation/command_service.rs`
 - Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/conversation/command_receipt.rs`
 - Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/conversation/projection_event.rs`
+- Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/conversation/projection_subscription.rs`
 - Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/agent_input/snapshot.rs`
 - Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/agent_input/mod.rs`
 - Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/local-ios-agent/rust-core/src/conversation/mod.rs`
@@ -350,6 +351,9 @@ git commit -m "build: link local agent runtime into Minis"
   - archive/delete projections are observable even though they have no `run_id`,
   - a reconnect after sequence 4 receives 5 onward without a gap or duplicate,
   - the projection API accepts no `run_id`,
+  - cancelling a projection subscription while it is idle wakes its blocking receiver, unregisters its listener, and returns from the FFI observation call,
+  - cancelling one subscription does not stop another subscription observing the same conversation,
+  - an unknown or already-finished `subscription_id` can be cancelled idempotently,
   - the same `(conversation_stream_id, request_id)` plus the same canonical command payload returns the first stored `TranscriptCommandResult`,
   - reusing that key with a different canonical payload returns `conversation.idempotency_conflict`,
   - a duplicated `Send` writes one user message, records one run request, and starts at most one run even after an FFI retry or process restart.
@@ -446,7 +450,6 @@ pub struct RunStartSnapshot {
     pub ordered_prompt_documents: Vec<PromptDocumentSnapshot>,
     pub skill_descriptors: Vec<SkillDescriptor>,
     pub ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
-    pub memory_enabled: bool,
     pub snapshot_digest: String,
 }
 
@@ -471,7 +474,7 @@ pub struct ToolDefinitionSnapshot {
 }
 ```
 
-The digest domain is `run-start-snapshot:v1` and covers every field except `snapshot_digest`, preserving vector order. Rust recomputes it, rejects a mismatch, rejects more than 20 Skill descriptors, and rejects duplicate tool names or a non-object JSON schema. The snapshot contains no provider candidate, credential, full `SKILL.md`, executable callback, or Swift-rendered system prompt.
+The digest domain is `run-start-snapshot:v1` and covers every field except `snapshot_digest`, preserving vector order. Rust recomputes it, rejects a mismatch, rejects more than 20 Skill descriptors, and rejects duplicate tool names or a non-object JSON schema. The snapshot contains no provider candidate, credential, full `SKILL.md`, executable callback, Swift-rendered system prompt, or memory toggle.
 
 - [ ] Mirror these types exactly as `RunStartSnapshotDTO`, `PromptDocumentSnapshotDTO`, `RustSkillDescriptorDTO`, and `ToolDefinitionSnapshotDTO` in `TranscriptDTOs.swift`. Only `Send`, `RetryFrom`, and `EditMessage` DTO cases contain `runStartSnapshot`.
 
@@ -490,6 +493,16 @@ pub struct TranscriptProjectionEvent {
     pub event_id: String,
     pub kind: TranscriptProjectionKind,
     pub payload: serde_json::Value,
+}
+
+pub struct ObserveTranscriptProjectionsRequest {
+    pub subscription_id: String,
+    pub conversation_stream_id: String,
+    pub after_sequence: u64,
+}
+
+pub struct CancelTranscriptProjectionSubscriptionRequest {
+    pub subscription_id: String,
 }
 ```
 
@@ -524,11 +537,13 @@ Use primary key `(conversation_stream_id, request_id)`. Serialize command handli
 - [ ] `TranscriptCommandResult` is only an acknowledgement. Never embed projections in the command response.
 - [ ] Use the existing event storage sequence for the specified stream. Do not add a global counter table.
 
-- [ ] Add exactly two conversation gateway operations:
+- [ ] Add exactly three conversation gateway operations:
 
 ```swift
 case transcriptCommand = "transcript_command"
 case observeTranscriptProjections = "observe_transcript_projections"
+case cancelTranscriptProjectionSubscription =
+    "cancel_transcript_projection_subscription"
 ```
 
 - [ ] Generalize the gateway's existing typed callback wrapper without changing its reliability semantics:
@@ -541,7 +556,7 @@ func stream<Request: Encodable, Event: Decodable>(
 ) -> AsyncThrowingStream<Event, Error>
 ```
 
-Keep `.observeEvents` routed to the existing run-event C callback. Add `local_agent_runtime_bridge_observe_transcript_projections_streaming` plus its `RustRuntimeCFunctionTable` entry for `.observeTranscriptProjections`; both callbacks reuse the same JSON decoding/error/cancellation wrapper, but their Rust read keys remain different.
+Keep `.observeEvents` routed to the existing run-event C callback. Add `local_agent_runtime_bridge_observe_transcript_projections_streaming` and `local_agent_runtime_bridge_cancel_transcript_projection_subscription` plus their `RustRuntimeCFunctionTable` entries. The projection stream may reuse the existing JSON decoding/error wrapper, but its `onTermination` must call the cancellation function with its own `subscription_id`; merely terminating the callback box is insufficient because Rust may be blocked with no next event.
 
 - [ ] Replace the mutation methods on `ConversationBridgeClient` with:
 
@@ -551,15 +566,22 @@ func submitTranscriptCommand(
 ) async throws -> TranscriptCommandResultDTO
 
 func observeTranscriptProjections(
+    subscriptionId: String,
     conversationStreamId: String,
     afterSequence: UInt64
 ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error>
+
+func cancelTranscriptProjectionSubscription(
+    subscriptionId: String
+) async
 ```
 
 Keep read methods needed by the UI. Remove `renameSession` from the new canonical transcript route; title remains Swift product metadata.
 
-- [ ] Implement the projection operation over the canonical conversation store, not `ExecutionService.observe_event_stream(run_id, ...)`: register the per-stream live listener first, query and emit stored projections after `afterSequence` in strict order, then use each live notification only to query the canonical store again after the last emitted sequence. Never trust a notification payload as the source event. Listener overflow/closure terminates the stream with an error so Swift reconnects from its durable cursor; it never silently drops a wake-up. Any reconnect follows the same replay-first algorithm.
-- [ ] Add bridge tests that submit a command, verify its response contains no projection payload, reconnect from a saved cursor, and receive the resulting projections exactly once in strict sequence. Add a test proving a runless archive event is delivered.
+- [ ] Implement the projection operation over the canonical conversation store, not `ExecutionService.observe_event_stream(run_id, ...)`: register `(subscription_id, conversation_stream_id, wake_handle)` before reading, query and emit stored projections after `afterSequence` in strict order, then use each live notification only to query the canonical store again after the last emitted sequence. Never trust a notification payload as the source event. Listener overflow/closure terminates the stream with an error so Swift reconnects from its durable cursor; it never silently drops a wake-up. Any reconnect creates a fresh subscription ID and follows the same replay-first algorithm.
+- [ ] The cancellation operation marks only the matching subscription cancelled, wakes the receiver that is blocked waiting for a live notification, unregisters the canonical-store listener, removes the subscription registry entry, and lets the streaming FFI call return. Do not wait for a future projection. Both natural stream completion and explicit cancellation run the same idempotent unregister cleanup.
+- [ ] In Swift, allocate one UUID before starting each projection observation. `AsyncThrowingStream.onTermination` invokes `cancelTranscriptProjectionSubscription(subscriptionId:)` from a separate task and then terminates the callback box; it must not queue cancellation on the detached task currently blocked inside the observation FFI call.
+- [ ] Add bridge tests that submit a command, verify its response contains no projection payload, reconnect from a saved cursor, and receive the resulting projections exactly once in strict sequence. Add a test proving a runless archive event is delivered. Add an idle-feed cancellation test that waits until both the Rust listener/subscription count and the Swift detached projection-task count return to zero without publishing an event; expose counters only through test fixtures.
 
 - [ ] Keep the legacy methods temporarily behind current callers. Mark them `@available(*, deprecated, message: "Use submitTranscriptCommand")` and delete them in Task 14.
 
@@ -661,7 +683,7 @@ pub fn validate_skill_descriptors(
 
 Reject more than 20 descriptors at the Rust boundary. Do not add `SkillCatalog`, `SkillDocument`, a Skill loader, or any API that reads `SKILL.md`; the existing file tool is the only progressive-disclosure path.
 
-- [ ] Keep `MemoryProvider` as the sole optional memory boundary and add only a test fake. Do not rewire the old memory graph or add m_flow, Memori, or Graphify adapters in Task 4.
+- [ ] Keep `MemoryProvider` as the sole optional memory boundary and add only a test fake. Leave it unwired from the production context/loop in this phase; do not add a run-start flag, rewire the old memory graph, or add m_flow, Memori, or Graphify adapters in Task 4.
 
 - [ ] Run:
 
@@ -788,7 +810,8 @@ pub struct ToolBatchResult {
   13. edit/delete/clear/branch/archive/conversation deletion on a busy stream returns `conversation_busy` without mutation; the UI may explicitly cancel and retry;
   14. an active-run lease is released on completion, error, max-turn, and cancellation;
   15. startup claims an unstarted canonical run once but marks a previously started nonterminal run interrupted without replaying model/tools;
-  16. the `agent_loop` source contains no `RunState`, `RunMachine`, `Approval`, `ToolLoopDetector`, `HostExecutionPhase`, or `ResourceLifecycle` dependency.
+  16. `AgentLoopService::cancel_run` never holds the active-run map lock or cancellation gate while calling either runtime, and a re-entrant fake runtime cannot deadlock it;
+  17. the `agent_loop` source contains no `RunState`, `RunMachine`, `Approval`, `ToolLoopDetector`, `HostExecutionPhase`, or `ResourceLifecycle` dependency.
 
 - [ ] Run:
 
@@ -836,7 +859,7 @@ Err(AgentLoopError::max_model_turns(MAX_MODEL_TURNS))
 ```
 
 - [ ] Do not add an agent phase enum. Cancellation, model error, tool error, and max-turn termination are normal return branches.
-- [ ] Add a minimal `ActiveConversationRuns` guarded map from `conversation_stream_id` to `ActiveRunEntry { run_id, cancellation: Arc<RunCancellationRecord> }`. `try_acquire` returns an RAII lease; a duplicate command receipt is resolved before this check, different streams do not block one another, and dropping the lease removes only the matching `(stream, run)` pair. `cancel_run(run_id)` looks up the record through this map and calls its `cancel()` method.
+- [ ] Add a minimal `ActiveConversationRuns` guarded map from `conversation_stream_id` to `ActiveRunEntry { run_id, cancellation: Arc<RunCancellationRecord> }`. `try_acquire` returns an RAII lease; a duplicate command receipt is resolved before this check, different streams do not block one another, and dropping the lease removes only the matching `(stream, run)` pair. `cancellation_for_run(run_id)` clones the record and releases the map lock before returning it; this map never calls a runtime.
 - [ ] Before exposing the FFI command endpoint at startup, resolve canonical nonterminal runs using Task 3's conservative rule: acquire a lease and start a never-started request once; append an interrupted terminal event for any `run_started` record without a terminal event. Do not reconstruct an in-flight tool batch.
 - [ ] The first fresh run-producing command acquires the stream lease before its canonical command transaction and transfers that lease to the scheduled `AgentLoop`. If acquisition or the transaction fails, write nothing and release the lease. Every other transcript mutation on that active stream returns `conversation_busy`; explicit cancellation is the only operation allowed through the guard. A deliberate UI retry after cancellation uses a new `request_id`; replaying the busy request ID returns its stored busy outcome.
 - [ ] Use this run-scoped cancellation record, not a phase/state enum:
@@ -853,7 +876,17 @@ struct RunCancellationGate {
 }
 ```
 
-`CancellationToken` is one `AtomicBool`, not a lifecycle enum. While holding `gate`, `cancel()` sets the token before inspecting `active_batch_id`. If a batch is registered it calls `ToolRuntime::cancel_batch(batch_id)`; otherwise it calls `ModelRuntime::cancel(run_id)`. `begin_batch(batch_id)` holds the same gate while atomically rejecting an already-cancelled run or recording that batch before Swift can start it. `commit_if_active` holds the gate while checking the token and running the transcript transaction: a cancellation linearized first forbids the commit; a commit linearized first means the run had already completed.
+`CancellationToken` is one `AtomicBool`, not a lifecycle enum. The record contains no runtime reference and never makes a Swift/FFI call. Its cancellation method is limited to the short critical section:
+
+```rust
+fn request_cancel(&self) -> Option<String> {
+    let gate = self.gate.lock().expect("cancellation gate poisoned");
+    self.token.cancel();
+    gate.active_batch_id.clone()
+}
+```
+
+`AgentLoopService::cancel_run(run_id)` owns the `ModelRuntime` and `ToolRuntime` references. It clones the record from `ActiveConversationRuns`, calls `request_cancel()`, releases every Rust lock, and only then calls `ToolRuntime::cancel_batch(batch_id)` when a batch was returned or `ModelRuntime::cancel(run_id)` otherwise. Cancellation between model completion and `begin_batch` therefore sets the token and prevents the batch from starting. `begin_batch(batch_id)` holds the gate only while atomically rejecting an already-cancelled run or recording that batch before Swift can start it. `commit_if_active` may hold the same gate while checking the token and running the short transcript transaction: a cancellation linearized first forbids the commit; a commit linearized first means the canonical turn had already completed.
 - [ ] Treat `ModelRuntime::cancel(run_id)` as idempotent provider/run-resource cleanup even when no model request is active. On tool error, max-turn, or any abnormal exit without an active batch, the loop wrapper calls it before releasing the stream lease; this also releases the Swift run-scoped detector. Normal final completion is cleaned by `OpenMinisModelExecutor` after a no-tool model turn.
 - [ ] Implement `commit_tool_round` in `conversation/service.rs` as one event-store/SQLite transaction containing the assistant tool-call event and every ordered tool-result event. A failed or cancelled batch performs no canonical write for that round.
 - [ ] Add one storage primitive used by both the in-memory and SQLite stores:
@@ -1068,7 +1101,7 @@ Expected: FAIL.
 - [ ] Use `git mv` for the dispatcher and worker files so history is preserved.
 - [ ] Keep their `Condvar`/worker-thread mechanism, receipts, backpressure thresholds, repository transactions, epoch checks, and necessary `HostExecutionPhase`/`ResourceLifecycle` transport states.
 - [ ] Replace `HostToolBatchExecutor::execute_tool` and the sequential loop in `process_tool_batch` with the `HostToolRuntime` command/response path.
-- [ ] Route the existing `cancel_run` FFI operation to `ActiveConversationRuns::cancel_run(run_id)`. The run-scoped record decides whether to emit `CancelGeneration` or `CancelToolBatch`; the bridge does not infer a phase.
+- [ ] Route the existing `cancel_run` FFI operation to `AgentLoopService::cancel_run(run_id)`. The service obtains the run-scoped record, copies its optional active batch ID under the short gate, releases all locks, and only then emits `CancelGeneration` or `CancelToolBatch`; the bridge does not infer a phase.
 - [ ] Remove approval outcomes from the new adapter. A Swift preflight rejection is an ordinary `ToolCallResult { is_error: true }`.
 - [ ] Have `HostModelRuntime::generate`:
 
@@ -1165,7 +1198,7 @@ Expected: FAIL.
 
 - [ ] Route `StartGeneration`/`ResumeGeneration`/`CancelGeneration` to `ModelRuntimeCommandHandler`.
 - [ ] Route `ExecuteToolBatch`/`CancelToolBatch` to `ToolBatchCommandHandler`.
-- [ ] Keep `ModelRuntimeCommandHandler` as a thin dispatcher. It owns no `hasEmittedModelContent` field or per-run replay dictionary. Fallback ordering, replay eligibility, and model/provider configuration belong only to the single `OpenMinisModelExecutor.generate` invocation in Task 12.
+- [ ] Keep `ModelRuntimeCommandHandler` as a thin dispatcher. It owns no `hasEmittedModelContent` field or per-run replay dictionary. Fallback ordering, replay eligibility, and model/provider configuration belong only to the single `OpenMinisModelExecutor.generate` invocation in Task 11.
 - [ ] The host envelope contains only the selected logical request, never provider candidates or credentials.
 - [ ] Use `LLMEventSequencer` for batch events as well as model events. Do not create a second Swift callback.
 - [ ] Preserve all current event receipt and backpressure handling.
@@ -1222,7 +1255,8 @@ git commit -m "feat: handle Rust model and tool batch commands in Swift"
   - cancellation arriving after batch registration but before a child handle/PID is installed still cancels that late registration;
   - two concurrent batches using the same call ID keep separate entries and cancelling one does not affect the other;
   - no executor method writes `AIChatViewModel.messages` or `ChatStore`;
-  - `ToolLoopDetector` is consulted before each call and records its result after each call;
+  - `ToolLoopDetector` is consulted before each call, but after concurrent execution it records completed results in original call order rather than child-task completion order;
+  - reversing the child-task completion order produces the same detector history and warnings;
   - two runs that issue identical calls have independent detector histories;
   - completing or cancelling run A removes only run A's detector and cannot alter run B.
 
@@ -1270,7 +1304,7 @@ final class ToolLoopDetectorRegistry: @unchecked Sendable {
 }
 ```
 
-`detector(for:)` returns the same detector only within one run. The batch executor calls `check` immediately before each tool call and `record` immediately after its result. `LocalRuntimeBootstrap` injects this same registry into `OpenMinisToolBatchExecutor` and `OpenMinisModelExecutor`; do not put a singleton detector on the executor itself.
+`detector(for:)` returns the same detector only within one run. Each child task calls `check` immediately before dispatch and writes its result into the indexed slot, but it must not call `record`. After all children settle and results are restored to input order, the batch executor calls `record` for those completed results in that original order and attaches any warning to the matching result. A cancelled batch is discarded and its detector is removed, so it needs no completion-order history. `LocalRuntimeBootstrap` injects this same registry into `OpenMinisToolBatchExecutor` and `OpenMinisModelExecutor`; do not put a singleton detector on the executor itself.
 
 - [ ] Implement `OpenMinisToolBatchExecutor: ToolBatchExecuting` with:
 
@@ -1279,6 +1313,7 @@ final class ToolLoopDetectorRegistry: @unchecked Sendable {
   - existing native offload/file/iSH tool implementations,
   - `withTaskGroup` concurrency,
   - indexed result slots so output order equals call order,
+  - ordered detector recording after the task group settles,
   - batch registration before `withTaskGroup`,
   - one cancellation registry entry per `(batchID, callID)`,
   - the `HostToolBatch.runID` passed to both registries.
@@ -1297,7 +1332,7 @@ onProcessStarted: { batchId, callId, pid in
 
 Allow multiple PIDs per call. Do not preserve the computed “set” backed by one PID.
 
-- [ ] Return one `HostToolBatchCompletion` containing the input `batchID` and ordered results. Remove message/ChatStore writes from the extracted execution path; legacy `AIChatViewModel` callers may adapt returned results until Task 10 replaces the loop.
+- [ ] Return one `HostToolBatchCompletion` containing the input `batchID` and ordered results. Remove message/ChatStore writes from the extracted execution path; legacy `AIChatViewModel` callers may adapt returned results until Task 12 replaces the loop.
 - [ ] `cancel(batchId:)` obtains the batch's `runID`, cancels all entries, and removes that run's detector. `OpenMinisModelExecutor` removes the same detector when a model generation finishes with no tool call, exhausts fallback with an error, or receives `cancel(runId:)`. Removal is idempotent.
 - [ ] Keep path traversal, symlink, mount permission, and native-offload checks in their current Swift execution layer.
 - [ ] Run the same two test identifiers through `run-openminis-tests.sh`.
@@ -1317,114 +1352,7 @@ git commit -m "refactor: expose OpenMinis tools as cancellable batches"
 
 ---
 
-## Task 10: Make the OpenMinis App Start and Render the Rust Agent Loop
-
-**Files:**
-
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/LocalRuntimeBootstrap.swift`
-- Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/RustAgentCoordinator.swift`
-- Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/ChatStoreProjectionApplier.swift`
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel.swift`
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel+Persistence.swift`
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel+BackgroundTask.swift`
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Session/SessionForkManager.swift`
-- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/ChatStore.swift`
-- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/RustAgentCoordinatorTests.swift`
-- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/ChatStoreProjectionApplierTests.swift`
-- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/TranscriptOwnershipTests.swift`
-
-### RED: lock the product control flow
-
-- [ ] Add tests proving:
-
-  - `send` submits `TranscriptCommandDTO.send` and does not directly append a durable user message;
-  - retry, edit, delete, clear, branch, archive, and conversation deletion each submit their matching Rust command before a durable `ChatStore` change;
-  - a transcript command acknowledgement never applies a `ChatStore` projection;
-  - app startup unions `listSessions` with retained projection-cursor rows, then observes every stream from its exact stored sequence before relying on live delivery;
-  - archive/delete and other runless projections arrive through the conversation feed;
-  - the coordinator never uses `ExecutionBridgeClient.observeEvents(runId:)` for transcript projection;
-  - `ChatStoreProjectionApplier` ignores an event whose sequence is at or below the stored sequence for its conversation;
-  - an event at exactly `lastSequence + 1` applies atomically;
-  - an event above `lastSequence + 1` changes neither rows nor cursor and causes a catch-up restart from the stored cursor;
-  - the same projection event replayed after app restart is a no-op;
-  - two runs in one conversation share one projection cursor;
-  - title, pin, and model selection remain direct Swift metadata operations;
-  - `AIChatViewModel.runAgentLoop` is not called on the Rust runtime path.
-
-- [ ] Add a source architecture test that rejects direct calls to transcript-changing `ChatStore` methods from the new runtime files and from send/retry/edit/delete/clear/branch entry points.
-- [ ] Run:
-
-```bash
-OPENMINIS_TEST_UDID="$OPENMINIS_IPHONE_UDID" \
-  bash local-ios-agent/scripts/run-openminis-tests.sh \
-  MinisTests/RustAgentCoordinatorTests \
-  MinisTests/ChatStoreProjectionApplierTests \
-  MinisTests/TranscriptOwnershipTests
-```
-
-Expected: FAIL.
-
-### GREEN: replace control, preserve UI
-
-- [ ] Construct `LLMHostProductRuntime`, `ModelRuntimeCommandHandler`, and `OpenMinisToolBatchExecutor` once in `LocalRuntimeBootstrap`.
-- [ ] Implement `RustAgentCoordinator` as the small UI-facing facade:
-
-```swift
-@MainActor
-final class RustAgentCoordinator: ObservableObject {
-    func submit(_ command: TranscriptCommandDTO) async throws
-    func cancel(runId: String) async
-    func startProjection(conversationStreamId: String) async throws
-}
-```
-
-It owns no conversation history and no agent loop.
-
-- [ ] Replace the call from OpenMinis send/retry paths into `runAgentLoop` with the corresponding Rust command.
-- [ ] Treat `submitTranscriptCommand` results as acceptance metadata only. Feed `ChatStoreProjectionApplier` exclusively from `ConversationBridgeClient.observeTranscriptProjections`.
-- [ ] `ExecutionBridgeClient.observeEvents(runId:)` may continue to drive ephemeral text/reasoning/tool-status UI for an active run, but it never advances the transcript cursor or mutates durable `ChatStore` rows.
-- [ ] At bootstrap, take the union of Rust `listSessions()` and every existing `rust_projection_cursor.conversation_stream_id`, then start one observation task per stream from its stored cursor (default 0). Before submitting a command for a new stream, insert its cursor row at 0 and start observation first. Retaining cursor rows makes archived/deleted streams catch up after a crash even if they no longer appear in the active session list. Reconnecting always passes the last committed Swift cursor.
-- [ ] Apply only `sequence == last_sequence + 1`. If the feed emits `sequence > last_sequence + 1`, cancel that observation without applying the event and immediately reopen it with `afterSequence: last_sequence`; never jump the cursor. The Rust operation replays canonical events before resuming live delivery.
-- [ ] On projection stream error or listener overflow, reopen from the same last committed cursor after 250 ms, then 1 s, then 2 s for subsequent failures; reset to 250 ms after the next applied event. Do not fall back to the run observer or command response.
-- [ ] Preserve existing OpenMinis rendering, attachments UI, tool blocks, background-task behavior, title generation UI, provider picker, session list, and iPad layout.
-- [ ] Streaming text/reasoning/tool status may update an ephemeral UI message. It must carry the Rust event ID and be reconciled by the final projection, not persisted independently.
-- [ ] Add one SQLite projection cursor table to the existing OpenMinis database:
-
-```sql
-create table if not exists rust_projection_cursor (
-    conversation_stream_id text primary key,
-    last_sequence integer not null
-);
-```
-
-This is per-stream state, not a global cursor.
-
-- [ ] Make `ChatStoreProjectionApplier` the sole new-runtime caller of transcript row insert/update/delete methods. Apply the event and cursor advance in one `ChatStore` transaction.
-- [ ] Apply `CursorAdvance` by changing only the cursor in that transaction. Retain the cursor row after archive or conversation deletion so relaunch does not replay the entire deleted stream.
-- [ ] Do not add `ChatStore → Rust` reconciliation. If Rust has no canonical conversation, display it as unavailable rather than importing Swift rows.
-- [ ] Remove the Swift invocation of the old `runAgentLoop`; leave its body temporarily unreachable until Task 14.
-- [ ] Run the complete `MinisTests` target to catch direct-ChatStore regressions:
-
-```bash
-OPENMINIS_TEST_UDID="$OPENMINIS_IPHONE_UDID" \
-  bash local-ios-agent/scripts/run-openminis-tests.sh MinisTests
-```
-
-Expected: PASS.
-
-- [ ] Commit:
-
-```bash
-git add OpenMinis/src/ios/Agent/LocalRuntime \
-  OpenMinis/src/ios/Agent/Chat \
-  OpenMinis/src/ios/Agent/Session/SessionForkManager.swift \
-  OpenMinis/src/ios/MinisTests
-git commit -m "feat: drive the OpenMinis product from the Rust loop"
-```
-
----
-
-## Task 11: Feed Markdown Prompts and Progressive Skill Descriptors into Rust
+## Task 10: Feed Markdown Prompts and Progressive Skill Descriptors into Rust
 
 **Files:**
 
@@ -1459,7 +1387,6 @@ git commit -m "feat: drive the OpenMinis product from the Rust loop"
   - when the model selects a relevant descriptor, it reads that descriptor's location through the ordinary file tool and the returned content appears as an ordinary tool result on the next turn;
   - the complete model request contains each prompt/Skill descriptor marker exactly once;
   - `SystemPromptBuilder.identitySection`, `baseSystemPrompt`, `skillPromptFragment`, `loadGlobalMemoryFragment`, `memoryStatusFragment`, and `makeAgentTools` are not called on the Rust path;
-  - provider fallback receives the same frozen Rust `ModelRequest` rather than rebuilding a prompt in Swift.
 
 - [ ] Run:
 
@@ -1509,15 +1436,14 @@ struct RunStartSnapshotDTO {
     var promptDocuments: [PromptDocumentSnapshotDTO]
     var skillDescriptors: [RustSkillDescriptorDTO]
     var orderedToolDefinitions: [ToolDefinitionSnapshotDTO]
-    var memoryEnabled: Bool
     var snapshotDigest: String
 }
 ```
 
-The memory flag decides whether Rust calls its optional existing `MemoryProvider`; Swift contributes no memory text.
+This phase leaves the existing Rust `MemoryProvider` interface available for a later concrete backend but does not call it from context assembly or carry a memory toggle over the wire. Add that wiring only when a production provider exists.
 
 - [ ] Extract the model-visible schema portion of the current OpenMinis tool definitions into `OpenMinisToolDefinitionSnapshotProvider`. It is the sole static source for tool name, description, and input JSON schema. Existing legacy `makeAgentTools()` may delegate to it during migration, but the Rust runtime path calls only the snapshot provider and Rust stores no duplicate static schema list.
-- [ ] Compute `snapshotDigest` with the Task 3 canonical field order and `run-start-snapshot:v1` domain. `RustAgentCoordinator` freezes one snapshot immediately before submitting `Send`, `RetryFrom`, or `EditMessage`; Rust recomputes the digest, stores the accepted snapshot with the run request, and uses that same value for every context build and tool-call validation in the run.
+- [ ] Compute `snapshotDigest` with the Task 3 canonical field order and `run-start-snapshot:v1` domain. `RustAgentInputSnapshotProvider` returns one complete immutable value; focused bridge tests may submit it directly. Task 12 makes `RustAgentCoordinator` obtain that value immediately before `Send`, `RetryFrom`, or `EditMessage`. Rust recomputes the digest, stores the accepted snapshot with the run request, and uses that same value for every context build and tool-call validation in the run.
 
 - [ ] Keep each descriptor's `location` readable by the existing OpenMinis file tool. The agent decides relevance and issues `file_read`; Rust treats the returned `SKILL.md` body exactly like any other tool result.
 
@@ -1533,6 +1459,7 @@ legacy makeAgentTools prompt path
 
 The Rust model request already contains the final system prompt and model-visible tools.
 
+- [ ] Add an architecture test proving `RunStartSnapshot`/`RunStartSnapshotDTO` has no memory flag and the production `AgentLoop`/context path does not call `MemoryProvider` in this phase.
 - [ ] Leave those helpers only where still needed for unrelated product previews. Delete unreachable loop-only helpers in Task 14.
 - [ ] Run the Rust test and repeat the three-test `run-openminis-tests.sh` command above.
 
@@ -1553,7 +1480,7 @@ git commit -m "feat: assemble prompts and Skills once in Rust"
 
 ---
 
-## Task 12: Use OpenMinis Provider UX with `LocalAgentLLMCloud` as the Only HTTP Runtime
+## Task 11: Use OpenMinis Provider UX with `LocalAgentLLMCloud` as the Only HTTP Runtime
 
 **Files:**
 
@@ -1595,9 +1522,12 @@ git commit -m "feat: assemble prompts and Skills once in Rust"
   - OpenAI, OpenRouter, and Kimi Code reuse one configurable OpenAI-compatible adapter with preset-specific endpoint/header/auth inputs;
   - Antigravity alone requires a dedicated Cloud Code envelope adapter because OpenMinis wraps requests and responses in its documented custom envelope;
   - provider/model/Base URL/group fallback configured in OpenMinis maps to one `LocalAgentLLMCloud` request;
+  - every fallback attempt receives the same frozen Rust `ModelRequest` and never rebuilds prompt, Skills, memory, or tool schemas in Swift;
   - each `OpenMinisModelExecutor.generate` invocation owns its own local `hasEmittedModelContent` value;
   - two concurrent generate calls do not share fallback eligibility;
-  - failure before the first text/reasoning/tool event may retry, while any such event permanently disables replay for that invocation;
+  - a non-cancellation failure before the first text/reasoning/tool event may retry, while any such event permanently disables replay for that invocation;
+  - `CancellationError`, Swift task cancellation, and an explicit `cancel(runId:)` terminate immediately before or after the first event and never start another provider;
+  - cancelling before the first token leaves the fallback provider invocation count at zero;
   - API key and OAuth token are resolved only inside Swift immediately before authorization;
   - no provider candidate list or credential appears in the host command sent by Rust;
   - no OpenMinis provider client executes `URLSession` on the Rust runtime path;
@@ -1642,9 +1572,9 @@ public static let antigravity = Self(rawValue: "antigravity")
 ```
 
 - [ ] Register exactly one adapter per shipped preset in `CloudLLMRuntime.shipped()` and add all four preset IDs to `OfficialCloudCapabilityCatalog.v1.json` with their implemented semantic adapter IDs.
-- [ ] Implement fallback only inside `OpenMinisModelExecutor.generate`. Use local `var hasEmittedModelContent = false` and `var hasEmittedToolCall = false` values captured by that invocation's emit closure; update them before forwarding an event. Retry/fallback only while `hasEmittedModelContent` is false. Do not add shared replay/fallback state or a replay dictionary keyed by run; the separate active-provider-task registry required by `cancel(runId:)` may remain.
+- [ ] Implement fallback only inside `OpenMinisModelExecutor.generate`. Use local `var hasEmittedModelContent = false` and `var hasEmittedToolCall = false` values captured by that invocation's emit closure; mark `hasEmittedModelContent` before forwarding the first text, reasoning, or tool event. Retry/fallback only while that value is false. In the error path, check cancellation before the generic provider-failure branch: `CancellationError`, `Task.isCancelled`, the executor's explicit run-cancel marker, and a provider/local-runtime cancelled terminal error are always rethrown as cancellation and never advance to the next candidate. `cancel(runId:)` cancels the active task before removing its registry entry. Do not add shared replay/fallback state or a replay dictionary keyed by run; the run-keyed active-provider-task/cancel registry may contain only task handles and cancellation markers needed for the current invocation and removes both when that invocation exits.
 - [ ] Inject the Task 9 `ToolLoopDetectorRegistry` into `OpenMinisModelExecutor`. Remove `runID` when generation completes with `hasEmittedToolCall == false`, when fallback is exhausted, or when `cancel(runId:)` is called. A generation that emits tool calls retains the detector for the following batch.
-- [ ] Keep the old OpenMinis provider factory only for non-agent previews during migration; architecture tests must reject it from `RustAgentCoordinator`.
+- [ ] Keep the old OpenMinis provider factory only for non-agent previews during migration. The final App cutover task adds the architecture assertion that rejects it from `RustAgentCoordinator`.
 - [ ] Run the two SwiftPM commands and repeat the two-test `run-openminis-tests.sh` command above.
 
 Expected: PASS.
@@ -1660,6 +1590,125 @@ git add OpenMinis/src/ios/Agent/LocalRuntime \
   local-ios-agent/toolkit/Sources/LocalAgentLLMCloud \
   local-ios-agent/toolkit/Tests/LocalAgentLLMCloudTests
 git commit -m "feat: combine OpenMinis provider UX with one cloud runtime"
+```
+
+---
+
+## Task 12: Make the OpenMinis App Start and Render the Rust Agent Loop
+
+This final cutover depends on the Task 10 snapshot provider and Task 11 model/provider executor. Do not create temporary substitutes for either dependency.
+
+**Files:**
+
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/LocalRuntimeBootstrap.swift`
+- Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/RustAgentCoordinator.swift`
+- Create: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/LocalRuntime/ChatStoreProjectionApplier.swift`
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel.swift`
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel+Persistence.swift`
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/AIChatViewModel+BackgroundTask.swift`
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Session/SessionForkManager.swift`
+- Modify: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/Agent/Chat/ChatStore.swift`
+- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/RustAgentCoordinatorTests.swift`
+- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/ChatStoreProjectionApplierTests.swift`
+- Test: `/Users/alexandercou/Projects/Alex-agent/.worktrees/openminis-rust-react/OpenMinis/src/ios/MinisTests/TranscriptOwnershipTests.swift`
+
+### RED: lock the product control flow
+
+- [ ] Add tests proving:
+
+  - `send` obtains one complete Task 10 `RunStartSnapshotDTO`, submits `TranscriptCommandDTO.send`, and does not directly append a durable user message;
+  - retry and edit receive the same complete snapshot shape; delete, clear, branch, archive, and conversation deletion each submit their matching Rust command before a durable `ChatStore` change;
+  - a transcript command acknowledgement never applies a `ChatStore` projection;
+  - app startup observes only the current open conversation and product-allowed background-running conversations, never more than five feeds;
+  - a dormant historical conversation catches up from its stored cursor when opened rather than owning a permanent feed;
+  - applying an archive or delete terminal projection immediately cancels that conversation's subscription while retaining its cursor;
+  - opening a sixth eligible non-running conversation cancels the least-recently-used non-running feed before starting the replacement, while an active background feed is never evicted;
+  - archive/delete and other runless projections arrive through the conversation feed;
+  - the coordinator never uses `ExecutionBridgeClient.observeEvents(runId:)` for transcript projection;
+  - `ChatStoreProjectionApplier` ignores an event whose sequence is at or below the stored sequence for its conversation;
+  - an event at exactly `lastSequence + 1` applies atomically;
+  - an event above `lastSequence + 1` changes neither rows nor cursor and causes a catch-up restart from the stored cursor;
+  - the same projection event replayed after app restart is a no-op;
+  - two runs in one conversation share one projection cursor;
+  - title, pin, and model selection remain direct Swift metadata operations;
+  - `AIChatViewModel.runAgentLoop` is not called on the Rust runtime path.
+
+- [ ] Add source architecture tests that reject:
+
+  - direct calls to transcript-changing `ChatStore` methods from the new runtime files and from send/retry/edit/delete/clear/branch entry points;
+  - the legacy OpenMinis provider factory from `RustAgentCoordinator`;
+  - construction of `RustAgentCoordinator` without the concrete Task 10 snapshot provider and Task 11 `OpenMinisModelExecutor`.
+
+- [ ] Run:
+
+```bash
+OPENMINIS_TEST_UDID="$OPENMINIS_IPHONE_UDID" \
+  bash local-ios-agent/scripts/run-openminis-tests.sh \
+  MinisTests/RustAgentCoordinatorTests \
+  MinisTests/ChatStoreProjectionApplierTests \
+  MinisTests/TranscriptOwnershipTests
+```
+
+Expected: FAIL.
+
+### GREEN: replace control, preserve UI
+
+- [ ] Construct the Task 10 `RustAgentInputSnapshotProvider`, Task 11 `OpenMinisModelExecutor`, `LLMHostProductRuntime`, `ModelRuntimeCommandHandler`, and Task 9 `OpenMinisToolBatchExecutor` once in `LocalRuntimeBootstrap`.
+- [ ] Implement `RustAgentCoordinator` as the small UI-facing facade:
+
+```swift
+@MainActor
+final class RustAgentCoordinator: ObservableObject {
+    func submit(_ command: TranscriptCommandDTO) async throws
+    func cancel(runId: String) async
+    func startProjection(conversationStreamId: String) async throws
+}
+```
+
+It owns no conversation history and no agent loop.
+
+- [ ] Replace the call from OpenMinis send/retry paths into `runAgentLoop` with snapshot creation followed by the corresponding Rust command.
+- [ ] Treat `submitTranscriptCommand` results as acceptance metadata only. Feed `ChatStoreProjectionApplier` exclusively from `ConversationBridgeClient.observeTranscriptProjections`.
+- [ ] `ExecutionBridgeClient.observeEvents(runId:)` may continue to drive ephemeral text/reasoning/tool-status UI for an active run, but it never advances the transcript cursor or mutates durable `ChatStore` rows.
+- [ ] Keep projection cursor rows for every previously seen conversation, but create live subscriptions only for the current open conversation and background-running conversations admitted by the product, with a hard combined limit of five. Other historical or archived rows remain dormant. Opening a dormant conversation starts from its stored cursor; before adding a sixth feed, cancel and await termination of the least-recently-used feed that has no active run. If all five feeds have active background runs, the existing product background-run admission must refuse a sixth active conversation instead of leaking a sixth observer.
+- [ ] Before submitting a run-producing command for a new stream, insert its cursor row at 0 and establish its eligible projection feed. Reconnecting always creates a fresh subscription ID and passes the last committed Swift cursor.
+- [ ] Apply only `sequence == last_sequence + 1`. If the feed emits `sequence > last_sequence + 1`, cancel and await termination of that observation without applying the event, then immediately reopen it with `afterSequence: last_sequence`; never jump the cursor. The Rust operation replays canonical events before resuming live delivery.
+- [ ] On projection stream error or listener overflow, release the old subscription and reopen from the same last committed cursor after 250 ms, then 1 s, then 2 s for subsequent failures; reset to 250 ms after the next applied event. Do not fall back to the run observer or command response.
+- [ ] After applying an archive or conversation-deletion terminal projection, cancel and await that stream's subscription immediately. Retain its cursor row so reopening or recovery resumes from the last applied sequence without a permanent listener.
+- [ ] Preserve existing OpenMinis rendering, attachments UI, tool blocks, background-task behavior, title generation UI, provider picker, session list, and iPad layout.
+- [ ] Streaming text/reasoning/tool status may update an ephemeral UI message. It must carry the Rust event ID and be reconciled by the final projection, not persisted independently.
+- [ ] Add one SQLite projection cursor table to the existing OpenMinis database:
+
+```sql
+create table if not exists rust_projection_cursor (
+    conversation_stream_id text primary key,
+    last_sequence integer not null
+);
+```
+
+This is per-stream state, not a global cursor.
+
+- [ ] Make `ChatStoreProjectionApplier` the sole new-runtime caller of transcript row insert/update/delete methods. Apply the event and cursor advance in one `ChatStore` transaction.
+- [ ] Apply `CursorAdvance` by changing only the cursor in that transaction.
+- [ ] Do not add `ChatStore → Rust` reconciliation. If Rust has no canonical conversation, display it as unavailable rather than importing Swift rows.
+- [ ] Remove the Swift invocation of the old `runAgentLoop`; leave its body temporarily unreachable until Task 14.
+- [ ] Run the complete `MinisTests` target to catch direct-ChatStore regressions:
+
+```bash
+OPENMINIS_TEST_UDID="$OPENMINIS_IPHONE_UDID" \
+  bash local-ios-agent/scripts/run-openminis-tests.sh MinisTests
+```
+
+Expected: PASS.
+
+- [ ] Commit:
+
+```bash
+git add OpenMinis/src/ios/Agent/LocalRuntime \
+  OpenMinis/src/ios/Agent/Chat \
+  OpenMinis/src/ios/Agent/Session/SessionForkManager.swift \
+  OpenMinis/src/ios/MinisTests
+git commit -m "feat: drive the OpenMinis product from the Rust loop"
 ```
 
 ---
@@ -1933,14 +1982,17 @@ git commit -m "refactor: retain minimal execution event observation"
   7. final assistant output is persisted by Rust and projected once;
   8. app relaunch replays no duplicate messages;
   9. retry and edit both create new canonical events;
-  10. cancellation terminates model and all tool processes;
+  10. cancellation terminates the model and all tool processes, and cancellation before the first token never starts a fallback provider;
   11. a simulated host exit between tool-call streaming and batch completion leaves neither assistant tool calls nor tool results in the canonical transcript;
   12. app relaunch from a stale projection cursor replays the missing conversation events before live delivery, and an injected sequence gap is pulled rather than skipped;
   13. retrying the same `Send` FFI payload with the same request ID returns the original result and starts one run, while a changed payload returns idempotency conflict;
   14. two simultaneous sends on one conversation execute at most one model/tool path and the other returns `conversation_busy`, while two conversations run concurrently;
   15. model-phase, model-to-tool boundary, and tool-phase cancellation races commit no post-cancel final/tool round;
   16. two runs with identical tools retain independent `ToolLoopDetector` histories and both registries are empty after termination;
-  17. the Rust model request uses the digest-verified prompt/Skill/tool snapshot frozen at run start even if Swift settings change mid-run.
+  17. out-of-order child completion still records `ToolLoopDetector` history in original call order;
+  18. the Rust model request uses the digest-verified prompt/Skill/tool snapshot frozen at run start even if Swift settings change mid-run;
+  19. cancelling an idle projection feed with no new event returns its FFI observer and leaves zero Rust listeners/subscriptions and zero Swift projection tasks;
+  20. at most five open/background conversations own live projection feeds, a dormant conversation catches up when opened, and archive/delete terminal projection stops its feed immediately.
 
 - [ ] Add UI smoke tests for:
 
@@ -2035,9 +2087,10 @@ Stop and review at these boundaries:
 1. **After Task 2:** GPL acceptance, source provenance, submodules, and OpenMinis linkage are correct.
 2. **After Task 5:** the minimal direct Rust loop and canonical transcript contracts are accepted before transport work.
 3. **After Task 8:** the existing reliable wire carries complete model requests and batches without a second protocol.
-4. **After Task 10:** OpenMinis is demonstrably the product trunk and Rust owns control/transcript.
-5. **After Task 13:** prompt/provider/sync/iSH security boundaries match the approved design.
-6. **After Task 15:** every zero-caller legacy group is removed, required event observation is retained, and the full iPhone/iPad suite passes.
+4. **After Task 11:** snapshot and provider/model dependencies are complete without temporary App stubs.
+5. **After Task 12:** OpenMinis is demonstrably the product trunk and Rust owns control/transcript.
+6. **After Task 13:** prompt/provider/sync/iSH security boundaries match the approved design.
+7. **After Task 15:** every zero-caller legacy group is removed, required event observation is retained, and the full iPhone/iPad suite passes.
 
 ## Explicitly Deferred
 
