@@ -967,7 +967,11 @@ fn legacy_llm_occurrences() -> std::collections::BTreeMap<String, usize> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut result = std::collections::BTreeMap::new();
     for directory in ["src/core", "src/model", "src/inference"] {
-        for (file, source) in rust_sources_under(root.join(directory)) {
+        let directory_path = root.join(directory);
+        if !directory_path.exists() {
+            continue;
+        }
+        for (file, source) in rust_sources_under(directory_path) {
             for symbol in [
                 "ProviderRegistry",
                 "ModelProvider",
