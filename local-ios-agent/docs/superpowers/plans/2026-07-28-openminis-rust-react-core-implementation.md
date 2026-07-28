@@ -21,6 +21,7 @@
 - A tool round is one Rust storage transaction: assistant tool calls and the complete validated tool-result batch commit together or neither commits.
 - Swift owns model retry/fallback, tool concurrency, tool argument repair, tool preflight, iSH process management, and product UI.
 - `LocalAgentLLMCloud` remains the only cloud HTTP execution stack. OpenMinis retains settings, OAuth, provider/model catalog, Base URL, and product interactions.
+- Swift freezes one non-secret `ProviderRunPlan` on the first model generation of each Rust run and reuses it across every ReAct turn. API keys/OAuth tokens are excluded from the plan and resolved from secure storage immediately before each request attempt.
 - The only Rust tool runtime API is one ordered batch call. No tool execution-mode enum crosses the Rust/Swift boundary.
 - iSH raw guest networking remains enabled by default to match OpenMinis. It is an independent high-privilege network path and is not covered by `LocalAgentLLMCloud` SSRF/egress controls. The UI must disclose this; phase 1 adds no per-command approval and claims no string-based network sandbox.
 - Phase 1 disables cross-device sync for `Session`, `Message`, `CompactMarker`, and `SessionFile`. Do not add a `ChatStore → Rust` import path.
@@ -37,9 +38,10 @@
 - A Rust-owned ReAct loop completes text-only and multi-tool runs, validates batch ID plus ordered results, stops safely at all model/tool cancellation boundaries and the max-turn bound, and contains no approval/run-state machine.
 - OpenMinis executes a whole tool batch with up to ten concurrent calls and owns one cancellation handle plus every iSH PID for each call.
 - Send, retry, edit, delete, clear, branch, archive, and conversation deletion enter Rust first, are request-idempotent, and are projected idempotently into `ChatStore`.
-- On startup and after any sequence gap, Swift resumes the relevant conversation projection feed from its stored per-stream cursor before applying live events. The product keeps at most five feeds for the open or background-running conversations and releases each Rust listener when its Swift stream ends.
+- On startup and after any sequence gap, Swift resumes the relevant conversation projection feed from its stored per-stream cursor before applying live events. The persistent feed set is exactly `SessionConcurrencyManager.runningSessions ∪ currentConversation`, so OpenMinis's five concurrent runs require at most six feeds. A command targeting a dormant stream may temporarily use an available slot, but every feed is released when it leaves that set or its awaited command projection is applied.
 - Prompt Markdown documents, at most 20 OpenMinis Skill descriptors, and the current OpenMinis tool name/description/JSON schemas enter Rust once as a digest-verified run-start snapshot; full Skill files are read on demand with the file tool, and the new model path never invokes OpenMinis prompt/Skill/memory injection.
 - Provider settings/OAuth/Base URL remain OpenMinis product features while every cloud request is executed by `LocalAgentLLMCloud`.
+- A provider/model/Base URL/fallback setting change during a tool round affects only the next run; the active run keeps its frozen non-secret route while credentials remain late-bound.
 - Conversation CloudKit sync is disabled; Skills/provider product data sync still works.
 - API keys/OAuth tokens cannot be observed from Rust, iSH, tool results, or logs; provider sync remains inside OpenMinis's existing Swift-only secret controls.
 - Rust, SwiftPM, OpenMinis unit tests, architecture lints, and the iPhone/iPad simulator smoke suite pass.
@@ -955,11 +957,13 @@ git commit -m "feat: add minimal Rust ReAct agent loop"
   2. an `execute_tool_batch` command with two ordered calls;
   3. a `tool_batch_completed` event with two ordered results;
   4. a cancellation command for an active batch;
-  5. invalid command/payload combinations for every command kind.
+  5. invalid command/payload combinations for every command kind;
+  6. invalid event/payload combinations: missing batch completion, completion on a model event, mismatched run ID, mismatched expected batch ID, and batch completion mixed with text/tool-call/model-completion fields.
 
 - [ ] Assert both languages produce the same canonical envelope digest.
 - [ ] Assert old schema-v1 fixture decoding still works during migration.
 - [ ] Assert a reordered tool result list changes the digest and is rejected by the Rust batch validator.
+- [ ] Assert Swift outbound and Rust inbound validators accept/reject the same event fixtures with `llm.contract.event_payload_mismatch`.
 - [ ] Run:
 
 ```bash
@@ -1032,9 +1036,25 @@ ToolBatchFailed,
 
 ```rust
 pub tool_batch_completion: Option<HostToolBatchCompletion>,
+
+pub struct HostToolBatchCompletion {
+    pub batch_id: String,
+    pub run_id: String,
+    pub ordered_results: Vec<HostToolResult>,
+}
 ```
 
-with `batch_id` and `ordered_results`. Do not send one event per executed tool result.
+Mirror `HostToolBatchCompletion` exactly in Swift. Do not send one event per executed tool result.
+- [ ] Add `LLMEventPayload::validate_for(kind, envelope_run_id, expected_batch_id)` in Rust and the matching Swift `validate(for:envelopeRunID:expectedBatchID:)`. Enforce:
+
+  - `ToolBatchCompleted` carries exactly one `tool_batch_completion`;
+  - its `run_id` equals the envelope `run_id`;
+  - its `batch_id` equals the non-optional active `expected_batch_id`;
+  - text, reasoning/tool-call fields, token usage, model `completion`, failure, and close fields are absent; existing command/operation correlation IDs remain governed by the unchanged transport correlation rules;
+  - every other model or tool event has `tool_batch_completion == nil`.
+
+Reject a missing/mixed completion or either identity mismatch with `llm.contract.event_payload_mismatch`.
+- [ ] Swift validates immediately before computing the outgoing v2 event digest and enqueueing the event. Rust verifies decoding and the canonical digest, then invokes the same validator with the batch awaited by `HostToolRuntime`; validation must finish before receipts, transport lifecycle transitions, result-slot mutation, or delivery to `AgentLoop`. A valid digest never bypasses semantic validation.
 
 - [ ] Keep all existing envelope identity fields, sequence semantics, receipt dispositions, digest verification, backpressure behavior, and `host_process_epoch`.
 - [ ] Make canonical digest domains schema-specific (`host-command-payload:v2`, `llm-event-envelope:v2`) while preserving v1 decoding until Task 14.
@@ -1100,6 +1120,7 @@ Expected: FAIL.
 
 - [ ] Use `git mv` for the dispatcher and worker files so history is preserved.
 - [ ] Keep their `Condvar`/worker-thread mechanism, receipts, backpressure thresholds, repository transactions, epoch checks, and necessary `HostExecutionPhase`/`ResourceLifecycle` transport states.
+- [ ] At event ingress, run Task 6's `LLMEventPayload::validate_for` after digest verification and before any transport state transition or model/tool result delivery. Pass the active batch ID awaited by `HostToolRuntime`; an invalid event becomes a terminal contract error and never fills a result slot.
 - [ ] Replace `HostToolBatchExecutor::execute_tool` and the sequential loop in `process_tool_batch` with the `HostToolRuntime` command/response path.
 - [ ] Route the existing `cancel_run` FFI operation to `AgentLoopService::cancel_run(run_id)`. The service obtains the run-scoped record, copies its optional active batch ID under the short gate, releases all locks, and only then emits `CancelGeneration` or `CancelToolBatch`; the bridge does not infer a phase.
 - [ ] Remove approval outcomes from the new adapter. A Swift preflight rejection is an ordinary `ToolCallResult { is_error: true }`.
@@ -1164,7 +1185,7 @@ git commit -m "refactor: adapt reliable host transport to the direct loop"
   - the handler forwards model events and terminal errors without implementing retry/fallback or storing replay eligibility;
   - Rust never receives or selects the provider fallback candidate list;
   - cancellation stops the active provider/local task;
-  - tool batch commands retain `runID`, are passed as one ordered value, and emit one batch completion.
+  - tool batch commands retain `runID`, are passed as one ordered value, and emit one batch completion echoing both `batchID` and `runID`.
 
 - [ ] Define the Swift-only protocols:
 
@@ -1201,6 +1222,7 @@ Expected: FAIL.
 - [ ] Keep `ModelRuntimeCommandHandler` as a thin dispatcher. It owns no `hasEmittedModelContent` field or per-run replay dictionary. Fallback ordering, replay eligibility, and model/provider configuration belong only to the single `OpenMinisModelExecutor.generate` invocation in Task 11.
 - [ ] The host envelope contains only the selected logical request, never provider candidates or credentials.
 - [ ] Use `LLMEventSequencer` for batch events as well as model events. Do not create a second Swift callback.
+- [ ] Before `LLMEventSequencer` emits any v2 event, invoke Task 6's Swift event validator. For `ToolBatchCompleted`, pass the original `HostToolBatch.batchID` and reject a handler completion whose batch or run identity differs before it reaches the sequencer.
 - [ ] Preserve all current event receipt and backpressure handling.
 - [ ] Run both focused suites and the existing host runtime suite.
 
@@ -1249,7 +1271,7 @@ git commit -m "feat: handle Rust model and tool batch commands in Swift"
   - at most ten independent calls are active;
   - argument repair and preflight happen before execution;
   - result order matches input order even when completion order differs;
-  - the completion echoes the input `batchID`;
+  - the completion echoes the input `batchID` and `runID`;
   - an unknown tool and a preflight rejection return model-visible error results;
   - cancelling one batch invokes every per-call cancellation handle and every recorded PID;
   - cancellation arriving after batch registration but before a child handle/PID is installed still cancels that late registration;
@@ -1332,7 +1354,7 @@ onProcessStarted: { batchId, callId, pid in
 
 Allow multiple PIDs per call. Do not preserve the computed “set” backed by one PID.
 
-- [ ] Return one `HostToolBatchCompletion` containing the input `batchID` and ordered results. Remove message/ChatStore writes from the extracted execution path; legacy `AIChatViewModel` callers may adapt returned results until Task 12 replaces the loop.
+- [ ] Return one `HostToolBatchCompletion` containing the input `batchID`, input `runID`, and ordered results. Remove message/ChatStore writes from the extracted execution path; legacy `AIChatViewModel` callers may adapt returned results until Task 12 replaces the loop.
 - [ ] `cancel(batchId:)` obtains the batch's `runID`, cancels all entries, and removes that run's detector. `OpenMinisModelExecutor` removes the same detector when a model generation finishes with no tool call, exhausts fallback with an error, or receives `cancel(runId:)`. Removal is idempotent.
 - [ ] Keep path traversal, symlink, mount permission, and native-offload checks in their current Swift execution layer.
 - [ ] Run the same two test identifiers through `run-openminis-tests.sh`.
@@ -1523,6 +1545,11 @@ git commit -m "feat: assemble prompts and Skills once in Rust"
   - Antigravity alone requires a dedicated Cloud Code envelope adapter because OpenMinis wraps requests and responses in its documented custom envelope;
   - provider/model/Base URL/group fallback configured in OpenMinis maps to one `LocalAgentLLMCloud` request;
   - every fallback attempt receives the same frozen Rust `ModelRequest` and never rebuilds prompt, Skills, memory, or tool schemas in Swift;
+  - the first `generate(runId:)` freezes logical model, per-candidate Base URL, and fallback candidate order in one non-secret `ProviderRunPlan`;
+  - after a first model turn emits tool calls, changing the selected model, Base URL, or fallback group does not change the second model turn for that run;
+  - a new run created after the setting change receives the new provider plan;
+  - credentials are absent from `ProviderRunPlan` and are resolved again immediately before every local/cloud attempt;
+  - final completion, explicit cancellation, and terminal error each remove the run plan, while a tool-call turn retains it;
   - each `OpenMinisModelExecutor.generate` invocation owns its own local `hasEmittedModelContent` value;
   - two concurrent generate calls do not share fallback eligibility;
   - a non-cancellation failure before the first text/reasoning/tool event may retry, while any such event permanently disables replay for that invocation;
@@ -1556,8 +1583,27 @@ Expected: FAIL because a configurable OpenAI-compatible product route and the ve
 ### GREEN: port codecs, not network clients
 
 - [ ] Reuse `ProviderConfigStore` UI, model lists, groups, OAuth flows, Keychain storage, validation screens, and custom Base URL editing.
-- [ ] `OpenMinisProviderConfigurationAdapter` maps non-secret configuration into a `ProviderProfile`.
+- [ ] `OpenMinisProviderConfigurationAdapter` maps non-secret configuration into a `ProviderProfile` and can freeze this Swift-only value on the first model request for a run:
+
+```swift
+struct ProviderRunPlan: Sendable, Equatable {
+    let logicalModelID: String
+    let orderedCandidates: [ProviderRunCandidate]
+}
+
+struct ProviderRunCandidate: Sendable, Equatable {
+    let providerConfigurationID: String
+    let providerType: ProviderType
+    let modelID: String
+    let baseURL: URL?
+    let presetID: ProviderPresetID
+}
+```
+
+The plan contains no API key, OAuth token, rendered prompt, messages, or tool schemas. It stays in Swift and never crosses the host envelope.
+- [ ] Store `ProviderRunPlan` in `OpenMinisModelExecutor` by `runID`, protected by the same actor/lock used for active provider tasks. The first `generate` atomically creates it from current settings; every later `generate` in the same ReAct run reuses it. Fallback eligibility flags remain local to each `generate` invocation, but the candidate list, logical model, model IDs, and Base URLs come only from the run plan. Do not add a second registry type or persistence table.
 - [ ] Resolve the selected credential through the OpenMinis Keychain/OAuth store inside `OpenMinisModelExecutor`, then hand it to `LocalAgentLLMCloud`'s credential/authorization boundary in memory. Never serialize it into Rust DTOs.
+- [ ] For each request attempt, resolve the current API key/OAuth token using the candidate's stable configuration ID immediately before authorization. Credential rotation during a run therefore takes effect on the next request without changing the frozen non-secret route.
 - [ ] Implement missing provider semantics by porting only request/response/SSE codec behavior into `LocalAgentLLMCloud`. Do not call OpenMinis provider network objects from the new runtime path.
 - [ ] Parameterize `OpenAICompatibleAdapter` with preset ID, endpoint, headers, authentication mode, and semantic adapter ID. Reuse it for OpenAI Chat Completions, OpenRouter, and Kimi Code.
 - [ ] Implement `AntigravityCloudCodeAdapter` from the distinct envelope already present in `OpenMinis/src/ios/Providers/Antigravity/AntigravityProvider.swift`: wrap the inner request with project/model/user-agent fields and unwrap the response envelope before feeding Gemini-compatible events to the existing semantic layer.
@@ -1572,7 +1618,8 @@ public static let antigravity = Self(rawValue: "antigravity")
 ```
 
 - [ ] Register exactly one adapter per shipped preset in `CloudLLMRuntime.shipped()` and add all four preset IDs to `OfficialCloudCapabilityCatalog.v1.json` with their implemented semantic adapter IDs.
-- [ ] Implement fallback only inside `OpenMinisModelExecutor.generate`. Use local `var hasEmittedModelContent = false` and `var hasEmittedToolCall = false` values captured by that invocation's emit closure; mark `hasEmittedModelContent` before forwarding the first text, reasoning, or tool event. Retry/fallback only while that value is false. In the error path, check cancellation before the generic provider-failure branch: `CancellationError`, `Task.isCancelled`, the executor's explicit run-cancel marker, and a provider/local-runtime cancelled terminal error are always rethrown as cancellation and never advance to the next candidate. `cancel(runId:)` cancels the active task before removing its registry entry. Do not add shared replay/fallback state or a replay dictionary keyed by run; the run-keyed active-provider-task/cancel registry may contain only task handles and cancellation markers needed for the current invocation and removes both when that invocation exits.
+- [ ] Implement fallback only inside `OpenMinisModelExecutor.generate`, iterating the frozen `ProviderRunPlan.orderedCandidates`. Use local `var hasEmittedModelContent = false` and `var hasEmittedToolCall = false` values captured by that invocation's emit closure; mark `hasEmittedModelContent` before forwarding the first text, reasoning, or tool event. Retry/fallback only while that value is false. In the error path, check cancellation before the generic provider-failure branch: `CancellationError`, `Task.isCancelled`, the executor's explicit run-cancel marker, and a provider/local-runtime cancelled terminal error are always rethrown as cancellation and never advance to the next candidate. Do not add shared replay eligibility or a replay dictionary keyed by run.
+- [ ] Keep the run plan after a successful generation that emitted a tool call. Remove the plan and active task/cancel entry when a generation produces the final no-tool turn, `cancel(runId:)` is called, or fallback ends in a terminal error. `cancel(runId:)` cancels the active task before the atomic cleanup. The abnormal-exit `ModelRuntime::cancel(run_id)` rule in Task 5 makes tool errors and max-turn exits use the same idempotent cleanup.
 - [ ] Inject the Task 9 `ToolLoopDetectorRegistry` into `OpenMinisModelExecutor`. Remove `runID` when generation completes with `hasEmittedToolCall == false`, when fallback is exhausted, or when `cancel(runId:)` is called. A generation that emits tool calls retains the detector for the following batch.
 - [ ] Keep the old OpenMinis provider factory only for non-agent previews during migration. The final App cutover task adds the architecture assertion that rejects it from `RustAgentCoordinator`.
 - [ ] Run the two SwiftPM commands and repeat the two-test `run-openminis-tests.sh` command above.
@@ -1619,10 +1666,14 @@ This final cutover depends on the Task 10 snapshot provider and Task 11 model/pr
   - `send` obtains one complete Task 10 `RunStartSnapshotDTO`, submits `TranscriptCommandDTO.send`, and does not directly append a durable user message;
   - retry and edit receive the same complete snapshot shape; delete, clear, branch, archive, and conversation deletion each submit their matching Rust command before a durable `ChatStore` change;
   - a transcript command acknowledgement never applies a `ChatStore` projection;
-  - app startup observes only the current open conversation and product-allowed background-running conversations, never more than five feeds;
+  - app startup's persistent feed set equals `SessionConcurrencyManager.runningSessions ∪ currentConversation`, including the case of five background runs plus a different current conversation, and never exceeds six;
   - a dormant historical conversation catches up from its stored cursor when opened rather than owning a permanent feed;
   - applying an archive or delete terminal projection immediately cancels that conversation's subscription while retaining its cursor;
-  - opening a sixth eligible non-running conversation cancels the least-recently-used non-running feed before starting the replacement, while an active background feed is never evicted;
+  - changing the current conversation cancels the old current feed immediately unless that conversation remains in `runningSessions` or is awaiting an already-accepted command projection;
+  - no LRU, eviction order, or feed-priority policy exists;
+  - every `TranscriptCommandDTO` establishes a feed for its `conversationStreamId` before it enters Rust, including archive/delete from the session list;
+  - a dormant command target may use an available temporary feed, but when all six slots are occupied the coordinator returns `projectionFeedCapacity` before calling Rust;
+  - a temporary archive/delete feed remains alive until its terminal projection is applied, then closes immediately;
   - archive/delete and other runless projections arrive through the conversation feed;
   - the coordinator never uses `ExecutionBridgeClient.observeEvents(runId:)` for transcript projection;
   - `ChatStoreProjectionApplier` ignores an event whose sequence is at or below the stored sequence for its conversation;
@@ -1657,6 +1708,10 @@ Expected: FAIL.
 - [ ] Implement `RustAgentCoordinator` as the small UI-facing facade:
 
 ```swift
+enum RustAgentCoordinatorError: Error, Equatable {
+    case projectionFeedCapacity
+}
+
 @MainActor
 final class RustAgentCoordinator: ObservableObject {
     func submit(_ command: TranscriptCommandDTO) async throws
@@ -1670,8 +1725,20 @@ It owns no conversation history and no agent loop.
 - [ ] Replace the call from OpenMinis send/retry paths into `runAgentLoop` with snapshot creation followed by the corresponding Rust command.
 - [ ] Treat `submitTranscriptCommand` results as acceptance metadata only. Feed `ChatStoreProjectionApplier` exclusively from `ConversationBridgeClient.observeTranscriptProjections`.
 - [ ] `ExecutionBridgeClient.observeEvents(runId:)` may continue to drive ephemeral text/reasoning/tool-status UI for an active run, but it never advances the transcript cursor or mutates durable `ChatStore` rows.
-- [ ] Keep projection cursor rows for every previously seen conversation, but create live subscriptions only for the current open conversation and background-running conversations admitted by the product, with a hard combined limit of five. Other historical or archived rows remain dormant. Opening a dormant conversation starts from its stored cursor; before adding a sixth feed, cancel and await termination of the least-recently-used feed that has no active run. If all five feeds have active background runs, the existing product background-run admission must refuse a sixth active conversation instead of leaking a sixth observer.
-- [ ] Before submitting a run-producing command for a new stream, insert its cursor row at 0 and establish its eligible projection feed. Reconnecting always creates a fresh subscription ID and passes the last committed Swift cursor.
+- [ ] Keep projection cursor rows for every previously seen conversation. Reconcile persistent subscriptions after every running/current change using only:
+
+```swift
+var desiredFeedStreams = SessionConcurrencyManager.shared.runningSessions
+if let currentConversationID {
+    desiredFeedStreams.insert(currentConversationID)
+}
+let maxProjectionFeeds = SessionConcurrencyManager.shared.maxConcurrent + 1 // 6
+```
+
+Start missing feeds and cancel feeds that leave `desiredFeedStreams` and have no accepted command awaiting projection; do not implement LRU, eviction, priority, or a second concurrency manager.
+- [ ] Before submitting any `TranscriptCommandDTO`, call `ensureProjectionFeed(conversationStreamId:)` for its stream, insert the cursor row at 0 when absent, and install the observation task before invoking Rust. This includes send, retry, edit, message delete, clear, branch, archive, and conversation delete; it is not limited to run-producing commands. The observer's register-before-query replay rule makes a command racing listener registration lossless.
+- [ ] A dormant command target that is not in the persistent set may occupy an unused temporary slot. Enforce one hard limit of six total feeds. If all six are already required by the persistent set or other pending commands, phase 1 immediately returns `RustAgentCoordinatorError.projectionFeedCapacity` before `submitTranscriptCommand` and does not call Rust. After an accepted command, keep the temporary feed until `ChatStoreProjectionApplier` has atomically applied through `TranscriptCommandResult.acceptedSequence`; archive/delete specifically wait for their terminal projection. Then cancel and await that feed unless the stream has joined the persistent set. A rejected Rust command releases its temporary feed immediately.
+- [ ] Reconnecting always creates a fresh subscription ID and passes the last committed Swift cursor.
 - [ ] Apply only `sequence == last_sequence + 1`. If the feed emits `sequence > last_sequence + 1`, cancel and await termination of that observation without applying the event, then immediately reopen it with `afterSequence: last_sequence`; never jump the cursor. The Rust operation replays canonical events before resuming live delivery.
 - [ ] On projection stream error or listener overflow, release the old subscription and reopen from the same last committed cursor after 250 ms, then 1 s, then 2 s for subsequent failures; reset to 250 ms after the next applied event. Do not fall back to the run observer or command response.
 - [ ] After applying an archive or conversation-deletion terminal projection, cancel and await that stream's subscription immediately. Retain its cursor row so reopening or recovery resumes from the last applied sequence without a permanent listener.
@@ -1991,8 +2058,11 @@ git commit -m "refactor: retain minimal execution event observation"
   16. two runs with identical tools retain independent `ToolLoopDetector` histories and both registries are empty after termination;
   17. out-of-order child completion still records `ToolLoopDetector` history in original call order;
   18. the Rust model request uses the digest-verified prompt/Skill/tool snapshot frozen at run start even if Swift settings change mid-run;
-  19. cancelling an idle projection feed with no new event returns its FFI observer and leaves zero Rust listeners/subscriptions and zero Swift projection tasks;
-  20. at most five open/background conversations own live projection feeds, a dormant conversation catches up when opened, and archive/delete terminal projection stops its feed immediately.
+  19. after a tool-call turn, changing provider/model/Base URL/fallback settings does not alter that run's second model turn, a new run sees the change, and each attempt still resolves the current credential;
+  20. cancelling an idle projection feed with no new event returns its FFI observer and leaves zero Rust listeners/subscriptions and zero Swift projection tasks;
+  21. five background runs plus a different current conversation own exactly six feeds; changing the current conversation reconciles the direct set without LRU;
+  22. every transcript command establishes its feed before entering Rust, a seventh dormant command target is rejected before canonical mutation, and an archive/delete temporary feed closes only after its terminal projection applies;
+  23. a digest-valid `ToolBatchCompleted` with missing/mixed completion or mismatched batch/run identity is rejected before transport state mutation or AgentLoop result delivery.
 
 - [ ] Add UI smoke tests for:
 
