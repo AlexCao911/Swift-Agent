@@ -1,6 +1,6 @@
 # OpenMinis Product Reuse and Minimal Rust ReAct Core Design
 
-**Status:** Revised after written-spec review; pending final approval
+**Status:** Revised after second written-spec review; pending final approval
 
 **Date:** 2026-07-28
 
@@ -64,6 +64,9 @@ Rust Skill Package direction in
 - Remove iOS-specific lifecycle concepts from the platform-neutral Rust loop.
 - Reuse the existing sequenced, digested, backpressured, epoch-bound
   Rust/Swift wire transport.
+- Keep Prompt and Context assembly exclusively in Rust.
+- Prevent `ChatStore` cross-device data from bypassing the canonical Rust
+  transcript.
 
 ## Non-Goals
 
@@ -78,6 +81,9 @@ Rust Skill Package direction in
 - Preserving redundant legacy execution abstractions for compatibility.
 - Resuming an in-flight provider stream or tool process after process death.
 - Adding a general Rust approval workflow for normal tools.
+- Adding reverse `ChatStore -> Rust` transcript import.
+- Adding a global projection cursor or second projection bus.
+- Claiming phase-one iSH guest networking has destination-level sandboxing.
 
 ## Confirmed Decisions
 
@@ -105,6 +111,12 @@ Rust Skill Package direction in
     tools.
 16. `LocalAgentLLMCloud` is the only cloud HTTP execution stack.
 17. Rust is the only writer of the canonical agent transcript.
+18. Rust is the only Prompt, Context, and tool-schema assembler.
+19. Agent-loop state is removed; necessary transport lifecycle state remains
+    isolated in the host adapter.
+20. Phase one disables cross-device conversation synchronization.
+21. Phase-one iSH guest networking is an independent high-privilege capability,
+    not a protected `LocalAgentLLMCloud` egress path.
 
 ## Architecture
 
@@ -122,21 +134,20 @@ OpenMinis Swift App trunk
                     | and host-process epoch
                     | ordered PromptDocument and SkillDescriptor snapshots
                     v
-Rust Core
+Rust host_adapter
+  - existing envelopes, receipts, epoch, digest, backpressure
+  - necessary transport delivery and resource lifecycle
+                    |
+                    | ModelRuntime / ToolRuntime logical interfaces
+                    v
+Rust agent_loop
   - direct ReAct loop
   - Prompt Markdown composition
   - Context assembly and budgeting
   - Skills progressive disclosure
   - MemoryBackend interface
   - conversation/session data
-  - completed-turn persistence and events
-                    |
-                    v
-C++ local inference
-  - model loading
-  - generation
-  - streaming
-  - cancellation
+  - completed-turn persistence and per-stream events
 ```
 
 ### Logical Core Boundary and Existing Wire Transport
@@ -168,6 +179,30 @@ versioned command/payload schema and reuse the same delivery machinery. Do not
 add a second callback channel, queue, receipt scheme, or transport abstraction.
 The migration removes business-state-machine meaning from Agent Core while
 preserving the reliable communication layer.
+
+The Rust module boundary is:
+
+```text
+agent_loop/
+  depends only on ModelRuntime, ToolRuntime, Prompt, Context, Skills, Memory,
+  conversation, and persistence interfaces
+
+host_adapter/
+  implements ModelRuntime and ToolRuntime over the existing envelopes
+  retains receipts, sequence checks, epoch checks, backpressure,
+  delivery acknowledgements, and required resource lifecycle
+```
+
+`agent_loop/` must not import `HostExecutionPhase`, `ResourceLifecycle`, event
+receipts, prepared host sessions, or host epochs. Those types may remain inside
+`host_adapter/` where required for reliable transport. The "no state machine"
+rule does not authorize deleting transport acknowledgements or lifecycle
+tracking.
+
+Agent-only states and transitions are still retired: `RunMachine`, generic
+approval flow, suspended-for-approval behavior, and any
+`HostExecutionPhase` variants that have no remaining transport purpose after
+the batch migration.
 
 It does not know about:
 
@@ -302,6 +337,24 @@ and no hidden platform-specific precedence.
 
 Swift owns Prompt file import, upload, editing, selection, and display. The
 Rust Prompt compiler owns the final deterministic text sent into Context.
+
+Rust is the sole assembler of the complete system prompt, messages, Context,
+and model-visible tool definitions. On the new runtime path, Swift receives
+that completed input and only encodes it for the selected local or cloud
+backend.
+
+The new OpenMinis `ModelRuntime` path must not call or append:
+
+- `SystemPromptBuilder`;
+- `baseSystemPrompt`;
+- `SkillStore.skillPromptFragment`;
+- OpenMinis global or daily memory injection;
+- `MCPStore.systemPromptSnippet`;
+- a separately rebuilt `makeAgentTools()` schema.
+
+Any model capability fragment or product prompt that remains useful must enter
+Rust first as a `PromptDocument`, `ContextContribution`, or registered tool
+definition. Swift must not mutate the already-budgeted input.
 
 ## Context
 
@@ -504,12 +557,30 @@ Removing generic Rust approvals does not weaken the host boundary:
   read-only or read-write access;
 - path traversal, symbolic-link escape, and native-offload permission checks
   remain enforced in Swift before host access;
-- guest network access remains subject to the existing security and egress
-  policy rather than bypassing it through raw iSH networking;
 - OpenMinis `ToolLoopDetector` remains in the Swift tool executor;
 - Rust enforces one simple configurable maximum number of model/tool turns.
 
 The maximum-turn counter is a loop budget, not a state machine.
+
+OpenMinis currently gives the iSH guest its own DNS configuration, including
+public-DNS fallback, and guest processes can open sockets independently.
+Therefore phase one treats raw iSH networking as a separate high-privilege
+capability:
+
+- it is not protected by `LocalAgentLLMCloud` HTTPS, SSRF, DNS, redirect, or
+  egress policy;
+- `curl`, `wget`, package managers, and other guest processes may use that
+  independent network path;
+- shell-command string inspection is not a network security boundary and must
+  not be presented as one;
+- product UI and security documentation must disclose this boundary wherever
+  raw guest networking is enabled;
+- API keys and OAuth tokens remain excluded from the guest even though the
+  guest has independent network access.
+
+Destination filtering, private-address denial, and DNS policy require a future
+implementation at the iSH socket/connect boundary. They are not claimed or
+scheduled in phase one.
 
 ## Model Runtime
 
@@ -618,18 +689,39 @@ writes is permitted; wholesale tool rewrites are not.
 
 - Rust is the only writer of the canonical provider-neutral agent transcript
   and completed ReAct turns.
-- OpenMinis `ChatStore` remains only a UI/search/sync read model.
-- Rust emits projection events with a stable event ID and monotonic cursor.
-- Swift applies each event idempotently and records the last applied cursor.
+- OpenMinis `ChatStore` remains only a local UI/search read model for
+  conversation data.
+- Projection reuses the existing per-stream event position:
+  `(stream_id or run_id, sequence)`.
+- Swift records the last applied sequence separately for each stream and
+  ignores events at or below that sequence.
 - Projection is one-way: Rust to `ChatStore`. There is no bidirectional
   transcript synchronization and no independent Swift transcript append.
 - Transient UI progress may update `AIChatViewModel.messages`, but it cannot
   become canonical history or independently drive the agent loop.
-- On restart, Swift resumes projection from its last cursor; it never infers
-  missing canonical messages from `ChatStore`.
+- On restart, Swift resumes each stream after its saved sequence; it never
+  infers missing canonical messages from `ChatStore`.
+- No global projection cursor, global event number, or separate projection bus
+  is introduced.
 - Swift owns provider profiles, credentials, model installations, Skill files,
   iSH filesystem data, and iOS UI preferences.
 - C++ owns no product persistence.
+
+### Phase-One Cross-Device Sync
+
+OpenMinis currently uploads and downloads `Session`, `Message`,
+`CompactMarker`, and `SessionFile` records. Remote records would mutate the
+local `ChatStore` without entering Rust, so this path is incompatible with a
+Rust-canonical transcript.
+
+Phase one disables upload, download, merge, deletion propagation, and restore
+for those conversation record types. Cloud sync may remain enabled for product
+data such as Skills and provider configuration, subject to their existing
+secret-handling rules.
+
+Do not add a `ChatStore -> Rust` import or reverse-projection protocol to retain
+the current conversation sync. Cross-device conversations are deferred until
+the sync format directly carries Rust canonical event streams.
 
 ## Legacy Simplification
 
@@ -642,7 +734,7 @@ After production callers move to the direct loop, remove or retire:
 - unused `PluginModule` / `RuntimePluginRegistry`;
 - custom Rust Skill Package types;
 - concrete memory implementations with no production callers;
-- core dependencies on iOS host lifecycle contracts.
+- `agent_loop/` dependencies on iOS host lifecycle contracts.
 
 Deletion occurs only after caller searches and replacement tests confirm that
 the production path no longer depends on each item.
@@ -675,7 +767,8 @@ The implementation is acceptable when:
    does not recreate its product features inside the current app shell.
 3. Existing `HostCommandEnvelope`, `LLMEventEnvelope`, receipt, sequence,
    digest, backpressure, and epoch machinery carries the new loop traffic;
-   there is no second wire protocol.
+   there is no second wire protocol. Necessary lifecycle state remains inside
+   `host_adapter/` and is absent from `agent_loop/`.
 4. Multiple tool calls cross the boundary through one
    `execute_batch(ordered_calls)` request and return in source order.
 5. Rust exposes no tool execution-mode field and performs no per-call
@@ -685,17 +778,19 @@ The implementation is acceptable when:
 7. A failure before model output may retry/fallback inside Swift; a failure
    after text, reasoning, or tool output does not automatically replay.
 8. Rust never receives a model candidate list or provider secret.
-9. `ChatStore` updates are one-way, cursor-based, and idempotent; only Rust
-   writes canonical transcript events.
+9. `ChatStore` projection is one-way and idempotent using
+   `(stream_id or run_id, sequence)`; no global projection cursor exists.
 10. No API key or OAuth token appears in iSH files, environment, logs, or tool
     results.
-11. Mount permissions, path traversal, symbolic links, native offload, and
-    guest network egress have explicit security tests.
+11. Phase-one cloud sync excludes `Session`, `Message`, `CompactMarker`, and
+    `SessionFile` upload, download, merge, deletion, and restore.
 12. OpenMinis `ToolLoopDetector` and a simple Rust maximum-turn budget both
     stop runaway loops.
 13. Exactly one cloud HTTP execution stack exists:
     `LocalAgentLLMCloud`.
-14. Prompt Markdown composition is deterministic and source traceable.
+14. Rust deterministically assembles the complete Prompt, Context, messages,
+    and tool schema. The Swift runtime performs no second base-prompt, Skill,
+    Memory, MCP, or tool-schema injection.
 15. Uploaded OpenMinis Skills appear as Rust-generated metadata and their
     `SKILL.md` files are read on demand through ordinary tools.
 16. A fake `MemoryBackend` can be swapped without changing the ReAct loop, and
@@ -703,11 +798,14 @@ The implementation is acceptable when:
 17. Cloud and C++ local generation satisfy the same Rust model contract.
 18. Existing cloud transport, credential, egress, and retention security tests
     continue to pass.
-19. The platform-neutral loop imports no Apple, Swift, Keychain, URLSession, or
-    iSH-specific types.
-20. Legacy loop/state/plugin/approval paths have no production callers before
+19. The platform-neutral loop imports no Apple, Swift, Keychain, URLSession,
+    iSH, `HostExecutionPhase`, `ResourceLifecycle`, receipt, or epoch types.
+20. Mount permissions, path traversal, symbolic links, and native offload have
+    explicit security tests. Tests and product disclosure also demonstrate
+    that raw iSH networking is independent of cloud egress protection.
+21. Legacy loop/state/plugin/approval paths have no production callers before
     they are removed.
-21. One small end-to-end contract test covers the core loop; focused bridge,
+22. One small end-to-end contract test covers the core loop; focused bridge,
     security, projection, cancellation, and parser tests cover trust
     boundaries.
 
@@ -734,9 +832,13 @@ design with:
 - a second Skill store;
 - a concrete memory backend;
 - a dynamic plugin framework;
+- a reverse `ChatStore` transcript-import path;
+- a global projection cursor or projection bus;
+- a claimed iSH network sandbox without socket/connect enforcement;
 - speculative compatibility layers.
 
 The shortest safe path is to adopt OpenMinis as the Swift trunk, connect its
 model and whole-batch tool facilities to the existing reliable bridge, make
-the direct Rust loop authoritative, then delete superseded Rust paths and
-unused concrete memory implementations.
+the direct Rust loop authoritative, disable ChatStore conversation sync and
+Swift-side Prompt injection, then delete superseded Rust paths and unused
+concrete memory implementations.
