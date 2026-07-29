@@ -8,9 +8,9 @@ mod execution_planner;
 mod execution_service;
 mod host_llm_dispatcher;
 mod host_llm_worker;
-mod react_worker;
 mod run_lifecycle;
 mod tool_approval;
+mod tool_contract;
 mod tool_loop;
 mod trace;
 
@@ -33,14 +33,10 @@ pub use host_llm_dispatcher::{
 pub use host_llm_worker::{
     HostLLMWorkerService, HostLLMWorkerServiceConfig, HostToolBatchExecutor,
 };
-pub use react_worker::{
-    ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker, ExecutionToolCall,
-    ExecutionToolExecutor, ExecutionToolObservation, ExecutionToolOutcome,
-    NoopExecutionToolExecutor,
-};
 pub use run_lifecycle::{
     ExecutionStartError, RunHandle, RunLifecycleService, StartExecutionRequest,
 };
 pub use tool_approval::{ApprovalDecision, ToolApprovalService};
+pub use tool_contract::{ExecutionToolCall, ExecutionToolObservation, ExecutionToolOutcome};
 pub use tool_loop::{ToolLoopService, ToolLoopStartError, ToolLoopStartRequest};
 pub use trace::TraceConfig;

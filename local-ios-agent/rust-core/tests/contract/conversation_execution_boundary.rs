@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use local_ios_agent_runtime::context::{ModelInputMessages, ModelInputRole};
+use local_ios_agent_runtime::context::ModelInputRole;
 use local_ios_agent_runtime::conversation::{
     AttachmentRef, ConversationCommitService, ConversationFrameId, ConversationFrameMessage,
     ConversationFrameRepository, ConversationLineage, ConversationRunFrame,
@@ -8,9 +8,8 @@ use local_ios_agent_runtime::conversation::{
 };
 use local_ios_agent_runtime::core::{EntryId, SessionId};
 use local_ios_agent_runtime::execution::{
-    CompletedRunRecord, CompletedRunRegistry, ExecutionContextInputAssembler,
-    ExecutionEventLog, ExecutionModelClient, ExecutionModelTurn, ExecutionReactWorker,
-    ExecutionService, NoopExecutionToolExecutor, RunLifecycleService,
+    CompletedRunRecord, CompletedRunRegistry, ExecutionContextInputAssembler, ExecutionEventLog,
+    ExecutionService, RunLifecycleService,
 };
 use local_ios_agent_runtime::storage::agent_os_state::SharedAgentOSStateStore;
 
@@ -87,53 +86,6 @@ fn context_assembler_uses_only_the_pinned_conversation_frame() {
         .messages()
         .iter()
         .any(|message| message.role() == ModelInputRole::System));
-}
-
-#[derive(Clone)]
-struct RecordingModel {
-    inputs: Arc<Mutex<Vec<ModelInputMessages>>>,
-}
-
-impl ExecutionModelClient for RecordingModel {
-    fn next_turn(
-        &self,
-        _run_id: &str,
-        input: &ModelInputMessages,
-    ) -> Result<ExecutionModelTurn, String> {
-        self.inputs.lock().unwrap().push(input.clone());
-        Ok(ExecutionModelTurn::Final {
-            message_id: "final_1".into(),
-            text: "answer".into(),
-        })
-    }
-}
-
-#[test]
-fn provider_neutral_react_worker_remains_available_for_kernel_tests() {
-    let inputs = Arc::new(Mutex::new(Vec::new()));
-    let reference = frame_ref("frame_react");
-    let log = ExecutionEventLog::default();
-    let completed = CompletedRunRegistry::default();
-    let worker = ExecutionReactWorker::new(
-        RecordingModel {
-            inputs: inputs.clone(),
-        },
-        NoopExecutionToolExecutor,
-        ExecutionContextInputAssembler::new(),
-        log.clone(),
-        completed.clone(),
-    );
-
-    worker
-        .run("run_1", &frame(reference.clone()), &reference)
-        .unwrap();
-
-    assert_eq!(inputs.lock().unwrap().len(), 1);
-    assert!(log
-        .replay("run_1", None)
-        .iter()
-        .any(|event| event.code() == "assistant_message_completed"));
-    assert!(completed.get("run_1", "final_1").is_some());
 }
 
 #[test]
