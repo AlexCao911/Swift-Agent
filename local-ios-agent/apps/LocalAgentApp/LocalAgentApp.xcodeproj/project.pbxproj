@@ -10,19 +10,14 @@
 		0A0000010000000000000001 /* LocalAgentApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000101 /* LocalAgentApp.swift */; };
 		0A0000010000000000000002 /* AppBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000102 /* AppBootstrapper.swift */; };
 		0A0000010000000000000003 /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000103 /* AppContainer.swift */; };
-		0A0000010000000000000004 /* AgentViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000104 /* AgentViewModel.swift */; };
-		0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000105 /* AgentRuntimeService.swift */; };
 		0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000106 /* RuntimeEventReducer.swift */; };
 		0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000107 /* MinimalHostToolDriver.swift */; };
 		0A0000010000000000000008 /* AgentViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000108 /* AgentViewState.swift */; };
-		0A0000010000000000000009 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000109 /* ChatView.swift */; };
 		0A000001000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010A /* Assets.xcassets */; };
 		0A000001000000000000000B /* LocalAgentBridge in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000301 /* LocalAgentBridge */; };
 		0A000001000000000000000C /* LocalNativeToolkit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000010000000000000302 /* LocalNativeToolkit */; };
 		0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000111 /* RuntimeEventReducerTests.swift */; };
 		0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */; };
-		0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */; };
-		0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000114 /* AgentViewModelTests.swift */; };
 		0A0000010000000000000011 /* RustRuntimeAppIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */; };
 		0A00000100000000000000F5 /* LocalInferenceNativeLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */; };
 		0A00000100000000000000F6 /* LocalInferenceReleaseSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */; };
@@ -111,13 +106,8 @@
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
 		0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */; };
 		0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010E /* RuntimeStreamBuffer.swift */; };
-		0A0000010000000000000018 /* ConversationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010F /* ConversationService.swift */; };
-		0A0000010000000000000019 /* MessageContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000118 /* MessageContentView.swift */; };
-		0A000001000000000000001A /* ConversationListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000119 /* ConversationListView.swift */; };
-		0A000001000000000000001B /* AttachmentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011A /* AttachmentService.swift */; };
 		0A000001000000000000001C /* AppIntentRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011B /* AppIntentRouter.swift */; };
 		0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011C /* LocalAgentShortcuts.swift */; };
-		0A000001000000000000001E /* ChatManagementSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000011D /* ChatManagementSheets.swift */; };
 		0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */; };
 		0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000123 /* RuntimeProjectionModelTests.swift */; };
 		0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000120 /* AgentBuilderViewModel.swift */; };
@@ -144,13 +134,8 @@
 		0C0000010000000000002015 /* AppShellViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002115 /* AppShellViewModel.swift */; };
 		0C0000010000000000002016 /* AppShellViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002116 /* AppShellViewModelTests.swift */; };
 		0C0000010000000000002017 /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002117 /* AppShellView.swift */; };
-		0C0000010000000000002018 /* ConversationWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002118 /* ConversationWorkspaceView.swift */; };
-		0C0000010000000000002019 /* ConversationWorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */; };
-		0C000001000000000000201A /* ConversationWorkspaceViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */; };
 		0C000001000000000000201B /* RunInlineCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211B /* RunInlineCards.swift */; };
 		0C000001000000000000201C /* RunInlineCardsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211C /* RunInlineCardsTests.swift */; };
-		0C000001000000000000201D /* ContextInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211D /* ContextInspectorView.swift */; };
-		0C000001000000000000201E /* ContextInspectorViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211E /* ContextInspectorViewModelTests.swift */; };
 		0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000211F /* ToolCenterViewModel.swift */; };
 		0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002120 /* ToolCenterViewModelTests.swift */; };
 		0C0000010000000000002021 /* ToolCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002121 /* ToolCenterView.swift */; };
@@ -174,25 +159,9 @@
 		0C0000010000000000002029 /* PrivacySettingsProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002129 /* PrivacySettingsProjectionTests.swift */; };
 		0C000001000000000000202A /* DebugTraceProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000212A /* DebugTraceProjectionTests.swift */; };
 		0C000001000000000000202B /* StateBadgeDescriptorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000212B /* StateBadgeDescriptorTests.swift */; };
-		0B0000010000000000001001 /* ConversationDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001101 /* ConversationDomain.swift */; };
-		0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001102 /* ConversationDomainAdapter.swift */; };
-		0B0000010000000000001003 /* ExecutionDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001103 /* ExecutionDomain.swift */; };
-		0B0000010000000000001004 /* ExecutionDomainAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001104 /* ExecutionDomainAdapter.swift */; };
-		0B0000010000000000001005 /* AgentProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001105 /* AgentProfileService.swift */; };
-		0B0000010000000000001006 /* AgentCompositionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001106 /* AgentCompositionService.swift */; };
-		0B0000010000000000001007 /* RunLifecycleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001107 /* RunLifecycleService.swift */; };
-		0B0000010000000000001008 /* RunEventStreamService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001108 /* RunEventStreamService.swift */; };
-		0B0000010000000000001009 /* ToolApprovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001109 /* ToolApprovalService.swift */; };
 		0B000001000000000000100A /* RunDebugService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B000001000000000000110A /* RunDebugService.swift */; };
-		0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001120 /* ConversationDomainTests.swift */; };
-		0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001121 /* ExecutionDomainTests.swift */; };
-		0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */; };
-		0B0000010000000000001030 /* ConversationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001130 /* ConversationViewModel.swift */; };
-		0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001131 /* ConversationViewModelTests.swift */; };
 		0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001140 /* AgentRunViewModel.swift */; };
 		0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001141 /* AgentRunViewModelTests.swift */; };
-		0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001150 /* ChatInteractionCoordinator.swift */; };
-		0B0000010000000000001051 /* ChatInteractionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -211,22 +180,16 @@
 		0A0000010000000000000101 /* LocalAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentApp.swift; sourceTree = "<group>"; };
 		0A0000010000000000000102 /* AppBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapper.swift; sourceTree = "<group>"; };
 		0A0000010000000000000103 /* AppContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainer.swift; sourceTree = "<group>"; };
-		0A0000010000000000000104 /* AgentViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModel.swift; sourceTree = "<group>"; };
-		0A0000010000000000000105 /* AgentRuntimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeService.swift; sourceTree = "<group>"; };
 		0A0000010000000000000106 /* RuntimeEventReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEventReducer.swift; sourceTree = "<group>"; };
 		0A0000010000000000000107 /* MinimalHostToolDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimalHostToolDriver.swift; sourceTree = "<group>"; };
 		0A0000010000000000000108 /* AgentViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewState.swift; sourceTree = "<group>"; };
-		0A0000010000000000000109 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		0A000001000000000000010A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0A000001000000000000010B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		0A000001000000000000010C /* MessageContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContent.swift; sourceTree = "<group>"; };
 		0A000001000000000000010D /* ReasoningTagParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParser.swift; sourceTree = "<group>"; };
 		0A000001000000000000010E /* RuntimeStreamBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBuffer.swift; sourceTree = "<group>"; };
-		0A000001000000000000010F /* ConversationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationService.swift; sourceTree = "<group>"; };
 		0A0000010000000000000111 /* RuntimeEventReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEventReducerTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000112 /* MinimalHostToolDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimalHostToolDriverTests.swift; sourceTree = "<group>"; };
-		0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeServiceTests.swift; sourceTree = "<group>"; };
-		0A0000010000000000000114 /* AgentViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentViewModelTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustRuntimeAppIntegrationTests.swift; sourceTree = "<group>"; };
 		0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceNativeLinkTests.swift; sourceTree = "<group>"; };
 		0A00000100000000000001F6 /* LocalInferenceReleaseSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalInferenceReleaseSmokeTests.swift; sourceTree = "<group>"; };
@@ -309,12 +272,8 @@
 		0F7000010000000000000105 /* ChatStoreProjectionApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStoreProjectionApplierTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
-		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
-		0A0000010000000000000119 /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
-		0A000001000000000000011A /* AttachmentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentService.swift; sourceTree = "<group>"; };
 		0A000001000000000000011B /* AppIntentRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouter.swift; sourceTree = "<group>"; };
 		0A000001000000000000011C /* LocalAgentShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentShortcuts.swift; sourceTree = "<group>"; };
-		0A000001000000000000011D /* ChatManagementSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatManagementSheets.swift; sourceTree = "<group>"; };
 		0A0000010000000000000120 /* AgentBuilderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderViewModel.swift; sourceTree = "<group>"; };
 		0A0000010000000000000121 /* RuntimeProjectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProjectionModel.swift; sourceTree = "<group>"; };
 		0A0000010000000000000122 /* AgentBuilderViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderViewModelTests.swift; sourceTree = "<group>"; };
@@ -341,13 +300,8 @@
 		0C0000010000000000002115 /* AppShellViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002116 /* AppShellViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellViewModelTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002117 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
-		0C0000010000000000002118 /* ConversationWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceView.swift; sourceTree = "<group>"; };
-		0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceViewModel.swift; sourceTree = "<group>"; };
-		0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspaceViewModelTests.swift; sourceTree = "<group>"; };
 		0C000001000000000000211B /* RunInlineCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunInlineCards.swift; sourceTree = "<group>"; };
 		0C000001000000000000211C /* RunInlineCardsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunInlineCardsTests.swift; sourceTree = "<group>"; };
-		0C000001000000000000211D /* ContextInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextInspectorView.swift; sourceTree = "<group>"; };
-		0C000001000000000000211E /* ContextInspectorViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextInspectorViewModelTests.swift; sourceTree = "<group>"; };
 		0C000001000000000000211F /* ToolCenterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterViewModel.swift; sourceTree = "<group>"; };
 		0C0000010000000000002120 /* ToolCenterViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterViewModelTests.swift; sourceTree = "<group>"; };
 		0C0000010000000000002121 /* ToolCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCenterView.swift; sourceTree = "<group>"; };
@@ -370,25 +324,9 @@
 		0C0000010000000000002129 /* PrivacySettingsProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySettingsProjectionTests.swift; sourceTree = "<group>"; };
 		0C000001000000000000212A /* DebugTraceProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTraceProjectionTests.swift; sourceTree = "<group>"; };
 		0C000001000000000000212B /* StateBadgeDescriptorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateBadgeDescriptorTests.swift; sourceTree = "<group>"; };
-		0B0000010000000000001101 /* ConversationDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomain.swift; sourceTree = "<group>"; };
-		0B0000010000000000001102 /* ConversationDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainAdapter.swift; sourceTree = "<group>"; };
-		0B0000010000000000001103 /* ExecutionDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomain.swift; sourceTree = "<group>"; };
-		0B0000010000000000001104 /* ExecutionDomainAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainAdapter.swift; sourceTree = "<group>"; };
-		0B0000010000000000001105 /* AgentProfileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProfileService.swift; sourceTree = "<group>"; };
-		0B0000010000000000001106 /* AgentCompositionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCompositionService.swift; sourceTree = "<group>"; };
-		0B0000010000000000001107 /* RunLifecycleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunLifecycleService.swift; sourceTree = "<group>"; };
-		0B0000010000000000001108 /* RunEventStreamService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunEventStreamService.swift; sourceTree = "<group>"; };
-		0B0000010000000000001109 /* ToolApprovalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolApprovalService.swift; sourceTree = "<group>"; };
 		0B000001000000000000110A /* RunDebugService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunDebugService.swift; sourceTree = "<group>"; };
-		0B0000010000000000001120 /* ConversationDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDomainTests.swift; sourceTree = "<group>"; };
-		0B0000010000000000001121 /* ExecutionDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainTests.swift; sourceTree = "<group>"; };
-		0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionDomainArchitectureTests.swift; sourceTree = "<group>"; };
-		0B0000010000000000001130 /* ConversationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModel.swift; sourceTree = "<group>"; };
-		0B0000010000000000001131 /* ConversationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationViewModelTests.swift; sourceTree = "<group>"; };
 		0B0000010000000000001140 /* AgentRunViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModel.swift; sourceTree = "<group>"; };
 		0B0000010000000000001141 /* AgentRunViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunViewModelTests.swift; sourceTree = "<group>"; };
-		0B0000010000000000001150 /* ChatInteractionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionCoordinator.swift; sourceTree = "<group>"; };
-		0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionCoordinatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -715,11 +653,7 @@
 				0F4000010000000000000105 /* RustAgentInputSnapshotProvider.swift */,
 				0B0000010000000000001501 /* Conversation */,
 				0B0000010000000000001502 /* Execution */,
-				0A0000010000000000000105 /* AgentRuntimeService.swift */,
 				0F0000010000000000000101 /* AppLLMHostRouting.swift */,
-				0A000001000000000000011A /* AttachmentService.swift */,
-				0B0000010000000000001150 /* ChatInteractionCoordinator.swift */,
-				0A000001000000000000010F /* ConversationService.swift */,
 				0A000001000000000000010E /* RuntimeStreamBuffer.swift */,
 				0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */,
 			);
@@ -791,15 +725,6 @@
 		0A0000010000000000000507 /* Chat */ = {
 			isa = PBXGroup;
 			children = (
-				0A0000010000000000000104 /* AgentViewModel.swift */,
-				0A000001000000000000011D /* ChatManagementSheets.swift */,
-				0A0000010000000000000109 /* ChatView.swift */,
-				0A0000010000000000000119 /* ConversationListView.swift */,
-				0C0000010000000000002118 /* ConversationWorkspaceView.swift */,
-				0C0000010000000000002119 /* ConversationWorkspaceViewModel.swift */,
-				0B0000010000000000001130 /* ConversationViewModel.swift */,
-				0C000001000000000000211D /* ContextInspectorView.swift */,
-				0A0000010000000000000118 /* MessageContentView.swift */,
 				0C000001000000000000211B /* RunInlineCards.swift */,
 			);
 			path = Chat;
@@ -886,11 +811,6 @@
 				0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */,
 				0F7000010000000000000104 /* RustAgentCoordinatorTests.swift */,
 				0F4000010000000000000108 /* RustAgentInputSnapshotProviderTests.swift */,
-				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
-				0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */,
-				0B0000010000000000001120 /* ConversationDomainTests.swift */,
-				0B0000010000000000001121 /* ExecutionDomainTests.swift */,
-				0B0000010000000000001122 /* ExecutionDomainArchitectureTests.swift */,
 				0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */,
 				0E5000040000000000000012 /* LegacyLLMMigrationCoordinatorTests.swift */,
 			);
@@ -900,8 +820,6 @@
 		0B0000010000000000001501 /* Conversation */ = {
 			isa = PBXGroup;
 			children = (
-				0B0000010000000000001101 /* ConversationDomain.swift */,
-				0B0000010000000000001102 /* ConversationDomainAdapter.swift */,
 			);
 			path = Conversation;
 			sourceTree = "<group>";
@@ -909,13 +827,6 @@
 		0B0000010000000000001502 /* Execution */ = {
 			isa = PBXGroup;
 			children = (
-				0B0000010000000000001103 /* ExecutionDomain.swift */,
-				0B0000010000000000001104 /* ExecutionDomainAdapter.swift */,
-				0B0000010000000000001105 /* AgentProfileService.swift */,
-				0B0000010000000000001106 /* AgentCompositionService.swift */,
-				0B0000010000000000001107 /* RunLifecycleService.swift */,
-				0B0000010000000000001108 /* RunEventStreamService.swift */,
-				0B0000010000000000001109 /* ToolApprovalService.swift */,
 				0B000001000000000000110A /* RunDebugService.swift */,
 			);
 			path = Execution;
@@ -1024,10 +935,6 @@
 		0A0000010000000000000515 /* Chat */ = {
 			isa = PBXGroup;
 			children = (
-				0A0000010000000000000114 /* AgentViewModelTests.swift */,
-				0C000001000000000000211E /* ContextInspectorViewModelTests.swift */,
-				0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */,
-				0B0000010000000000001131 /* ConversationViewModelTests.swift */,
 				0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */,
 				0C000001000000000000211C /* RunInlineCardsTests.swift */,
 			);
@@ -1215,12 +1122,7 @@
 				0A0000010000000000000001 /* LocalAgentApp.swift in Sources */,
 				0A0000010000000000000002 /* AppBootstrapper.swift in Sources */,
 				0A0000010000000000000003 /* AppContainer.swift in Sources */,
-				0A0000010000000000000004 /* AgentViewModel.swift in Sources */,
-				0B0000010000000000001030 /* ConversationViewModel.swift in Sources */,
 				0B0000010000000000001040 /* AgentRunViewModel.swift in Sources */,
-				0C0000010000000000002018 /* ConversationWorkspaceView.swift in Sources */,
-				0C0000010000000000002019 /* ConversationWorkspaceViewModel.swift in Sources */,
-				0C000001000000000000201D /* ContextInspectorView.swift in Sources */,
 				0C000001000000000000201B /* RunInlineCards.swift in Sources */,
 				0C0000010000000000002023 /* ModelCenterView.swift in Sources */,
 				0C0000010000000000002022 /* ModelCenterViewModel.swift in Sources */,
@@ -1234,21 +1136,10 @@
 				0C0000010000000000002027 /* StateBadges.swift in Sources */,
 				0C0000010000000000002021 /* ToolCenterView.swift in Sources */,
 				0C000001000000000000201F /* ToolCenterViewModel.swift in Sources */,
-				0A0000010000000000000005 /* AgentRuntimeService.swift in Sources */,
 				0D5000010000000000000001 /* AppCloudApprovalBroker.swift in Sources */,
 				0D5000010000000000000002 /* CloudApprovalSheet.swift in Sources */,
 				0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */,
-				0B0000010000000000001001 /* ConversationDomain.swift in Sources */,
-				0B0000010000000000001002 /* ConversationDomainAdapter.swift in Sources */,
-				0B0000010000000000001003 /* ExecutionDomain.swift in Sources */,
-				0B0000010000000000001004 /* ExecutionDomainAdapter.swift in Sources */,
-				0B0000010000000000001005 /* AgentProfileService.swift in Sources */,
-				0B0000010000000000001006 /* AgentCompositionService.swift in Sources */,
-				0B0000010000000000001007 /* RunLifecycleService.swift in Sources */,
-				0B0000010000000000001008 /* RunEventStreamService.swift in Sources */,
-				0B0000010000000000001009 /* ToolApprovalService.swift in Sources */,
 				0B000001000000000000100A /* RunDebugService.swift in Sources */,
-				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
 				0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */,
 				0C000001000000000000200F /* NativeInteractionBroker.swift in Sources */,
 				0C0000010000000000002011 /* AgentEntity.swift in Sources */,
@@ -1260,17 +1151,11 @@
 				0A0000010000000000000006 /* RuntimeEventReducer.swift in Sources */,
 				0A0000010000000000000007 /* MinimalHostToolDriver.swift in Sources */,
 				0A0000010000000000000008 /* AgentViewState.swift in Sources */,
-				0A0000010000000000000009 /* ChatView.swift in Sources */,
 				0A0000010000000000000014 /* MessageContent.swift in Sources */,
 				0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */,
 				0A0000010000000000000017 /* RuntimeStreamBuffer.swift in Sources */,
-				0A0000010000000000000018 /* ConversationService.swift in Sources */,
-				0A0000010000000000000019 /* MessageContentView.swift in Sources */,
-				0A000001000000000000001A /* ConversationListView.swift in Sources */,
-				0A000001000000000000001B /* AttachmentService.swift in Sources */,
 				0A000001000000000000001C /* AppIntentRouter.swift in Sources */,
 				0A000001000000000000001D /* LocalAgentShortcuts.swift in Sources */,
-				0A000001000000000000001E /* ChatManagementSheets.swift in Sources */,
 				0C0000010000000000002005 /* AgentBuilderCards.swift in Sources */,
 				0C0000010000000000002007 /* AgentBuilderContextPreviewView.swift in Sources */,
 				0C0000010000000000002000 /* AgentBuilderDraftModels.swift in Sources */,
@@ -1331,15 +1216,6 @@
 				0F1000010000000000000002 /* OpenMinisChatFacadeTests.swift in Sources */,
 				0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */,
 				0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */,
-				0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */,
-				0B0000010000000000001051 /* ChatInteractionCoordinatorTests.swift in Sources */,
-				0B0000010000000000001020 /* ConversationDomainTests.swift in Sources */,
-				0B0000010000000000001021 /* ExecutionDomainTests.swift in Sources */,
-				0B0000010000000000001022 /* ExecutionDomainArchitectureTests.swift in Sources */,
-				0A0000010000000000000010 /* AgentViewModelTests.swift in Sources */,
-				0C000001000000000000201E /* ContextInspectorViewModelTests.swift in Sources */,
-				0C000001000000000000201A /* ConversationWorkspaceViewModelTests.swift in Sources */,
-				0B0000010000000000001031 /* ConversationViewModelTests.swift in Sources */,
 				0C000001000000000000201C /* RunInlineCardsTests.swift in Sources */,
 				0C0000010000000000002020 /* ToolCenterViewModelTests.swift in Sources */,
 				0C0000010000000000002024 /* ModelCenterViewModelTests.swift in Sources */,
