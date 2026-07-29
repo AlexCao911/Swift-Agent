@@ -136,7 +136,11 @@ fi
 require_text 'aarch64-apple-ios-sim' "$ROOT/scripts/build-local-inference-xcode.sh"
 require_text 'aarch64-apple-ios' "$ROOT/scripts/build-local-inference-xcode.sh"
 require_text 'target/xcode-ios' "$ROOT/scripts/build-local-inference-xcode.sh"
-require_text 'rev-parse --path-format=absolute --git-common-dir' \
+require_text 'native_source_record llama-cpp' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'CMAKE_OSX_SYSROOT=iphonesimulator' \
+  "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
+require_text 'CMAKE_OSX_SYSROOT=iphoneos' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"
 require_text 'plutil -extract engine_ids' \
   "$ROOT/scripts/build-local-agent-inference-xcframework.sh"

@@ -37,7 +37,10 @@ if [[ "${CONFIGURATION:-Debug}" == "Release" ]]; then
   PROFILE_DIRECTORY="release"
 fi
 
-"$LOCAL_AGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
+INFERENCE_XCFRAMEWORK="$LOCAL_AGENT_ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework"
+if [[ ! -f "$INFERENCE_XCFRAMEWORK/Info.plist" ]]; then
+  "$LOCAL_AGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
+fi
 
 "$CARGO_BIN" build \
   "${CARGO_ARGUMENTS[@]:1}"

@@ -65,6 +65,7 @@ test_download_replaces_invalid_cache() {
 
 test_inference_xcframework_uses_platform_specific_vendor_builds() {
     local builder="$LOCALAGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
+    local xcode_builder="$LOCALAGENT_ROOT/scripts/build-local-inference-xcode.sh"
 
     /usr/bin/grep -q -- '-G Xcode' "$builder" \
         || fail "inference builder must use the Xcode CMake generator"
@@ -74,6 +75,10 @@ test_inference_xcframework_uses_platform_specific_vendor_builds() {
         || fail "inference builder is missing the device vendor slice"
     /usr/bin/grep -q -- 'BUILD_SHARED_LIBS=OFF' "$builder" \
         || fail "inference builder must produce static vendor archives"
+    /usr/bin/grep -q -- 'CMAKE_C_COMPILER=' "$builder" \
+        || fail "inference builder must ignore ambient Xcode compiler settings"
+    /usr/bin/grep -q -- 'if \[\[ ! -f "$INFERENCE_XCFRAMEWORK/Info.plist" \]\]' "$xcode_builder" \
+        || fail "Xcode pre-action must reuse a complete inference XCFramework"
     if /usr/bin/grep -q -- ' -- -quiet' "$builder"; then
         fail "inference builder passes Xcode-only flags through CMake"
     fi

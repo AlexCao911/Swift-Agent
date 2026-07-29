@@ -9,7 +9,8 @@ ARCHIVE_ROOT="$NATIVE_ROOT/.build/downloads"
 RELEASE_ENGINES="$ROOT/inference/release-engines.json"
 OUTPUT="${LOCAL_AGENT_INFERENCE_XCFRAMEWORK:-$ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework}"
 BUILD_ROOT="${LOCAL_AGENT_INFERENCE_BUILD_ROOT:-/private/tmp/local-agent-inference-native}"
-CXX="${CXX:-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++}"
+C_COMPILER="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+CXX_COMPILER="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
 LIBTOOL="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool"
 LIPO="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"
 
@@ -38,7 +39,7 @@ prepare_llama_cpp_source() {
 
 LLAMA_CPP_ROOT="${LLAMA_CPP_ROOT:-$(prepare_llama_cpp_source)}"
 
-if [[ ! -x "$CXX" || ! -x "$LIBTOOL" || ! -x "$LIPO" ]]; then
+if [[ ! -x "$C_COMPILER" || ! -x "$CXX_COMPILER" || ! -x "$LIBTOOL" || ! -x "$LIPO" ]]; then
   echo "Xcode C++/libtool/lipo tools are required" >&2
   exit 1
 fi
@@ -133,6 +134,8 @@ ensure_vendor_archives() {
       -DBUILD_SHARED_LIBS=OFF \
       -DGGML_NATIVE=OFF \
       -DGGML_OPENMP=OFF \
+      "-DCMAKE_C_COMPILER=$C_COMPILER" \
+      "-DCMAKE_CXX_COMPILER=$CXX_COMPILER" \
       "${platform_args[@]}"
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     cmake --build "$vendor_build_root" --config Release --target mtmd
@@ -171,7 +174,7 @@ build_slice() {
 
   local index=0
   for source in "${COMMON_SOURCES[@]}"; do
-    "$CXX" -std=c++17 -O2 -fvisibility=hidden \
+    "$CXX_COMPILER" -std=c++17 -O2 -fvisibility=hidden \
       -target "$target" -isysroot "$sdk_path" \
       -DLOCAL_AGENT_ENABLE_LLAMA_CPP \
       -DLOCAL_AGENT_ENABLE_LLAMA_CPP_MTMD \
