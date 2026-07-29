@@ -9,12 +9,17 @@ public struct ProviderPresetID: RawRepresentable, Codable, Hashable, Sendable {
     }
 
     public static let openAI = Self(rawValue: "openai")
+    public static let openAIChatCompletions = Self(
+        rawValue: "openai_chat_completions"
+    )
     public static let anthropic = Self(rawValue: "anthropic")
     public static let gemini = Self(rawValue: "gemini")
     public static let xAI = Self(rawValue: "xai")
     public static let deepSeek = Self(rawValue: "deepseek")
     public static let miniMax = Self(rawValue: "minimax")
     public static let glm = Self(rawValue: "glm")
+    public static let openRouter = Self(rawValue: "openrouter")
+    public static let kimiCode = Self(rawValue: "kimi_code")
 }
 
 public enum ProviderRetentionMode: String, Equatable, Hashable, Sendable {
@@ -113,6 +118,15 @@ public struct ProviderPreset: Codable, Equatable, Sendable {
     public static let shipped: [ProviderPreset] = [
         preset(.openAI, "OpenAI", "https://api.openai.com/v1", .bearerAuthorization,
                "openai_responses", .providerModelList, "openai.responses"),
+        preset(
+            .openAIChatCompletions,
+            "OpenAI Chat Completions",
+            "https://api.openai.com/v1",
+            .bearerAuthorization,
+            "openai_chat_completions",
+            .providerModelList,
+            "openai.chat_completions"
+        ),
         preset(.anthropic, "Anthropic", "https://api.anthropic.com/v1", .xAPIKeyHeader,
                "anthropic_messages", .providerModelList, "anthropic.messages"),
         preset(.gemini, "Gemini", "https://generativelanguage.googleapis.com/v1beta", .googleAPIKeyHeader,
@@ -125,6 +139,24 @@ public struct ProviderPreset: Codable, Equatable, Sendable {
                "anthropic_messages", .providerModelList, "minimax.messages"),
         preset(.glm, "GLM", "https://open.bigmodel.cn/api/paas/v4", .bearerAuthorization,
                "openai_chat_completions", .catalogAndManual, "glm.chat_completions"),
+        preset(
+            .openRouter,
+            "OpenRouter",
+            "https://openrouter.ai/api/v1",
+            .bearerAuthorization,
+            "openai_chat_completions",
+            .providerModelList,
+            "openrouter.chat_completions"
+        ),
+        preset(
+            .kimiCode,
+            "Kimi Code",
+            "https://api.kimi.com/coding/v1",
+            .bearerAuthorization,
+            "openai_chat_completions",
+            .catalogAndManual,
+            "kimi.chat_completions"
+        ),
     ]
 
     private static func preset(

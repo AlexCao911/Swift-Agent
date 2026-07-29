@@ -724,6 +724,21 @@ private func validationAdapter(
     case .deepSeek: return DeepSeekAdapter()
     case .miniMax: return MiniMaxAdapter()
     case .glm: return GLMAdapter()
+    case .openAIChatCompletions:
+        return OpenAICompatibleAdapter(
+            presetID: .openAIChatCompletions,
+            adapterID: "openai.chat_completions"
+        )
+    case .openRouter:
+        return OpenAICompatibleAdapter(
+            presetID: .openRouter,
+            adapterID: "openrouter.chat_completions"
+        )
+    case .kimiCode:
+        return OpenAICompatibleAdapter(
+            presetID: .kimiCode,
+            adapterID: "kimi.chat_completions"
+        )
     default:
         throw validationFailure(
             "provider_validation.adapter_mismatch",

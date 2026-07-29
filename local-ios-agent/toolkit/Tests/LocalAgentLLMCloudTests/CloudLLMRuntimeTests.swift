@@ -45,7 +45,7 @@ struct CloudLLMRuntimeTests {
 
         #expect(registry.presetIDs == Set(ProviderPreset.shipped.map(\.id)))
         #expect(registry.adapterIDs == Set(ProviderPreset.shipped.map(\.semanticAdapterID)))
-        #expect(registry.adapterIDs.count == 7)
+        #expect(registry.adapterIDs.count == 10)
     }
 
     @Test

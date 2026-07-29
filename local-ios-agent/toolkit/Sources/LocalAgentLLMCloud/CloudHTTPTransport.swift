@@ -7,6 +7,16 @@ package protocol CloudHTTPTransport: Sendable {
     ) async throws -> AsyncThrowingStream<SSEEvent, Error>
 
     func json(_ request: AuthorizedCloudHTTPRequest) async throws -> Data
+
+    func oauth(_ request: OAuthHTTPRequest) async throws -> OAuthHTTPResponse
+}
+
+extension CloudHTTPTransport {
+    package func oauth(
+        _ request: OAuthHTTPRequest
+    ) async throws -> OAuthHTTPResponse {
+        throw OAuthHTTPFailure(code: "oauth.transport_unavailable")
+    }
 }
 
 package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked Sendable {
@@ -102,6 +112,73 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
             throw transportFailure("cloud_transport.response_invalid", "cloud JSON response was empty")
         }
         return value
+    }
+
+    package func oauth(
+        _ request: OAuthHTTPRequest
+    ) async throws -> OAuthHTTPResponse {
+        try validateLimits()
+        try Task.checkCancellation()
+        try await policy.preflight(
+            baseURL: request.profile.baseURL,
+            expectedOrigin: request.profile.expectedOrigin
+        )
+        var components = URLComponents(
+            url: request.profile.baseURL,
+            resolvingAgainstBaseURL: false
+        )
+        components?.path = request.path
+        guard let url = components?.url else {
+            throw OAuthHTTPFailure(code: "oauth.url_invalid")
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = request.method
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        urlRequest.httpBody = request.body
+        for (name, value) in request.headers {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
+
+        let delegate = OAuthRedirectRejectingDelegate()
+        let session = URLSession(
+            configuration: configuration,
+            delegate: nil,
+            delegateQueue: nil
+        )
+        defer { session.invalidateAndCancel() }
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(
+                for: urlRequest,
+                delegate: delegate
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw OAuthHTTPFailure(code: "oauth.network_failed")
+        }
+        try Task.checkCancellation()
+        guard data.count <= maximumJSONBytes,
+              let http = response as? HTTPURLResponse else {
+            throw OAuthHTTPFailure(code: "oauth.response_invalid")
+        }
+        let headers = http.allHeaderFields.reduce(
+            into: [String: String]()
+        ) { output, item in
+            guard let name = item.key as? String,
+                  let value = item.value as? String else {
+                return
+            }
+            output[name.lowercased()] = value
+        }
+        return OAuthHTTPResponse(
+            statusCode: http.statusCode,
+            headers: headers,
+            body: data
+        )
     }
 
     private func validateLimits() throws {
@@ -297,6 +374,22 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
             urlRequest.setValue(value, forHTTPHeaderField: "x-goog-api-key")
         }
         return urlRequest
+    }
+}
+
+private final class OAuthRedirectRejectingDelegate:
+    NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 

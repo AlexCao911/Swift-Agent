@@ -6,6 +6,7 @@ struct ModelCenterView: View {
     @Bindable var viewModel: ModelCenterViewModel
     @State private var editor: ProviderEditorPresentation?
     @State private var manualModelIDs: [String: String] = [:]
+    @State private var showsUnifiedModelPicker = false
 
     var body: some View {
         List {
@@ -25,6 +26,11 @@ struct ModelCenterView: View {
         .navigationTitle("Models")
         .toolbar {
             Button {
+                showsUnifiedModelPicker = true
+            } label: {
+                Label("Choose Model", systemImage: "cpu")
+            }
+            Button {
                 editor = ProviderEditorPresentation(provider: nil)
             } label: {
                 Label("Add Provider", systemImage: "plus")
@@ -40,6 +46,13 @@ struct ModelCenterView: View {
                 ) {
                     editor = nil
                     Task { await viewModel.reload() }
+                }
+            }
+        }
+        .sheet(isPresented: $showsUnifiedModelPicker) {
+            UnifiedModelPicker(options: viewModel.unifiedModelOptions) { option in
+                perform {
+                    try await viewModel.createTarget(modelID: option.modelCenterID)
                 }
             }
         }

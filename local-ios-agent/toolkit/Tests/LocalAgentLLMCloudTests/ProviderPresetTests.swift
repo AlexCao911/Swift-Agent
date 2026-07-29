@@ -8,9 +8,18 @@ struct ProviderPresetTests {
         let presets = ProviderPreset.shipped
 
         #expect(presets.map(\.id.rawValue) == [
-            "openai", "anthropic", "gemini", "xai", "deepseek", "minimax", "glm",
+            "openai",
+            "openai_chat_completions",
+            "anthropic",
+            "gemini",
+            "xai",
+            "deepseek",
+            "minimax",
+            "glm",
+            "openrouter",
+            "kimi_code",
         ])
-        #expect(Set(presets.map(\.id)).count == 7)
+        #expect(Set(presets.map(\.id)).count == 10)
         #expect(presets.allSatisfy { preset in
             preset.defaultBaseURL.scheme == "https"
                 && preset.defaultBaseURL.user == nil
@@ -27,6 +36,12 @@ struct ProviderPresetTests {
         #expect(try #require(presets[id: .deepSeek]).codecID == "openai_chat_completions")
         #expect(try #require(presets[id: .miniMax]).semanticAdapterID == "minimax.messages")
         #expect(try #require(presets[id: .glm]).discovery == .catalogAndManual)
+        #expect(try #require(presets[id: .openAIChatCompletions]).codecID
+            == "openai_chat_completions")
+        #expect(try #require(presets[id: .openRouter]).semanticAdapterID
+            == "openrouter.chat_completions")
+        #expect(try #require(presets[id: .kimiCode]).discovery
+            == .catalogAndManual)
     }
 }
 

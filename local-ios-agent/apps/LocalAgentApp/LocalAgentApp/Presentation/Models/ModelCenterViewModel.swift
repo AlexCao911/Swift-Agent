@@ -204,6 +204,10 @@ final class ModelCenterViewModel {
         client.map(ProviderProfileEditorViewModel.init(client:))
     }
 
+    var unifiedModelOptions: [UnifiedModelOption] {
+        UnifiedModelPickerProjection.options(in: snapshot)
+    }
+
     private func cloudModel(for id: String) -> ModelCenterCloudModelState? {
         snapshot.cloudModels.first { cloudModelID($0) == id }
     }

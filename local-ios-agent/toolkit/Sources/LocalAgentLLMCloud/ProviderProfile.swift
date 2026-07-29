@@ -9,6 +9,7 @@ public struct ProviderProfileRevision: Codable, Equatable, Sendable {
     public let baseURL: URL
     public let credentialRef: String
     public let retentionMode: ProviderRetentionMode
+    public let credentialMode: ProviderCredentialMode?
 
     public init(
         profileID: String,
@@ -17,7 +18,8 @@ public struct ProviderProfileRevision: Codable, Equatable, Sendable {
         displayName: String,
         baseURL: URL,
         credentialRef: String,
-        retentionMode: ProviderRetentionMode = .statelessRequired
+        retentionMode: ProviderRetentionMode = .statelessRequired,
+        credentialMode: ProviderCredentialMode? = nil
     ) {
         self.profileID = profileID
         self.revision = revision
@@ -26,6 +28,7 @@ public struct ProviderProfileRevision: Codable, Equatable, Sendable {
         self.baseURL = baseURL
         self.credentialRef = credentialRef
         self.retentionMode = retentionMode
+        self.credentialMode = credentialMode
     }
 }
 

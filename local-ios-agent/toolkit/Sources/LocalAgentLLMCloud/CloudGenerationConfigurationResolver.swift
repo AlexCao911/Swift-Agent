@@ -137,7 +137,9 @@ package enum CloudGenerationConfigurationResolver {
             return try messagesFields(configuration, adapterID: adapterID)
         case "gemini.interactions":
             return try geminiFields(configuration)
-        case "deepseek.chat_completions", "glm.chat_completions":
+        case "deepseek.chat_completions", "glm.chat_completions",
+             "openai.chat_completions", "openrouter.chat_completions",
+             "kimi.chat_completions":
             return try chatFields(configuration, adapterID: adapterID)
         default:
             throw resolverFailure(
@@ -265,6 +267,11 @@ package enum CloudGenerationConfigurationResolver {
             return temperatureAndTopP.union([
                 LLMParameterID.generationStopSequences.rawValue,
                 LLMParameterID.reasoningEffort.rawValue,
+            ])
+        case "openai.chat_completions", "openrouter.chat_completions",
+             "kimi.chat_completions":
+            return temperatureAndTopP.union([
+                LLMParameterID.generationStopSequences.rawValue,
             ])
         default:
             return []

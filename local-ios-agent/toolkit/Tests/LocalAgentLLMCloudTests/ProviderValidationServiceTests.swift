@@ -11,12 +11,15 @@ struct ProviderValidationServiceTests {
     func everyShippedAdapterOwnsItsProbeWire() throws {
         let expectedPaths: [ProviderPresetID: String] = [
             .openAI: "/responses",
+            .openAIChatCompletions: "/chat/completions",
             .anthropic: "/messages",
             .gemini: "/interactions",
             .xAI: "/responses",
             .deepSeek: "/chat/completions",
             .miniMax: "/messages",
             .glm: "/chat/completions",
+            .openRouter: "/chat/completions",
+            .kimiCode: "/chat/completions",
         ]
         let adapters: [any CloudProviderAdapter] = [
             OpenAIResponsesAdapter(),
@@ -26,9 +29,21 @@ struct ProviderValidationServiceTests {
             DeepSeekAdapter(),
             MiniMaxAdapter(),
             GLMAdapter(),
+            OpenAICompatibleAdapter(
+                presetID: .openAIChatCompletions,
+                adapterID: "openai.chat_completions"
+            ),
+            OpenAICompatibleAdapter(
+                presetID: .openRouter,
+                adapterID: "openrouter.chat_completions"
+            ),
+            OpenAICompatibleAdapter(
+                presetID: .kimiCode,
+                adapterID: "kimi.chat_completions"
+            ),
         ]
 
-        #expect(adapters.count == 7)
+        #expect(adapters.count == 10)
         #expect(Set(adapters.map(\.presetID)) == Set(ProviderPreset.shipped.map(\.id)))
         for adapter in adapters {
             let preset = try #require(ProviderPreset.shipped.first { $0.id == adapter.presetID })

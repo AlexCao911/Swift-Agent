@@ -90,3 +90,25 @@ ordered descriptor metadata with a stable virtual location such as
 that path through the read-only Skills mount only after the Agent chooses the
 Skill. Sibling `scripts/`, `references/`, and `assets/` remain ordinary files
 and are never recursively preloaded.
+
+## Providers, OAuth, and model selection
+
+| OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
+| --- | --- | --- | --- | --- |
+| `src/ios/Providers/ProviderTypes.swift`, `ProviderInstance.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/OpenMinisProviderConfigurationAdapter.swift`, `LocalAgentLLMCloud/ProviderProductMapping.swift` | `LocalAgentApp` Sources and `LocalAgentLLMCloud` Swift package target | Product model adapted from GPLv3 donor; LocalAgent transport implementation | Preserves provider type, credential mode, label, Base URL and `/v1` behavior; unknown types round-trip and fail before network |
+| `src/ios/Views/Providers/UnifiedModelPicker.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/UnifiedModelPicker.swift`, existing `ModelCenterView` | `LocalAgentApp` Sources | Product interaction adapted from GPLv3 donor | One picker projects both validated cloud models and installed compatible C++ local models; selection publishes a reusable target and does not start generation |
+| Provider OAuth manager HTTP semantics | `LocalAgentLLMCloud/OAuthHTTPClient.swift`, existing `ProviderCredentialStore` | `LocalAgentLLMCloud` Swift package target | LocalAgent implementation informed by GPLv3 donor flows | OAuth endpoint profiles use the same exact-origin/SSRF transport boundary as model traffic; tokens stay in the existing secure credential vault and cancellation never triggers fallback |
+| OpenAI-compatible provider product records | `ProviderPreset.swift`, `OpenAICompatibleAdapter.swift` | `LocalAgentLLMCloud` Swift package target | LocalAgent implementation | OpenAI Chat Completions, OpenRouter and Kimi share one codec implementation; Antigravity remains visible-but-disabled until its distinct Cloud Code envelope has a dedicated codec |
+
+The donor generation clients and `LLMProviderFactory` are not present in the
+shipping App. Provider discovery, validation, quick probes and generation keep
+using the single `LocalAgentLLMCloud` HTTP stack. The migrated Provider
+directory contains no direct `URLSession` calls. Existing API-key and Base URL
+editing now also records whether the vault entry is an API key or OAuth token;
+the secret itself is never part of the Codable product configuration, Rust
+snapshot, host command, iSH environment, or ChatStore.
+
+The donor `models-dev-api.json` is not copied: LocalAgent already has a signed,
+production-trusted capability catalog. OpenRouter, Kimi and generic OpenAI Chat
+models enter conservatively through manual discovery/validation until a future
+signed catalog revision adds authoritative model rows.

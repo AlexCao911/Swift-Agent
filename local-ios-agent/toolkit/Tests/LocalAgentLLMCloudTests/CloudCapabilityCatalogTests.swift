@@ -15,7 +15,14 @@ struct CloudCapabilityCatalogTests {
         )
         #expect(catalog.catalogRevision > 0)
         #expect(!catalog.keyID.hasPrefix("test-"))
-        #expect(Set(catalog.models.values.map(\.identity.presetID)) == Set(ProviderPreset.shipped.map(\.id)))
+        let catalogPresets = Set(
+            catalog.models.values.map(\.identity.presetID)
+        )
+        let shippedPresets = Set(ProviderPreset.shipped.map(\.id))
+        #expect(catalogPresets.isSubset(of: shippedPresets))
+        #expect(catalogPresets == [
+            .openAI, .anthropic, .gemini, .xAI, .deepSeek, .miniMax, .glm,
+        ])
         #expect(catalog.models.values.allSatisfy {
             $0.capabilities.first {
                 $0.capabilityID == "tool_calling"

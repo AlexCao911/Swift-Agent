@@ -10,6 +10,7 @@ final class ProviderProfileEditorViewModel {
     var displayName = "OpenAI"
     var baseURL = "https://api.openai.com/v1"
     var apiKey = ""
+    var credentialMode: ProviderCredentialMode = .apiKey
     var retentionMode: ProviderRetentionMode = .statelessRequired
     private(set) var hasStoredCredential = false
     private(set) var errorMessage: String?
@@ -39,6 +40,7 @@ final class ProviderProfileEditorViewModel {
             baseURL = profile.baseURL.absoluteString
             hasStoredCredential = profile.hasStoredCredential
             retentionMode = profile.retentionMode
+            credentialMode = profile.credentialMode
             apiKey = ""
             errorMessage = nil
         } catch {
@@ -53,6 +55,21 @@ final class ProviderProfileEditorViewModel {
         presetID = id
         displayName = preset.displayName
         baseURL = preset.defaultBaseURL.absoluteString
+        if !availableCredentialModes.contains(credentialMode) {
+            credentialMode = availableCredentialModes.first ?? .apiKey
+        }
+    }
+
+    var availableCredentialModes: [ProviderCredentialMode] {
+        guard let rawType = OpenMinisProviderConfigurationAdapter
+            .rawProviderType(for: presetID)
+        else {
+            return [.apiKey]
+        }
+        let modes = ProviderProductCompatibility.mapping(
+            rawProviderType: rawType
+        ).credentialModes
+        return [.apiKey, .oauth].filter(modes.contains)
     }
 
     func save() async {
@@ -73,6 +90,7 @@ final class ProviderProfileEditorViewModel {
                 displayName: displayName,
                 baseURL: url,
                 retentionMode: retentionMode,
+                credentialMode: credentialMode,
                 initialSecret: secret
             ))
             didSave = true
@@ -100,12 +118,12 @@ struct ProviderProfileEditorView: View {
                 TextField("HTTPS Base URL", text: $viewModel.baseURL)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
-                SecureField(
-                    viewModel.hasStoredCredential
-                        ? "Replace stored API key (optional)"
-                        : "API key",
-                    text: $viewModel.apiKey
-                )
+                Picker("Credential", selection: $viewModel.credentialMode) {
+                    ForEach(viewModel.availableCredentialModes, id: \.rawValue) {
+                        Text($0 == .oauth ? "OAuth Token" : "API Key").tag($0)
+                    }
+                }
+                SecureField(credentialPlaceholder, text: $viewModel.apiKey)
                 Picker("Retention", selection: $viewModel.retentionMode) {
                     Text("Stateless required")
                         .tag(ProviderRetentionMode.statelessRequired)
@@ -143,5 +161,14 @@ struct ProviderProfileEditorView: View {
             get: { viewModel.presetID },
             set: { viewModel.selectPreset($0) }
         )
+    }
+
+    private var credentialPlaceholder: String {
+        let kind = viewModel.credentialMode == .oauth
+            ? "OAuth token"
+            : "API key"
+        return viewModel.hasStoredCredential
+            ? "Replace stored \(kind) (optional)"
+            : kind
     }
 }

@@ -49,6 +49,7 @@ struct ProviderProfileProductDraft: Sendable {
     let displayName: String
     let baseURL: URL
     let retentionMode: ProviderRetentionMode
+    let credentialMode: ProviderCredentialMode
     let initialSecret: SecretBytes?
 }
 
@@ -183,6 +184,7 @@ actor AppModelCenterClient: ModelCenterClient {
             displayName: draft.displayName,
             baseURL: draft.baseURL,
             retentionMode: draft.retentionMode,
+            credentialMode: draft.credentialMode,
             initialSecret: draft.initialSecret
         )
         updateContinuation.yield()

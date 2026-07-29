@@ -16,6 +16,7 @@ public struct CloudLLMSubsystem: Sendable {
     public let egress: ProviderEgressPolicy
     public let validation: ProviderValidationService
     public let runtime: CloudLLMRuntime
+    public let oauth: OAuthHTTPClient
     package let catalog: CloudCapabilityCatalogStore
     package let sessions: PreparedCloudSessionStore
     package let bindingStore: LLMStore
@@ -28,6 +29,7 @@ public struct CloudLLMSubsystem: Sendable {
         egress: ProviderEgressPolicy,
         validation: ProviderValidationService,
         runtime: CloudLLMRuntime,
+        oauth: OAuthHTTPClient,
         catalog: CloudCapabilityCatalogStore,
         sessions: PreparedCloudSessionStore,
         bindingStore: LLMStore
@@ -39,6 +41,7 @@ public struct CloudLLMSubsystem: Sendable {
         self.egress = egress
         self.validation = validation
         self.runtime = runtime
+        self.oauth = oauth
         self.catalog = catalog
         self.sessions = sessions
         self.bindingStore = bindingStore
@@ -102,7 +105,8 @@ public struct CloudLLMSubsystem: Sendable {
                     credentialRef: profile.revision.credentialRef,
                     modelID: nil
                 ),
-                hasStoredCredential: credential?.lifecycle == .active
+                hasStoredCredential: credential?.lifecycle == .active,
+                credentialMode: profile.revision.credentialMode ?? .apiKey
             ))
         }
         return result
@@ -115,6 +119,7 @@ public struct CloudLLMSubsystem: Sendable {
         displayName: String,
         baseURL: URL,
         retentionMode: ProviderRetentionMode,
+        credentialMode: ProviderCredentialMode = .apiKey,
         initialSecret: SecretBytes?,
         proposedOperationID: String = UUID().uuidString.lowercased()
     ) async throws -> PublishedProviderProfileRevision {
@@ -154,7 +159,8 @@ public struct CloudLLMSubsystem: Sendable {
             displayName: displayName,
             baseURL: baseURL,
             credentialRef: credentialRef,
-            retentionMode: retentionMode
+            retentionMode: retentionMode,
+            credentialMode: credentialMode
         )
         let operationID = try await profiles.prepareCreatingRevision(
             value,
@@ -462,6 +468,7 @@ public struct CloudLLMSubsystem: Sendable {
             egress: egress,
             validation: validation,
             runtime: runtime,
+            oauth: OAuthHTTPClient(transport: transport),
             catalog: catalog,
             sessions: sessions,
             bindingStore: bindingStore

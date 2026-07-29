@@ -95,6 +95,18 @@ package struct CloudProviderAdapterRegistry: Sendable {
             DeepSeekAdapter(),
             MiniMaxAdapter(),
             GLMAdapter(),
+            OpenAICompatibleAdapter(
+                presetID: .openAIChatCompletions,
+                adapterID: "openai.chat_completions"
+            ),
+            OpenAICompatibleAdapter(
+                presetID: .openRouter,
+                adapterID: "openrouter.chat_completions"
+            ),
+            OpenAICompatibleAdapter(
+                presetID: .kimiCode,
+                adapterID: "kimi.chat_completions"
+            ),
         ])
         let expected = Dictionary(uniqueKeysWithValues: ProviderPreset.shipped.map {
             ($0.id, $0.semanticAdapterID)

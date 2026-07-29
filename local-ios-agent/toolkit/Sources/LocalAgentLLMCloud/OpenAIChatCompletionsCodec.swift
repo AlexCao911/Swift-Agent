@@ -1,15 +1,22 @@
 import Foundation
 import LocalAgentLLMContracts
 
-package enum ChatProviderSemantics: Sendable {
+package enum ChatProviderSemantics: Equatable, Sendable {
     case deepSeek
     case glm
+    case openAICompatible(adapterID: String)
 
     var adapterID: String {
         switch self {
         case .deepSeek: "deepseek.chat_completions"
         case .glm: "glm.chat_completions"
+        case .openAICompatible(let adapterID): adapterID
         }
+    }
+
+    var isOpenAICompatible: Bool {
+        if case .openAICompatible = self { return true }
+        return false
     }
 }
 
@@ -258,9 +265,14 @@ package final class OpenAIChatCompletionsSession: CloudProviderSession, @uncheck
 
     private func validateModel() throws {
         let model = context.modelID.lowercased()
-        let valid = semantics == .deepSeek
-            ? model.hasPrefix("deepseek-")
-            : model.hasPrefix("glm-")
+        let valid = switch semantics {
+        case .deepSeek:
+            model.hasPrefix("deepseek-")
+        case .glm:
+            model.hasPrefix("glm-")
+        case .openAICompatible:
+            !model.isEmpty
+        }
         guard valid else {
             throw chatFailure(
                 "cloud_adapter.model_incompatible",
@@ -628,13 +640,15 @@ private func applyChatParameters(
     modelID: String,
     body: inout [String: Any]
 ) throws -> Bool {
-    let supported = Set([
+    var supported = Set([
         LLMParameterID.samplingTemperature.rawValue,
         LLMParameterID.samplingTopP.rawValue,
         LLMParameterID.generationMaxOutputTokens.rawValue,
         LLMParameterID.generationStopSequences.rawValue,
-        LLMParameterID.reasoningEffort.rawValue,
     ])
+    if !semantics.isOpenAICompatible {
+        supported.insert(LLMParameterID.reasoningEffort.rawValue)
+    }
     guard Set(configuration.parameters.keys).isSubset(of: supported) else {
         throw chatFailure(
             "cloud_adapter.parameter_unsupported",
