@@ -425,6 +425,7 @@ fn model_request() -> ModelRequest {
             description: "run a command".into(),
             input_schema: json!({"type": "object"}),
         }],
+        ordered_tool_results: Vec::new(),
         purpose: local_ios_agent_runtime::agent_loop::ModelRequestPurpose::Generation,
     }
 }

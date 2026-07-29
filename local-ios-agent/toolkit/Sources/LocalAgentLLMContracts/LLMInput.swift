@@ -114,6 +114,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
     public let orderedMessages: [HostModelMessage]
     public let attachmentReferences: [HostAttachmentReference]
     public let orderedToolDefinitions: [HostToolDefinition]
+    public let orderedToolResults: [HostToolResult]
     public let purpose: HostModelRequestPurpose
 
     public init(
@@ -123,6 +124,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         orderedMessages: [HostModelMessage],
         attachmentReferences: [HostAttachmentReference],
         orderedToolDefinitions: [HostToolDefinition],
+        orderedToolResults: [HostToolResult] = [],
         purpose: HostModelRequestPurpose = .generation
     ) {
         self.runID = runID
@@ -131,7 +133,43 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         self.orderedMessages = orderedMessages
         self.attachmentReferences = attachmentReferences
         self.orderedToolDefinitions = orderedToolDefinitions
+        self.orderedToolResults = orderedToolResults
         self.purpose = purpose
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        runID = try container.decode(String.self, forKey: .runID)
+        conversationStreamID = try container.decode(String.self, forKey: .conversationStreamID)
+        systemPrompt = try container.decode(String.self, forKey: .systemPrompt)
+        orderedMessages = try container.decode([HostModelMessage].self, forKey: .orderedMessages)
+        attachmentReferences = try container.decode(
+            [HostAttachmentReference].self,
+            forKey: .attachmentReferences
+        )
+        orderedToolDefinitions = try container.decode(
+            [HostToolDefinition].self,
+            forKey: .orderedToolDefinitions
+        )
+        orderedToolResults = try container.decodeIfPresent(
+            [HostToolResult].self,
+            forKey: .orderedToolResults
+        ) ?? []
+        purpose = try container.decode(HostModelRequestPurpose.self, forKey: .purpose)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(runID, forKey: .runID)
+        try container.encode(conversationStreamID, forKey: .conversationStreamID)
+        try container.encode(systemPrompt, forKey: .systemPrompt)
+        try container.encode(orderedMessages, forKey: .orderedMessages)
+        try container.encode(attachmentReferences, forKey: .attachmentReferences)
+        try container.encode(orderedToolDefinitions, forKey: .orderedToolDefinitions)
+        if !orderedToolResults.isEmpty {
+            try container.encode(orderedToolResults, forKey: .orderedToolResults)
+        }
+        try container.encode(purpose, forKey: .purpose)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -141,6 +179,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         case orderedMessages = "ordered_messages"
         case attachmentReferences = "attachment_references"
         case orderedToolDefinitions = "ordered_tool_definitions"
+        case orderedToolResults = "ordered_tool_results"
         case purpose
     }
 }

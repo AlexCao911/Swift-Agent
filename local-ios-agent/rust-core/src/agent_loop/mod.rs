@@ -8,4 +8,5 @@ pub use contracts::{
     AgentLoopError, AgentLoopOutcome, AgentRunRequest, AssistantTurn, ModelEvent, ModelEventSink,
     ModelMessage, ModelRequest, ModelRequestPurpose, ModelRuntime, ToolRuntime,
 };
+pub(crate) use runner::agent_run_request;
 pub use runner::{validate_batch_result, validate_tool_calls, AgentLoopService, MAX_MODEL_TURNS};

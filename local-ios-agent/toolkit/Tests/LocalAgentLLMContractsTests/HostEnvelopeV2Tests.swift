@@ -30,6 +30,54 @@ struct HostEnvelopeV2Tests {
     }
 
     @Test
+    func generationPreservesOrderedToolResultsOnlyForModelCommands() throws {
+        let fixture = try hostV2Fixture()
+        let results = [
+            HostToolResult(
+                callID: "call-1",
+                toolName: "shell",
+                result: try .object(entries: [
+                    .init(name: "stdout", value: .string("first")),
+                ]),
+                isError: false,
+                dataClasses: [],
+                highestSensitivity: "public"
+            ),
+            HostToolResult(
+                callID: "call-2",
+                toolName: "read_file",
+                result: try .object(entries: [
+                    .init(name: "content", value: .string("second")),
+                ]),
+                isError: false,
+                dataClasses: [],
+                highestSensitivity: "public"
+            ),
+        ]
+        let request = HostModelRequest(
+            runID: fixture.modelRequest.runID,
+            conversationStreamID: fixture.modelRequest.conversationStreamID,
+            systemPrompt: fixture.modelRequest.systemPrompt,
+            orderedMessages: fixture.modelRequest.orderedMessages,
+            attachmentReferences: fixture.modelRequest.attachmentReferences,
+            orderedToolDefinitions: fixture.modelRequest.orderedToolDefinitions,
+            orderedToolResults: results,
+            purpose: fixture.modelRequest.purpose
+        )
+        let payload = HostCommandPayload.generationV2(request)
+
+        #expect(
+            try payload.modelRequest(
+                for: .resumeGeneration,
+                envelopeRunID: "run-v2"
+            ) == request
+        )
+        assertContractError("llm.contract.command_payload_mismatch") {
+            try payload.validate(for: .closeSession, envelopeRunID: "run-v2")
+        }
+    }
+
+    @Test
     func toolCompletionRequiresExactEventIdentity() throws {
         let fixture = try hostV2Fixture()
         let payload = LLMEventPayload(

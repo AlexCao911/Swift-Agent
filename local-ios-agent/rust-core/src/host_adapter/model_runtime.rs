@@ -25,13 +25,13 @@ use crate::tool::AgentToolCall;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-pub struct HostModelRuntime<R: UnifiedRuntimeStateRepository> {
+pub struct HostModelRuntime<R: UnifiedRuntimeStateRepository + ?Sized> {
     repository: Arc<R>,
     poll_interval: Duration,
     active_commands: Arc<Mutex<HashMap<String, String>>>,
 }
 
-impl<R: UnifiedRuntimeStateRepository> HostModelRuntime<R> {
+impl<R: UnifiedRuntimeStateRepository + ?Sized> HostModelRuntime<R> {
     pub fn new(repository: Arc<R>) -> Self {
         Self {
             repository,
@@ -292,7 +292,7 @@ impl<R: UnifiedRuntimeStateRepository> HostModelRuntime<R> {
     }
 }
 
-impl<R: UnifiedRuntimeStateRepository> ModelRuntime for HostModelRuntime<R> {
+impl<R: UnifiedRuntimeStateRepository + ?Sized> ModelRuntime for HostModelRuntime<R> {
     fn generate(
         &self,
         request: ModelRequest,
@@ -310,7 +310,7 @@ impl<R: UnifiedRuntimeStateRepository> ModelRuntime for HostModelRuntime<R> {
     }
 }
 
-pub(crate) fn wait_for_ack<R: UnifiedRuntimeStateRepository>(
+pub(crate) fn wait_for_ack<R: UnifiedRuntimeStateRepository + ?Sized>(
     repository: &R,
     command_id: &str,
     poll_interval: Duration,
@@ -339,7 +339,7 @@ pub(crate) fn wait_for_ack<R: UnifiedRuntimeStateRepository>(
     }
 }
 
-pub(crate) fn required_worker<R: UnifiedRuntimeStateRepository>(
+pub(crate) fn required_worker<R: UnifiedRuntimeStateRepository + ?Sized>(
     repository: &R,
     run_id: &str,
 ) -> Result<crate::llm_contracts::HostWorkerRecord, AgentLoopError> {
@@ -410,6 +410,18 @@ fn host_model_request(request: ModelRequest) -> HostModelRequest {
                 name: value.name,
                 description: value.description,
                 input_schema: value.input_schema,
+            })
+            .collect(),
+        ordered_tool_results: request
+            .ordered_tool_results
+            .into_iter()
+            .map(|value| crate::llm_contracts::HostToolResult {
+                call_id: value.call_id,
+                tool_name: value.tool_name,
+                result: value.result,
+                is_error: value.is_error,
+                data_classes: value.data_classes,
+                highest_sensitivity: value.highest_sensitivity,
             })
             .collect(),
         purpose: match request.purpose {

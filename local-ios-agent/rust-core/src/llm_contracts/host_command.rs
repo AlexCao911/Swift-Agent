@@ -90,6 +90,8 @@ pub struct HostModelRequest {
     pub ordered_messages: Vec<HostModelMessage>,
     pub attachment_references: Vec<HostAttachmentReference>,
     pub ordered_tool_definitions: Vec<HostToolDefinition>,
+    #[serde(default)]
+    pub ordered_tool_results: Vec<HostToolResult>,
     pub purpose: ModelRequestPurpose,
 }
 
@@ -151,6 +153,8 @@ pub struct HostCommandPayload {
     pub attachment_references: Vec<HostAttachmentReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ordered_tool_definitions: Vec<HostToolDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordered_tool_results: Vec<HostToolResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_request_purpose: Option<ModelRequestPurpose>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,6 +183,7 @@ impl HostCommandPayload {
             ordered_messages: Vec::new(),
             attachment_references: Vec::new(),
             ordered_tool_definitions: Vec::new(),
+            ordered_tool_results: Vec::new(),
             model_request_purpose: None,
             tool_batch: None,
             target_batch_id: None,
@@ -193,6 +198,7 @@ impl HostCommandPayload {
         payload.ordered_messages = request.ordered_messages;
         payload.attachment_references = request.attachment_references;
         payload.ordered_tool_definitions = request.ordered_tool_definitions;
+        payload.ordered_tool_results = request.ordered_tool_results;
         payload.model_request_purpose = Some(request.purpose);
         payload
     }
@@ -232,6 +238,7 @@ impl HostCommandPayload {
             ordered_messages: self.ordered_messages.clone(),
             attachment_references: self.attachment_references.clone(),
             ordered_tool_definitions: self.ordered_tool_definitions.clone(),
+            ordered_tool_results: self.ordered_tool_results.clone(),
             purpose: self
                 .model_request_purpose
                 .ok_or_else(command_payload_mismatch)?,
@@ -267,6 +274,7 @@ impl HostCommandPayload {
             && self.ordered_messages.is_empty()
             && self.attachment_references.is_empty()
             && self.ordered_tool_definitions.is_empty()
+            && self.ordered_tool_results.is_empty()
             && self.model_request_purpose.is_none();
         let valid = match kind {
             HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration => {
@@ -417,6 +425,7 @@ impl HostCommandPayload {
             && self.ordered_messages.is_empty()
             && self.attachment_references.is_empty()
             && self.ordered_tool_definitions.is_empty()
+            && self.ordered_tool_results.is_empty()
             && self.model_request_purpose.is_none()
             && self.tool_batch.is_none()
             && self.target_batch_id.is_none()

@@ -453,18 +453,8 @@ package actor LLMBridgeActor {
             await reject(command, code: "llm.command.closed_session")
             return
         }
-        guard var entry = sessions[command.sessionHandle] else {
-            await reject(command, code: "llm.command.unknown_session")
-            return
-        }
-        guard command.hostProcessEpoch == hostProcessEpoch.rawValue,
-              command.hostProcessEpoch == entry.allocation.hostProcessEpoch.rawValue
-        else {
+        guard command.hostProcessEpoch == hostProcessEpoch.rawValue else {
             await reject(command, code: "llm.command.wrong_epoch")
-            return
-        }
-        guard command.runID == entry.allocation.proposedRunID else {
-            await reject(command, code: "llm.command.wrong_run")
             return
         }
         do {
@@ -483,6 +473,21 @@ package actor LLMBridgeActor {
               digest == command.commandEnvelopeDigest
         else {
             await reject(command, code: "llm.command.digest_mismatch")
+            return
+        }
+        if sessions[command.sessionHandle] == nil {
+            guard adoptRustOwnedV2Session(for: command) else {
+                await reject(command, code: "llm.command.unknown_session")
+                return
+            }
+        }
+        guard var entry = sessions[command.sessionHandle] else { return }
+        guard command.hostProcessEpoch == entry.allocation.hostProcessEpoch.rawValue else {
+            await reject(command, code: "llm.command.wrong_epoch")
+            return
+        }
+        guard command.runID == entry.allocation.proposedRunID else {
+            await reject(command, code: "llm.command.wrong_run")
             return
         }
 
@@ -513,6 +518,40 @@ package actor LLMBridgeActor {
                 executeAcceptedV2Command(command)
             }
         }
+    }
+
+    private func adoptRustOwnedV2Session(
+        for command: HostCommandEnvelope
+    ) -> Bool {
+        guard command.schemaVersion == 2,
+              command.kind == .startGeneration,
+              command.commandSequence == 1,
+              modelHandler != nil
+        else {
+            return false
+        }
+        let allocation = AllocatedHostSession(
+            sessionHandle: command.sessionHandle,
+            preparationID: "rust-react:\(command.runID)",
+            proposedRunID: command.runID,
+            swiftSnapshotID: command.payloadDigest,
+            bindingHash: command.payloadDigest,
+            hostProcessEpoch: hostProcessEpoch,
+            preparedSessionRegistrationDigest: command.commandEnvelopeDigest,
+            cleanupOwner: PreparedSessionCleanupOwner()
+        )
+        sessions[command.sessionHandle] = HostSessionEntry(
+            allocation: allocation,
+            lifecycle: .committed,
+            driver: nil,
+            eventSequencer: LLMEventSequencer(
+                runID: command.runID,
+                sessionHandle: command.sessionHandle,
+                hostProcessEpoch: hostProcessEpoch,
+                submitter: rustSink
+            )
+        )
+        return true
     }
 
     private func executionTask(

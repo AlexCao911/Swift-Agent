@@ -156,6 +156,27 @@ struct LLMHostRuntimeTests {
     }
 
     @Test
+    func rustOwnedV2StartAdoptsItsRunScopedSessionWithoutV1Preparation() async throws {
+        let fixture = try await HostRuntimeHarness.make(lifecycle: .committed)
+        let command = try fixture.v2GenerationCommand(id: "rust-react", sequence: 1)
+        let executor = RecordingV2ModelExecutor()
+        let sink = RecordingRustSink(acceptsCleanupAcknowledgement: true)
+        let runtime = LLMHostRuntime(
+            hostProcessEpoch: HostRuntimeHarness.epoch,
+            rustSink: sink,
+            modelExecutor: executor
+        )
+
+        #expect(runtime.copy(try dispatch(command)) == .copied)
+        await runtime.drain()
+        await waitUntil { await sink.eventKinds().contains(.generationCompleted) }
+
+        #expect(await executor.requestCount() == 1)
+        #expect(await sink.lastRejectionCode() == nil)
+        #expect(await runtime.bridgeActor.lifecycle(for: command.sessionHandle) == .committed)
+    }
+
+    @Test
     func v2CloseSessionFinishesRunOwnedModelResources() async throws {
         let executor = RecordingV2ModelExecutor()
         let harness = try await HostRuntimeHarness.make(

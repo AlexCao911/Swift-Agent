@@ -78,6 +78,24 @@ where
         request: AgentRunRequest,
         sink: &mut dyn ModelEventSink,
     ) -> Result<AgentLoopOutcome, AgentLoopError> {
+        let cancellation = self.begin_run(&request)?;
+        self.run_registered(request, cancellation, sink)
+    }
+
+    pub fn spawn(&self, request: AgentRunRequest) -> Result<(), AgentLoopError> {
+        let cancellation = self.begin_run(&request)?;
+        let service = self.clone();
+        std::thread::spawn(move || {
+            let mut sink = DiscardingModelEventSink;
+            let _ = service.run_registered(request, cancellation, &mut sink);
+        });
+        Ok(())
+    }
+
+    fn begin_run(
+        &self,
+        request: &AgentRunRequest,
+    ) -> Result<Arc<RunCancellationRecord>, AgentLoopError> {
         if self
             .active_runs
             .active_run(&request.conversation_stream_id)
@@ -104,7 +122,15 @@ where
             }
             records.insert(request.run_id.clone(), cancellation.clone());
         }
+        Ok(cancellation)
+    }
 
+    fn run_registered(
+        &self,
+        request: AgentRunRequest,
+        cancellation: Arc<RunCancellationRecord>,
+        sink: &mut dyn ModelEventSink,
+    ) -> Result<AgentLoopOutcome, AgentLoopError> {
         let result = cancellation
             .commit_if_active(|| self.commit_run_started(&request))
             .and_then(|_| self.run_inner(&request, &cancellation, sink));
@@ -243,6 +269,7 @@ where
             ContextWindowPolicy::for_model(request.run_start_snapshot.model_context_window)
                 .map_err(input_error)?;
         let mut completed_tool_results = Vec::new();
+        let mut pending_tool_results = Vec::new();
 
         for model_turn in 0..MAX_MODEL_TURNS {
             cancellation.check()?;
@@ -250,7 +277,8 @@ where
             let mut input = input_assembler
                 .assemble_turn(&request.conversation_stream_id, branch.clone())
                 .map_err(input_error)?;
-            let mut generation_request = model_request(request, &input);
+            let mut generation_request =
+                model_request(request, &input, pending_tool_results.clone());
             if estimated_model_request_tokens(&generation_request)
                 >= context_policy.auto_compact_threshold_tokens()
             {
@@ -258,9 +286,15 @@ where
                 if let Some(checkpoint) = compaction_checkpoint(&branch) {
                     cancellation.check()?;
                     let summary_turn = self.model.generate(
-                        compaction_model_request(request, &branch, &context_policy),
+                        compaction_model_request(
+                            request,
+                            &branch,
+                            &context_policy,
+                            pending_tool_results.clone(),
+                        ),
                         &mut DiscardingModelEventSink,
                     )?;
+                    pending_tool_results.clear();
                     cancellation.check()?;
                     if summary_turn.text.trim().is_empty() || !summary_turn.tool_calls.is_empty() {
                         return Err(AgentLoopError::new(
@@ -281,10 +315,11 @@ where
                     input = input_assembler
                         .assemble_turn(&request.conversation_stream_id, branch)
                         .map_err(input_error)?;
-                    generation_request = model_request(request, &input);
+                    generation_request = model_request(request, &input, Vec::new());
                 }
             }
             let turn = self.model.generate(generation_request, sink)?;
+            pending_tool_results.clear();
             cancellation.check()?;
 
             if turn.tool_calls.is_empty() {
@@ -315,6 +350,7 @@ where
             validate_batch_result(&batch, &result)?;
             cancellation
                 .commit_if_active(|| self.commit_tool_round(request, model_turn, &turn, &result))?;
+            pending_tool_results = result.ordered_results.clone();
             completed_tool_results.extend(
                 result
                     .ordered_results
@@ -539,29 +575,9 @@ fn recovered_request(event: &RuntimeEvent) -> Result<AgentRunRequest, AgentLoopE
             "run command stream does not match its event",
         ));
     }
-    let run_start_snapshot = command.run_start_snapshot().cloned().ok_or_else(|| {
-        AgentLoopError::new(
-            "agent_loop.recovery_payload_invalid",
-            "run-start snapshot is missing",
-        )
-    })?;
-    run_start_snapshot.validate().map_err(input_error)?;
-    let attachment_references = match command {
-        TranscriptCommand::Send { attachments, .. } => attachments,
-        TranscriptCommand::EditMessage {
-            replacement_attachments,
-            ..
-        } => replacement_attachments,
-        TranscriptCommand::RetryFrom { .. } => Vec::new(),
-        _ => {
-            return Err(AgentLoopError::new(
-                "agent_loop.recovery_payload_invalid",
-                "event does not contain a run-producing command",
-            ));
-        }
-    };
-    Ok(AgentRunRequest {
-        run_id: event
+    agent_run_request(
+        &command,
+        event
             .run_id
             .as_ref()
             .map(|run_id| run_id.0.clone())
@@ -571,7 +587,37 @@ fn recovered_request(event: &RuntimeEvent) -> Result<AgentRunRequest, AgentLoopE
                     "run command has no run identifier",
                 )
             })?,
-        conversation_stream_id: event.session_id.0.clone(),
+    )
+}
+
+pub(crate) fn agent_run_request(
+    command: &TranscriptCommand,
+    run_id: String,
+) -> Result<AgentRunRequest, AgentLoopError> {
+    let run_start_snapshot = command.run_start_snapshot().cloned().ok_or_else(|| {
+        AgentLoopError::new(
+            "agent_loop.recovery_payload_invalid",
+            "run-start snapshot is missing",
+        )
+    })?;
+    run_start_snapshot.validate().map_err(input_error)?;
+    let attachment_references = match command {
+        TranscriptCommand::Send { attachments, .. } => attachments.clone(),
+        TranscriptCommand::EditMessage {
+            replacement_attachments,
+            ..
+        } => replacement_attachments.clone(),
+        TranscriptCommand::RetryFrom { .. } => Vec::new(),
+        _ => {
+            return Err(AgentLoopError::new(
+                "agent_loop.recovery_payload_invalid",
+                "event does not contain a run-producing command",
+            ));
+        }
+    };
+    Ok(AgentRunRequest {
+        run_id,
+        conversation_stream_id: command.conversation_stream_id().to_string(),
         run_start_snapshot,
         attachment_references,
     })
@@ -642,7 +688,11 @@ pub fn validate_batch_result(
     Ok(())
 }
 
-fn model_request(request: &AgentRunRequest, input: &AgentTurnInput) -> ModelRequest {
+fn model_request(
+    request: &AgentRunRequest,
+    input: &AgentTurnInput,
+    ordered_tool_results: Vec<crate::tool::ToolCallResult>,
+) -> ModelRequest {
     ModelRequest {
         run_id: request.run_id.clone(),
         conversation_stream_id: request.conversation_stream_id.clone(),
@@ -658,6 +708,7 @@ fn model_request(request: &AgentRunRequest, input: &AgentTurnInput) -> ModelRequ
             .collect(),
         attachment_references: request.attachment_references.clone(),
         ordered_tool_definitions: input.ordered_tool_definitions().to_vec(),
+        ordered_tool_results,
         purpose: ModelRequestPurpose::Generation,
     }
 }
@@ -724,6 +775,7 @@ fn compaction_model_request(
     request: &AgentRunRequest,
     branch: &[RuntimeEvent],
     policy: &ContextWindowPolicy,
+    ordered_tool_results: Vec<crate::tool::ToolCallResult>,
 ) -> ModelRequest {
     let system_prompt = concat!(
         "Compact the conversation for continued agent work. Preserve user intent, ",
@@ -752,6 +804,7 @@ fn compaction_model_request(
         }],
         attachment_references: Vec::new(),
         ordered_tool_definitions: Vec::new(),
+        ordered_tool_results,
         purpose: ModelRequestPurpose::Compaction,
     }
 }

@@ -11,6 +11,7 @@ use std::sync::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::agent_loop::AgentLoopService;
 use crate::app_service::{
     AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
 };
@@ -33,13 +34,14 @@ use crate::execution::{
     ExecutionStartError, ExecutionToolCall, ExecutionToolOutcome, HostLLMDispatcherConfig,
     HostLLMDispatcherRuntime, HostToolBatchExecutor, LocalAgentLLMHostVTable,
 };
+use crate::host_adapter::{HostModelRuntime, HostToolRuntime};
 use crate::llm_contracts::{
-    AgentHostBindingService, HostAttestation, HostBindingActivationConfirmation, HostBindingCommit,
-    HostBindingSubjectCatalog, HostCommandAcknowledgement, HostToolResult, LLMEventEnvelope,
-    LLMEventKind, LLMEventSubmissionResult, LegacyProfileMigrationRecord,
-    LegacyProfileMigrationService, LegacyProfileMigrationState, PackageBindingPreparation,
-    PreparationAbortReason, PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
-    PreparedSessionRegistration, ProfilePublishPreparation,
+    AgentHostBindingService, BearerTokenIssuer, HostAttestation, HostBindingActivationConfirmation,
+    HostBindingCommit, HostBindingSubjectCatalog, HostCommandAcknowledgement, HostSessionRecord,
+    HostToolResult, HostWorkerRecord, LLMEventEnvelope, LLMEventKind, LLMEventSubmissionResult,
+    LegacyProfileMigrationRecord, LegacyProfileMigrationService, LegacyProfileMigrationState,
+    PackageBindingPreparation, PreparationAbortReason, PreparedSessionCleanupAcknowledgement,
+    PreparedSessionClosedReceipt, PreparedSessionRegistration, ProfilePublishPreparation,
 };
 use crate::run_snapshot::{
     PersistedResolvedRunSnapshotV2, ResolvedRunSnapshot, RunPreparationService, StartRunRequest,
@@ -156,6 +158,7 @@ pub struct BridgeRuntime<S: ConversationEventStore + Send + 'static> {
     conversation:
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
     transcript_commands: ConversationCommandService<RuntimeConversationStore<S>>,
+    agent_loop: AgentLoopService<RuntimeConversationStore<S>>,
     execution: ExecutionService,
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
@@ -164,6 +167,7 @@ pub struct BridgeRuntime<S: ConversationEventStore + Send + 'static> {
     run_preparation: RunPreparationService,
     host_llm_dispatcher: HostLLMDispatcherRuntime,
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
+    host_process_epoch: String,
     ffi_tainted: AtomicBool,
 }
 
@@ -208,7 +212,14 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         let transcript_store = Arc::new(Mutex::new(RuntimeConversationStore::new(
             runtime.clone(),
         )));
-        let transcript_commands = ConversationCommandService::new(transcript_store);
+        let transcript_commands = ConversationCommandService::new(transcript_store.clone());
+        let agent_loop = AgentLoopService::new(
+            transcript_store,
+            Arc::new(HostModelRuntime::new(runtime_state.clone())),
+            Arc::new(HostToolRuntime::new(runtime_state.clone())),
+            transcript_commands.active_run_registry(),
+            transcript_commands.projection_registry(),
+        );
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let completed_runs = CompletedRunRegistry::default();
         let snapshot_service = app_services.snapshot_service();
@@ -231,7 +242,7 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         );
         let run_preparation = RunPreparationService::with_host_runtime(
             agent_os_state.clone(),
-            host_process_epoch,
+            host_process_epoch.clone(),
             snapshot_service,
             runtime_state.clone(),
         );
@@ -259,6 +270,7 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             frames,
             conversation,
             transcript_commands,
+            agent_loop,
             execution,
             app_services,
             conversation_commits,
@@ -267,6 +279,7 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             run_preparation,
             host_llm_dispatcher,
             runtime_state,
+            host_process_epoch,
             ffi_tainted: AtomicBool::new(false),
         };
         bridge.consume_host_events()?;
@@ -893,11 +906,55 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         let command: TranscriptCommand = from_json(request_json)?;
         let result = self
             .transcript_commands
-            .submit(command)
+            .submit(command.clone())
             .map_err(|error| {
                 AgentError::Storage(format!("{}: {error}", error.code()))
             })?;
+        if let Some(run_id) = &result.run_id {
+            self.start_react_run_if_needed(&command, run_id)?;
+        }
         to_json(&result)
+    }
+
+    fn start_react_run_if_needed(
+        &self,
+        command: &TranscriptCommand,
+        run_id: &str,
+    ) -> Result<(), AgentError> {
+        if self
+            .runtime_state
+            .host_worker(run_id)
+            .map_err(runtime_state_agent_error)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let request = crate::agent_loop::agent_run_request(command, run_id.to_string())
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        let session_handle = BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?
+            .raw()
+            .to_string();
+        let binding_hash = request.run_start_snapshot.snapshot_digest.clone();
+        self.runtime_state
+            .insert_worker_and_session(
+                HostWorkerRecord::new(run_id, &session_handle, &self.host_process_epoch),
+                HostSessionRecord::new(
+                    run_id,
+                    &session_handle,
+                    &self.host_process_epoch,
+                    format!("react:{run_id}"),
+                    1,
+                    binding_hash,
+                ),
+            )
+            .map_err(runtime_state_agent_error)?;
+
+        self.agent_loop
+            .spawn(request)
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        Ok(())
     }
 
     fn observe_transcript_projections_stream_json<F>(
@@ -1036,9 +1093,17 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             .map_err(runtime_state_agent_error)?
             .is_some()
         {
-            self.host_llm_dispatcher
-                .cancel_run(&run_id)
-                .map_err(runtime_state_agent_error)?;
+            match self.agent_loop.cancel_run(&run_id) {
+                Ok(()) => {}
+                Err(error) if error.code() == "agent_loop.run_not_active" => {
+                    self.host_llm_dispatcher
+                        .cancel_run(&run_id)
+                        .map_err(runtime_state_agent_error)?;
+                }
+                Err(error) => {
+                    return Err(AgentError::Storage(format!("{}: {error}", error.code())));
+                }
+            }
             self.execution()
                 .record_external_event(&run_id, "run.cancel_requested", r#"{"state":"cancelling"}"#)
                 .map_err(execution_start_agent_error)?;
@@ -3549,6 +3614,52 @@ mod tests {
             schema.metadata_json.as_deref(),
             Some(r#"{"native_permission_scope":"calendar.events"}"#)
         );
+    }
+
+    #[test]
+    fn accepted_transcript_run_registers_the_react_host_session() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        let snapshot = crate::agent_input::RunStartSnapshot::make(
+            vec![crate::agent_input::PromptDocumentSnapshot {
+                id: "base".into(),
+                source: "test".into(),
+                markdown: "Be useful.".into(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            crate::context::ModelContextWindow {
+                context_window_tokens: 8_192,
+                max_output_tokens: 1_024,
+            },
+        )
+        .unwrap();
+        let command = TranscriptCommand::Send {
+            request_id: "request-react-host".into(),
+            conversation_stream_id: "conversation-react-host".into(),
+            client_message_id: "message-react-host".into(),
+            text: "hello".into(),
+            attachments: Vec::new(),
+            run_start_snapshot: snapshot,
+        };
+
+        let response = bridge
+            .submit_transcript_command_json(&serde_json::to_string(&command).unwrap())
+            .unwrap();
+        let result: crate::conversation::TranscriptCommandResult =
+            serde_json::from_str(&response).unwrap();
+        let run_id = result.run_id.unwrap();
+
+        let worker = bridge.runtime_state.host_worker(&run_id).unwrap().unwrap();
+        assert!(bridge
+            .runtime_state
+            .host_session(worker.session_handle())
+            .unwrap()
+            .is_some());
     }
 
     #[test]

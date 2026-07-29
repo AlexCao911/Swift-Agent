@@ -210,6 +210,10 @@ impl<S: ConversationEventStore> ConversationCommandService<S> {
         self.projection_subscriptions.clone()
     }
 
+    pub fn active_run_registry(&self) -> ActiveRunRegistry {
+        self.active_runs.clone()
+    }
+
     pub(crate) fn store_handle(&self) -> Arc<Mutex<S>> {
         self.store.clone()
     }

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use local_ios_agent_runtime::llm_contracts::{
     HostAttestation, HostAttestationV1Document, HostCommandEnvelope, HostCommandKind,
     HostCommandPayload, HostDispatchEnvelope, HostModelRequest, HostToolBatch,
-    HostToolBatchCompletion, LLMEventEnvelope, LLMEventKind, LLMEventPayload, LLMEventReceipt,
-    LLMEventSubmissionResult, SequenceEffect,
+    HostToolBatchCompletion, HostToolResult, LLMEventEnvelope, LLMEventKind, LLMEventPayload,
+    LLMEventReceipt, LLMEventSubmissionResult, SequenceEffect,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -174,6 +174,45 @@ fn v2_generation_and_tool_batch_payloads_validate_by_command_kind() {
         .validate_for(HostCommandKind::ExecuteToolBatch, "run-v2")
         .unwrap_err()
         .code(),
+        "llm.contract.command_payload_mismatch"
+    );
+}
+
+#[test]
+fn v2_generation_preserves_ordered_tool_results_only_for_model_commands() {
+    let fixture = host_v2_fixture();
+    let mut request = fixture.model_request;
+    request.ordered_tool_results = vec![
+        HostToolResult {
+            call_id: "call-1".into(),
+            tool_name: "shell".into(),
+            result: serde_json::json!({"stdout": "first"}),
+            is_error: false,
+            data_classes: Vec::new(),
+            highest_sensitivity: "public".into(),
+        },
+        HostToolResult {
+            call_id: "call-2".into(),
+            tool_name: "read_file".into(),
+            result: serde_json::json!({"content": "second"}),
+            is_error: false,
+            data_classes: Vec::new(),
+            highest_sensitivity: "public".into(),
+        },
+    ];
+
+    let payload = HostCommandPayload::generation_v2(request.clone());
+    assert_eq!(
+        payload
+            .model_request_v2(HostCommandKind::ResumeGeneration, "run-v2")
+            .unwrap(),
+        request
+    );
+    assert_eq!(
+        payload
+            .validate_for(HostCommandKind::CloseSession, "run-v2")
+            .unwrap_err()
+            .code(),
         "llm.contract.command_payload_mismatch"
     );
 }

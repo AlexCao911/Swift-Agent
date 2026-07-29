@@ -20,7 +20,7 @@ use super::model_runtime::{
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-pub struct HostToolRuntime<R: UnifiedRuntimeStateRepository> {
+pub struct HostToolRuntime<R: UnifiedRuntimeStateRepository + ?Sized> {
     repository: Arc<R>,
     poll_interval: Duration,
     active_batches: Arc<Mutex<HashMap<String, ActiveBatch>>>,
@@ -32,7 +32,7 @@ struct ActiveBatch {
     command_id: String,
 }
 
-impl<R: UnifiedRuntimeStateRepository> HostToolRuntime<R> {
+impl<R: UnifiedRuntimeStateRepository + ?Sized> HostToolRuntime<R> {
     pub fn new(repository: Arc<R>) -> Self {
         Self {
             repository,
@@ -201,7 +201,7 @@ impl<R: UnifiedRuntimeStateRepository> HostToolRuntime<R> {
     }
 }
 
-impl<R: UnifiedRuntimeStateRepository> ToolRuntime for HostToolRuntime<R> {
+impl<R: UnifiedRuntimeStateRepository + ?Sized> ToolRuntime for HostToolRuntime<R> {
     fn execute_batch(&self, batch: ToolBatch) -> Result<ToolBatchResult, AgentLoopError> {
         self.execute_inner(batch)
     }

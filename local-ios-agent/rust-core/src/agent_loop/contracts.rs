@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::agent_input::{RunStartSnapshot, ToolDefinitionSnapshot};
 use crate::conversation::TranscriptAttachmentReference;
-use crate::tool::{AgentToolCall, ToolBatch, ToolBatchResult};
+use crate::tool::{AgentToolCall, ToolBatch, ToolBatchResult, ToolCallResult};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentRunRequest {
@@ -37,6 +37,7 @@ pub struct ModelRequest {
     pub ordered_messages: Vec<ModelMessage>,
     pub attachment_references: Vec<TranscriptAttachmentReference>,
     pub ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+    pub ordered_tool_results: Vec<ToolCallResult>,
     pub purpose: ModelRequestPurpose,
 }
 
