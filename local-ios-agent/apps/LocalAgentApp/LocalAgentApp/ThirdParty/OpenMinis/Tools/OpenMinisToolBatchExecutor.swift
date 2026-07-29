@@ -246,8 +246,8 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
             toolName: call.toolName,
             result: .string(message),
             isError: true,
-            dataClasses: [],
-            highestSensitivity: "public"
+            dataClasses: [EgressDataClass.unknownData.rawValue],
+            highestSensitivity: DataSensitivity.unknown.rawValue
         )
     }
 }

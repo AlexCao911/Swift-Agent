@@ -130,10 +130,9 @@ struct OpenMinisProductShellView: View {
     }
 
     private var visibleMessages: [ChatMessage] {
-        let projected = chatStore.projectedMessages(
+        chatStore.projectedMessages(
             conversationStreamID: viewModel.conversationStreamID
         )
-        return projected.isEmpty ? runtimeViewModel.state.messages : projected
     }
 
     private var emptyConversation: some View {

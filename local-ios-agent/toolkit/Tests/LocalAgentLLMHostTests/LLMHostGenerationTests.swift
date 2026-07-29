@@ -138,6 +138,62 @@ struct LLMHostGenerationTests {
         }
         #expect(text == #"{"call_id":"call-1","is_error":false,"result":{"name":"Ada"},"tool_name":"contacts.search"}"#)
     }
+
+    @Test
+    func rustReActRequestUsesRustContextAndNormalizesOpenMinisTools() throws {
+        let schema = try CanonicalJSONValue.object(entries: [
+            .init(name: "type", value: .string("object")),
+            .init(name: "properties", value: try .object(entries: [
+                .init(name: "command", value: try .object(entries: [
+                    .init(name: "type", value: .string("string")),
+                ])),
+            ])),
+        ])
+        let request = HostModelRequest(
+            runID: "run-1",
+            conversationStreamID: "conversation-1",
+            systemPrompt: "system",
+            orderedMessages: [
+                HostModelMessage(role: "user", content: .string("inspect")),
+                HostModelMessage(role: "tool", content: .string("large output")),
+            ],
+            attachmentReferences: [],
+            orderedToolDefinitions: [
+                HostToolDefinition(
+                    name: "shell",
+                    description: "Run a command",
+                    inputSchema: schema
+                ),
+            ],
+            orderedToolResults: [
+                HostToolResult(
+                    callID: "call-1",
+                    toolName: "shell",
+                    result: .string("done"),
+                    isError: false,
+                    dataClasses: ["shell_output"],
+                    highestSensitivity: "public"
+                ),
+            ]
+        )
+
+        let input = try rustReActInput(request, includeContext: true)
+        #expect(input.messages.map(\.role) == [.system, .user, .user])
+        #expect(try rustReActInput(request, includeContext: false).messages.isEmpty)
+        #expect(try rustReActToolSchema(request) == .object(entries: [
+            .init(name: "tools", value: .array([
+                try .object(entries: [
+                    .init(name: "description", value: .string("Run a command")),
+                    .init(name: "name", value: .string("shell")),
+                    .init(name: "parameters", value: schema),
+                ]),
+            ])),
+        ]))
+
+        let result = try #require(rustReActToolResults(request.orderedToolResults).first)
+        #expect(result.dataClasses == [.unknownData])
+        #expect(result.highestSensitivity == .unknown)
+    }
 }
 
 private struct GenerationHarness {

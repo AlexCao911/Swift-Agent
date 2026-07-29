@@ -46,8 +46,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 call,
                 value: output.value,
                 isError: output.isError,
-                dataClasses: ["web_content"],
-                sensitivity: "private"
+                dataClasses: [EgressDataClass.text.rawValue],
+                sensitivity: DataSensitivity.private.rawValue
             )
         default:
             return await executeNative(call, context: context)
@@ -87,8 +87,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 ToolResultCredentialRedactor.redact(output.modelText)
             ),
             isError: output.isError,
-            dataClasses: ["native_tool_result"],
-            sensitivity: output.sensitivity.rawValue
+            dataClasses: [EgressDataClass.unknownData.rawValue],
+            sensitivity: dataSensitivity(output.sensitivity)
         )
     }
 
@@ -128,8 +128,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             call,
             value: .string(ToolResultCredentialRedactor.redact(output)),
             isError: commandResult.exitCode != 0 || commandResult.wasCancelled,
-            dataClasses: ["shell_output"],
-            sensitivity: "private"
+            dataClasses: [EgressDataClass.unknownData.rawValue],
+            sensitivity: DataSensitivity.unknown.rawValue
         )
     }
 
@@ -170,8 +170,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             return result(
                 call,
                 value: .string(ToolResultCredentialRedactor.redact(output)),
-                dataClasses: ["file_content"],
-                sensitivity: "private"
+                dataClasses: [EgressDataClass.files.rawValue],
+                sensitivity: DataSensitivity.private.rawValue
             )
         } catch {
             return self.error(call, fileErrorMessage(error))
@@ -199,8 +199,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             return result(
                 call,
                 value: .string("Wrote \(content.utf8.count) bytes to \(path)."),
-                dataClasses: ["file_metadata"],
-                sensitivity: "private"
+                dataClasses: [EgressDataClass.files.rawValue],
+                sensitivity: DataSensitivity.private.rawValue
             )
         } catch {
             return self.error(call, fileErrorMessage(error))
@@ -247,8 +247,8 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             return result(
                 call,
                 value: .string("Updated \(path) (\(replacements) replacement(s))."),
-                dataClasses: ["file_metadata"],
-                sensitivity: "private"
+                dataClasses: [EgressDataClass.files.rawValue],
+                sensitivity: DataSensitivity.private.rawValue
             )
         } catch {
             return self.error(call, fileErrorMessage(error))
@@ -435,9 +435,22 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             call,
             value: .string(message),
             isError: true,
-            dataClasses: [],
-            sensitivity: "public"
+            dataClasses: [EgressDataClass.unknownData.rawValue],
+            sensitivity: DataSensitivity.unknown.rawValue
         )
+    }
+
+    private func dataSensitivity(_ value: SensitivityDTO) -> String {
+        switch value {
+        case .public:
+            DataSensitivity.routine.rawValue
+        case .private:
+            DataSensitivity.private.rawValue
+        case .secret:
+            DataSensitivity.highlySensitive.rawValue
+        default:
+            DataSensitivity.unknown.rawValue
+        }
     }
 
     private func fileErrorMessage(_ error: Error) -> String {

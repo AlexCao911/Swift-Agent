@@ -58,10 +58,20 @@ enum AppBootstrapper {
             plans: modelExecutionRegistry,
             runtime: modelExecutionRegistry
         )
+        let nativeTools = await container.nativeToolkitClient
+            .registrationSnapshot()
+        let toolExecutor = OpenMinisToolBatchExecutor(
+            dispatcher: OpenMinisProductToolDispatcher(
+                nativeTools: container.hostToolDriver
+            ),
+            definitions: try OpenMinisToolDefinitionSnapshotProvider
+                .productDefaults(nativeSchemas: nativeTools.schemas)
+        )
         let host = try await LLMHostProductRuntime.bootstrap(
             rust: rust,
             hostProcessEpoch: hostProcessEpoch,
-            modelExecutor: modelExecutor
+            modelExecutor: modelExecutor,
+            toolExecutor: toolExecutor
         )
         let modelCenterClient = AppModelCenterClient(
             local: local,
@@ -155,6 +165,7 @@ enum AppBootstrapper {
                 toolDriver: nativeBundle.toolDriver
             ),
             runDebugService: RunDebugService(bridge: executionBridge),
+            hostToolDriver: nativeBundle.toolDriver,
             nativeToolkitClient: nativeBundle.client,
             nativePermissionGateway: nativeBundle.permissionGateway,
             agentBuilderClient: RustAgentBuilderClient(execution: executionBridge),
@@ -214,6 +225,7 @@ enum AppBootstrapper {
                 toolDriver: nativeBundle.toolDriver
             ),
             runDebugService: nil,
+            hostToolDriver: nativeBundle.toolDriver,
             nativeToolkitClient: nativeBundle.client,
             nativePermissionGateway: nativeBundle.permissionGateway,
             agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([
@@ -271,6 +283,7 @@ enum AppBootstrapper {
                 toolDriver: toolDriver
             ),
             runDebugService: nil,
+            hostToolDriver: toolDriver,
             nativeToolkitClient: LastResortNativeToolkitClient(error: error),
             nativePermissionGateway: StoreBackedNativePermissionGateway(store: permissionStore),
             agentBuilderClient: MockAgentBuilderClient.withReadinessIssues([
@@ -467,6 +480,14 @@ enum AppBootstrapper {
         try sqliteURL(fileManager: fileManager)
             .deletingLastPathComponent()
             .appendingPathComponent("host-tool-effects.sqlite")
+    }
+
+    static func transcriptProjectionURL(
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        try sqliteURL(fileManager: fileManager)
+            .deletingLastPathComponent()
+            .appendingPathComponent("transcript-projection.sqlite")
     }
 
     private static func recoverSQLiteStore(

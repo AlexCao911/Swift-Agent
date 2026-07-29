@@ -711,7 +711,8 @@ func makeAuthorizedTransportFixture(
     parameters: GenerationConfiguration = GenerationConfiguration(),
     systemText: String? = nil,
     includeToolResult: Bool = false,
-    toolResults: [NormalizedToolResult]? = nil
+    toolResults: [NormalizedToolResult]? = nil,
+    canonicalToolSchema: CanonicalJSONValue? = nil
 ) async throws -> AuthorizedTransportFixture {
     let harness = try await EgressHarness.make(retentionMode: retentionMode)
     if retentionMode == .providerStateApproved {
@@ -732,7 +733,8 @@ func makeAuthorizedTransportFixture(
             toolResultsOverride: toolResults,
             providerHistory: providerHistory,
             resolvedParameters: parameters,
-            systemText: systemText
+            systemText: systemText,
+            canonicalToolSchema: canonicalToolSchema
         ),
         session: harness.session,
         priorGrant: nil
@@ -909,7 +911,8 @@ private func validatedTurn(
     toolResultsOverride: [NormalizedToolResult]? = nil,
     providerHistory: CanonicalJSONValue = .array([]),
     resolvedParameters: GenerationConfiguration = GenerationConfiguration(),
-    systemText: String? = nil
+    systemText: String? = nil,
+    canonicalToolSchema: CanonicalJSONValue? = nil
 ) throws -> ValidatedCloudGenerationTurn {
     let defaultToolResults = includeToolResult ? [NormalizedToolResult(
         callID: "call-1",
@@ -942,14 +945,15 @@ private func validatedTurn(
         inputMessages.append(.init(role: .system, content: [.text(systemText)]))
     }
     inputMessages.append(.init(role: .user, content: [.text(text)]))
+    let effectiveToolSchema = try canonicalToolSchema ?? .object(entries: [
+        .init(name: "tools", value: .array([.string("contacts.search")])),
+    ])
     let base = CloudGenerationTurnCandidate(
         input: AgentLLMInput(
             inputID: "input-\(turnID)",
             messages: inputMessages
         ),
-        canonicalToolSchema: try .object(entries: [
-            .init(name: "tools", value: .array([.string("contacts.search")])),
-        ]),
+        canonicalToolSchema: effectiveToolSchema,
         sourceRevisionDocument: try .object(entries: [
             .init(name: "sources", value: .array([
                 try .object(entries: [

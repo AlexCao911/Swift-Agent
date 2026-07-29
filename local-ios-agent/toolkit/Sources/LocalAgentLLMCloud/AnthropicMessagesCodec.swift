@@ -554,9 +554,13 @@ private func messagesTools(_ schema: CanonicalJSONValue) throws -> [[String: Any
                 "input_schema": ["type": "object", "properties": [:]],
             ]
         }
-        guard let value = value as? [String: Any] else {
+        guard var value = value as? [String: Any] else {
             throw messagesFailure("cloud_adapter.tool_schema_invalid", "Messages tool schema is invalid")
         }
+        if value["input_schema"] == nil, let parameters = value.removeValue(forKey: "parameters") {
+            value["input_schema"] = parameters
+        }
+        value.removeValue(forKey: "type")
         return value
     }
 }

@@ -623,7 +623,22 @@ private func chatTools(_ schema: CanonicalJSONValue) throws -> [[String: Any]] {
         guard let object = value as? [String: Any] else {
             throw chatFailure("cloud_adapter.tool_schema_invalid", "Chat tool schema is invalid")
         }
-        return object
+        if object["function"] != nil {
+            return object
+        }
+        guard let name = object["name"] as? String,
+              let parameters = object["parameters"] ?? object["input_schema"]
+        else {
+            throw chatFailure("cloud_adapter.tool_schema_invalid", "Chat tool schema is invalid")
+        }
+        var function: [String: Any] = [
+            "name": name,
+            "parameters": parameters,
+        ]
+        if let description = object["description"] as? String {
+            function["description"] = description
+        }
+        return ["type": "function", "function": function]
     }
 }
 

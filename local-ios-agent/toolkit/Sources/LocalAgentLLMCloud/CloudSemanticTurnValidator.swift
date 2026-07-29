@@ -46,10 +46,7 @@ package struct CloudSemanticTurnValidator: CloudSemanticTurnValidating {
         try validateSourceIdentities(candidate.sourceRevisionDocument)
         try validateAttachments(candidate)
 
-        let contentDigest = try CanonicalDigestV1.digest(
-            domain: "agent-input:v1",
-            document: semanticDocument(candidate)
-        )
+        let contentDigest = try contentDigest(candidate)
         guard contentDigest.hex == candidate.disclosure.contentDigest else {
             throw failure(
                 "cloud_turn.content_digest_mismatch",
@@ -57,10 +54,7 @@ package struct CloudSemanticTurnValidator: CloudSemanticTurnValidating {
             )
         }
 
-        let sourceRevisionDigest = try CanonicalDigestV1.digest(
-            domain: "source-revisions:v1",
-            document: sourceDocument(candidate)
-        )
+        let sourceRevisionDigest = try sourceRevisionDigest(candidate)
         guard sourceRevisionDigest.hex == candidate.disclosure.sourceRevisionDigest else {
             throw failure(
                 "cloud_turn.source_revision_digest_mismatch",
@@ -71,6 +65,24 @@ package struct CloudSemanticTurnValidator: CloudSemanticTurnValidating {
             semantic: candidate,
             contentDigest: contentDigest,
             sourceRevisionDigest: sourceRevisionDigest
+        )
+    }
+
+    package func contentDigest(
+        _ candidate: CloudGenerationTurnCandidate
+    ) throws -> CanonicalDigest {
+        try CanonicalDigestV1.digest(
+            domain: "agent-input:v1",
+            document: semanticDocument(candidate)
+        )
+    }
+
+    package func sourceRevisionDigest(
+        _ candidate: CloudGenerationTurnCandidate
+    ) throws -> CanonicalDigest {
+        try CanonicalDigestV1.digest(
+            domain: "source-revisions:v1",
+            document: sourceDocument(candidate)
         )
     }
 

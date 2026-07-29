@@ -20,14 +20,16 @@ struct AppShellView: View {
         self.viewModel = viewModel
         self.container = container
         let runtimeViewModel = container.makeAgentViewModel()
+        let chatStore = container.makeOpenMinisChatStore()
         _chatViewModel = State(initialValue: runtimeViewModel)
         _openMinisChatViewModel = StateObject(
             wrappedValue: container.makeOpenMinisChatViewModel(
-                runtimeViewModel: runtimeViewModel
+                runtimeViewModel: runtimeViewModel,
+                chatStore: chatStore
             )
         )
         _openMinisChatStore = StateObject(
-            wrappedValue: container.makeOpenMinisChatStore()
+            wrappedValue: chatStore
         )
         _builderViewModel = State(initialValue: container.makeAgentBuilderViewModel())
         _toolCenterViewModel = State(initialValue: container.makeToolCenterViewModel())

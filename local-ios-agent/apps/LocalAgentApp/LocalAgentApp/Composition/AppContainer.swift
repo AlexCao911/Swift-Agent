@@ -9,6 +9,7 @@ struct AppContainer {
     let hostProcessEpoch: HostProcessEpoch
     let runtimeService: AgentRuntimeService
     let runDebugService: RunDebugService?
+    let hostToolDriver: any HostToolDriving
     let nativeToolkitClient: any NativeToolkitClientProtocol
     let nativePermissionGateway: any NativePermissionGateway
     let agentBuilderClient: any AgentBuilderClient
@@ -44,6 +45,7 @@ struct AppContainer {
             hostProcessEpoch: hostProcessEpoch,
             runtimeService: runtimeService,
             runDebugService: runDebugService,
+            hostToolDriver: hostToolDriver,
             nativeToolkitClient: nativeToolkitClient,
             nativePermissionGateway: nativePermissionGateway,
             agentBuilderClient: agentBuilderClient,
@@ -85,15 +87,89 @@ struct AppContainer {
 
     @MainActor
     func makeOpenMinisChatViewModel(
-        runtimeViewModel: AgentViewModel
+        runtimeViewModel: AgentViewModel,
+        chatStore: ChatStore
     ) -> AIChatViewModel {
-        AIChatViewModel(
-            conversationStreamID: runtimeViewModel.state.currentSessionId
-                ?? "localagent-draft"
-        ) { submission in
-            runtimeViewModel.state.draftText = submission.text
-            runtimeViewModel.state.draft.attachments = submission.attachments
-            await runtimeViewModel.send()
+        let conversationStreamID = runtimeViewModel.state.currentSessionId
+            ?? "conversation-\(UUID().uuidString.lowercased())"
+        guard let rustRuntimeClient,
+              let llmHostSelections,
+              let localLLMSubsystem,
+              let cloudLLMSubsystem,
+              let modelExecutionRegistry
+        else {
+            return AIChatViewModel(
+                conversationStreamID: conversationStreamID
+            ) { _ in
+                throw RustAgentCoordinatorError(
+                    message: "Rust Agent runtime is unavailable"
+                )
+            }
+        }
+
+        do {
+            let conversation = RustConversationBridgeClient(
+                gateway: rustRuntimeClient,
+                legacyClient: rustRuntimeClient
+            )
+            let persistence = try TranscriptProjectionStore(
+                fileURL: try AppBootstrapper.transcriptProjectionURL()
+            )
+            let projections = ProjectionFeedController(
+                client: conversation,
+                applier: ChatStoreProjectionApplier(
+                    store: chatStore,
+                    persistence: persistence
+                )
+            )
+            let coordinator = RustAgentCoordinator(
+                conversation: conversation,
+                snapshots: RustAgentInputSnapshotProvider(
+                    nativeToolkit: nativeToolkitClient
+                ),
+                models: AppRustAgentModelRunPreparer(
+                    selections: llmHostSelections,
+                    local: localLLMSubsystem,
+                    cloud: cloudLLMSubsystem,
+                    registry: modelExecutionRegistry
+                ),
+                projections: projections
+            )
+            try coordinator.startProjection(
+                conversationStreamID: conversationStreamID
+            )
+            return AIChatViewModel(
+                conversationStreamID: conversationStreamID
+            ) { submission in
+                guard submission.attachments.isEmpty else {
+                    throw RustAgentCoordinatorError(
+                        message: "Attachments are not connected to the Rust ReAct path yet"
+                    )
+                }
+                guard let revision =
+                    runtimeViewModel.state.selectedAgentProfileRevisionId
+                else {
+                    throw RustAgentCoordinatorError(
+                        message: "Choose an agent and model before sending"
+                    )
+                }
+                _ = try await coordinator.send(
+                    requestID: UUID().uuidString.lowercased(),
+                    conversationStreamID: submission.conversationStreamID,
+                    clientMessageID: UUID().uuidString.lowercased(),
+                    text: submission.text,
+                    attachments: [],
+                    agentProfileID:
+                        runtimeViewModel.state.selectedAgentProfileId,
+                    agentProfileRevisionID: revision
+                )
+            }
+        } catch {
+            return AIChatViewModel(
+                conversationStreamID: conversationStreamID
+            ) { _ in
+                throw error
+            }
         }
     }
 

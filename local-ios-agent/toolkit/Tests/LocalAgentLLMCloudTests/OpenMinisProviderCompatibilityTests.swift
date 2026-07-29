@@ -6,6 +6,57 @@ import Testing
 @Suite("OpenMinis provider compatibility")
 struct OpenMinisProviderCompatibilityTests {
     @Test
+    func rustGenericToolSchemaMapsToChatAndMessagesWireFormats() async throws {
+        let parameters = try CanonicalJSONValue.object(entries: [
+            .init(name: "type", value: .string("object")),
+            .init(name: "properties", value: try .object(entries: [
+                .init(name: "command", value: try .object(entries: [
+                    .init(name: "type", value: .string("string")),
+                ])),
+            ])),
+        ])
+        let schema = try CanonicalJSONValue.object(entries: [
+            .init(name: "tools", value: .array([
+                try .object(entries: [
+                    .init(name: "description", value: .string("Run a command")),
+                    .init(name: "name", value: .string("shell")),
+                    .init(name: "parameters", value: parameters),
+                ]),
+            ])),
+        ])
+        let chatFixture = try await makeAuthorizedTransportFixture(
+            modelID: "deepseek-chat",
+            canonicalToolSchema: schema
+        )
+        let messagesFixture = try await makeAuthorizedTransportFixture(
+            modelID: "claude-sonnet-4-5",
+            canonicalToolSchema: schema
+        )
+        defer { chatFixture.cleanup(); messagesFixture.cleanup() }
+
+        let chatBody = try wireJSONObject(
+            DeepSeekAdapter()
+                .makeSession(chatFixture.sessionContext)
+                .encodeStart(chatFixture.authorizedTurn)
+        )
+        let chatTools = try #require(chatBody["tools"] as? [[String: Any]])
+        let function = try #require(chatTools.first?["function"] as? [String: Any])
+        #expect(chatTools.first?["type"] as? String == "function")
+        #expect(function["name"] as? String == "shell")
+        #expect(function["parameters"] != nil)
+
+        let messagesBody = try wireJSONObject(
+            AnthropicMessagesAdapter()
+                .makeSession(messagesFixture.sessionContext)
+                .encodeStart(messagesFixture.authorizedTurn)
+        )
+        let messagesTools = try #require(messagesBody["tools"] as? [[String: Any]])
+        #expect(messagesTools.first?["name"] as? String == "shell")
+        #expect(messagesTools.first?["input_schema"] != nil)
+        #expect(messagesTools.first?["parameters"] == nil)
+    }
+
+    @Test
     func antigravityUsesItsCloudCodeEnvelopeAndGeminiStreamSemantics() async throws {
         let fixture = try await makeAuthorizedTransportFixture(
             modelID: "gemini-3-flash",
