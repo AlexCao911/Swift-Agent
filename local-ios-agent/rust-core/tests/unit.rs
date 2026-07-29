@@ -10,8 +10,6 @@ mod context_projection;
 mod context_prompt;
 #[path = "unit/core_types.rs"]
 mod core_types;
-#[path = "unit/memory_foundation.rs"]
-mod memory_foundation;
 #[path = "unit/run_state.rs"]
 mod run_state;
 #[path = "unit/session_tree.rs"]

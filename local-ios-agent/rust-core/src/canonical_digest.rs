@@ -4,7 +4,7 @@ use std::fmt::{self, Write};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const REGISTERED_DOMAINS: [&str; 36] = [
+const REGISTERED_DOMAINS: [&str; 37] = [
     "agent-host-binding:v1",
     "agent-input:v1",
     "agent-requirements:v1",
@@ -41,6 +41,7 @@ const REGISTERED_DOMAINS: [&str; 36] = [
     "saga-token:v1",
     "source-revisions:v1",
     "tool-schema:v1",
+    "transcript-command:v1",
 ];
 
 pub struct CanonicalDigestV1;

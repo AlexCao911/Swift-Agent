@@ -11,6 +11,8 @@ mod agent_os_state_sqlite;
 mod app_service_builder_publish;
 #[path = "integration/context_assembly_lifecycle.rs"]
 mod context_assembly_lifecycle;
+#[path = "integration/conversation_projection.rs"]
+mod conversation_projection;
 #[path = "integration/host_llm_ffi.rs"]
 mod host_llm_ffi;
 #[path = "integration/llm_profile_migration_ffi.rs"]

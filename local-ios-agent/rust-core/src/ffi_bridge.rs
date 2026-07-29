@@ -17,10 +17,12 @@ use crate::app_service::{
 use crate::canonical_digest::CanonicalDigestV1;
 use crate::context::{ContextAssembler, ContextSegment};
 use crate::conversation::{
-    ConversationCommitError, ConversationCommitService, ConversationFrameId,
-    ConversationFrameMessage, ConversationFrameRepository, ConversationRunFrame,
-    ConversationRunFrameRef, ConversationService, InMemoryConversationFrameRepository,
+    ConversationCommandService, ConversationCommitError, ConversationCommitService,
+    ConversationFrameId, ConversationFrameMessage, ConversationFrameRepository,
+    ConversationRunFrame, ConversationRunFrameRef, ConversationService,
+    InMemoryConversationFrameRepository, ObserveTranscriptProjectionsRequest,
     PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader,
+    RuntimeConversationStore, TranscriptCommand,
 };
 use crate::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, EntryId, EventKind, RunId, RuntimeEvent,
@@ -39,7 +41,6 @@ use crate::llm_contracts::{
     PreparationAbortReason, PreparedSessionCleanupAcknowledgement, PreparedSessionClosedReceipt,
     PreparedSessionRegistration, ProfilePublishPreparation,
 };
-use crate::memory::{EventStore, InMemoryEventStore, SqliteEventStore};
 use crate::run_snapshot::{
     PersistedResolvedRunSnapshotV2, ResolvedRunSnapshot, RunPreparationService, StartRunRequest,
 };
@@ -49,7 +50,8 @@ use crate::security::{
 };
 use crate::storage::agent_os_state::SharedAgentOSStateStore;
 use crate::storage::{
-    InMemoryRuntimeStateStore, SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
+    ConversationEventStore, InMemoryConversationStore, InMemoryRuntimeStateStore,
+    SqliteConversationStore, SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
 };
 use crate::tool::{
     CompiledToolRecipe, CompiledToolRecipeContent, HttpResponseSensitivity, RetentionPolicy,
@@ -104,12 +106,14 @@ fn validate_host_process_epoch(value: &str) -> Result<(), AgentError> {
 }
 
 #[derive(Clone)]
-struct BridgeHostToolBatchExecutor<S: EventStore + Send + 'static> {
+struct BridgeHostToolBatchExecutor<S: ConversationEventStore + Send + 'static> {
     runtime: Arc<Mutex<AgentRuntime<S>>>,
     runtime_state: Arc<dyn UnifiedRuntimeStateRepository>,
 }
 
-impl<S: EventStore + Send + 'static> HostToolBatchExecutor for BridgeHostToolBatchExecutor<S> {
+impl<S: ConversationEventStore + Send + 'static> HostToolBatchExecutor
+    for BridgeHostToolBatchExecutor<S>
+{
     fn execute_tool(
         &self,
         run_id: &str,
@@ -141,16 +145,17 @@ impl<S: EventStore + Send + 'static> HostToolBatchExecutor for BridgeHostToolBat
 }
 
 pub enum RuntimeJsonBridge {
-    InMemory(BridgeRuntime<InMemoryEventStore>),
-    Sqlite(BridgeRuntime<SqliteEventStore>),
+    InMemory(BridgeRuntime<InMemoryConversationStore>),
+    Sqlite(BridgeRuntime<SqliteConversationStore>),
 }
 
-pub struct BridgeRuntime<S: EventStore + Send + 'static> {
+pub struct BridgeRuntime<S: ConversationEventStore + Send + 'static> {
     runtime: Arc<Mutex<AgentRuntime<S>>>,
     debug_archives: Mutex<BTreeMap<String, RunDebugArchiveJson>>,
     frames: InMemoryConversationFrameRepository,
     conversation:
         ConversationService<InMemoryConversationFrameRepository, RuntimeBranchEventReader<S>>,
+    transcript_commands: ConversationCommandService<RuntimeConversationStore<S>>,
     execution: ExecutionService,
     app_services: AgentOSApplicationService,
     conversation_commits: ConversationCommitService,
@@ -162,7 +167,7 @@ pub struct BridgeRuntime<S: EventStore + Send + 'static> {
     ffi_tainted: AtomicBool,
 }
 
-impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
+impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
     fn new(runtime: AgentRuntime<S>, app_services: AgentOSApplicationService) -> Self {
         let runtime_state = InMemoryRuntimeStateStore::new();
         let event_log = ExecutionEventLog::new(runtime_state.clone());
@@ -200,6 +205,10 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         }
         let frames = InMemoryConversationFrameRepository::default();
         let runtime = Arc::new(Mutex::new(runtime));
+        let transcript_store = Arc::new(Mutex::new(RuntimeConversationStore::new(
+            runtime.clone(),
+        )));
+        let transcript_commands = ConversationCommandService::new(transcript_store);
         let branch_reader = RuntimeBranchEventReader::new(runtime.clone());
         let completed_runs = CompletedRunRegistry::default();
         let snapshot_service = app_services.snapshot_service();
@@ -249,6 +258,7 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
             debug_archives: Mutex::new(BTreeMap::new()),
             frames,
             conversation,
+            transcript_commands,
             execution,
             app_services,
             conversation_commits,
@@ -876,6 +886,56 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
         )
     }
 
+    fn submit_transcript_command_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let command: TranscriptCommand = from_json(request_json)?;
+        let result = self
+            .transcript_commands
+            .submit(command)
+            .map_err(|error| {
+                AgentError::Storage(format!("{}: {error}", error.code()))
+            })?;
+        to_json(&result)
+    }
+
+    fn observe_transcript_projections_stream_json<F>(
+        &self,
+        request_json: &str,
+        mut emit: F,
+    ) -> Result<(), AgentError>
+    where
+        F: FnMut(String) -> Result<(), AgentError>,
+    {
+        let request: ObserveTranscriptProjectionsRequest = from_json(request_json)?;
+        let mut feed = self
+            .transcript_commands
+            .projection_registry()
+            .observe(self.transcript_commands.store_handle(), request)
+            .map_err(|error| {
+                AgentError::Storage(format!("{}: {error}", error.code()))
+            })?;
+        while let Some(event) = feed.next().map_err(|error| {
+            AgentError::Storage(format!("{}: {error}", error.code()))
+        })? {
+            emit(to_json(&event)?)?;
+        }
+        Ok(())
+    }
+
+    fn cancel_transcript_projection_subscription_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        let request: CancelTranscriptProjectionSubscriptionJson =
+            from_json(request_json)?;
+        self.transcript_commands
+            .projection_registry()
+            .cancel(&request.subscription_id);
+        Ok("null".to_string())
+    }
+
     fn commit_assistant_result_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: CommitAssistantResultRequestJson = from_json(request_json)?;
         let frame_ref = request.conversation_run_frame_ref.into_domain();
@@ -1065,14 +1125,14 @@ impl<S: EventStore + Send + 'static> BridgeRuntime<S> {
 }
 
 impl RuntimeJsonBridge {
-    pub fn new(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
+    pub fn new(runtime: AgentRuntime<InMemoryConversationStore>) -> Self {
         Self::InMemory(BridgeRuntime::new(
             runtime,
             AgentOSApplicationService::empty(),
         ))
     }
 
-    pub fn new_development_seeded(runtime: AgentRuntime<InMemoryEventStore>) -> Self {
+    pub fn new_development_seeded(runtime: AgentRuntime<InMemoryConversationStore>) -> Self {
         let app_services = AgentOSApplicationService::from_config(
             AgentOSApplicationServiceConfig::new().with_seed_development_profile(true),
         )
@@ -1100,7 +1160,10 @@ impl RuntimeJsonBridge {
                 )
                 .map_err(|error| AgentError::Storage(error.to_string()))?;
                 Ok(Self::InMemory(BridgeRuntime::try_new(
-                    AgentRuntime::open_without_replay(runtime_config, InMemoryEventStore::new())?,
+                    AgentRuntime::open_without_replay(
+                        runtime_config,
+                        InMemoryConversationStore::new(),
+                    )?,
                     app_services,
                     runtime_state.agent_os_state(),
                     host_process_epoch,
@@ -1546,6 +1609,48 @@ impl RuntimeJsonBridge {
         }
     }
 
+    pub fn submit_transcript_command_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => {
+                runtime.submit_transcript_command_json(request_json)
+            }
+            Self::Sqlite(runtime) => {
+                runtime.submit_transcript_command_json(request_json)
+            }
+        }
+    }
+
+    pub fn observe_transcript_projections_stream_json<F>(
+        &self,
+        request_json: &str,
+        mut emit: F,
+    ) -> Result<(), AgentError>
+    where
+        F: FnMut(String) -> Result<(), AgentError>,
+    {
+        match self {
+            Self::InMemory(runtime) => runtime
+                .observe_transcript_projections_stream_json(request_json, &mut emit),
+            Self::Sqlite(runtime) => runtime
+                .observe_transcript_projections_stream_json(request_json, &mut emit),
+        }
+    }
+
+    pub fn cancel_transcript_projection_subscription_json(
+        &self,
+        request_json: &str,
+    ) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime
+                .cancel_transcript_projection_subscription_json(request_json),
+            Self::Sqlite(runtime) => runtime
+                .cancel_transcript_projection_subscription_json(request_json),
+        }
+    }
+
     pub fn commit_assistant_result_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.commit_assistant_result_json(request_json),
@@ -1901,6 +2006,14 @@ json_bridge_function!(
     local_agent_runtime_bridge_confirm_prepared_session_closed,
     confirm_prepared_session_closed_json
 );
+json_bridge_function!(
+    local_agent_runtime_bridge_submit_transcript_command,
+    submit_transcript_command_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_cancel_transcript_projection_subscription,
+    cancel_transcript_projection_subscription_json
+);
 
 #[no_mangle]
 pub unsafe extern "C" fn local_agent_runtime_bridge_list_agent_profiles(
@@ -1969,6 +2082,23 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_observe_events_streaming(
         bridge_ref(runtime)?.observe_events_stream_json(request_json, |event_json| {
             dispatch_stream_event(on_event, user_data, &event_json)
         })?;
+        Ok("null".to_string())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn local_agent_runtime_bridge_observe_transcript_projections(
+    runtime: *mut RuntimeJsonBridge,
+    request_json: *const c_char,
+    on_event: RuntimeEventCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    c_runtime_result(runtime, || {
+        let request_json = c_str_arg(request_json, "request_json")?;
+        bridge_ref(runtime)?.observe_transcript_projections_stream_json(
+            request_json,
+            |event_json| dispatch_stream_event(on_event, user_data, &event_json),
+        )?;
         Ok("null".to_string())
     })
 }
@@ -2350,6 +2480,11 @@ struct ConversationRunFrameRefJson {
 struct ObserveExecutionEventsRequestJson {
     run_id: String,
     from_sequence: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CancelTranscriptProjectionSubscriptionJson {
+    subscription_id: String,
 }
 
 #[derive(Deserialize)]
@@ -3265,6 +3400,13 @@ fn event_kind_json(kind: &EventKind) -> &'static str {
         EventKind::ProviderChanged => "provider_changed",
         EventKind::ToolRegistered => "tool_registered",
         EventKind::UserMessage => "user_message",
+        EventKind::TranscriptRetryRequested => "transcript_retry_requested",
+        EventKind::MessageEdited => "message_edited",
+        EventKind::MessageDeleted => "message_deleted",
+        EventKind::ConversationCleared => "conversation_cleared",
+        EventKind::BranchCreated => "branch_created",
+        EventKind::ConversationArchived => "conversation_archived",
+        EventKind::ConversationDeleted => "conversation_deleted",
         EventKind::AssistantMessageStarted => "assistant_message_started",
         EventKind::AssistantTextDelta => "assistant_text_delta",
         EventKind::AssistantMessageCompleted => "assistant_message_completed",

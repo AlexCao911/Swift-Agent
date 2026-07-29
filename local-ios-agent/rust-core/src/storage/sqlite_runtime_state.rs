@@ -188,8 +188,8 @@ impl SqliteRuntimeStateStore {
 
     pub fn conversation_event_store(
         &self,
-    ) -> Result<crate::memory::SqliteEventStore, crate::core::AgentError> {
-        crate::memory::SqliteEventStore::from_unified_owner(self.inner.clone())
+    ) -> Result<crate::storage::SqliteConversationStore, crate::core::AgentError> {
+        crate::storage::SqliteConversationStore::from_unified_owner(self.inner.clone())
     }
 
     pub fn migration_state(&self) -> Result<MigrationState, RuntimeStateError> {

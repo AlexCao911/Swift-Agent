@@ -1,6 +1,5 @@
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
-use local_ios_agent_runtime::memory::EventStore;
-use local_ios_agent_runtime::memory::SqliteEventStore;
+use local_ios_agent_runtime::storage::{ConversationEventStore, SqliteConversationStore};
 
 fn sqlite_event(
     id: &str,
@@ -26,7 +25,7 @@ fn sqlite_store_opens_and_creates_schema() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
 
-    let store = SqliteEventStore::open(&db_path).unwrap();
+    let store = SqliteConversationStore::open(&db_path).unwrap();
 
     assert_eq!(store.schema_version().unwrap(), 1);
 }
@@ -35,7 +34,7 @@ fn sqlite_store_opens_and_creates_schema() {
 fn sqlite_store_creates_event_tables() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let store = SqliteEventStore::open(&db_path).unwrap();
+    let store = SqliteConversationStore::open(&db_path).unwrap();
 
     let tables = store.table_names().unwrap();
 
@@ -49,7 +48,7 @@ fn sqlite_store_creates_event_tables() {
 fn sqlite_store_appends_and_reads_event() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let mut store = SqliteEventStore::open(&db_path).unwrap();
+    let mut store = SqliteConversationStore::open(&db_path).unwrap();
     let source_event = sqlite_event("root", None, 1, 0, "root");
 
     store.append(source_event.clone()).unwrap();
@@ -70,7 +69,7 @@ fn sqlite_store_appends_and_reads_event() {
 fn sqlite_store_reconstructs_active_branch_from_closure_table() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let mut store = SqliteEventStore::open(&db_path).unwrap();
+    let mut store = SqliteConversationStore::open(&db_path).unwrap();
 
     store
         .append(sqlite_event("root", None, 1, 0, "root"))
@@ -101,7 +100,7 @@ fn sqlite_store_reconstructs_active_branch_from_closure_table() {
 fn sqlite_store_exposes_replay_queries() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let mut store = SqliteEventStore::open(&db_path).unwrap();
+    let mut store = SqliteConversationStore::open(&db_path).unwrap();
 
     store
         .append(sqlite_event("root", None, 1, 0, "root"))
@@ -134,7 +133,7 @@ fn sqlite_store_exposes_replay_queries() {
 fn sqlite_store_persists_session_title_override() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let mut store = SqliteEventStore::open(&db_path).unwrap();
+    let mut store = SqliteConversationStore::open(&db_path).unwrap();
 
     store
         .append(sqlite_event("root", None, 1, 0, "root"))
@@ -146,7 +145,7 @@ fn sqlite_store_persists_session_title_override() {
         )
         .unwrap();
 
-    let reopened = SqliteEventStore::open(&db_path).unwrap();
+    let reopened = SqliteConversationStore::open(&db_path).unwrap();
     assert_eq!(
         reopened
             .session_title_override(&SessionId("session_sqlite".into()))

@@ -139,6 +139,20 @@ char *local_agent_runtime_bridge_observe_events_streaming(
     LocalAgentRuntimeEventCallback callback,
     void *user_data
 );
+char *local_agent_runtime_bridge_submit_transcript_command(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
+char *local_agent_runtime_bridge_observe_transcript_projections(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json,
+    LocalAgentRuntimeEventCallback callback,
+    void *user_data
+);
+char *local_agent_runtime_bridge_cancel_transcript_projection_subscription(
+    LocalAgentRuntimeBridge *runtime,
+    const char *request_json
+);
 char *local_agent_runtime_bridge_commit_assistant_result(
     LocalAgentRuntimeBridge *runtime,
     const char *request_json

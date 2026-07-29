@@ -2,19 +2,19 @@ use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
-use crate::memory::{
-    AuditRow, BlobRecord, BranchSummaryRecord, EventStore, LongTermMemoryRecord, MemoryCandidate,
+use crate::storage::conversation_event_store::{
+    ConversationEventStore, StoredTranscriptCommandReceipt,
 };
 use crate::storage::agent_os_state::SqliteAgentOSStateStore;
 
-pub struct SqliteEventStore {
-    connection: SqliteEventStoreConnection,
+pub struct SqliteConversationStore {
+    connection: SqliteConversationStoreConnection,
 }
 
-enum SqliteEventStoreConnection {
+enum SqliteConversationStoreConnection {
     Owned(Connection),
     Unified(Arc<Mutex<SqliteAgentOSStateStore>>),
 }
@@ -60,11 +60,11 @@ impl DerefMut for SqliteConnectionMut<'_> {
     }
 }
 
-impl SqliteEventStore {
+impl SqliteConversationStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, AgentError> {
         let conn = Connection::open(path).map_err(storage_error)?;
         let store = Self {
-            connection: SqliteEventStoreConnection::Owned(conn),
+            connection: SqliteConversationStoreConnection::Owned(conn),
         };
         store.migrate()?;
         Ok(store)
@@ -74,7 +74,7 @@ impl SqliteEventStore {
         owner: Arc<Mutex<SqliteAgentOSStateStore>>,
     ) -> Result<Self, AgentError> {
         let store = Self {
-            connection: SqliteEventStoreConnection::Unified(owner),
+            connection: SqliteConversationStoreConnection::Unified(owner),
         };
         store.migrate()?;
         Ok(store)
@@ -82,10 +82,10 @@ impl SqliteEventStore {
 
     fn connection(&self) -> Result<SqliteConnectionRef<'_>, AgentError> {
         match &self.connection {
-            SqliteEventStoreConnection::Owned(connection) => {
+            SqliteConversationStoreConnection::Owned(connection) => {
                 Ok(SqliteConnectionRef::Owned(connection))
             }
-            SqliteEventStoreConnection::Unified(owner) => owner
+            SqliteConversationStoreConnection::Unified(owner) => owner
                 .lock()
                 .map(SqliteConnectionRef::Unified)
                 .map_err(|_| AgentError::Storage("unified sqlite owner mutex poisoned".into())),
@@ -94,10 +94,10 @@ impl SqliteEventStore {
 
     fn connection_mut(&mut self) -> Result<SqliteConnectionMut<'_>, AgentError> {
         match &mut self.connection {
-            SqliteEventStoreConnection::Owned(connection) => {
+            SqliteConversationStoreConnection::Owned(connection) => {
                 Ok(SqliteConnectionMut::Owned(connection))
             }
-            SqliteEventStoreConnection::Unified(owner) => owner
+            SqliteConversationStoreConnection::Unified(owner) => owner
                 .lock()
                 .map(SqliteConnectionMut::Unified)
                 .map_err(|_| AgentError::Storage("unified sqlite owner mutex poisoned".into())),
@@ -127,15 +127,15 @@ impl SqliteEventStore {
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
-        <Self as EventStore>::list_sessions(self)
+        <Self as ConversationEventStore>::list_sessions(self)
     }
 
     pub fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
-        <Self as EventStore>::active_leaf(self, session_id)
+        <Self as ConversationEventStore>::active_leaf(self, session_id)
     }
 
     pub fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
-        <Self as EventStore>::last_event(self, session_id)
+        <Self as ConversationEventStore>::last_event(self, session_id)
     }
 
     pub fn rename_session(
@@ -143,14 +143,14 @@ impl SqliteEventStore {
         session_id: &SessionId,
         title: String,
     ) -> Result<(), AgentError> {
-        <Self as EventStore>::rename_session(self, session_id, title)
+        <Self as ConversationEventStore>::rename_session(self, session_id, title)
     }
 
     pub fn session_title_override(
         &self,
         session_id: &SessionId,
     ) -> Result<Option<String>, AgentError> {
-        <Self as EventStore>::session_title_override(self, session_id)
+        <Self as ConversationEventStore>::session_title_override(self, session_id)
     }
 
     fn migrate(&self) -> Result<(), AgentError> {
@@ -204,39 +204,12 @@ impl SqliteEventStore {
                   summary text not null
                 );
 
-                create table if not exists long_term_memory (
-                  id text primary key,
-                  text text not null,
-                  keywords text not null,
-                  confirmed integer not null
-                );
-
-                create table if not exists long_term_memory_keywords (
-                  keyword text not null,
-                  memory_id text not null,
-                  primary key (keyword, memory_id)
-                );
-
-                create index if not exists idx_long_term_memory_keywords_keyword
-                on long_term_memory_keywords(keyword);
-
-                create table if not exists memory_candidates (
-                  text text primary key,
-                  confirmed integer not null
-                );
-
-                create table if not exists blobs (
-                  id text primary key,
-                  path text not null,
-                  mime_type text not null,
-                  byte_count integer not null
-                );
-
-                create table if not exists branch_summaries (
-                  session_id text not null,
-                  leaf_id text not null,
-                  summary text not null,
-                  primary key (session_id, leaf_id)
+                create table if not exists conversation_command_receipt (
+                  conversation_stream_id text not null,
+                  request_id text not null,
+                  command_digest text not null,
+                  outcome_json text not null,
+                  primary key (conversation_stream_id, request_id)
                 );
 
                 ",
@@ -254,6 +227,65 @@ impl SqliteEventStore {
             )));
         }
         Ok(())
+    }
+
+    fn append_command_transaction(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        mut events: Vec<RuntimeEvent>,
+        receipt: Option<&StoredTranscriptCommandReceipt>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let mut connection = self.connection_mut()?;
+        let tx = connection.transaction().map_err(storage_error)?;
+        let actual_next_sequence = tx
+            .query_row(
+                "
+                select coalesce(max(sequence), 0) + 1
+                from events
+                where session_id = ?1
+                ",
+                params![conversation_stream_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(storage_error)?
+            .max(1) as u64;
+        if actual_next_sequence != expected_next_sequence {
+            return Err(AgentError::Storage(format!(
+                "conversation sequence conflict: expected {expected_next_sequence}, actual {actual_next_sequence}"
+            )));
+        }
+
+        for (offset, event) in events.iter_mut().enumerate() {
+            if event.session_id.0 != conversation_stream_id {
+                return Err(AgentError::Storage(
+                    "conversation transaction mixed stream identifiers".into(),
+                ));
+            }
+            event.sequence = expected_next_sequence + offset as u64;
+            append_event_in_transaction(&tx, event)?;
+        }
+
+        if let Some(receipt) = receipt {
+            tx.execute(
+                "
+                insert into conversation_command_receipt(
+                  conversation_stream_id, request_id, command_digest, outcome_json
+                )
+                values (?1, ?2, ?3, ?4)
+                ",
+                params![
+                    receipt.conversation_stream_id,
+                    receipt.request_id,
+                    receipt.command_digest,
+                    receipt.outcome_json,
+                ],
+            )
+            .map_err(storage_error)?;
+        }
+
+        tx.commit().map_err(storage_error)?;
+        Ok(events)
     }
 
     fn ensure_sessions_archived_column(&self) -> Result<(), AgentError> {
@@ -307,229 +339,6 @@ impl SqliteEventStore {
         Ok(())
     }
 
-    pub fn upsert_memory(&self, record: LongTermMemoryRecord) -> Result<(), AgentError> {
-        let LongTermMemoryRecord {
-            id,
-            text,
-            keywords,
-            confirmed,
-        } = record;
-        let keywords_json = serde_json::to_string(&keywords)
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "
-                insert into long_term_memory(id, text, keywords, confirmed)
-                values (?1, ?2, ?3, ?4)
-                on conflict(id) do update set
-                  text = excluded.text,
-                  keywords = excluded.keywords,
-                  confirmed = excluded.confirmed
-                ",
-                params![id, text, keywords_json, confirmed as i64],
-            )
-            .map_err(storage_error)?;
-
-        connection
-            .execute(
-                "delete from long_term_memory_keywords where memory_id = ?1",
-                params![id.as_str()],
-            )
-            .map_err(storage_error)?;
-
-        for keyword in &keywords {
-            connection
-                .execute(
-                    "
-                    insert or ignore into long_term_memory_keywords(keyword, memory_id)
-                    values (?1, ?2)
-                    ",
-                    params![keyword, id.as_str()],
-                )
-                .map_err(storage_error)?;
-        }
-        Ok(())
-    }
-
-    pub fn search_memory(&self, keyword: &str) -> Result<Vec<LongTermMemoryRecord>, AgentError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "
-                select m.id, m.text, m.keywords, m.confirmed
-                from long_term_memory m
-                join long_term_memory_keywords k on k.memory_id = m.id
-                where m.confirmed = 1 and k.keyword = ?1
-                order by m.id
-                ",
-            )
-            .map_err(storage_error)?;
-
-        let rows = statement
-            .query_map(params![keyword], |row| {
-                let keywords: String = row.get(2)?;
-                Ok(LongTermMemoryRecord {
-                    id: row.get(0)?,
-                    text: row.get(1)?,
-                    keywords: serde_json::from_str(&keywords).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            2,
-                            rusqlite::types::Type::Text,
-                            Box::new(error),
-                        )
-                    })?,
-                    confirmed: row.get::<_, i64>(3)? != 0,
-                })
-            })
-            .map_err(storage_error)?;
-
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row.map_err(storage_error)?);
-        }
-        Ok(records)
-    }
-
-    pub fn save_memory_candidate(&self, candidate: MemoryCandidate) -> Result<(), AgentError> {
-        self.connection()?
-            .execute(
-                "
-                insert into memory_candidates(text, confirmed)
-                values (?1, ?2)
-                on conflict(text) do update set confirmed = excluded.confirmed
-                ",
-                params![candidate.text, candidate.confirmed as i64],
-            )
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
-    pub fn memory_candidates(&self) -> Result<Vec<MemoryCandidate>, AgentError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "
-                select text, confirmed
-                from memory_candidates
-                order by text
-                ",
-            )
-            .map_err(storage_error)?;
-
-        let rows = statement
-            .query_map([], |row| {
-                Ok(MemoryCandidate::persisted(
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)? != 0,
-                ))
-            })
-            .map_err(storage_error)?;
-
-        let mut candidates = Vec::new();
-        for row in rows {
-            candidates.push(row.map_err(storage_error)?);
-        }
-        Ok(candidates)
-    }
-
-    pub fn put_blob(&self, record: BlobRecord) -> Result<(), AgentError> {
-        let byte_count = i64::try_from(record.byte_count).map_err(|_| {
-            AgentError::Storage(format!(
-                "blob byte_count exceeds sqlite integer range: {}",
-                record.byte_count
-            ))
-        })?;
-
-        self.connection()?
-            .execute(
-                "
-                insert into blobs(id, path, mime_type, byte_count)
-                values (?1, ?2, ?3, ?4)
-                on conflict(id) do update set
-                  path = excluded.path,
-                  mime_type = excluded.mime_type,
-                  byte_count = excluded.byte_count
-                ",
-                params![record.id, record.path, record.mime_type, byte_count],
-            )
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
-    pub fn get_blob(&self, id: &str) -> Result<Option<BlobRecord>, AgentError> {
-        let connection = self.connection()?;
-        match connection.query_row(
-            "
-            select id, path, mime_type, byte_count
-            from blobs
-            where id = ?1
-            ",
-            params![id],
-            |row| {
-                let byte_count: i64 = row.get(3)?;
-                Ok(BlobRecord {
-                    id: row.get(0)?,
-                    path: row.get(1)?,
-                    mime_type: row.get(2)?,
-                    byte_count: u64::try_from(byte_count).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            3,
-                            rusqlite::types::Type::Integer,
-                            Box::new(error),
-                        )
-                    })?,
-                })
-            },
-        ) {
-            Ok(record) => Ok(Some(record)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(error) => Err(storage_error(error)),
-        }
-    }
-
-    pub fn put_branch_summary(&self, record: BranchSummaryRecord) -> Result<(), AgentError> {
-        self.connection()?
-            .execute(
-                "
-                insert into branch_summaries(session_id, leaf_id, summary)
-                values (?1, ?2, ?3)
-                on conflict(session_id, leaf_id) do update set
-                  summary = excluded.summary
-                ",
-                params![record.session_id, record.leaf_id, record.summary],
-            )
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
-    pub fn branch_summary(
-        &self,
-        session_id: &str,
-        leaf_id: &str,
-    ) -> Result<Option<BranchSummaryRecord>, AgentError> {
-        let connection = self.connection()?;
-        match connection.query_row(
-            "
-            select session_id, leaf_id, summary
-            from branch_summaries
-            where session_id = ?1 and leaf_id = ?2
-            ",
-            params![session_id, leaf_id],
-            |row| {
-                Ok(BranchSummaryRecord {
-                    session_id: row.get(0)?,
-                    leaf_id: row.get(1)?,
-                    summary: row.get(2)?,
-                })
-            },
-        ) {
-            Ok(record) => Ok(Some(record)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(error) => Err(storage_error(error)),
-        }
-    }
-
     pub fn write_audit(
         &self,
         session_id: &str,
@@ -548,39 +357,9 @@ impl SqliteEventStore {
         Ok(())
     }
 
-    pub fn audit_rows(&self, session_id: &str) -> Result<Vec<AuditRow>, AgentError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "
-                select session_id, event_id, summary
-                from audit_log
-                where session_id = ?1
-                order by id
-                ",
-            )
-            .map_err(storage_error)?;
-
-        let rows = statement
-            .query_map(params![session_id], |row| {
-                Ok(AuditRow {
-                    session_id: row.get(0)?,
-                    event_id: row.get(1)?,
-                    summary: row.get(2)?,
-                })
-            })
-            .map_err(storage_error)?;
-
-        let mut audit_rows = Vec::new();
-        for row in rows {
-            audit_rows.push(row.map_err(storage_error)?);
-        }
-        Ok(audit_rows)
-    }
-
 }
 
-impl EventStore for SqliteEventStore {
+impl ConversationEventStore for SqliteConversationStore {
     fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError> {
         if let Some(parent_id) = &event.parent_id {
             self.get(&event.session_id, parent_id)?;
@@ -648,13 +427,101 @@ impl EventStore for SqliteEventStore {
         Ok(())
     }
 
+    fn append_transaction(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        self.append_command_transaction(
+            conversation_stream_id,
+            expected_next_sequence,
+            events,
+            None,
+        )
+    }
+
+    fn events_after(
+        &self,
+        session_id: &SessionId,
+        after_sequence: u64,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "
+                select id
+                from events
+                where session_id = ?1 and sequence > ?2
+                order by sequence
+                ",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![session_id.0, after_sequence as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(storage_error)?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(EntryId(row.map_err(storage_error)?));
+        }
+        drop(statement);
+        drop(connection);
+
+        ids.into_iter()
+            .map(|entry_id| self.get(session_id, &entry_id))
+            .collect()
+    }
+
+    fn command_receipt(
+        &self,
+        conversation_stream_id: &str,
+        request_id: &str,
+    ) -> Result<Option<StoredTranscriptCommandReceipt>, AgentError> {
+        self.connection()?
+            .query_row(
+                "
+                select conversation_stream_id, request_id, command_digest, outcome_json
+                from conversation_command_receipt
+                where conversation_stream_id = ?1 and request_id = ?2
+                ",
+                params![conversation_stream_id, request_id],
+                |row| {
+                    Ok(StoredTranscriptCommandReceipt {
+                        conversation_stream_id: row.get(0)?,
+                        request_id: row.get(1)?,
+                        command_digest: row.get(2)?,
+                        outcome_json: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    fn commit_command(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        self.append_command_transaction(
+            conversation_stream_id,
+            expected_next_sequence,
+            events,
+            Some(&receipt),
+        )
+    }
+
     fn write_audit(
         &self,
         session_id: &SessionId,
         entry_id: &EntryId,
         summary: &str,
     ) -> Result<(), AgentError> {
-        SqliteEventStore::write_audit(self, &session_id.0, &entry_id.0, summary)
+        SqliteConversationStore::write_audit(self, &session_id.0, &entry_id.0, summary)
     }
 
     fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {
@@ -932,6 +799,86 @@ impl EventStore for SqliteEventStore {
 
 }
 
+fn append_event_in_transaction(
+    tx: &Transaction<'_>,
+    event: &RuntimeEvent,
+) -> Result<(), AgentError> {
+    if let Some(parent_id) = &event.parent_id {
+        let parent_exists = tx
+            .query_row(
+                "
+                select 1 from events
+                where session_id = ?1 and id = ?2
+                ",
+                params![event.session_id.0, parent_id.0],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .is_some();
+        if !parent_exists {
+            return Err(AgentError::Storage(format!(
+                "missing parent event: {}",
+                parent_id.0
+            )));
+        }
+    }
+
+    tx.execute(
+        "
+        insert into sessions(id, active_leaf_id, archived)
+        values (?1, ?2, 0)
+        on conflict(id) do update set
+          active_leaf_id = excluded.active_leaf_id
+        ",
+        params![event.session_id.0, event.id.0],
+    )
+    .map_err(storage_error)?;
+    tx.execute(
+        "
+        insert into events(
+          id, session_id, parent_id, run_id, sequence, created_at_millis, depth,
+          kind, payload, blob_refs
+        )
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ",
+        params![
+            event.id.0,
+            event.session_id.0,
+            event.parent_id.as_ref().map(|id| id.0.as_str()),
+            event.run_id.as_ref().map(|id| id.0.as_str()),
+            event.sequence as i64,
+            event.created_at_millis as i64,
+            event.depth as i64,
+            event_kind_to_str(&event.kind),
+            event.payload,
+            event.blob_refs.join("\n"),
+        ],
+    )
+    .map_err(storage_error)?;
+    tx.execute(
+        "
+        insert into event_paths(session_id, ancestor_id, descendant_id, depth_delta)
+        values (?1, ?2, ?3, 0)
+        ",
+        params![event.session_id.0, event.id.0, event.id.0],
+    )
+    .map_err(storage_error)?;
+    if let Some(parent_id) = &event.parent_id {
+        tx.execute(
+            "
+            insert into event_paths(session_id, ancestor_id, descendant_id, depth_delta)
+            select session_id, ancestor_id, ?1, depth_delta + 1
+            from event_paths
+            where session_id = ?2 and descendant_id = ?3
+            ",
+            params![event.id.0, event.session_id.0, parent_id.0],
+        )
+        .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
 fn storage_error(error: rusqlite::Error) -> AgentError {
     AgentError::Storage(error.to_string())
 }
@@ -942,6 +889,13 @@ fn event_kind_to_str(kind: &EventKind) -> &'static str {
         EventKind::ProviderChanged => "ProviderChanged",
         EventKind::ToolRegistered => "ToolRegistered",
         EventKind::UserMessage => "UserMessage",
+        EventKind::TranscriptRetryRequested => "TranscriptRetryRequested",
+        EventKind::MessageEdited => "MessageEdited",
+        EventKind::MessageDeleted => "MessageDeleted",
+        EventKind::ConversationCleared => "ConversationCleared",
+        EventKind::BranchCreated => "BranchCreated",
+        EventKind::ConversationArchived => "ConversationArchived",
+        EventKind::ConversationDeleted => "ConversationDeleted",
         EventKind::AssistantMessageStarted => "AssistantMessageStarted",
         EventKind::AssistantTextDelta => "AssistantTextDelta",
         EventKind::AssistantMessageCompleted => "AssistantMessageCompleted",
@@ -968,6 +922,13 @@ fn event_kind_from_str(value: &str) -> Result<EventKind, AgentError> {
         "ProviderChanged" => Ok(EventKind::ProviderChanged),
         "ToolRegistered" => Ok(EventKind::ToolRegistered),
         "UserMessage" => Ok(EventKind::UserMessage),
+        "TranscriptRetryRequested" => Ok(EventKind::TranscriptRetryRequested),
+        "MessageEdited" => Ok(EventKind::MessageEdited),
+        "MessageDeleted" => Ok(EventKind::MessageDeleted),
+        "ConversationCleared" => Ok(EventKind::ConversationCleared),
+        "BranchCreated" => Ok(EventKind::BranchCreated),
+        "ConversationArchived" => Ok(EventKind::ConversationArchived),
+        "ConversationDeleted" => Ok(EventKind::ConversationDeleted),
         "AssistantMessageStarted" => Ok(EventKind::AssistantMessageStarted),
         "AssistantTextDelta" => Ok(EventKind::AssistantTextDelta),
         "AssistantMessageCompleted" => Ok(EventKind::AssistantMessageCompleted),

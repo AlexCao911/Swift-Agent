@@ -150,6 +150,20 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         RuntimeEventCallback?,
         UnsafeMutableRawPointer?
     ) -> StringResult
+    public var submitTranscriptCommand: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
+    public var observeTranscriptProjections: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?,
+        RuntimeEventCallback?,
+        UnsafeMutableRawPointer?
+    ) -> StringResult
+    public var cancelTranscriptProjectionSubscription: (
+        RuntimeHandle?,
+        UnsafePointer<CChar>?
+    ) -> StringResult
     public var commitAssistantResult: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var approveTool: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
     public var cancelRun: (RuntimeHandle?, UnsafePointer<CChar>?) -> StringResult
@@ -212,7 +226,21 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
             RuntimeHandle?,
             UnsafePointer<CChar>?,
             UnsafePointer<CChar>?
-        ) -> StringResult = { _, _, _ in nil }
+        ) -> StringResult = { _, _, _ in nil },
+        submitTranscriptCommand: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?
+        ) -> StringResult = { _, _ in nil },
+        observeTranscriptProjections: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?,
+            RuntimeEventCallback?,
+            UnsafeMutableRawPointer?
+        ) -> StringResult = { _, _, _, _ in nil },
+        cancelTranscriptProjectionSubscription: @escaping (
+            RuntimeHandle?,
+            UnsafePointer<CChar>?
+        ) -> StringResult = { _, _ in nil }
     ) {
         self.makeRuntime = makeRuntime
         self.freeRuntime = freeRuntime
@@ -241,6 +269,10 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
         self.cancelRun = cancelRun
         self.previewContext = previewContext
         self.llmContractRequest = llmContractRequest
+        self.submitTranscriptCommand = submitTranscriptCommand
+        self.observeTranscriptProjections = observeTranscriptProjections
+        self.cancelTranscriptProjectionSubscription =
+            cancelTranscriptProjectionSubscription
     }
 
     public static func live(configuration: RustRuntimeConfiguration) throws -> Self {
@@ -431,6 +463,30 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                 default:
                     return nil
                 }
+            },
+            submitTranscriptCommand: { runtime, requestJson in
+                local_agent_runtime_bridge_submit_transcript_command(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson
+                )
+            },
+            observeTranscriptProjections: {
+                runtime,
+                requestJson,
+                callback,
+                userData in
+                local_agent_runtime_bridge_observe_transcript_projections(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson,
+                    callback,
+                    userData
+                )
+            },
+            cancelTranscriptProjectionSubscription: { runtime, requestJson in
+                local_agent_runtime_bridge_cancel_transcript_projection_subscription(
+                    runtime.map { OpaquePointer($0) },
+                    requestJson
+                )
             }
         )
     }
@@ -511,6 +567,8 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                 result = functions.cancelRun(handle, pointer)
             case .previewContext:
                 result = functions.previewContext(handle, pointer)
+            case .transcriptCommand:
+                result = functions.submitTranscriptCommand(handle, pointer)
             case .buildAgentV2, .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
                  .attachHostBinding, .confirmHostBindingActivation, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .reconcilePreparation,
@@ -522,10 +580,11 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                 result = operation.rawValue.withCString { operationPointer in
                     functions.llmContractRequest(handle, operationPointer, pointer)
                 }
-            case .observeEvents:
+            case .observeEvents, .observeTranscriptProjections,
+                 .cancelTranscriptProjectionSubscription:
                 throw RuntimeBridgeError(
                     kind: "unsupported_operation",
-                    message: "observeEvents must use stream(_:_:)"
+                    message: "\(operation.rawValue) uses its dedicated bridge method"
                 )
             }
             return try decode(result, as: Response.self)
@@ -557,6 +616,72 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
             }
         } catch {
             return failedEventStream(error)
+        }
+    }
+
+    public func observeTranscriptProjections(
+        _ request: ObserveTranscriptProjectionsRequestDTO
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error> {
+        do {
+            let json = try encode(request)
+            let (events, continuation) = AsyncThrowingStream.makeStream(
+                of: TranscriptProjectionEventDTO.self,
+                throwing: Error.self,
+                bufferingPolicy: .bufferingOldest(runtimeEventStreamBufferLimit)
+            )
+            let callbackBox = TranscriptProjectionCallbackBox(
+                continuation: continuation
+            )
+            continuation.onTermination = { @Sendable _ in
+                Task { [weak self, callbackBox] in
+                    guard let self else { return }
+                    await self.cancelTranscriptProjectionSubscription(
+                        subscriptionID: request.subscriptionID
+                    )
+                    callbackBox.terminate()
+                }
+            }
+            Task.detached { [self, callbackBox] in
+                let opaque = Unmanaged.passRetained(callbackBox).toOpaque()
+                defer {
+                    Unmanaged<TranscriptProjectionCallbackBox>
+                        .fromOpaque(opaque)
+                        .release()
+                }
+                do {
+                    let response = json.withCString { pointer in
+                        functions.observeTranscriptProjections(
+                            handle,
+                            pointer,
+                            rustTranscriptProjectionCallback,
+                            opaque
+                        )
+                    }
+                    _ = try consume(response)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            return events
+        } catch {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+
+    public func cancelTranscriptProjectionSubscription(
+        subscriptionID: String
+    ) async {
+        let request = CancelTranscriptProjectionSubscriptionDTO(
+            subscriptionID: subscriptionID
+        )
+        guard let json = try? encode(request) else { return }
+        _ = try? json.withCString { pointer in
+            try consume(
+                functions.cancelTranscriptProjectionSubscription(handle, pointer)
+            )
         }
     }
 
@@ -864,6 +989,77 @@ private func rustRuntimeEventCallback(
         .fromOpaque(userData)
         .takeUnretainedValue()
     return box.yield(eventJson: eventJson)
+}
+
+private final class TranscriptProjectionCallbackBox: @unchecked Sendable {
+    private let continuation:
+        AsyncThrowingStream<TranscriptProjectionEventDTO, Error>.Continuation
+    private let lock = NSLock()
+    private var terminated = false
+
+    init(
+        continuation:
+            AsyncThrowingStream<TranscriptProjectionEventDTO, Error>.Continuation
+    ) {
+        self.continuation = continuation
+    }
+
+    func terminate() {
+        lock.lock()
+        terminated = true
+        lock.unlock()
+    }
+
+    func yield(eventJSON: UnsafePointer<CChar>?) -> CInt {
+        guard let eventJSON else {
+            continuation.finish(throwing: RuntimeBridgeError(
+                kind: "ffi",
+                message: "runtime bridge streamed a null projection event"
+            ))
+            return 1
+        }
+        lock.lock()
+        let shouldReject = terminated
+        lock.unlock()
+        if shouldReject {
+            return 1
+        }
+
+        do {
+            let event = try JSONDecoder().decode(
+                TranscriptProjectionEventDTO.self,
+                from: Data(String(cString: eventJSON).utf8)
+            )
+            switch continuation.yield(event) {
+            case .enqueued:
+                return 0
+            case .dropped:
+                continuation.finish(throwing: RuntimeBridgeError(
+                    kind: "ffi",
+                    message: "transcript projection stream buffer overflow"
+                ))
+                return 1
+            case .terminated:
+                return 1
+            @unknown default:
+                return 1
+            }
+        } catch {
+            continuation.finish(throwing: error)
+            return 1
+        }
+    }
+}
+
+private func rustTranscriptProjectionCallback(
+    eventJSON: UnsafePointer<CChar>?,
+    userData: UnsafeMutableRawPointer?
+) -> CInt {
+    guard let userData else { return 1 }
+    return Unmanaged<TranscriptProjectionCallbackBox>
+        .fromOpaque(userData)
+        .takeUnretainedValue()
+        .yield(eventJSON: eventJSON)
 }
 
 private struct SetPermissionStateRequest: Encodable {

@@ -112,3 +112,19 @@ The donor `models-dev-api.json` is not copied: LocalAgent already has a signed,
 production-trusted capability catalog. OpenRouter, Kimi and generic OpenAI Chat
 models enter conservatively through manual discovery/validation until a future
 signed catalog revision adds authoritative model rows.
+
+## Rust canonical transcript and Swift projection
+
+This slice uses existing LocalAgent code rather than donor source. Conversation
+history belongs to Rust storage; `memory` is reserved for the later long-term
+fact backend interface.
+
+| Source | LocalAgent target | Build target | License | Migration |
+| --- | --- | --- | --- | --- |
+| Existing Rust conversation event stores under `rust-core/src/memory` | `rust-core/src/storage/*conversation*` | `local_ios_agent_runtime` | LocalAgent source | Renamed and reduced to conversation/session events, command receipts, replay and atomic append transactions; concrete long-term-memory tables were removed |
+| Existing reliable Rust/Swift bridge envelopes | `rust-core/src/conversation`, `ffi_bridge.rs`, `LocalAgentBridge/TranscriptDTOs.swift` | Rust runtime and `LocalAgentBridge` | LocalAgent source | Added idempotent transcript commands, one active run per conversation, cancellable per-conversation projection replay and the existing canonical-digest registry; no second transport protocol or projection database |
+
+Only Rust writes the canonical transcript. Swift receives ordered projections
+identified by `(conversation_stream_id, sequence)` and can replay from its last
+cursor after launch or a sequence gap. Presentation streaming remains
+ephemeral and does not commit partial assistant or tool turns.

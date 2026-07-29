@@ -7,6 +7,10 @@ public enum RustAgentOSOperation: String, Hashable, Sendable {
     case prepareUserTurn = "prepare_user_turn"
     case commitAssistantResult = "commit_assistant_result"
     case observeEvents = "observe_events"
+    case transcriptCommand = "transcript_command"
+    case observeTranscriptProjections = "observe_transcript_projections"
+    case cancelTranscriptProjectionSubscription =
+        "cancel_transcript_projection_subscription"
     case approveTool = "approve_tool"
     case submitToolResult = "submit_tool_result"
     case cancelRun = "cancel_run"
@@ -41,4 +45,29 @@ public protocol RustAgentOSBridgeGateway: Sendable {
         _ operation: RustAgentOSOperation,
         _ request: Request
     ) -> AsyncThrowingStream<RuntimeEventDTO, Error>
+
+    func observeTranscriptProjections(
+        _ request: ObserveTranscriptProjectionsRequestDTO
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error>
+
+    func cancelTranscriptProjectionSubscription(
+        subscriptionID: String
+    ) async
+}
+
+public extension RustAgentOSBridgeGateway {
+    func observeTranscriptProjections(
+        _ request: ObserveTranscriptProjectionsRequestDTO
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: RuntimeBridgeError(
+                kind: "unsupported_operation",
+                message: "transcript projection stream is unavailable"
+            ))
+        }
+    }
+
+    func cancelTranscriptProjectionSubscription(
+        subscriptionID: String
+    ) async {}
 }

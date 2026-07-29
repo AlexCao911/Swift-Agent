@@ -86,6 +86,12 @@
       "excluded": "snapshot digest, Skill bodies, provider plan, credential, host path, and mutable conversation context"
     },
     {
+      "domain": "transcript-command:v1",
+      "computing_authority": "rust",
+      "required_coverage": "complete tagged transcript command including conversation, request, message mutation, attachments, and frozen run-start snapshot",
+      "excluded": "command receipt, projection events, provider plan, credential, and mutable per-turn context"
+    },
+    {
       "domain": "saga-token:v1",
       "computing_authority": "rust_and_swift",
       "required_coverage": "operation kind and ID, token generation, random token bytes",

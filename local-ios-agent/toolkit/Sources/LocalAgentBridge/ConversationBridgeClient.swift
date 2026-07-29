@@ -7,6 +7,15 @@ public protocol ConversationBridgeClient: Sendable {
     func renameSession(sessionId: String, title: String) async throws
     func deleteSession(sessionId: String) async throws
     func commitAssistantResult(_ request: CommitAssistantResultRequestDTO) async throws -> ConversationCommitResultDTO
+    func submitTranscriptCommand(
+        _ command: TranscriptCommandDTO
+    ) async throws -> TranscriptCommandResultDTO
+    func observeTranscriptProjections(
+        subscriptionID: String,
+        conversationStreamID: String,
+        afterSequence: UInt64
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error>
+    func cancelTranscriptProjectionSubscription(subscriptionID: String) async
 }
 
 public struct RustConversationBridgeClient: ConversationBridgeClient {
@@ -51,5 +60,37 @@ public struct RustConversationBridgeClient: ConversationBridgeClient {
 
     public func commitAssistantResult(_ request: CommitAssistantResultRequestDTO) async throws -> ConversationCommitResultDTO {
         try await gateway.request(.commitAssistantResult, request, as: ConversationCommitResultDTO.self)
+    }
+
+    public func submitTranscriptCommand(
+        _ command: TranscriptCommandDTO
+    ) async throws -> TranscriptCommandResultDTO {
+        try await gateway.request(
+            .transcriptCommand,
+            command,
+            as: TranscriptCommandResultDTO.self
+        )
+    }
+
+    public func observeTranscriptProjections(
+        subscriptionID: String,
+        conversationStreamID: String,
+        afterSequence: UInt64
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error> {
+        gateway.observeTranscriptProjections(
+            ObserveTranscriptProjectionsRequestDTO(
+                subscriptionID: subscriptionID,
+                conversationStreamID: conversationStreamID,
+                afterSequence: afterSequence
+            )
+        )
+    }
+
+    public func cancelTranscriptProjectionSubscription(
+        subscriptionID: String
+    ) async {
+        await gateway.cancelTranscriptProjectionSubscription(
+            subscriptionID: subscriptionID
+        )
     }
 }

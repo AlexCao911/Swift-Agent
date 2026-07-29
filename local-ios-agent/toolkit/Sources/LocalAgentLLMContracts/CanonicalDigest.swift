@@ -57,6 +57,7 @@ public enum CanonicalDigestV1 {
         "saga-token:v1",
         "source-revisions:v1",
         "tool-schema:v1",
+        "transcript-command:v1",
     ]
 
     public static func canonicalize(_ value: CanonicalJSONValue) throws -> Data {

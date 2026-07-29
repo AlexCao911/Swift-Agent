@@ -241,3 +241,357 @@ private struct SnapshotDigestDocument: Codable {
         case orderedToolDefinitions = "ordered_tool_definitions"
     }
 }
+
+public struct TranscriptAttachmentReferenceDTO: Codable, Equatable, Sendable {
+    public let attachmentID: String
+    public let displayName: String
+    public let mediaType: String
+    public let modality: String
+    public let contentDigest: String
+
+    public init(
+        attachmentID: String,
+        displayName: String,
+        mediaType: String,
+        modality: String,
+        contentDigest: String
+    ) {
+        self.attachmentID = attachmentID
+        self.displayName = displayName
+        self.mediaType = mediaType
+        self.modality = modality
+        self.contentDigest = contentDigest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attachmentID = "attachment_id"
+        case displayName = "display_name"
+        case mediaType = "media_type"
+        case modality
+        case contentDigest = "content_digest"
+    }
+}
+
+public enum TranscriptCommandDTO: Codable, Equatable, Sendable {
+    case send(
+        requestID: String,
+        conversationStreamID: String,
+        clientMessageID: String,
+        text: String,
+        attachments: [TranscriptAttachmentReferenceDTO],
+        runStartSnapshot: RunStartSnapshotDTO
+    )
+    case retryFrom(
+        requestID: String,
+        conversationStreamID: String,
+        anchorEventID: String,
+        runStartSnapshot: RunStartSnapshotDTO
+    )
+    case editMessage(
+        requestID: String,
+        conversationStreamID: String,
+        targetEventID: String,
+        replacementText: String,
+        replacementAttachments: [TranscriptAttachmentReferenceDTO],
+        runStartSnapshot: RunStartSnapshotDTO
+    )
+    case deleteMessage(
+        requestID: String,
+        conversationStreamID: String,
+        targetEventID: String
+    )
+    case clearConversation(requestID: String, conversationStreamID: String)
+    case createBranch(
+        requestID: String,
+        conversationStreamID: String,
+        anchorEventID: String,
+        newConversationStreamID: String
+    )
+    case archiveConversation(requestID: String, conversationStreamID: String)
+    case deleteConversation(requestID: String, conversationStreamID: String)
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+        let requestID = try container.decode(String.self, forKey: .requestID)
+        let streamID = try container.decode(String.self, forKey: .conversationStreamID)
+        switch kind {
+        case .send:
+            self = .send(
+                requestID: requestID,
+                conversationStreamID: streamID,
+                clientMessageID: try container.decode(String.self, forKey: .clientMessageID),
+                text: try container.decode(String.self, forKey: .text),
+                attachments: try container.decode(
+                    [TranscriptAttachmentReferenceDTO].self,
+                    forKey: .attachments
+                ),
+                runStartSnapshot: try container.decode(
+                    RunStartSnapshotDTO.self,
+                    forKey: .runStartSnapshot
+                )
+            )
+        case .retryFrom:
+            self = .retryFrom(
+                requestID: requestID,
+                conversationStreamID: streamID,
+                anchorEventID: try container.decode(String.self, forKey: .anchorEventID),
+                runStartSnapshot: try container.decode(
+                    RunStartSnapshotDTO.self,
+                    forKey: .runStartSnapshot
+                )
+            )
+        case .editMessage:
+            self = .editMessage(
+                requestID: requestID,
+                conversationStreamID: streamID,
+                targetEventID: try container.decode(String.self, forKey: .targetEventID),
+                replacementText: try container.decode(String.self, forKey: .replacementText),
+                replacementAttachments: try container.decode(
+                    [TranscriptAttachmentReferenceDTO].self,
+                    forKey: .replacementAttachments
+                ),
+                runStartSnapshot: try container.decode(
+                    RunStartSnapshotDTO.self,
+                    forKey: .runStartSnapshot
+                )
+            )
+        case .deleteMessage:
+            self = .deleteMessage(
+                requestID: requestID,
+                conversationStreamID: streamID,
+                targetEventID: try container.decode(String.self, forKey: .targetEventID)
+            )
+        case .clearConversation:
+            self = .clearConversation(
+                requestID: requestID,
+                conversationStreamID: streamID
+            )
+        case .createBranch:
+            self = .createBranch(
+                requestID: requestID,
+                conversationStreamID: streamID,
+                anchorEventID: try container.decode(String.self, forKey: .anchorEventID),
+                newConversationStreamID: try container.decode(
+                    String.self,
+                    forKey: .newConversationStreamID
+                )
+            )
+        case .archiveConversation:
+            self = .archiveConversation(
+                requestID: requestID,
+                conversationStreamID: streamID
+            )
+        case .deleteConversation:
+            self = .deleteConversation(
+                requestID: requestID,
+                conversationStreamID: streamID
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .send(requestID, streamID, clientMessageID, text, attachments, snapshot):
+            try container.encode(Kind.send, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+            try container.encode(clientMessageID, forKey: .clientMessageID)
+            try container.encode(text, forKey: .text)
+            try container.encode(attachments, forKey: .attachments)
+            try container.encode(snapshot, forKey: .runStartSnapshot)
+        case let .retryFrom(requestID, streamID, anchorEventID, snapshot):
+            try container.encode(Kind.retryFrom, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+            try container.encode(anchorEventID, forKey: .anchorEventID)
+            try container.encode(snapshot, forKey: .runStartSnapshot)
+        case let .editMessage(
+            requestID,
+            streamID,
+            targetEventID,
+            replacementText,
+            replacementAttachments,
+            snapshot
+        ):
+            try container.encode(Kind.editMessage, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+            try container.encode(targetEventID, forKey: .targetEventID)
+            try container.encode(replacementText, forKey: .replacementText)
+            try container.encode(replacementAttachments, forKey: .replacementAttachments)
+            try container.encode(snapshot, forKey: .runStartSnapshot)
+        case let .deleteMessage(requestID, streamID, targetEventID):
+            try container.encode(Kind.deleteMessage, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+            try container.encode(targetEventID, forKey: .targetEventID)
+        case let .clearConversation(requestID, streamID):
+            try container.encode(Kind.clearConversation, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+        case let .createBranch(requestID, streamID, anchorEventID, newStreamID):
+            try container.encode(Kind.createBranch, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+            try container.encode(anchorEventID, forKey: .anchorEventID)
+            try container.encode(newStreamID, forKey: .newConversationStreamID)
+        case let .archiveConversation(requestID, streamID):
+            try container.encode(Kind.archiveConversation, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+        case let .deleteConversation(requestID, streamID):
+            try container.encode(Kind.deleteConversation, forKey: .kind)
+            try container.encode(requestID, forKey: .requestID)
+            try container.encode(streamID, forKey: .conversationStreamID)
+        }
+    }
+
+    private enum Kind: String, Codable {
+        case send
+        case retryFrom = "retry_from"
+        case editMessage = "edit_message"
+        case deleteMessage = "delete_message"
+        case clearConversation = "clear_conversation"
+        case createBranch = "create_branch"
+        case archiveConversation = "archive_conversation"
+        case deleteConversation = "delete_conversation"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case requestID = "request_id"
+        case conversationStreamID = "conversation_stream_id"
+        case clientMessageID = "client_message_id"
+        case text
+        case attachments
+        case runStartSnapshot = "run_start_snapshot"
+        case anchorEventID = "anchor_event_id"
+        case targetEventID = "target_event_id"
+        case replacementText = "replacement_text"
+        case replacementAttachments = "replacement_attachments"
+        case newConversationStreamID = "new_conversation_stream_id"
+    }
+}
+
+public struct TranscriptCommandResultDTO: Codable, Equatable, Sendable {
+    public let conversationStreamID: String
+    public let acceptedSequence: UInt64
+    public let runID: String?
+
+    public init(
+        conversationStreamID: String,
+        acceptedSequence: UInt64,
+        runID: String?
+    ) {
+        self.conversationStreamID = conversationStreamID
+        self.acceptedSequence = acceptedSequence
+        self.runID = runID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationStreamID = "conversation_stream_id"
+        case acceptedSequence = "accepted_sequence"
+        case runID = "run_id"
+    }
+}
+
+public enum TranscriptProjectionKindDTO: String, Codable, Equatable, Sendable {
+    case sessionCreated = "session_created"
+    case providerChanged = "provider_changed"
+    case toolRegistered = "tool_registered"
+    case userMessage = "user_message"
+    case transcriptRetryRequested = "transcript_retry_requested"
+    case messageEdited = "message_edited"
+    case messageDeleted = "message_deleted"
+    case conversationCleared = "conversation_cleared"
+    case branchCreated = "branch_created"
+    case conversationArchived = "conversation_archived"
+    case conversationDeleted = "conversation_deleted"
+    case assistantMessageStarted = "assistant_message_started"
+    case assistantTextDelta = "assistant_text_delta"
+    case assistantMessageCompleted = "assistant_message_completed"
+    case toolCallRequested = "tool_call_requested"
+    case toolCallApproved = "tool_call_approved"
+    case toolCallRejected = "tool_call_rejected"
+    case toolExecutionStarted = "tool_execution_started"
+    case toolExecutionUpdate = "tool_execution_update"
+    case toolExecutionCompleted = "tool_execution_completed"
+    case toolExecutionFailed = "tool_execution_failed"
+    case toolResultMessage = "tool_result_message"
+    case runSuspended = "run_suspended"
+    case runResumed = "run_resumed"
+    case compactionCreated = "compaction_created"
+    case branchSummaryCreated = "branch_summary_created"
+    case runCancelled = "run_cancelled"
+    case runFailed = "run_failed"
+}
+
+public struct TranscriptProjectionEventDTO: Codable, Equatable, Sendable {
+    public let conversationStreamID: String
+    public let sequence: UInt64
+    public let eventID: String
+    public let runID: String?
+    public let kind: TranscriptProjectionKindDTO
+    public let payload: CanonicalJSONValue
+
+    public init(
+        conversationStreamID: String,
+        sequence: UInt64,
+        eventID: String,
+        runID: String?,
+        kind: TranscriptProjectionKindDTO,
+        payload: CanonicalJSONValue
+    ) {
+        self.conversationStreamID = conversationStreamID
+        self.sequence = sequence
+        self.eventID = eventID
+        self.runID = runID
+        self.kind = kind
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationStreamID = "conversation_stream_id"
+        case sequence
+        case eventID = "event_id"
+        case runID = "run_id"
+        case kind
+        case payload
+    }
+}
+
+public struct ObserveTranscriptProjectionsRequestDTO: Codable, Equatable, Sendable {
+    public let subscriptionID: String
+    public let conversationStreamID: String
+    public let afterSequence: UInt64
+
+    public init(
+        subscriptionID: String,
+        conversationStreamID: String,
+        afterSequence: UInt64
+    ) {
+        self.subscriptionID = subscriptionID
+        self.conversationStreamID = conversationStreamID
+        self.afterSequence = afterSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case subscriptionID = "subscription_id"
+        case conversationStreamID = "conversation_stream_id"
+        case afterSequence = "after_sequence"
+    }
+}
+
+public struct CancelTranscriptProjectionSubscriptionDTO: Codable, Equatable, Sendable {
+    public let subscriptionID: String
+
+    public init(subscriptionID: String) {
+        self.subscriptionID = subscriptionID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case subscriptionID = "subscription_id"
+    }
+}

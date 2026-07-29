@@ -1,9 +1,9 @@
 use crate::core::{AgentError, EntryId, EventKind, RuntimeEvent, SessionId};
-use crate::memory::{EventStore, InMemoryEventStore};
+use crate::storage::{ConversationEventStore, InMemoryConversationStore};
 use crate::utils::id::IdGenerator;
 
 #[derive(Debug)]
-pub struct SessionTree<S: EventStore = InMemoryEventStore> {
+pub struct SessionTree<S: ConversationEventStore = InMemoryConversationStore> {
     session_id: SessionId,
     store: S,
     ids: IdGenerator,
@@ -11,13 +11,13 @@ pub struct SessionTree<S: EventStore = InMemoryEventStore> {
     sequence: u64,
 }
 
-impl SessionTree<InMemoryEventStore> {
+impl SessionTree<InMemoryConversationStore> {
     pub fn new(session_id: SessionId) -> Self {
-        Self::with_store(session_id, InMemoryEventStore::new())
+        Self::with_store(session_id, InMemoryConversationStore::new())
     }
 }
 
-impl<S: EventStore> SessionTree<S> {
+impl<S: ConversationEventStore> SessionTree<S> {
     pub fn with_store(session_id: SessionId, store: S) -> Self {
         Self {
             session_id,

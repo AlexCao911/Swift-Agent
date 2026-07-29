@@ -1,7 +1,38 @@
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
 
-pub trait EventStore {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredTranscriptCommandReceipt {
+    pub conversation_stream_id: String,
+    pub request_id: String,
+    pub command_digest: String,
+    pub outcome_json: String,
+}
+
+pub trait ConversationEventStore {
     fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError>;
+    fn append_transaction(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError>;
+    fn events_after(
+        &self,
+        session_id: &SessionId,
+        after_sequence: u64,
+    ) -> Result<Vec<RuntimeEvent>, AgentError>;
+    fn command_receipt(
+        &self,
+        conversation_stream_id: &str,
+        request_id: &str,
+    ) -> Result<Option<StoredTranscriptCommandReceipt>, AgentError>;
+    fn commit_command(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+    ) -> Result<Vec<RuntimeEvent>, AgentError>;
     fn write_audit(
         &self,
         _session_id: &SessionId,

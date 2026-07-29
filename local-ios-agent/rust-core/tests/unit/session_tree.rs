@@ -1,5 +1,7 @@
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId, SessionTree};
-use local_ios_agent_runtime::memory::{InMemoryEventStore, SqliteEventStore};
+use local_ios_agent_runtime::storage::{
+    InMemoryConversationStore, SqliteConversationStore,
+};
 
 fn event(id: &str, parent: Option<&str>, sequence: u64, depth: u32, payload: &str) -> RuntimeEvent {
     RuntimeEvent::new(
@@ -16,7 +18,7 @@ fn event(id: &str, parent: Option<&str>, sequence: u64, depth: u32, payload: &st
 
 #[test]
 fn active_branch_returns_ancestors_in_order() {
-    let mut store = InMemoryEventStore::new();
+    let mut store = InMemoryConversationStore::new();
     store.append(event("root", None, 1, 0, "root")).unwrap();
     store.append(event("a", Some("root"), 2, 1, "a")).unwrap();
     store.append(event("b", Some("a"), 3, 2, "b")).unwrap();
@@ -55,7 +57,7 @@ fn session_tree_tracks_active_leaf() {
 fn session_tree_can_be_constructed_with_explicit_store() {
     let mut tree = SessionTree::with_store(
         SessionId("session_3".to_string()),
-        InMemoryEventStore::new(),
+        InMemoryConversationStore::new(),
     );
     let root = tree
         .append(None, EventKind::SessionCreated, "created")
@@ -68,7 +70,7 @@ fn session_tree_can_be_constructed_with_explicit_store() {
 fn session_tree_can_use_sqlite_event_store() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let store = SqliteEventStore::open(&db_path).unwrap();
+    let store = SqliteConversationStore::open(&db_path).unwrap();
     let mut tree = SessionTree::with_store(SessionId("session_sqlite_tree".to_string()), store);
 
     let root = tree

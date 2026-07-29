@@ -47,6 +47,7 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
     public private(set) var cancelledRunIds: [String] = []
     public private(set) var preparedUserTurnRequests: [PrepareUserTurnRequestDTO] = []
     public private(set) var commitAssistantResultRequests: [CommitAssistantResultRequestDTO] = []
+    public private(set) var transcriptCommands: [TranscriptCommandDTO] = []
     public private(set) var startedExecutionRequests: [StartExecutionRequestDTO] = []
     public private(set) var approvedTools: [ToolApprovalSubmission] = []
     public private(set) var builtAgentTemplateIds: [String] = []
@@ -172,6 +173,33 @@ public actor MockRuntimeClient: RuntimeClient, ConversationRuntimeClient, Conver
             alreadyCommitted: false
         )
     }
+
+    public func submitTranscriptCommand(
+        _ command: TranscriptCommandDTO
+    ) async throws -> TranscriptCommandResultDTO {
+        transcriptCommands.append(command)
+        let data = try JSONEncoder().encode(command)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return TranscriptCommandResultDTO(
+            conversationStreamID: object?["conversation_stream_id"] as? String ?? "conversation_mock",
+            acceptedSequence: UInt64(transcriptCommands.count),
+            runID: nil
+        )
+    }
+
+    public nonisolated func observeTranscriptProjections(
+        subscriptionID: String,
+        conversationStreamID: String,
+        afterSequence: UInt64
+    ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    public func cancelTranscriptProjectionSubscription(
+        subscriptionID: String
+    ) async {}
 
     public func registerToolSchema(_ schema: ToolSchemaDTO) async throws {
         registeredToolSchemas.append(schema)

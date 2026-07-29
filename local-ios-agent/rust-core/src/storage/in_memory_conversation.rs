@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
-use crate::memory::EventStore;
+use crate::storage::conversation_event_store::{
+    ConversationEventStore, StoredTranscriptCommandReceipt,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct PathKey {
@@ -16,22 +18,23 @@ struct PathRow {
     depth_delta: u32,
 }
 
-#[derive(Debug, Default)]
-pub struct InMemoryEventStore {
+#[derive(Clone, Debug, Default)]
+pub struct InMemoryConversationStore {
     events: HashMap<(SessionId, EntryId), RuntimeEvent>,
     paths: Vec<PathRow>,
     children: HashMap<(SessionId, EntryId), HashSet<EntryId>>,
     archived_sessions: HashSet<SessionId>,
     session_title_overrides: HashMap<SessionId, String>,
+    command_receipts: HashMap<(SessionId, String), StoredTranscriptCommandReceipt>,
 }
 
-impl InMemoryEventStore {
+impl InMemoryConversationStore {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError> {
-        <Self as EventStore>::append(self, event)
+        <Self as ConversationEventStore>::append(self, event)
     }
 
     pub fn get(
@@ -39,7 +42,7 @@ impl InMemoryEventStore {
         session_id: &SessionId,
         entry_id: &EntryId,
     ) -> Result<RuntimeEvent, AgentError> {
-        <Self as EventStore>::get(self, session_id, entry_id)
+        <Self as ConversationEventStore>::get(self, session_id, entry_id)
     }
 
     pub fn active_branch(
@@ -47,19 +50,19 @@ impl InMemoryEventStore {
         session_id: &SessionId,
         leaf_id: &EntryId,
     ) -> Result<Vec<RuntimeEvent>, AgentError> {
-        <Self as EventStore>::active_branch(self, session_id, leaf_id)
+        <Self as ConversationEventStore>::active_branch(self, session_id, leaf_id)
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionId>, AgentError> {
-        <Self as EventStore>::list_sessions(self)
+        <Self as ConversationEventStore>::list_sessions(self)
     }
 
     pub fn active_leaf(&self, session_id: &SessionId) -> Result<Option<EntryId>, AgentError> {
-        <Self as EventStore>::active_leaf(self, session_id)
+        <Self as ConversationEventStore>::active_leaf(self, session_id)
     }
 
     pub fn last_event(&self, session_id: &SessionId) -> Result<Option<RuntimeEvent>, AgentError> {
-        <Self as EventStore>::last_event(self, session_id)
+        <Self as ConversationEventStore>::last_event(self, session_id)
     }
 
     pub fn rename_session(
@@ -67,14 +70,14 @@ impl InMemoryEventStore {
         session_id: &SessionId,
         title: String,
     ) -> Result<(), AgentError> {
-        <Self as EventStore>::rename_session(self, session_id, title)
+        <Self as ConversationEventStore>::rename_session(self, session_id, title)
     }
 
     pub fn session_title_override(
         &self,
         session_id: &SessionId,
     ) -> Result<Option<String>, AgentError> {
-        <Self as EventStore>::session_title_override(self, session_id)
+        <Self as ConversationEventStore>::session_title_override(self, session_id)
     }
 
     fn insert_paths(&mut self, event: &RuntimeEvent) {
@@ -111,7 +114,7 @@ impl InMemoryEventStore {
     }
 }
 
-impl EventStore for InMemoryEventStore {
+impl ConversationEventStore for InMemoryConversationStore {
     fn append(&mut self, event: RuntimeEvent) -> Result<(), AgentError> {
         let key = (event.session_id.clone(), event.id.clone());
         if self.events.contains_key(&key) {
@@ -142,6 +145,106 @@ impl EventStore for InMemoryEventStore {
 
         self.events.insert(key, event);
         Ok(())
+    }
+
+    fn append_transaction(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let session_id = SessionId(conversation_stream_id.to_string());
+        let actual_next_sequence = self
+            .last_event(&session_id)?
+            .map(|event| event.sequence + 1)
+            .unwrap_or(1);
+        if actual_next_sequence != expected_next_sequence {
+            return Err(AgentError::Storage(format!(
+                "conversation sequence conflict: expected {expected_next_sequence}, actual {actual_next_sequence}"
+            )));
+        }
+
+        let backup = self.clone();
+        let mut committed = Vec::with_capacity(events.len());
+        for (offset, mut event) in events.into_iter().enumerate() {
+            if event.session_id != session_id {
+                *self = backup;
+                return Err(AgentError::Storage(
+                    "conversation transaction mixed stream identifiers".into(),
+                ));
+            }
+            event.sequence = expected_next_sequence + offset as u64;
+            if let Err(error) = self.append(event.clone()) {
+                *self = backup;
+                return Err(error);
+            }
+            committed.push(event);
+        }
+        Ok(committed)
+    }
+
+    fn events_after(
+        &self,
+        session_id: &SessionId,
+        after_sequence: u64,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let mut events = self
+            .events
+            .values()
+            .filter(|event| {
+                event.session_id == *session_id && event.sequence > after_sequence
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        events.sort_by_key(|event| event.sequence);
+        Ok(events)
+    }
+
+    fn command_receipt(
+        &self,
+        conversation_stream_id: &str,
+        request_id: &str,
+    ) -> Result<Option<StoredTranscriptCommandReceipt>, AgentError> {
+        Ok(self
+            .command_receipts
+            .get(&(
+                SessionId(conversation_stream_id.to_string()),
+                request_id.to_string(),
+            ))
+            .cloned())
+    }
+
+    fn commit_command(
+        &mut self,
+        conversation_stream_id: &str,
+        expected_next_sequence: u64,
+        events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let key = (
+            SessionId(conversation_stream_id.to_string()),
+            receipt.request_id.clone(),
+        );
+        if self.command_receipts.contains_key(&key) {
+            return Err(AgentError::Storage(
+                "conversation command receipt already exists".into(),
+            ));
+        }
+        let backup = self.clone();
+        match self.append_transaction(
+            conversation_stream_id,
+            expected_next_sequence,
+            events,
+        ) {
+            Ok(committed) => {
+                self.command_receipts.insert(key, receipt);
+                Ok(committed)
+            }
+            Err(error) => {
+                *self = backup;
+                Err(error)
+            }
+        }
     }
 
     fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {

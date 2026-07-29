@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::conversation::ConversationRunFrameRef;
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionCursor, SessionId};
 use crate::execution::{ExecutionToolObservation, ExecutionToolOutcome};
-use crate::memory::{EventStore, InMemoryEventStore};
+use crate::storage::{ConversationEventStore, InMemoryConversationStore};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
     PermissionScope,
@@ -51,7 +51,7 @@ pub struct ConversationSummary {
 
 const ROOT_PARENT_EVENT_ID: &str = "__local_agent_root__";
 
-pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
+pub struct AgentRuntime<S: ConversationEventStore = InMemoryConversationStore> {
     ids: IdGenerator,
     store: S,
     sessions: HashMap<SessionId, SessionCursor>,
@@ -59,14 +59,14 @@ pub struct AgentRuntime<S: EventStore = InMemoryEventStore> {
     pending_tool_requests: Vec<ToolExecutionRequest>,
 }
 
-impl AgentRuntime<InMemoryEventStore> {
+impl AgentRuntime<InMemoryConversationStore> {
     pub fn new(config: AgentRuntimeConfig) -> Self {
-        Self::with_store(config, InMemoryEventStore::new())
+        Self::with_store(config, InMemoryConversationStore::new())
             .expect("new in-memory runtime should initialize")
     }
 }
 
-impl<S: EventStore> AgentRuntime<S> {
+impl<S: ConversationEventStore> AgentRuntime<S> {
     pub fn with_store(config: AgentRuntimeConfig, store: S) -> Result<Self, AgentError> {
         Self::open_without_replay(config, store)
     }
@@ -94,6 +94,14 @@ impl<S: EventStore> AgentRuntime<S> {
 
     pub(crate) fn replay_provider_independent_state(&mut self) -> Result<(), AgentError> {
         Ok(())
+    }
+
+    pub(crate) fn conversation_store(&self) -> &S {
+        &self.store
+    }
+
+    pub(crate) fn conversation_store_mut(&mut self) -> &mut S {
+        &mut self.store
     }
 
     pub fn pending_tool_requests(&self) -> &[ToolExecutionRequest] {
@@ -478,7 +486,7 @@ impl<S: EventStore> AgentRuntime<S> {
     }
 }
 
-fn next_replayed_id<S: EventStore>(
+fn next_replayed_id<S: ConversationEventStore>(
     store: &S,
     session_ids: &[SessionId],
 ) -> Result<u64, AgentError> {

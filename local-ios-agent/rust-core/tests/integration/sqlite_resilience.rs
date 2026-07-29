@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
-use local_ios_agent_runtime::memory::{EventStore, SqliteEventStore};
+use local_ios_agent_runtime::storage::{ConversationEventStore, SqliteConversationStore};
 
 fn event(id: &str, session: &str, sequence: u64) -> RuntimeEvent {
     RuntimeEvent::new(
@@ -21,7 +21,7 @@ fn event(id: &str, session: &str, sequence: u64) -> RuntimeEvent {
 fn sqlite_event_store_waits_for_short_write_lock_instead_of_failing_busy() {
     let tempdir = tempfile::tempdir().unwrap();
     let db_path = tempdir.path().join("agent.sqlite");
-    let mut blocked_store = SqliteEventStore::open(&db_path).unwrap();
+    let mut blocked_store = SqliteConversationStore::open(&db_path).unwrap();
     let locker = rusqlite::Connection::open(&db_path).unwrap();
 
     locker.execute_batch("begin immediate").unwrap();
@@ -41,7 +41,7 @@ fn sqlite_event_store_waits_for_short_write_lock_instead_of_failing_busy() {
         .expect("sqlite append thread should not panic")
         .expect("sqlite append should wait for a short lock and then commit");
 
-    let reopened = SqliteEventStore::open(&db_path).unwrap();
+    let reopened = SqliteConversationStore::open(&db_path).unwrap();
     assert!(reopened
         .get(
             &SessionId("session_lock".to_string()),
