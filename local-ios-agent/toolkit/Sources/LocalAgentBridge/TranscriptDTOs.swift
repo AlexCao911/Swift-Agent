@@ -505,6 +505,43 @@ public enum TranscriptCommandDTO: Codable, Equatable, Sendable {
         case replacementAttachments = "replacement_attachments"
         case newConversationStreamID = "new_conversation_stream_id"
     }
+
+    public var conversationStreamID: String {
+        switch self {
+        case let .send(_, streamID, _, _, _, _),
+             let .retryFrom(_, streamID, _, _),
+             let .editMessage(_, streamID, _, _, _, _),
+             let .deleteMessage(_, streamID, _),
+             let .clearConversation(_, streamID),
+             let .createBranch(_, streamID, _, _),
+             let .archiveConversation(_, streamID),
+             let .deleteConversation(_, streamID):
+            streamID
+        }
+    }
+
+    public var startsRun: Bool {
+        switch self {
+        case .send, .retryFrom, .editMessage:
+            true
+        case .deleteMessage, .clearConversation, .createBranch,
+             .archiveConversation, .deleteConversation:
+            false
+        }
+    }
+
+    public func predictedRunID() throws -> String? {
+        guard startsRun else { return nil }
+        let document = try JSONDecoder().decode(
+            CanonicalJSONValue.self,
+            from: JSONEncoder().encode(self)
+        )
+        let digest = try CanonicalDigestV1.digest(
+            domain: "transcript-command:v1",
+            document: document
+        ).hex
+        return "run-\(digest.prefix(24))"
+    }
 }
 
 public struct TranscriptCommandResultDTO: Codable, Equatable, Sendable {
