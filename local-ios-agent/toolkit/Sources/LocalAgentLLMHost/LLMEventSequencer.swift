@@ -175,6 +175,9 @@ package actor LLMEventSequencer {
         if generationTerminal {
             return false
         }
+        if matchesToolBatchEvent(kind) {
+            return true
+        }
         return generationTurnID.map { !terminalTurns.contains($0) } ?? true
     }
 
@@ -209,5 +212,14 @@ package actor LLMEventSequencer {
         default:
             break
         }
+    }
+}
+
+private func matchesToolBatchEvent(_ kind: LLMEventKind) -> Bool {
+    switch kind {
+    case .toolBatchStarted, .toolBatchCompleted, .toolBatchFailed:
+        true
+    default:
+        false
     }
 }

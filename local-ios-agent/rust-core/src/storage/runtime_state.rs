@@ -2184,15 +2184,25 @@ pub(crate) fn accepted_event_state(
             | LLMEventKind::ToolCallStarted
             | LLMEventKind::ToolCallArgumentsDelta
             | LLMEventKind::ToolCallCompleted
-            | LLMEventKind::UsageUpdated
-            | LLMEventKind::ToolBatchStarted
-            | LLMEventKind::ToolBatchCompleted
-            | LLMEventKind::ToolBatchFailed => {
+            | LLMEventKind::UsageUpdated => {
                 next_worker = next_worker.with_watchdog(
                     Some(HostWatchdogKind::StreamIdle),
                     None,
                     Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
                 );
+            }
+            LLMEventKind::ToolBatchStarted => {
+                next_worker = next_worker.with_watchdog(
+                    Some(HostWatchdogKind::ToolBatch),
+                    None,
+                    Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                );
+            }
+            LLMEventKind::ToolBatchCompleted | LLMEventKind::ToolBatchFailed => {
+                next_worker = next_worker
+                    .with_execution_phase(None)
+                    .with_watchdog(None, None, None);
+                lifecycle = ResourceLifecycle::Registered;
             }
             LLMEventKind::GenerationCompleted => {
                 let completion = event.payload.completion.as_ref().ok_or_else(|| {
@@ -2201,7 +2211,30 @@ pub(crate) fn accepted_event_state(
                         "generation completion payload is missing",
                     )
                 })?;
-                if completion.outcome == "tool_calls_ready"
+                let direct_react = worker
+                    .generation_payload()
+                    .is_some_and(|payload| payload.schema_version == "2");
+                if direct_react
+                    && completion.outcome == "tool_calls_ready"
+                    && valid_tool_batch(completion, prior_events)
+                {
+                    next_worker = next_worker
+                        .with_execution_phase(Some(HostExecutionPhase::ExecutingToolBatch))
+                        .with_watchdog(
+                            Some(HostWatchdogKind::ToolBatch),
+                            None,
+                            Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
+                        );
+                    lifecycle = ResourceLifecycle::Registered;
+                } else if direct_react
+                    && completion.outcome == "final_response"
+                    && valid_final_response(completion, prior_events)
+                {
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_watchdog(None, None, None);
+                    lifecycle = ResourceLifecycle::Registered;
+                } else if completion.outcome == "tool_calls_ready"
                     && valid_tool_batch(completion, prior_events)
                 {
                     next_worker = next_worker
@@ -2265,28 +2298,48 @@ pub(crate) fn accepted_event_state(
                 }
             }
             LLMEventKind::Failed => {
-                next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
-                    LogicalRunOutcome::Failed {
-                        code: event
-                            .payload
-                            .failure_code
-                            .clone()
-                            .unwrap_or_else(|| "llm.generation.failed".into()),
-                    },
-                );
-                lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
-                let (armed, command) = arm_terminal_close(worker, next_worker)?;
-                next_worker = armed;
-                close = Some(command);
+                if worker
+                    .generation_payload()
+                    .is_some_and(|payload| payload.schema_version == "2")
+                {
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_watchdog(None, None, None);
+                    lifecycle = ResourceLifecycle::Registered;
+                } else {
+                    next_worker = next_worker.with_execution_phase(None).with_logical_outcome(
+                        LogicalRunOutcome::Failed {
+                            code: event
+                                .payload
+                                .failure_code
+                                .clone()
+                                .unwrap_or_else(|| "llm.generation.failed".into()),
+                        },
+                    );
+                    lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                    let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                    next_worker = armed;
+                    close = Some(command);
+                }
             }
             LLMEventKind::Cancelled => {
-                next_worker = next_worker
-                    .with_execution_phase(None)
-                    .with_logical_outcome(LogicalRunOutcome::Cancelled);
-                lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
-                let (armed, command) = arm_terminal_close(worker, next_worker)?;
-                next_worker = armed;
-                close = Some(command);
+                if worker
+                    .generation_payload()
+                    .is_some_and(|payload| payload.schema_version == "2")
+                {
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_watchdog(None, None, None);
+                    lifecycle = ResourceLifecycle::Registered;
+                } else {
+                    next_worker = next_worker
+                        .with_execution_phase(None)
+                        .with_logical_outcome(LogicalRunOutcome::Cancelled);
+                    lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
+                    let (armed, command) = arm_terminal_close(worker, next_worker)?;
+                    next_worker = armed;
+                    close = Some(command);
+                }
             }
             LLMEventKind::SessionClosed => {
                 lifecycle = ResourceLifecycle::Closed {

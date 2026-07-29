@@ -17,6 +17,8 @@ public final class LLMHostRuntime: @unchecked Sendable {
     package init(
         hostProcessEpoch: HostProcessEpoch,
         rustSink: any LLMHostRustSink,
+        modelExecutor: (any ModelGenerationExecuting)? = nil,
+        toolExecutor: (any ToolBatchExecuting)? = nil,
         operationStartTimeout: Duration = .seconds(10)
     ) {
         let inbox = BoundedHostCommandInbox()
@@ -24,6 +26,8 @@ public final class LLMHostRuntime: @unchecked Sendable {
             inbox: inbox,
             hostProcessEpoch: hostProcessEpoch,
             rustSink: rustSink,
+            modelExecutor: modelExecutor,
+            toolExecutor: toolExecutor,
             operationStartTimeout: operationStartTimeout
         )
         self.hostProcessEpoch = hostProcessEpoch

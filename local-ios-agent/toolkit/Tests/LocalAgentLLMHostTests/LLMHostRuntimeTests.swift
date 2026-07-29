@@ -134,6 +134,28 @@ struct LLMHostRuntimeTests {
     }
 
     @Test
+    func v2GenerationStartsOnceAndOnlyAfterRustAcknowledgesTheCommand() async throws {
+        let executor = RecordingV2ModelExecutor()
+        let harness = try await HostRuntimeHarness.make(
+            lifecycle: .committed,
+            modelExecutor: executor
+        )
+        let command = try harness.v2GenerationCommand(id: "v2", sequence: 1)
+
+        #expect(harness.runtime.copy(try dispatch(command)) == .copied)
+        await harness.runtime.drain()
+        await waitUntil { await harness.sink.eventKinds().contains(.generationCompleted) }
+
+        #expect(await executor.requestCount() == 1)
+        #expect(await harness.sink.operations().first == "ack:v2")
+        #expect(await harness.sink.operations().dropFirst().first == "event:generation_started")
+
+        #expect(harness.runtime.copy(try dispatch(command)) == .copied)
+        await harness.runtime.drain()
+        #expect(await executor.requestCount() == 1)
+    }
+
+    @Test
     func rejectedCleanupAcknowledgementQuarantinesTheSession() async throws {
         let harness = try await HostRuntimeHarness.make(
             lifecycle: .registrationInFlight,
@@ -210,12 +232,17 @@ private struct HostRuntimeHarness {
     static func make(
         lifecycle: HostSessionLifecycle,
         installDriver: Bool = true,
-        acceptsCleanupAcknowledgement: Bool = true
+        acceptsCleanupAcknowledgement: Bool = true,
+        modelExecutor: (any ModelGenerationExecuting)? = nil
     ) async throws -> HostRuntimeHarness {
         let sink = RecordingRustSink(
             acceptsCleanupAcknowledgement: acceptsCleanupAcknowledgement
         )
-        let runtime = LLMHostRuntime(hostProcessEpoch: epoch, rustSink: sink)
+        let runtime = LLMHostRuntime(
+            hostProcessEpoch: epoch,
+            rustSink: sink,
+            modelExecutor: modelExecutor
+        )
         let harness = try HostRuntimeHarness(
             runtime: runtime,
             sink: sink,
@@ -302,6 +329,65 @@ private struct HostRuntimeHarness {
             payload: draft.payload
         )
     }
+
+    func v2GenerationCommand(
+        id: String,
+        sequence: UInt64
+    ) throws -> HostCommandEnvelope {
+        let payload = HostCommandPayload.generationV2(HostModelRequest(
+            runID: runID,
+            conversationStreamID: "conversation-1",
+            systemPrompt: "system",
+            orderedMessages: [],
+            attachmentReferences: [],
+            orderedToolDefinitions: []
+        ))
+        let payloadDigest = try payload.computedDigest().hex
+        let disclosure = GenerationDisclosure(
+            schemaVersion: "1",
+            generationTurnID: "turn-v2",
+            contentDigest: payloadDigest,
+            sourceRevisionDigest: String(repeating: "0", count: 64),
+            dataClasses: [.text],
+            highestSensitivity: .private,
+            safeDisplaySummary: SafeDisplaySummary(
+                sourceKinds: [.conversation],
+                addedItemCounts: [.init(dataClass: .text, count: 1)],
+                approximateAddedSize: .lessThanOneKiB,
+                triggeringToolDisplayKeys: []
+            )
+        )
+        let draft = HostCommandEnvelope(
+            schemaVersion: 2,
+            commandID: id,
+            runID: runID,
+            sessionHandle: handle,
+            hostProcessEpoch: Self.epoch.rawValue,
+            commandSequence: sequence,
+            generationTurnID: disclosure.generationTurnID,
+            kind: .startGeneration,
+            payloadDigest: payloadDigest,
+            disclosureDigest: try disclosure.computedDigest().hex,
+            commandEnvelopeDigest: "",
+            disclosure: disclosure,
+            payload: payload
+        )
+        return HostCommandEnvelope(
+            schemaVersion: draft.schemaVersion,
+            commandID: draft.commandID,
+            runID: draft.runID,
+            sessionHandle: draft.sessionHandle,
+            hostProcessEpoch: draft.hostProcessEpoch,
+            commandSequence: draft.commandSequence,
+            generationTurnID: draft.generationTurnID,
+            kind: draft.kind,
+            payloadDigest: draft.payloadDigest,
+            disclosureDigest: draft.disclosureDigest,
+            commandEnvelopeDigest: try draft.recomputedDigest().hex,
+            disclosure: draft.disclosure,
+            payload: draft.payload
+        )
+    }
 }
 
 private actor RecordingDriver: LLMHostSessionDriver {
@@ -336,6 +422,8 @@ private actor RecordingRustSink: LLMHostRustSink {
     private var acknowledgements: [HostCommandAcknowledgement] = []
     private var closeDispositionValue: LLMBackendSessionCloseDisposition?
     private var closeConfirmations = 0
+    private var submittedEvents: [LLMEventEnvelope] = []
+    private var operationLog: [String] = []
 
     init(acceptsCleanupAcknowledgement: Bool) {
         self.acceptsCleanupAcknowledgement = acceptsCleanupAcknowledgement
@@ -344,11 +432,14 @@ private actor RecordingRustSink: LLMHostRustSink {
     func submit(
         _ envelope: LLMEventEnvelope
     ) async throws -> LLMEventSubmissionResult {
-        .accepted
+        submittedEvents.append(envelope)
+        operationLog.append("event:\(envelope.kind.rawValue)")
+        return .accepted
     }
 
     func submitCommandAcknowledgement(_ acknowledgement: HostCommandAcknowledgement) async -> Bool {
         acknowledgements.append(acknowledgement)
+        operationLog.append("ack:\(acknowledgement.commandID)")
         return true
     }
 
@@ -381,6 +472,24 @@ private actor RecordingRustSink: LLMHostRustSink {
     }
 
     func confirmedCloseCount() -> Int { closeConfirmations }
+    func eventKinds() -> [LLMEventKind] { submittedEvents.map(\.kind) }
+    func operations() -> [String] { operationLog }
+}
+
+private actor RecordingV2ModelExecutor: ModelGenerationExecuting {
+    private var requests: [HostModelRequest] = []
+
+    func generate(
+        _ request: HostModelRequest,
+        emit: @escaping @Sendable (HostModelEvent) async throws -> Void
+    ) async throws {
+        requests.append(request)
+        try await emit(.textDelta("done"))
+    }
+
+    func cancel(runID: String) async {}
+
+    func requestCount() -> Int { requests.count }
 }
 
 private actor CloseCounter {

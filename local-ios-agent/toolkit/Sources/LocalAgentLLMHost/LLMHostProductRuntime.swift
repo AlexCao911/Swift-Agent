@@ -29,12 +29,16 @@ public final class LLMHostProductRuntime: @unchecked Sendable {
 
     public static func bootstrap(
         rust: RustRuntimeClient,
-        hostProcessEpoch: HostProcessEpoch
+        hostProcessEpoch: HostProcessEpoch,
+        modelExecutor: (any ModelGenerationExecuting)? = nil,
+        toolExecutor: (any ToolBatchExecuting)? = nil
     ) async throws -> LLMHostProductRuntime {
         let sink = RustPortHostSink(rust: rust)
         let runtime = LLMHostRuntime(
             hostProcessEpoch: hostProcessEpoch,
-            rustSink: sink
+            rustSink: sink,
+            modelExecutor: modelExecutor,
+            toolExecutor: toolExecutor
         )
         let port = try rust.installLLMHost { bytes in
             switch runtime.copy(bytes) {

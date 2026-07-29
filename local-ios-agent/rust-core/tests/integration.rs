@@ -13,6 +13,8 @@ mod app_service_builder_publish;
 mod context_assembly_lifecycle;
 #[path = "integration/conversation_projection.rs"]
 mod conversation_projection;
+#[path = "integration/host_agent_loop.rs"]
+mod host_agent_loop;
 #[path = "integration/host_llm_ffi.rs"]
 mod host_llm_ffi;
 #[path = "integration/llm_profile_migration_ffi.rs"]

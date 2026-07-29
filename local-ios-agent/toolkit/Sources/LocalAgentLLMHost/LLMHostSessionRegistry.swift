@@ -180,6 +180,8 @@ package actor LLMBridgeActor {
     private let inbox: BoundedHostCommandInbox
     private let hostProcessEpoch: HostProcessEpoch
     private let rustSink: any LLMHostRustSink
+    private let modelHandler: ModelRuntimeCommandHandler?
+    private let toolHandler: ToolBatchCommandHandler?
     private let operationStartTimeout: Duration
     private var sessions: [String: HostSessionEntry] = [:]
     private var tombstones: [String: ClosedSessionTombstone] = [:]
@@ -189,11 +191,15 @@ package actor LLMBridgeActor {
         inbox: BoundedHostCommandInbox,
         hostProcessEpoch: HostProcessEpoch,
         rustSink: any LLMHostRustSink,
+        modelExecutor: (any ModelGenerationExecuting)? = nil,
+        toolExecutor: (any ToolBatchExecuting)? = nil,
         operationStartTimeout: Duration
     ) {
         self.inbox = inbox
         self.hostProcessEpoch = hostProcessEpoch
         self.rustSink = rustSink
+        modelHandler = modelExecutor.map(ModelRuntimeCommandHandler.init)
+        toolHandler = toolExecutor.map(ToolBatchCommandHandler.init)
         self.operationStartTimeout = operationStartTimeout
     }
 
@@ -439,7 +445,7 @@ package actor LLMBridgeActor {
     }
 
     private func process(_ command: HostCommandEnvelope) async {
-        guard command.schemaVersion == 1 else {
+        guard command.schemaVersion == 1 || command.schemaVersion == 2 else {
             await reject(command, code: "llm.command.unsupported_schema")
             return
         }
@@ -499,7 +505,13 @@ package actor LLMBridgeActor {
             entry.commandLedger.record(command, result: result)
             sessions[command.sessionHandle] = entry
             let acknowledgement = await result.value
-            _ = await rustSink.submitCommandAcknowledgement(acknowledgement)
+            let acknowledged = await rustSink.submitCommandAcknowledgement(acknowledgement)
+            if acknowledged,
+               acknowledgement.disposition == .accepted,
+               command.schemaVersion == 2
+            {
+                executeAcceptedV2Command(command)
+            }
         }
     }
 
@@ -509,15 +521,22 @@ package actor LLMBridgeActor {
     ) -> Task<HostCommandAcknowledgement, Never> {
         let rejection: String?
         let driver = entry.driver
+        let isV2 = command.schemaVersion == 2
 
         switch command.kind {
         case .startGeneration:
-            rejection = generationRejection(
-                command,
-                lifecycle: entry.lifecycle,
-                allowed: [.commitInFlight, .commitOutcomeUnknown, .committed],
-                driver: driver
-            )
+            rejection = isV2
+                ? v2GenerationRejection(
+                    command,
+                    lifecycle: entry.lifecycle,
+                    allowed: [.commitInFlight, .commitOutcomeUnknown, .committed]
+                )
+                : generationRejection(
+                    command,
+                    lifecycle: entry.lifecycle,
+                    allowed: [.commitInFlight, .commitOutcomeUnknown, .committed],
+                    driver: driver
+                )
             if rejection == nil,
                entry.lifecycle == .commitInFlight
                 || entry.lifecycle == .commitOutcomeUnknown
@@ -526,23 +545,44 @@ package actor LLMBridgeActor {
             }
 
         case .resumeGeneration:
-            rejection = generationRejection(
-                command,
-                lifecycle: entry.lifecycle,
-                allowed: [.committed],
-                driver: driver
-            )
+            rejection = isV2
+                ? v2GenerationRejection(
+                    command,
+                    lifecycle: entry.lifecycle,
+                    allowed: [.committed]
+                )
+                : generationRejection(
+                    command,
+                    lifecycle: entry.lifecycle,
+                    allowed: [.committed],
+                    driver: driver
+                )
 
         case .cancelGeneration:
-            rejection = entry.lifecycle == .committed && driver != nil
+            rejection = entry.lifecycle == .committed
+                && (isV2 ? modelHandler != nil : driver != nil)
                 ? nil
                 : "llm.command.invalid_lifecycle"
 
-        case .executeToolBatch, .cancelToolBatch:
-            rejection = "llm.command.unsupported_until_host_adapter"
+        case .executeToolBatch:
+            rejection = isV2
+                && entry.lifecycle == .committed
+                && toolHandler != nil
+                && command.payload.toolBatch != nil
+                ? nil
+                : "llm.command.invalid_lifecycle"
+
+        case .cancelToolBatch:
+            rejection = isV2
+                && entry.lifecycle == .committed
+                && toolHandler != nil
+                && command.payload.targetBatchID != nil
+                ? nil
+                : "llm.command.invalid_lifecycle"
 
         case .closeSession:
-            rejection = entry.lifecycle == .committed && driver != nil
+            rejection = entry.lifecycle == .committed
+                && (isV2 ? modelHandler != nil : driver != nil)
                 ? nil
                 : "llm.command.invalid_lifecycle"
             if rejection == nil {
@@ -560,14 +600,25 @@ package actor LLMBridgeActor {
         }
 
         if command.kind == .startGeneration || command.kind == .resumeGeneration {
-            guard let driver,
-                  let generationTurnID = command.generationTurnID,
+            guard let generationTurnID = command.generationTurnID,
                   let disclosure = command.disclosure
             else {
                 return Task {
                     rejectedAcknowledgement(
                         command,
                         code: "llm.command.missing_generation_disclosure"
+                    )
+                }
+            }
+            if isV2 {
+                entry.activeGenerationTurnID = generationTurnID
+                return Task { acceptedAcknowledgement(command) }
+            }
+            guard let driver else {
+                return Task {
+                    rejectedAcknowledgement(
+                        command,
+                        code: "llm.command.invalid_lifecycle"
                     )
                 }
             }
@@ -595,6 +646,9 @@ package actor LLMBridgeActor {
             return Task { acceptedAcknowledgement(command) }
         }
 
+        if isV2 {
+            return Task { acceptedAcknowledgement(command) }
+        }
         let eventSequencer = entry.eventSequencer
         guard let driver else {
             return Task {
@@ -664,6 +718,84 @@ package actor LLMBridgeActor {
         }
     }
 
+    private func executeAcceptedV2Command(_ command: HostCommandEnvelope) {
+        guard var entry = sessions[command.sessionHandle] else { return }
+        let sequencer = entry.eventSequencer
+
+        switch command.kind {
+        case .startGeneration, .resumeGeneration:
+            guard let modelHandler,
+                  let generationTurnID = command.generationTurnID,
+                  let request = try? command.payload.modelRequest(
+                      for: command.kind,
+                      envelopeRunID: command.runID
+                  )
+            else {
+                return
+            }
+            entry.generationTask = Task {
+                await modelHandler.generate(
+                    request: request,
+                    generationTurnID: generationTurnID,
+                    sequencer: sequencer
+                )
+            }
+            entry.activeGenerationTurnID = generationTurnID
+            sessions[command.sessionHandle] = entry
+
+        case .executeToolBatch:
+            guard let toolHandler, let batch = command.payload.toolBatch else { return }
+            let generationTurnID = entry.activeGenerationTurnID
+            Task {
+                await toolHandler.execute(
+                    batch,
+                    generationTurnID: generationTurnID,
+                    sequencer: sequencer
+                )
+            }
+
+        case .cancelToolBatch:
+            guard let toolHandler, let batchID = command.payload.targetBatchID else {
+                return
+            }
+            Task { await toolHandler.cancel(batchID: batchID) }
+
+        case .cancelGeneration:
+            guard let modelHandler else { return }
+            let generationTurnID = entry.activeGenerationTurnID
+            Task {
+                await modelHandler.cancel(runID: command.runID)
+                _ = try? await sequencer.submit(
+                    kind: .cancelled,
+                    payload: LLMEventPayload(commandID: command.commandID),
+                    generationTurnID: generationTurnID
+                )
+            }
+
+        case .closeSession:
+            let generationTask = entry.generationTask
+            Task { [weak self] in
+                await generationTask?.value
+                let result = try? await sequencer.submit(
+                    kind: .sessionClosed,
+                    payload: LLMEventPayload(
+                        commandID: command.commandID,
+                        closeDisposition:
+                            LLMBackendSessionCloseDisposition.closed.rawValue
+                    ),
+                    generationTurnID: nil
+                )
+                await self?.finishCommittedClose(
+                    command.sessionHandle,
+                    result: result
+                )
+            }
+
+        case .capacityAvailable:
+            Task { await sequencer.notifyCapacityAvailable() }
+        }
+    }
+
     private func finishCommittedClose(
         _ handle: String,
         result: LLMEventSubmissionResult?
@@ -688,6 +820,23 @@ package actor LLMBridgeActor {
         driver: (any LLMHostSessionDriver)?
     ) -> String? {
         guard allowed.contains(lifecycle), driver != nil else {
+            return "llm.command.invalid_lifecycle"
+        }
+        guard let generationTurnID = command.generationTurnID,
+              let disclosure = command.disclosure,
+              disclosure.generationTurnID == generationTurnID
+        else {
+            return "llm.command.missing_generation_disclosure"
+        }
+        return nil
+    }
+
+    private func v2GenerationRejection(
+        _ command: HostCommandEnvelope,
+        lifecycle: HostSessionLifecycle,
+        allowed: Set<HostSessionLifecycle>
+    ) -> String? {
+        guard allowed.contains(lifecycle), modelHandler != nil else {
             return "llm.command.invalid_lifecycle"
         }
         guard let generationTurnID = command.generationTurnID,

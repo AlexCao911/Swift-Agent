@@ -671,6 +671,16 @@ fn lifecycle_result(
             LLMEventSubmissionResult::Accepted
         }
         Some(HostExecutionPhase::ConsumingLlmTurn) => LLMEventSubmissionResult::Accepted,
+        Some(HostExecutionPhase::ExecutingToolBatch)
+            if matches!(
+                event.kind,
+                LLMEventKind::ToolBatchStarted
+                    | LLMEventKind::ToolBatchCompleted
+                    | LLMEventKind::ToolBatchFailed
+            ) =>
+        {
+            LLMEventSubmissionResult::Accepted
+        }
         _ => LLMEventSubmissionResult::TurnTerminal,
     }
 }

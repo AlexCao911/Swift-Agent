@@ -23,12 +23,14 @@ mod bearer_token;
 mod canonical_digest_v1;
 #[path = "contract/context_agent_os.rs"]
 mod context_agent_os;
-#[path = "contract/conversation_execution_boundary.rs"]
-mod conversation_execution_boundary;
 #[path = "contract/conversation_command.rs"]
 mod conversation_command;
+#[path = "contract/conversation_execution_boundary.rs"]
+mod conversation_execution_boundary;
 #[path = "contract/global_run_lease.rs"]
 mod global_run_lease;
+#[path = "contract/host_adapter.rs"]
+mod host_adapter;
 #[path = "contract/host_binding_saga.rs"]
 mod host_binding_saga;
 #[path = "contract/host_llm_contracts.rs"]

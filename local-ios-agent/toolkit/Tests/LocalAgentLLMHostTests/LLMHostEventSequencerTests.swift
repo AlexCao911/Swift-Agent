@@ -124,6 +124,41 @@ struct LLMHostEventSequencerTests {
         }
         #expect(await sequencer.nextSequence() == 1)
     }
+
+    @Test
+    func toolBatchCompletionMayFollowItsTerminalModelTurn() async throws {
+        let submitter = RecordingEventSubmitter(results: [.accepted, .accepted])
+        let sequencer = LLMEventSequencer(
+            runID: "run-1",
+            sessionHandle: "session-1",
+            hostProcessEpoch: HostRuntimeHarnessEpoch.value,
+            submitter: submitter
+        )
+        let turnID = "turn-1"
+        _ = try await sequencer.submit(
+            kind: .generationCompleted,
+            payload: .init(completion: .init(
+                outcome: "tool_calls_ready",
+                orderedCallIDs: ["call-1"],
+                finishReason: "tool_calls"
+            )),
+            generationTurnID: turnID
+        )
+        _ = try await sequencer.submit(
+            kind: .toolBatchCompleted,
+            payload: .init(toolBatchCompletion: .init(
+                batchID: "batch-1",
+                runID: "run-1",
+                orderedResults: []
+            )),
+            generationTurnID: turnID
+        )
+
+        #expect(await submitter.envelopes().map(\.kind) == [
+            .generationCompleted,
+            .toolBatchCompleted,
+        ])
+    }
 }
 
 private enum HostRuntimeHarnessEpoch {
