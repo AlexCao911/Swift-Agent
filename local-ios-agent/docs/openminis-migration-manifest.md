@@ -51,3 +51,26 @@ only verifies and consumes those outputs.
 | `scripts/build_lame.sh` | `scripts/native/build_lame.sh` | Produces platform-specific static library input | LGPL-2.0-or-later | Adapted to the LocalAgent lock file and output directory |
 | `scripts/build_ffmpeg.sh`, `ffmpeg-patch/` | `scripts/native/build_ffmpeg.sh`, `ThirdParty/OpenMinisNative/Patches/FFmpeg` | Produces platform-specific frameworks | LGPL-2.1-or-later plus migrated patch source under GPLv3 | Adapted to verified downloads and LocalAgent paths |
 | `scripts/prepare_alpine_rootfs.sh`, iSH `RootfsPatch.bundle` | `scripts/native/prepare_alpine_rootfs.sh`, generated `.build/resources` | `alpine-rootfs.zip` and `RootfsPatch.bundle` in `LocalAgentApp` Copy Bundle Resources | Alpine packages retain their own licenses; overlay source follows iSH | Rootfs version, URL, and digest are fixed; public DNS is not baked into the image |
+
+## iSH, filesystem, browser, MCP, and tools
+
+| OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
+| --- | --- | --- | --- | --- |
+| `src/ios/iSH/ISHKernel.*`, `src/ios/Agent/ISH/ISHShellExecutor.*`, `CurrentRoot.*` | `LocalAgentApp/ThirdParty/OpenMinis/ISH/Runtime` | `LocalAgentApp` Sources through `LocalAgentApp-Bridging-Header.h` | GPLv3/iSH notices | Copied and reduced to the kernel/shell surface used by the product executor; product paths and identifiers use LocalAgent |
+| `src/ios/Agent/ISH/RootfsManager.swift` | `LocalAgentApp/ThirdParty/OpenMinis/ISH/Rootfs/RootfsManager.swift` | `LocalAgentApp` Sources | GPLv3/iSH notices | Copied and adapted to the reproducible bundle inputs from the native build contract |
+| `src/ios/default_mount` | `LocalAgentApp/ThirdParty/OpenMinis/Resources/default_mount` | `LocalAgentApp` Copy Bundle Resources | GPLv3 plus component notices | Copied and product-renamed; includes the `localagent-mcp-cli` client and daemon |
+| `AIChatViewModel+ConcurrentTools.swift`, `AIChatViewModel+ToolPreflight.swift`, `ToolLoopDetector.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Tools/OpenMinisToolBatchExecutor.swift`, `OpenMinisToolArgumentRepair.swift`, `ToolLoopDetector*.swift` | `LocalAgentApp` Sources | GPLv3 | Extracted from UI state into one ordered, cancellable batch executor with at most ten calls in flight and one detector per run |
+| `AIChatViewModel+FileTools.swift`, `AIChatViewModel+ISHCommand.swift` | `LocalAgentApp/ThirdParty/OpenMinis/ISH/ToolFileResolver.swift`, `OpenMinisISHRuntime.swift`, `Tools/OpenMinisProductToolDispatcher.swift` | `LocalAgentApp` Sources | GPLv3 | Preserves ordinary guest paths and maps only the four declared `/var/localagent` host mounts; host paths never cross the tool contract |
+| `src/ios/Agent/BrowserUse`, browser settings views | `LocalAgentApp/ThirdParty/OpenMinis/Tools/Browser` | `LocalAgentApp` Sources | GPLv3 | Copied and adapted for Swift 6, run-scoped ownership, `localagent://` URLs, LocalAgent shared mounts, and transcript-free download notifications |
+| `src/ios/NativeOffloads` | Existing `LocalNativeToolkit` plus `OpenMinisProductToolDispatcher` adapter | Existing Swift package and `LocalAgentApp` Sources | LocalAgent source; donor offloads not copied | Reuses the existing permission-aware native catalog and durable effect ledger instead of shipping a duplicate calendar/photos/reminders implementation |
+
+The MCP execution client is available inside the Linux guest and is reached
+through the ordinary shell tool. Its management/rootfs UI is a later product
+slice and does not block the Rust transcript/ReAct path. Credentials are not
+added to the guest environment; model-provider API keys and OAuth tokens
+remain in Swift secure storage.
+
+The broad donor `NativeOffloads` directory and its device-specific UI are not
+copied wholesale. Individual capabilities that the existing
+`LocalNativeToolkit` does not cover (for example FFmpeg command offload) remain
+eligible, caller-driven migration slices after the core Agent path is working.

@@ -16,6 +16,10 @@ private enum OpenMinisChatColors {
 
 @MainActor
 struct OpenMinisProductShellView: View {
+    @AppStorage("localagent.ish.raw-networking-disclosure.seen")
+    private var hasSeenLinuxNetworkDisclosure = false
+    @State private var showsLinuxNetworkDisclosure = false
+
     @Bindable var shellViewModel: AppShellViewModel
     @Bindable var runtimeViewModel: AgentViewModel
     @ObservedObject var viewModel: AIChatViewModel
@@ -34,6 +38,18 @@ struct OpenMinisProductShellView: View {
         .task {
             KaTeXRenderer.shared.warmUp()
             await runtimeViewModel.bootstrap()
+            if !hasSeenLinuxNetworkDisclosure {
+                showsLinuxNetworkDisclosure = true
+            }
+        }
+        .alert("Linux Tool Networking", isPresented: $showsLinuxNetworkDisclosure) {
+            Button("I Understand") {
+                hasSeenLinuxNetworkDisclosure = true
+            }
+        } message: {
+            Text(
+                "Linux tools have raw network access enabled. curl, wget, apk, DNS, and sockets use an independent network path and do not pass through the cloud-model egress filter."
+            )
         }
     }
 

@@ -6,6 +6,7 @@ struct PrivacySettingsSnapshot: Equatable, Sendable {
     var attachmentStorageSummary: String
     var memoryRetentionSummary: String
     var modelProviderSummary: String
+    var linuxGuestNetworkSummary: String
     var advancedDebugEnabled: Bool
     var entryPoints: [PrivacySettingsEntryPoint]
 }
@@ -28,6 +29,7 @@ enum PrivacySettingsProjection {
             attachmentStorageSummary: "Attachments stay in the app sandbox and are referenced by opaque IDs.",
             memoryRetentionSummary: "Run-only by default; memory candidates require explicit review.",
             modelProviderSummary: modelSummary(activeAgent),
+            linuxGuestNetworkSummary: "Enabled by default. Linux tools such as curl, wget, apk, DNS, and raw sockets use an independent network path that does not pass through the cloud-model egress filter.",
             advancedDebugEnabled: advancedDebugEnabled,
             entryPoints: [
                 PrivacySettingsEntryPoint(id: "export", title: "Export Data", systemImageName: "square.and.arrow.up"),
@@ -90,6 +92,7 @@ struct PrivacySettingsView: View {
                 SettingsSummaryRow(title: "Attachments", value: snapshot.attachmentStorageSummary, systemImageName: "paperclip")
                 SettingsSummaryRow(title: "Memory", value: snapshot.memoryRetentionSummary, systemImageName: "brain")
                 SettingsSummaryRow(title: "Model", value: snapshot.modelProviderSummary, systemImageName: "cpu")
+                SettingsSummaryRow(title: "Linux Network", value: snapshot.linuxGuestNetworkSummary, systemImageName: "network")
             }
 
             Section("Data") {

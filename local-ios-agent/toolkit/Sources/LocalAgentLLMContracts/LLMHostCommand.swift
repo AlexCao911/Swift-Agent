@@ -79,6 +79,23 @@ public struct HostToolResult: Codable, Equatable, Sendable {
     public let isError: Bool
     public let dataClasses: [String]
     public let highestSensitivity: String
+
+    public init(
+        callID: String,
+        toolName: String,
+        result: CanonicalJSONValue,
+        isError: Bool,
+        dataClasses: [String],
+        highestSensitivity: String
+    ) {
+        self.callID = callID
+        self.toolName = toolName
+        self.result = result
+        self.isError = isError
+        self.dataClasses = dataClasses
+        self.highestSensitivity = highestSensitivity
+    }
+
     private enum CodingKeys: String, CodingKey {
         case callID = "call_id"
         case toolName = "tool_name"

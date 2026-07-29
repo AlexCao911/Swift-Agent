@@ -53,6 +53,40 @@
 		0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */; };
 		0F2000010000000000000001 /* alpine-rootfs.zip in Resources */ = {isa = PBXBuildFile; fileRef = 0F2000010000000000000101 /* alpine-rootfs.zip */; };
 		0F2000010000000000000002 /* RootfsPatch.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 0F2000010000000000000102 /* RootfsPatch.bundle */; };
+		0F3000010000000000000001 /* ToolFileResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000101 /* ToolFileResolverTests.swift */; };
+		0F3000010000000000000002 /* ToolCallCancellationRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000102 /* ToolCallCancellationRegistryTests.swift */; };
+		0F3000010000000000000003 /* ToolFileResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000103 /* ToolFileResolver.swift */; };
+		0F3000010000000000000004 /* ToolCallCancellationRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000104 /* ToolCallCancellationRegistry.swift */; };
+		0F3000010000000000000005 /* OpenMinisToolBatchExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000105 /* OpenMinisToolBatchExecutorTests.swift */; };
+		0F3000010000000000000006 /* ToolLoopDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000106 /* ToolLoopDetector.swift */; };
+		0F3000010000000000000007 /* ToolLoopDetectorRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000107 /* ToolLoopDetectorRegistry.swift */; };
+		0F3000010000000000000008 /* OpenMinisToolDefinitionSnapshotProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000108 /* OpenMinisToolDefinitionSnapshotProvider.swift */; };
+		0F3000010000000000000009 /* OpenMinisToolBatchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000109 /* OpenMinisToolBatchExecutor.swift */; };
+		0F300001000000000000000A /* ISHKernel.m in Sources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010A /* ISHKernel.m */; };
+		0F300001000000000000000B /* ISHShellExecutor.m in Sources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010B /* ISHShellExecutor.m */; };
+		0F300001000000000000000C /* CurrentRoot.m in Sources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010C /* CurrentRoot.m */; };
+		0F300001000000000000000D /* RootfsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010D /* RootfsManager.swift */; };
+		0F300001000000000000000E /* OpenMinisISHRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010E /* OpenMinisISHRuntime.swift */; };
+		0F300001000000000000000F /* default_mount in Resources */ = {isa = PBXBuildFile; fileRef = 0F300001000000000000010F /* default_mount */; };
+		0F3000010000000000000010 /* ISHEnvironmentPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3000010000000000000110 /* ISHEnvironmentPolicyTests.swift */; };
+		0F3100010000000000000001 /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000101 /* AppLogger.swift */; };
+		0F3100010000000000000002 /* BrowserHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000102 /* BrowserHistory.swift */; };
+		0F3100010000000000000003 /* BrowserManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000103 /* BrowserManagementView.swift */; };
+		0F3100010000000000000004 /* BrowserSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000104 /* BrowserSheetView.swift */; };
+		0F3100010000000000000005 /* BrowserTabPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000105 /* BrowserTabPool.swift */; };
+		0F3100010000000000000006 /* BrowserUseActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000106 /* BrowserUseActions.swift */; };
+		0F3100010000000000000007 /* BrowserUseJavaScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000107 /* BrowserUseJavaScript.swift */; };
+		0F3100010000000000000008 /* BrowserUseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000108 /* BrowserUseManager.swift */; };
+		0F3100010000000000000009 /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3100010000000000000109 /* BrowserWebView.swift */; };
+		0F310001000000000000000A /* CookieAuditLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F310001000000000000010A /* CookieAuditLogger.swift */; };
+		0F310001000000000000000B /* CookieBackupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F310001000000000000010B /* CookieBackupStore.swift */; };
+		0F310001000000000000000C /* BrowserResourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F310001000000000000010C /* BrowserResourceMonitor.swift */; };
+		0F310001000000000000000D /* WebLoadError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F310001000000000000010D /* WebLoadError.swift */; };
+		0F310001000000000000000E /* LocalAgentBrowserFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F310001000000000000010E /* LocalAgentBrowserFiles.swift */; };
+		0F3200010000000000000001 /* OpenMinisBrowserRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000101 /* OpenMinisBrowserRuntime.swift */; };
+		0F3200010000000000000002 /* OpenMinisProductToolDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000102 /* OpenMinisProductToolDispatcher.swift */; };
+		0F3200010000000000000003 /* OpenMinisProductToolDispatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000103 /* OpenMinisProductToolDispatcherTests.swift */; };
+		0F3200010000000000000004 /* OpenMinisToolArgumentRepair.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000104 /* OpenMinisToolArgumentRepair.swift */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -199,6 +233,44 @@
 		0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_LICENSES.md; sourceTree = "<group>"; };
 		0F2000010000000000000101 /* alpine-rootfs.zip */ = {isa = PBXFileReference; lastKnownFileType = archive.zip; path = "alpine-rootfs.zip"; sourceTree = "<group>"; };
 		0F2000010000000000000102 /* RootfsPatch.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.plug-in; path = RootfsPatch.bundle; sourceTree = "<group>"; };
+		0F3000010000000000000101 /* ToolFileResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolFileResolverTests.swift; sourceTree = "<group>"; };
+		0F3000010000000000000102 /* ToolCallCancellationRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCancellationRegistryTests.swift; sourceTree = "<group>"; };
+		0F3000010000000000000103 /* ToolFileResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolFileResolver.swift; sourceTree = "<group>"; };
+		0F3000010000000000000104 /* ToolCallCancellationRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCancellationRegistry.swift; sourceTree = "<group>"; };
+		0F3000010000000000000105 /* OpenMinisToolBatchExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisToolBatchExecutorTests.swift; sourceTree = "<group>"; };
+		0F3000010000000000000106 /* ToolLoopDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolLoopDetector.swift; sourceTree = "<group>"; };
+		0F3000010000000000000107 /* ToolLoopDetectorRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolLoopDetectorRegistry.swift; sourceTree = "<group>"; };
+		0F3000010000000000000108 /* OpenMinisToolDefinitionSnapshotProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisToolDefinitionSnapshotProvider.swift; sourceTree = "<group>"; };
+		0F3000010000000000000109 /* OpenMinisToolBatchExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisToolBatchExecutor.swift; sourceTree = "<group>"; };
+		0F300001000000000000010A /* ISHKernel.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ISHKernel.m; sourceTree = "<group>"; };
+		0F300001000000000000010B /* ISHShellExecutor.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ISHShellExecutor.m; sourceTree = "<group>"; };
+		0F300001000000000000010C /* CurrentRoot.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CurrentRoot.m; sourceTree = "<group>"; };
+		0F300001000000000000010D /* RootfsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootfsManager.swift; sourceTree = "<group>"; };
+		0F300001000000000000010E /* OpenMinisISHRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisISHRuntime.swift; sourceTree = "<group>"; };
+		0F300001000000000000010F /* default_mount */ = {isa = PBXFileReference; lastKnownFileType = folder; path = default_mount; sourceTree = "<group>"; };
+		0F3000010000000000000110 /* ISHEnvironmentPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHEnvironmentPolicyTests.swift; sourceTree = "<group>"; };
+		0F3000010000000000000111 /* ISHKernel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ISHKernel.h; sourceTree = "<group>"; };
+		0F3000010000000000000112 /* ISHShellExecutor.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ISHShellExecutor.h; sourceTree = "<group>"; };
+		0F3000010000000000000113 /* CurrentRoot.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CurrentRoot.h; sourceTree = "<group>"; };
+		0F3000010000000000000114 /* LocalAgentApp-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "LocalAgentApp-Bridging-Header.h"; sourceTree = "<group>"; };
+		0F3100010000000000000101 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
+		0F3100010000000000000102 /* BrowserHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserHistory.swift; sourceTree = "<group>"; };
+		0F3100010000000000000103 /* BrowserManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserManagementView.swift; sourceTree = "<group>"; };
+		0F3100010000000000000104 /* BrowserSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserSheetView.swift; sourceTree = "<group>"; };
+		0F3100010000000000000105 /* BrowserTabPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTabPool.swift; sourceTree = "<group>"; };
+		0F3100010000000000000106 /* BrowserUseActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserUseActions.swift; sourceTree = "<group>"; };
+		0F3100010000000000000107 /* BrowserUseJavaScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserUseJavaScript.swift; sourceTree = "<group>"; };
+		0F3100010000000000000108 /* BrowserUseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserUseManager.swift; sourceTree = "<group>"; };
+		0F3100010000000000000109 /* BrowserWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWebView.swift; sourceTree = "<group>"; };
+		0F310001000000000000010A /* CookieAuditLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CookieAuditLogger.swift; sourceTree = "<group>"; };
+		0F310001000000000000010B /* CookieBackupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CookieBackupStore.swift; sourceTree = "<group>"; };
+		0F310001000000000000010C /* BrowserResourceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserResourceMonitor.swift; sourceTree = "<group>"; };
+		0F310001000000000000010D /* WebLoadError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebLoadError.swift; sourceTree = "<group>"; };
+		0F310001000000000000010E /* LocalAgentBrowserFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentBrowserFiles.swift; sourceTree = "<group>"; };
+		0F3200010000000000000101 /* OpenMinisBrowserRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisBrowserRuntime.swift; sourceTree = "<group>"; };
+		0F3200010000000000000102 /* OpenMinisProductToolDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductToolDispatcher.swift; sourceTree = "<group>"; };
+		0F3200010000000000000103 /* OpenMinisProductToolDispatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductToolDispatcherTests.swift; sourceTree = "<group>"; };
+		0F3200010000000000000104 /* OpenMinisToolArgumentRepair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisToolArgumentRepair.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -345,6 +417,7 @@
 				0A0000010000000000000509 /* AppIntents */,
 				0A0000010000000000000508 /* Resources */,
 				0F1000010000000000000502 /* ThirdParty */,
+				0F3000010000000000000114 /* LocalAgentApp-Bridging-Header.h */,
 			);
 			path = LocalAgentApp;
 			sourceTree = "<group>";
@@ -361,11 +434,98 @@
 			isa = PBXGroup;
 			children = (
 				0F1000010000000000000504 /* ChatUI */,
+				0F3000010000000000000501 /* ISH */,
 				0F1000010000000000000505 /* Product */,
 				0F1000010000000000000507 /* Resources */,
 				0F1000010000000000000508 /* Licenses */,
+				0F3000010000000000000502 /* Tools */,
+				0F3100010000000000000502 /* Diagnostics */,
+				0F3100010000000000000503 /* Support */,
 			);
 			path = OpenMinis;
+			sourceTree = "<group>";
+		};
+		0F3000010000000000000501 /* ISH */ = {
+			isa = PBXGroup;
+			children = (
+				0F300001000000000000010E /* OpenMinisISHRuntime.swift */,
+				0F3000010000000000000103 /* ToolFileResolver.swift */,
+				0F3000010000000000000503 /* Rootfs */,
+				0F3000010000000000000504 /* Runtime */,
+			);
+			path = ISH;
+			sourceTree = "<group>";
+		};
+		0F3000010000000000000503 /* Rootfs */ = {
+			isa = PBXGroup;
+			children = (
+				0F300001000000000000010D /* RootfsManager.swift */,
+			);
+			path = Rootfs;
+			sourceTree = "<group>";
+		};
+		0F3000010000000000000504 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				0F3000010000000000000113 /* CurrentRoot.h */,
+				0F300001000000000000010C /* CurrentRoot.m */,
+				0F3000010000000000000111 /* ISHKernel.h */,
+				0F300001000000000000010A /* ISHKernel.m */,
+				0F3000010000000000000112 /* ISHShellExecutor.h */,
+				0F300001000000000000010B /* ISHShellExecutor.m */,
+			);
+			path = Runtime;
+			sourceTree = "<group>";
+		};
+		0F3000010000000000000502 /* Tools */ = {
+			isa = PBXGroup;
+			children = (
+				0F3100010000000000000501 /* Browser */,
+				0F3000010000000000000109 /* OpenMinisToolBatchExecutor.swift */,
+				0F3200010000000000000102 /* OpenMinisProductToolDispatcher.swift */,
+				0F3200010000000000000104 /* OpenMinisToolArgumentRepair.swift */,
+				0F3000010000000000000108 /* OpenMinisToolDefinitionSnapshotProvider.swift */,
+				0F3000010000000000000104 /* ToolCallCancellationRegistry.swift */,
+				0F3000010000000000000106 /* ToolLoopDetector.swift */,
+				0F3000010000000000000107 /* ToolLoopDetectorRegistry.swift */,
+			);
+			path = Tools;
+			sourceTree = "<group>";
+		};
+		0F3100010000000000000501 /* Browser */ = {
+			isa = PBXGroup;
+			children = (
+				0F3100010000000000000102 /* BrowserHistory.swift */,
+				0F3100010000000000000103 /* BrowserManagementView.swift */,
+				0F3100010000000000000104 /* BrowserSheetView.swift */,
+				0F3100010000000000000105 /* BrowserTabPool.swift */,
+				0F3100010000000000000106 /* BrowserUseActions.swift */,
+				0F3100010000000000000107 /* BrowserUseJavaScript.swift */,
+				0F3100010000000000000108 /* BrowserUseManager.swift */,
+				0F3100010000000000000109 /* BrowserWebView.swift */,
+				0F310001000000000000010A /* CookieAuditLogger.swift */,
+				0F310001000000000000010B /* CookieBackupStore.swift */,
+				0F310001000000000000010E /* LocalAgentBrowserFiles.swift */,
+				0F3200010000000000000101 /* OpenMinisBrowserRuntime.swift */,
+				0F310001000000000000010D /* WebLoadError.swift */,
+			);
+			path = Browser;
+			sourceTree = "<group>";
+		};
+		0F3100010000000000000502 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				0F310001000000000000010C /* BrowserResourceMonitor.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		0F3100010000000000000503 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				0F3100010000000000000101 /* AppLogger.swift */,
+			);
+			path = Support;
 			sourceTree = "<group>";
 		};
 		0F1000010000000000000504 /* ChatUI */ = {
@@ -401,6 +561,7 @@
 			isa = PBXGroup;
 			children = (
 				0F100001000000000000010A /* KaTeX */,
+				0F300001000000000000010F /* default_mount */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -684,6 +845,11 @@
 				0C000001000000000000210E /* NativeHostToolDriverTests.swift */,
 				0C0000010000000000002110 /* NativeInteractionBrokerTests.swift */,
 				0C000001000000000000210D /* NativeToolkitClientTests.swift */,
+				0F3000010000000000000101 /* ToolFileResolverTests.swift */,
+				0F3000010000000000000102 /* ToolCallCancellationRegistryTests.swift */,
+				0F3000010000000000000105 /* OpenMinisToolBatchExecutorTests.swift */,
+				0F3000010000000000000110 /* ISHEnvironmentPolicyTests.swift */,
+				0F3200010000000000000103 /* OpenMinisProductToolDispatcherTests.swift */,
 			);
 			path = Tools;
 			sourceTree = "<group>";
@@ -916,6 +1082,7 @@
 				0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */,
 				0F2000010000000000000001 /* alpine-rootfs.zip in Resources */,
 				0F2000010000000000000002 /* RootfsPatch.bundle in Resources */,
+				0F300001000000000000000F /* default_mount in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1032,6 +1199,34 @@
 				0E5000030000000000000003 /* AgentLLMConfigurationView.swift in Sources */,
 				0A0000010000000000000029 /* AgentBuilderViewModel.swift in Sources */,
 				0A000001000000000000002A /* RuntimeProjectionModel.swift in Sources */,
+				0F3000010000000000000003 /* ToolFileResolver.swift in Sources */,
+				0F3000010000000000000004 /* ToolCallCancellationRegistry.swift in Sources */,
+				0F3000010000000000000006 /* ToolLoopDetector.swift in Sources */,
+				0F3000010000000000000007 /* ToolLoopDetectorRegistry.swift in Sources */,
+				0F3000010000000000000008 /* OpenMinisToolDefinitionSnapshotProvider.swift in Sources */,
+				0F3000010000000000000009 /* OpenMinisToolBatchExecutor.swift in Sources */,
+				0F300001000000000000000A /* ISHKernel.m in Sources */,
+				0F300001000000000000000B /* ISHShellExecutor.m in Sources */,
+				0F300001000000000000000C /* CurrentRoot.m in Sources */,
+				0F300001000000000000000D /* RootfsManager.swift in Sources */,
+				0F300001000000000000000E /* OpenMinisISHRuntime.swift in Sources */,
+				0F3100010000000000000001 /* AppLogger.swift in Sources */,
+				0F3100010000000000000002 /* BrowserHistory.swift in Sources */,
+				0F3100010000000000000003 /* BrowserManagementView.swift in Sources */,
+				0F3100010000000000000004 /* BrowserSheetView.swift in Sources */,
+				0F3100010000000000000005 /* BrowserTabPool.swift in Sources */,
+				0F3100010000000000000006 /* BrowserUseActions.swift in Sources */,
+				0F3100010000000000000007 /* BrowserUseJavaScript.swift in Sources */,
+				0F3100010000000000000008 /* BrowserUseManager.swift in Sources */,
+				0F3100010000000000000009 /* BrowserWebView.swift in Sources */,
+				0F310001000000000000000A /* CookieAuditLogger.swift in Sources */,
+				0F310001000000000000000B /* CookieBackupStore.swift in Sources */,
+				0F310001000000000000000C /* BrowserResourceMonitor.swift in Sources */,
+				0F310001000000000000000D /* WebLoadError.swift in Sources */,
+				0F310001000000000000000E /* LocalAgentBrowserFiles.swift in Sources */,
+				0F3200010000000000000001 /* OpenMinisBrowserRuntime.swift in Sources */,
+				0F3200010000000000000002 /* OpenMinisProductToolDispatcher.swift in Sources */,
+				0F3200010000000000000004 /* OpenMinisToolArgumentRepair.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1081,6 +1276,11 @@
 				0A0000010000000000000027 /* AgentBuilderViewModelTests.swift in Sources */,
 				0A0000010000000000000028 /* RuntimeProjectionModelTests.swift in Sources */,
 				0B0000010000000000001041 /* AgentRunViewModelTests.swift in Sources */,
+				0F3000010000000000000001 /* ToolFileResolverTests.swift in Sources */,
+				0F3000010000000000000002 /* ToolCallCancellationRegistryTests.swift in Sources */,
+				0F3000010000000000000005 /* OpenMinisToolBatchExecutorTests.swift in Sources */,
+				0F3000010000000000000010 /* ISHEnvironmentPolicyTests.swift in Sources */,
+				0F3200010000000000000003 /* OpenMinisProductToolDispatcherTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1105,6 +1305,11 @@
 				DEVELOPMENT_TEAM = "";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"GUEST_ARM64=1",
+					"ISH_INTERNAL=1",
+				);
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/frameworks",
@@ -1112,6 +1317,8 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/include",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/iSH",
 				);
 				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -1130,10 +1337,21 @@
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/lame/lib",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lish",
+					"-lish_emu",
+					"-lfakefs",
+					"-lsqlite3",
+					"-lresolv",
+					"-framework",
+					SystemConfiguration,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
+				SWIFT_OBJC_BRIDGING_HEADER = "LocalAgentApp/LocalAgentApp-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -1148,6 +1366,11 @@
 				DEVELOPMENT_TEAM = "";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"GUEST_ARM64=1",
+					"ISH_INTERNAL=1",
+				);
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/frameworks",
@@ -1155,6 +1378,8 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/include",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/iSH",
 				);
 				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -1173,10 +1398,21 @@
 					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/lame/lib",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lish",
+					"-lish_emu",
+					"-lfakefs",
+					"-lsqlite3",
+					"-lresolv",
+					"-framework",
+					SystemConfiguration,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
+				SWIFT_OBJC_BRIDGING_HEADER = "LocalAgentApp/LocalAgentApp-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

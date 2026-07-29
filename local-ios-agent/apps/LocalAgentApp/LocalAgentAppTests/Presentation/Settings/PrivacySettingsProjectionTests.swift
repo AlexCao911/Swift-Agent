@@ -50,6 +50,8 @@ struct PrivacySettingsProjectionTests {
         #expect(snapshot.attachmentStorageSummary == "Attachments stay in the app sandbox and are referenced by opaque IDs.")
         #expect(snapshot.memoryRetentionSummary == "Run-only by default; memory candidates require explicit review.")
         #expect(snapshot.modelProviderSummary == "Host target is selected by Research Agent revision 3")
+        #expect(snapshot.linuxGuestNetworkSummary.contains("independent network path"))
+        #expect(snapshot.linuxGuestNetworkSummary.contains("does not pass through"))
         #expect(snapshot.activeAgentSummary == "Research Agent revision 3")
         #expect(snapshot.advancedDebugEnabled == true)
         #expect(snapshot.entryPoints.map(\.id) == ["export", "reset", "debug"])
