@@ -15,7 +15,6 @@ pub mod migration;
 pub mod prompt;
 pub mod protocol;
 pub mod run_snapshot;
-pub mod runtime;
 pub mod security;
 pub mod skills;
 pub mod storage;
