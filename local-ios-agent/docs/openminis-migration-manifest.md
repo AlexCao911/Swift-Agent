@@ -37,3 +37,17 @@ performance-driven migration if profiling demonstrates a need.
 The Swift package lock is stored in
 `LocalAgentApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
 Only `swift-cmark` and `SwiftMath` are introduced by the core chat slice.
+
+## Native Linux and media inputs
+
+Generated native artifacts are deliberately excluded from source control.
+`scripts/prepare-ios-native.sh` rebuilds them from the pinned inputs in
+`ThirdParty/OpenMinisNative/native-sources.lock`; the LocalAgent Xcode target
+only verifies and consumes those outputs.
+
+| OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
+| --- | --- | --- | --- | --- |
+| `ish-arm64` build-reachable source closure | `ThirdParty/OpenMinisNative/iSH` | Built by `scripts/native/build_ish.sh`; generated headers/libraries are selected by `$(PLATFORM_NAME)` | iSH GPL/LGPL notices copied under `ThirdParty/OpenMinisNative/Licenses` | Kernel/emu/fs, ARM64 VDSO, fakefs tools, and RootfsPatch retained; donor App/CI/docs/benchmarks, inactive offload tests, `libapps`, and the unused vendored `libarchive` copy excluded |
+| `scripts/build_lame.sh` | `scripts/native/build_lame.sh` | Produces platform-specific static library input | LGPL-2.0-or-later | Adapted to the LocalAgent lock file and output directory |
+| `scripts/build_ffmpeg.sh`, `ffmpeg-patch/` | `scripts/native/build_ffmpeg.sh`, `ThirdParty/OpenMinisNative/Patches/FFmpeg` | Produces platform-specific frameworks | LGPL-2.1-or-later plus migrated patch source under GPLv3 | Adapted to verified downloads and LocalAgent paths |
+| `scripts/prepare_alpine_rootfs.sh`, iSH `RootfsPatch.bundle` | `scripts/native/prepare_alpine_rootfs.sh`, generated `.build/resources` | `alpine-rootfs.zip` and `RootfsPatch.bundle` in `LocalAgentApp` Copy Bundle Resources | Alpine packages retain their own licenses; overlay source follows iSH | Rootfs version, URL, and digest are fixed; public DNS is not baked into the image |

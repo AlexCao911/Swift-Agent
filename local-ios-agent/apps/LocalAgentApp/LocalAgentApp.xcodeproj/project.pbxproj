@@ -51,6 +51,8 @@
 		0F100001000000000000000D /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = 0F1000010000000000000307 /* SwiftMath */; };
 		0F100001000000000000000E /* GPL-3.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010B /* GPL-3.0.txt */; };
 		0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */; };
+		0F2000010000000000000001 /* alpine-rootfs.zip in Resources */ = {isa = PBXBuildFile; fileRef = 0F2000010000000000000101 /* alpine-rootfs.zip */; };
+		0F2000010000000000000002 /* RootfsPatch.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 0F2000010000000000000102 /* RootfsPatch.bundle */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -195,6 +197,8 @@
 		0F100001000000000000010A /* KaTeX */ = {isa = PBXFileReference; lastKnownFileType = folder; path = KaTeX; sourceTree = "<group>"; };
 		0F100001000000000000010B /* GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GPL-3.0.txt"; sourceTree = "<group>"; };
 		0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_LICENSES.md; sourceTree = "<group>"; };
+		0F2000010000000000000101 /* alpine-rootfs.zip */ = {isa = PBXFileReference; lastKnownFileType = archive.zip; path = "alpine-rootfs.zip"; sourceTree = "<group>"; };
+		0F2000010000000000000102 /* RootfsPatch.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.plug-in; path = RootfsPatch.bundle; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -314,8 +318,19 @@
 			children = (
 				0A0000010000000000000051 /* LocalAgentApp */,
 				0A0000010000000000000052 /* LocalAgentAppTests */,
+				0F2000010000000000000501 /* Generated Native Resources */,
 				0A0000010000000000000053 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		0F2000010000000000000501 /* Generated Native Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0F2000010000000000000101 /* alpine-rootfs.zip */,
+				0F2000010000000000000102 /* RootfsPatch.bundle */,
+			);
+			name = "Generated Native Resources";
+			path = "../../ThirdParty/OpenMinisNative/.build/resources";
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000051 /* LocalAgentApp */ = {
@@ -800,6 +815,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0A0000010000000000000091 /* Build configuration list for PBXNativeTarget "LocalAgentApp" */;
 			buildPhases = (
+				0F2000010000000000000701 /* Verify LocalAgent Native Inputs */,
 				0A0000010000000000000061 /* Sources */,
 				0A0000010000000000000041 /* Frameworks */,
 				0A0000010000000000000062 /* Resources */,
@@ -898,6 +914,8 @@
 				0F100001000000000000000A /* KaTeX in Resources */,
 				0F100001000000000000000E /* GPL-3.0.txt in Resources */,
 				0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */,
+				0F2000010000000000000001 /* alpine-rootfs.zip in Resources */,
+				0F2000010000000000000002 /* RootfsPatch.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -909,6 +927,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		0F2000010000000000000701 /* Verify LocalAgent Native Inputs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Verify LocalAgent Native Inputs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nnative_root=\"$PROJECT_DIR/../../ThirdParty/OpenMinisNative/.build\"\nartifact_root=\"$native_root/$PLATFORM_NAME\"\nmissing=0\nfor input in \\\n  \"$artifact_root/lame/lib/libmp3lame.a\" \\\n  \"$artifact_root/frameworks/FFmpeg.framework/FFmpeg\" \\\n  \"$artifact_root/libs/libish.a\" \\\n  \"$native_root/resources/alpine-rootfs.zip\" \\\n  \"$native_root/resources/RootfsPatch.bundle\"; do\n  if [[ ! -e \"$input\" ]]; then\n    echo \"error: Missing generated native input: $input\"\n    missing=1\n  fi\ndone\nif [[ \"$missing\" -ne 0 ]]; then\n  echo \"error: Run: $PROJECT_DIR/../../scripts/prepare-ios-native.sh --platform $PLATFORM_NAME\"\n  exit 1\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0A0000010000000000000061 /* Sources */ = {
@@ -1065,6 +1105,14 @@
 				DEVELOPMENT_TEAM = "";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/frameworks",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/include",
+				);
 				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LOCAL_AGENT_PHASE2_RELEASE_CATALOG_PATH = "";
@@ -1075,6 +1123,11 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/libs",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/lame/lib",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;
@@ -1095,6 +1148,14 @@
 				DEVELOPMENT_TEAM = "";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/frameworks",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/include",
+				);
 				INFOPLIST_FILE = LocalAgentApp/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LOCAL_AGENT_PHASE2_RELEASE_CATALOG_PATH = "";
@@ -1105,6 +1166,11 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/libs",
+					"$(PROJECT_DIR)/../../ThirdParty/OpenMinisNative/.build/$(PLATFORM_NAME)/lame/lib",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.localagent.app;

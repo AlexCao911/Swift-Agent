@@ -19,3 +19,4 @@ project.xcworkspace/xcuserdata/
 
 .kiro/
 toolkit/Artifacts/LocalAgentInferenceNative.xcframework/
+ThirdParty/OpenMinisNative/.build/
