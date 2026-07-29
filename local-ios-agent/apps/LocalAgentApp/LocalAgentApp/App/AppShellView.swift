@@ -5,7 +5,6 @@ struct AppShellView: View {
     let container: AppContainer
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var chatViewModel: AgentViewModel
     @StateObject private var openMinisChatViewModel: AIChatViewModel
     @StateObject private var openMinisChatStore: ChatStore
     @State private var builderViewModel: AgentBuilderViewModel
@@ -19,12 +18,10 @@ struct AppShellView: View {
     init(viewModel: AppShellViewModel, container: AppContainer) {
         self.viewModel = viewModel
         self.container = container
-        let runtimeViewModel = container.makeAgentViewModel()
         let chatStore = container.makeOpenMinisChatStore()
-        _chatViewModel = State(initialValue: runtimeViewModel)
         _openMinisChatViewModel = StateObject(
             wrappedValue: container.makeOpenMinisChatViewModel(
-                runtimeViewModel: runtimeViewModel,
+                shellViewModel: viewModel,
                 chatStore: chatStore
             )
         )
@@ -109,7 +106,6 @@ struct AppShellView: View {
         case .chat:
             OpenMinisProductShellView(
                 shellViewModel: viewModel,
-                runtimeViewModel: chatViewModel,
                 viewModel: openMinisChatViewModel,
                 chatStore: openMinisChatStore,
                 onOpenBuilder: {
@@ -165,7 +161,6 @@ struct AppShellView: View {
     @MainActor
     private func usePublishedAgentInChat(_ selection: PublishedAgentSelection) {
         viewModel.usePublishedAgent(selection)
-        BuilderFirstHostSelection.apply(selection, to: chatViewModel)
         viewModel.open(.chat(sessionId: nil))
     }
 }

@@ -22,7 +22,6 @@ struct OpenMinisProductShellView: View {
     @State private var showsConversationSkills = false
 
     @Bindable var shellViewModel: AppShellViewModel
-    @Bindable var runtimeViewModel: AgentViewModel
     @ObservedObject var viewModel: AIChatViewModel
     @ObservedObject var chatStore: ChatStore
     var onOpenBuilder: () -> Void
@@ -38,7 +37,6 @@ struct OpenMinisProductShellView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             KaTeXRenderer.shared.warmUp()
-            await runtimeViewModel.bootstrap()
             if !hasSeenLinuxNetworkDisclosure {
                 showsLinuxNetworkDisclosure = true
             }

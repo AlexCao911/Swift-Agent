@@ -87,10 +87,16 @@ struct AppContainer {
 
     @MainActor
     func makeOpenMinisChatViewModel(
-        runtimeViewModel: AgentViewModel,
+        shellViewModel: AppShellViewModel,
         chatStore: ChatStore
     ) -> AIChatViewModel {
-        let conversationStreamID = runtimeViewModel.state.currentSessionId
+        let routedConversationID: String? = if case let .chat(sessionID) =
+            shellViewModel.route {
+            sessionID
+        } else {
+            nil
+        }
+        let conversationStreamID = routedConversationID
             ?? "conversation-\(UUID().uuidString.lowercased())"
         guard let rustRuntimeClient,
               let llmHostSelections,
@@ -146,9 +152,7 @@ struct AppContainer {
                         message: "Attachments are not connected to the Rust ReAct path yet"
                     )
                 }
-                guard let revision =
-                    runtimeViewModel.state.selectedAgentProfileRevisionId
-                else {
+                guard let agent = shellViewModel.activeAgent else {
                     throw RustAgentCoordinatorError(
                         message: "Choose an agent and model before sending"
                     )
@@ -159,9 +163,8 @@ struct AppContainer {
                     clientMessageID: UUID().uuidString.lowercased(),
                     text: submission.text,
                     attachments: [],
-                    agentProfileID:
-                        runtimeViewModel.state.selectedAgentProfileId,
-                    agentProfileRevisionID: revision
+                    agentProfileID: agent.profileId,
+                    agentProfileRevisionID: agent.profileRevisionId
                 )
             }
         } catch {
