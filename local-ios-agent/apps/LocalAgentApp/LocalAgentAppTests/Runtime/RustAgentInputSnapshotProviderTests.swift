@@ -30,7 +30,8 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
         }
 
         let snapshot = try await provider.snapshot(
-            conversationStreamID: "conversation"
+            conversationStreamID: "conversation",
+            modelContextWindow: modelWindow
         )
         let encoded = String(
             decoding: try JSONEncoder().encode(snapshot),
@@ -64,14 +65,20 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
         ) {
             try OpenMinisToolDefinitionSnapshotProvider.productDefaults()
         }
-        let first = try await provider.snapshot(conversationStreamID: nil)
+        let first = try await provider.snapshot(
+            conversationStreamID: nil,
+            modelContextWindow: modelWindow
+        )
 
         try fixture.promptStore.update(
             prompt.id,
             name: "Base",
             markdown: "Version two"
         )
-        let second = try await provider.snapshot(conversationStreamID: nil)
+        let second = try await provider.snapshot(
+            conversationStreamID: nil,
+            modelContextWindow: modelWindow
+        )
 
         XCTAssertEqual(
             first.orderedPromptDocuments.first?.markdown,
@@ -101,6 +108,13 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
                 metadataURL: root.appendingPathComponent("skills.json"),
                 overridesURL: root.appendingPathComponent("overrides.json")
             )
+        )
+    }
+
+    private var modelWindow: ModelContextWindowDTO {
+        ModelContextWindowDTO(
+            contextWindowTokens: 8_192,
+            maxOutputTokens: 1_024
         )
     }
 

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::context::{
-    AgentTurnInput, BranchProjector, CompactionCandidate, ContextAssembler, ContextAssemblyTrace,
-    ContextBudget, ContextSegment, ModelInputMessages, ModelInputRole, PromptMessage,
+    approximate_token_count, compact_tool_results_for_context, AgentTurnInput, BranchProjector,
+    CompactionCandidate, ContextAssembler, ContextAssemblyTrace, ContextBudget, ContextSegment,
+    ContextWindowPolicy, ModelInputMessages, ModelInputRole, PromptMessage,
 };
 use crate::core::RuntimeEvent;
 use crate::memory::{MemoryProvider, MemoryQuery};
@@ -18,6 +19,18 @@ pub struct AgentInputAssembler {
 }
 
 impl AgentInputAssembler {
+    pub fn for_run(snapshot: RunStartSnapshot) -> Result<Self, AgentInputError> {
+        let input_limit = ContextWindowPolicy::for_model(snapshot.model_context_window)
+            .map_err(|error| {
+                AgentInputError::new(
+                    "agent_input.model_context_window_invalid",
+                    error.to_string(),
+                )
+            })?
+            .model_input_limit_tokens();
+        Self::new(snapshot, input_limit)
+    }
+
     pub fn new(
         snapshot: RunStartSnapshot,
         max_model_input_tokens: usize,
@@ -40,7 +53,10 @@ impl AgentInputAssembler {
         conversation_stream_id: &str,
         branch: Vec<RuntimeEvent>,
     ) -> Result<AgentTurnInput, AgentInputError> {
-        let conversation = BranchProjector::new().project(branch);
+        let conversation = compact_tool_results_for_context(
+            BranchProjector::new().project(branch),
+            self.max_model_input_tokens,
+        );
         let mut assembler = ContextAssembler::new().with_required_compiled_prompt(
             compile_prompt_documents(&self.snapshot.ordered_prompt_documents),
         );
@@ -67,7 +83,11 @@ impl AgentInputAssembler {
 
         let assembly = assembler
             .with_conversation_messages(conversation.clone())
-            .assemble(ContextBudget::tokens(self.max_model_input_tokens))
+            .assemble(ContextBudget::with_token_counter_named(
+                self.max_model_input_tokens,
+                "context.approximate",
+                approximate_token_count,
+            ))
             .map_err(|error| {
                 AgentInputError::new("agent_input.context_assembly_failed", error.to_string())
             })?;

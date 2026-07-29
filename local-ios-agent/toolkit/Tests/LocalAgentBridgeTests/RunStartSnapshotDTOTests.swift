@@ -12,7 +12,7 @@ struct RunStartSnapshotDTOTests {
         try snapshot.validate()
         #expect(
             snapshot.snapshotDigest
-                == "770d63806ac4bd25a4886d9f7383989bbb2bfe3ad6eb35ca85fc239850581f18"
+                == "43492a18fafbde12c99dfc7e37ab97ad006387e00bf4bd6addb113696a853bb7"
         )
 
         let data = try JSONEncoder().encode(snapshot)
@@ -22,6 +22,7 @@ struct RunStartSnapshotDTOTests {
         #expect(object["ordered_prompt_documents"] != nil)
         #expect(object["skill_descriptors"] != nil)
         #expect(object["ordered_tool_definitions"] != nil)
+        #expect(object["model_context_window"] != nil)
         #expect(object["snapshot_digest"] != nil)
     }
 
@@ -38,6 +39,7 @@ struct RunStartSnapshotDTOTests {
             ],
             skillDescriptors: original.skillDescriptors,
             orderedToolDefinitions: original.orderedToolDefinitions,
+            modelContextWindow: original.modelContextWindow,
             snapshotDigest: original.snapshotDigest
         )
 
@@ -62,7 +64,8 @@ struct RunStartSnapshotDTOTests {
             _ = try RunStartSnapshotDTO.make(
                 orderedPromptDocuments: [],
                 skillDescriptors: descriptors,
-                orderedToolDefinitions: []
+                orderedToolDefinitions: [],
+                modelContextWindow: modelWindow()
             )
         }
     }
@@ -86,7 +89,8 @@ struct RunStartSnapshotDTOTests {
                             enabled: true
                         ),
                     ],
-                    orderedToolDefinitions: []
+                    orderedToolDefinitions: [],
+                    modelContextWindow: modelWindow()
                 )
             }
         }
@@ -107,7 +111,8 @@ struct RunStartSnapshotDTOTests {
             _ = try RunStartSnapshotDTO.make(
                 orderedPromptDocuments: [],
                 skillDescriptors: [],
-                orderedToolDefinitions: [duplicate, duplicate]
+                orderedToolDefinitions: [duplicate, duplicate],
+                modelContextWindow: modelWindow()
             )
         }
         expectCode("run_start_snapshot.tool_schema_not_object") {
@@ -120,7 +125,8 @@ struct RunStartSnapshotDTOTests {
                         description: "Bad",
                         inputSchema: .array([])
                     ),
-                ]
+                ],
+                modelContextWindow: modelWindow()
             )
         }
     }
@@ -151,7 +157,15 @@ struct RunStartSnapshotDTOTests {
                         .init(name: "type", value: .string("object")),
                     ])
                 ),
-            ]
+            ],
+            modelContextWindow: modelWindow()
+        )
+    }
+
+    private func modelWindow() -> ModelContextWindowDTO {
+        ModelContextWindowDTO(
+            contextWindowTokens: 8_192,
+            maxOutputTokens: 1_024
         )
     }
 

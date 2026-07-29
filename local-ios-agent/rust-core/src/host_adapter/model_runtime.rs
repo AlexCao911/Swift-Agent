@@ -13,7 +13,8 @@ use crate::llm_contracts::{
     BearerTokenIssuer, EgressDataClassCountDocument, GenerationDisclosureDocument,
     HostAttachmentReference, HostCommandEnvelope, HostCommandKind, HostExecutionPhase,
     HostModelMessage, HostModelRequest, HostToolDefinition, HostWatchdogKind, LLMEventEnvelope,
-    LLMEventKind, LogicalRunOutcome, ResourceLifecycle, SafeDisplaySummaryDocument,
+    LLMEventKind, LogicalRunOutcome, ModelRequestPurpose as HostModelRequestPurpose,
+    ResourceLifecycle, SafeDisplaySummaryDocument,
 };
 use crate::storage::{
     runtime_now_millis, HostCommandOutboxStatus, RuntimeStateError, RuntimeTransition,
@@ -411,6 +412,14 @@ fn host_model_request(request: ModelRequest) -> HostModelRequest {
                 input_schema: value.input_schema,
             })
             .collect(),
+        purpose: match request.purpose {
+            crate::agent_loop::ModelRequestPurpose::Generation => {
+                HostModelRequestPurpose::Generation
+            }
+            crate::agent_loop::ModelRequestPurpose::Compaction => {
+                HostModelRequestPurpose::Compaction
+            }
+        },
     }
 }
 

@@ -128,13 +128,11 @@ public enum ProviderProductCompatibility {
                 modes: [.oauth]
             )
         case .antigravity:
-            ProviderProductMapping(
-                productType: type,
-                presetID: nil,
-                codecFamily: .antigravityCloudCode,
-                credentialModes: [.oauth],
-                isGenerationSupported: false,
-                requiresDedicatedCodec: true
+            mapping(
+                type,
+                presetID: .antigravity,
+                codec: .antigravityCloudCode,
+                modes: [.oauth]
             )
         case .unsupported:
             ProviderProductMapping(

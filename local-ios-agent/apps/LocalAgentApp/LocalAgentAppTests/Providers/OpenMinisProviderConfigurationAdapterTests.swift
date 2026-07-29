@@ -65,4 +65,39 @@ struct OpenMinisProviderConfigurationAdapterTests {
         #expect(!text.localizedCaseInsensitiveContains("api_key"))
         #expect(!text.localizedCaseInsensitiveContains("secret"))
     }
+
+    @Test
+    func antigravityRequiresAndPreservesItsDiscoveredProject() throws {
+        let configuration = OpenMinisProviderConfiguration(
+            id: "antigravity-1",
+            rawProviderType: "antigravity",
+            displayName: "Antigravity",
+            credentialMode: .oauth,
+            customBaseURL: nil,
+            appendsV1: false,
+            providerProjectID: "project-sentinel"
+        )
+
+        let draft = try OpenMinisProviderConfigurationAdapter.makeDraft(
+            configuration,
+            secret: SecretBytes(utf8: "oauth-token")
+        )
+
+        #expect(draft.presetID == .antigravity)
+        #expect(draft.providerProjectID == "project-sentinel")
+
+        #expect(throws: OpenMinisProviderConfigurationError.self) {
+            try OpenMinisProviderConfigurationAdapter.makeDraft(
+                OpenMinisProviderConfiguration(
+                    id: "antigravity-missing-project",
+                    rawProviderType: "antigravity",
+                    displayName: "Antigravity",
+                    credentialMode: .oauth,
+                    customBaseURL: nil,
+                    appendsV1: false
+                ),
+                secret: SecretBytes(utf8: "oauth-token")
+            )
+        }
+    }
 }

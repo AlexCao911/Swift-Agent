@@ -99,6 +99,8 @@
 		0F5000010000000000000002 /* UnifiedModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000102 /* UnifiedModelPicker.swift */; };
 		0F5000010000000000000003 /* OpenMinisProviderConfigurationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000103 /* OpenMinisProviderConfigurationAdapterTests.swift */; };
 		0F5000010000000000000004 /* UnifiedModelPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000104 /* UnifiedModelPickerTests.swift */; };
+		0F6000010000000000000001 /* OpenMinisModelExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6000010000000000000101 /* OpenMinisModelExecutor.swift */; };
+		0F6000010000000000000002 /* OpenMinisModelExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -295,6 +297,8 @@
 		0F5000010000000000000102 /* UnifiedModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedModelPicker.swift; sourceTree = "<group>"; };
 		0F5000010000000000000103 /* OpenMinisProviderConfigurationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProviderConfigurationAdapterTests.swift; sourceTree = "<group>"; };
 		0F5000010000000000000104 /* UnifiedModelPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedModelPickerTests.swift; sourceTree = "<group>"; };
+		0F6000010000000000000101 /* OpenMinisModelExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisModelExecutor.swift; sourceTree = "<group>"; };
+		0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisModelExecutorTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -700,6 +704,7 @@
 			isa = PBXGroup;
 			children = (
 				0D5000010000000000000101 /* AppCloudApprovalBroker.swift */,
+				0F6000010000000000000101 /* OpenMinisModelExecutor.swift */,
 				0F4000010000000000000105 /* RustAgentInputSnapshotProvider.swift */,
 				0B0000010000000000001501 /* Conversation */,
 				0B0000010000000000001502 /* Execution */,
@@ -870,6 +875,7 @@
 			isa = PBXGroup;
 			children = (
 				0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */,
+				0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */,
 				0F4000010000000000000108 /* RustAgentInputSnapshotProviderTests.swift */,
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
 				0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */,
@@ -1302,6 +1308,7 @@
 				0F4000010000000000000005 /* RustAgentInputSnapshotProvider.swift in Sources */,
 				0F5000010000000000000001 /* OpenMinisProviderConfigurationAdapter.swift in Sources */,
 				0F5000010000000000000002 /* UnifiedModelPicker.swift in Sources */,
+				0F6000010000000000000001 /* OpenMinisModelExecutor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1361,6 +1368,7 @@
 				0F4000010000000000000008 /* RustAgentInputSnapshotProviderTests.swift in Sources */,
 				0F5000010000000000000003 /* OpenMinisProviderConfigurationAdapterTests.swift in Sources */,
 				0F5000010000000000000004 /* UnifiedModelPickerTests.swift in Sources */,
+				0F6000010000000000000002 /* OpenMinisModelExecutorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -64,6 +64,10 @@ package struct ModelRuntimeCommandHandler: Sendable {
     package func cancel(runID: String) async {
         await executor.cancel(runID: runID)
     }
+
+    package func finish(runID: String) async {
+        await executor.finish(runID: runID)
+    }
 }
 
 private struct CompletedModelToolCall: Sendable {

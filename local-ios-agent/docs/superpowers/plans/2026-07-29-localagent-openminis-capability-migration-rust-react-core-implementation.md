@@ -2340,6 +2340,36 @@ git commit -m "refactor: adapt reliable host transport to the Rust loop"
 
 ---
 
+### Task 10A: Compact Model Context without Turning Memory into Transcript Storage
+
+- [x] Freeze `context_window_tokens` and `max_output_tokens` in
+  `RunStartSnapshot`; derive the input budget and 70% trigger from those values.
+- [x] Remove the fixed 32K Agent-loop budget.
+- [x] Replace old tool-result bodies with a stable Context placeholder and
+  bound the latest tool-result batch using the remaining model input budget.
+- [x] At the threshold, call the same frozen ModelRuntime with
+  `purpose = compaction`, no tools, and no attachments.
+- [x] Commit one `BranchSummaryCreated` checkpoint while retaining every
+  covered canonical event; rebuild the normal model request from summary,
+  latest exact user input, latest tool batch, and later events.
+- [x] Carry model window and request purpose through the existing Swift/Rust
+  contracts; do not add a Memory backend, second transport, or second store.
+
+Focused verification:
+
+```bash
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml \
+  --test unit context_compaction
+cargo test --manifest-path local-ios-agent/rust-core/Cargo.toml \
+  --test integration context_at_seventy_percent
+swift test --package-path local-ios-agent/toolkit \
+  --filter RunStartSnapshotDTOTests
+swift test --package-path local-ios-agent/toolkit \
+  --filter HostEnvelopeV2Tests
+```
+
+---
+
 ### Task 11: Execute Frozen Cloud/Local Model Plans without a Second Provider Stack
 
 **Files:**
@@ -2395,6 +2425,7 @@ because provider-named OpenRouter/Kimi adapters are absent.
 struct ProviderRunPlan: Sendable, Equatable {
     let logicalModelID: String
     let orderedCandidates: [ProviderRunCandidate]
+    let modelContextWindow: ModelContextWindowDTO
 }
 
 struct ProviderRunCandidate: Sendable, Equatable {

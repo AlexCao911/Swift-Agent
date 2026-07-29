@@ -9,9 +9,10 @@ use local_ios_agent_runtime::{
     },
     agent_loop::{
         AgentLoopError, AgentLoopOutcome, AgentLoopService, AgentRunRequest, AssistantTurn,
-        ModelEvent, ModelEventSink, ModelRequest, ModelRuntime, ToolBatch, ToolBatchResult,
-        ToolCall, ToolCallResult, ToolRuntime, MAX_MODEL_TURNS,
+        ModelEvent, ModelEventSink, ModelRequest, ModelRequestPurpose, ModelRuntime, ToolBatch,
+        ToolBatchResult, ToolCall, ToolCallResult, ToolRuntime, MAX_MODEL_TURNS,
     },
+    context::ModelContextWindow,
     conversation::{
         ActiveRunRegistry, ConversationCommandService, ProjectionSubscriptionRegistry,
         TranscriptCommand,
@@ -74,6 +75,89 @@ fn two_tool_batch_is_ordered_and_the_next_model_turn_sees_results() {
     assert!(second_text.contains("call-1"));
     assert!(second_text.contains("call-2"));
     assert_eq!(model.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn context_at_seventy_percent_is_compacted_by_the_current_model() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        Ok(final_turn("Earlier work was summarized.")),
+        Ok(final_turn("done")),
+    ]));
+    let tools = Arc::new(RecordingTools::default());
+    let setup = make_setup_with_snapshot(
+        model.clone(),
+        tools,
+        snapshot_with_window(ModelContextWindow {
+            context_window_tokens: 240,
+            max_output_tokens: 40,
+        }),
+    );
+    {
+        let mut store = setup.store.lock().unwrap();
+        let mut parent = store
+            .last_event(&SessionId("conversation-1".into()))
+            .unwrap()
+            .unwrap();
+        for index in 0..4 {
+            let event = RuntimeEvent::new(
+                EntryId(format!("historical-{index}")),
+                SessionId("conversation-1".into()),
+                Some(parent.id.clone()),
+                None,
+                0,
+                parent.depth + 1,
+                EventKind::AssistantMessageCompleted,
+                format!("historical detail {index}: {}", "large ".repeat(80)),
+            );
+            store
+                .append_transaction("conversation-1", parent.sequence + 1, vec![event])
+                .unwrap();
+            parent = store
+                .last_event(&SessionId("conversation-1".into()))
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    setup
+        .service
+        .run(setup.request, &mut RecordingSink::default())
+        .unwrap();
+
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].purpose, ModelRequestPurpose::Compaction);
+    assert!(requests[0].ordered_tool_definitions.is_empty());
+    assert_eq!(requests[1].purpose, ModelRequestPurpose::Generation);
+    let normal_context = requests[1]
+        .ordered_messages
+        .iter()
+        .map(|message| message.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(normal_context.contains("Earlier work was summarized."));
+    assert!(normal_context.contains("hello"));
+
+    let events = setup
+        .store
+        .lock()
+        .unwrap()
+        .events_after(&SessionId("conversation-1".into()), 0)
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.id.0.starts_with("historical-"))
+            .count(),
+        4
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == EventKind::BranchSummaryCreated)
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -247,6 +331,14 @@ struct Setup {
 }
 
 fn make_setup(model: Arc<dyn ModelRuntime>, tools: Arc<dyn ToolRuntime>) -> Setup {
+    make_setup_with_snapshot(model, tools, snapshot())
+}
+
+fn make_setup_with_snapshot(
+    model: Arc<dyn ModelRuntime>,
+    tools: Arc<dyn ToolRuntime>,
+    snapshot: RunStartSnapshot,
+) -> Setup {
     let store = Arc::new(Mutex::new(InMemoryConversationStore::default()));
     let active = ActiveRunRegistry::default();
     let projections = ProjectionSubscriptionRegistry::default();
@@ -255,7 +347,6 @@ fn make_setup(model: Arc<dyn ModelRuntime>, tools: Arc<dyn ToolRuntime>) -> Setu
         active.clone(),
         projections.clone(),
     );
-    let snapshot = snapshot();
     let accepted = commands
         .submit(TranscriptCommand::Send {
             request_id: "request-1".into(),
@@ -287,6 +378,13 @@ fn make_setup(model: Arc<dyn ModelRuntime>, tools: Arc<dyn ToolRuntime>) -> Setu
 }
 
 fn snapshot() -> RunStartSnapshot {
+    snapshot_with_window(ModelContextWindow {
+        context_window_tokens: 8_192,
+        max_output_tokens: 1_024,
+    })
+}
+
+fn snapshot_with_window(model_context_window: ModelContextWindow) -> RunStartSnapshot {
     RunStartSnapshot::make(
         vec![PromptDocumentSnapshot {
             id: "base".into(),
@@ -312,6 +410,7 @@ fn snapshot() -> RunStartSnapshot {
                 input_schema: json!({"type": "object"}),
             },
         ],
+        model_context_window,
     )
     .unwrap()
 }
@@ -432,9 +531,12 @@ struct RepeatingToolModel {
 impl ModelRuntime for RepeatingToolModel {
     fn generate(
         &self,
-        _request: ModelRequest,
+        request: ModelRequest,
         _sink: &mut dyn ModelEventSink,
     ) -> Result<AssistantTurn, AgentLoopError> {
+        if request.purpose == ModelRequestPurpose::Compaction {
+            return Ok(final_turn("Previous tool rounds compacted."));
+        }
         let index = self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(tool_turn(vec![call(&format!("call-{index}"), "file_read")]))
     }

@@ -1,4 +1,6 @@
-use crate::context::{ContextInjectionPolicy, PromptMessage};
+use std::collections::BTreeSet;
+
+use crate::context::{ContextCompactionCheckpoint, ContextInjectionPolicy, PromptMessage};
 use crate::core::{EventKind, RuntimeEvent};
 use crate::tool::ToolResult;
 use serde_json::Value;
@@ -12,6 +14,14 @@ impl BranchProjector {
     }
 
     pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<PromptMessage> {
+        if let Some(checkpoint) = branch.iter().rev().find_map(|event| {
+            (event.kind == EventKind::BranchSummaryCreated)
+                .then(|| serde_json::from_str::<ContextCompactionCheckpoint>(&event.payload).ok())
+                .flatten()
+        }) {
+            return project_checkpointed_branch(branch, checkpoint);
+        }
+
         let mut messages = Vec::new();
         for event in branch {
             match event.kind {
@@ -38,6 +48,45 @@ impl BranchProjector {
         }
 
         messages
+    }
+}
+
+fn project_checkpointed_branch(
+    branch: Vec<RuntimeEvent>,
+    checkpoint: ContextCompactionCheckpoint,
+) -> Vec<PromptMessage> {
+    let preserved = checkpoint
+        .preserved_event_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut messages = vec![PromptMessage::Summary(checkpoint.summary)];
+    for event in branch {
+        if event.kind == EventKind::BranchSummaryCreated
+            || (event.sequence <= checkpoint.covered_through_sequence
+                && !preserved.contains(event.id.0.as_str()))
+        {
+            continue;
+        }
+        project_event(event, &mut messages);
+    }
+    messages
+}
+
+fn project_event(event: RuntimeEvent, messages: &mut Vec<PromptMessage>) {
+    match event.kind {
+        EventKind::UserMessage => {
+            messages.push(project_user_message(event.payload, event.blob_refs))
+        }
+        EventKind::AssistantMessageCompleted | EventKind::ToolCallRequested => {
+            messages.push(PromptMessage::Assistant(event.payload));
+        }
+        EventKind::ToolResultMessage => {
+            if let Some(message) = project_tool_result(event.payload) {
+                messages.push(message);
+            }
+        }
+        _ => {}
     }
 }
 

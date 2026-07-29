@@ -366,9 +366,8 @@ impl LegacyProfileMigrationService {
         {
             let source = LegacyAgentProfileTranslator::translate_record(&source_json)
                 .map_err(translation_error)?;
-            let source_digest =
-                LegacyAgentProfileTranslator::source_digest(&source_json)
-                    .map_err(translation_error)?;
+            let source_digest = LegacyAgentProfileTranslator::source_digest(&source_json)
+                .map_err(translation_error)?;
             self.repository
                 .ensure_legacy_profile_migration_record(
                     LegacyProfileMigrationRecord::pending_source(

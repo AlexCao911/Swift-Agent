@@ -212,7 +212,7 @@ fn llm_phase_three_architecture_requires_all_provider_fixtures_and_one_runner() 
     .unwrap();
     assert!(preset.contains("public static let shipped"));
     let runtime_tests = fs::read_to_string(tests.join("CloudLLMRuntimeTests.swift")).unwrap();
-    assert!(runtime_tests.contains("adapterIDs.count == 10"));
+    assert!(runtime_tests.contains("adapterIDs.count == 11"));
 
     let runner = fs::read_to_string(root.join("scripts/run-llm-phase-3-contracts.sh"))
         .expect("Phase 3 deterministic runner is missing");

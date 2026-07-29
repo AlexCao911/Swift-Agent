@@ -291,6 +291,7 @@ pub(crate) fn derive_authoritative_preparation(
         ordered_messages: Vec::new(),
         attachment_references: Vec::new(),
         ordered_tool_definitions: Vec::new(),
+        model_request_purpose: None,
         tool_batch: None,
         target_batch_id: None,
     };

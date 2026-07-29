@@ -20,6 +20,7 @@ struct ProviderValidationServiceTests {
             .glm: "/chat/completions",
             .openRouter: "/chat/completions",
             .kimiCode: "/chat/completions",
+            .antigravity: "/v1internal:streamGenerateContent",
         ]
         let adapters: [any CloudProviderAdapter] = [
             OpenAIResponsesAdapter(),
@@ -41,23 +42,35 @@ struct ProviderValidationServiceTests {
                 presetID: .kimiCode,
                 adapterID: "kimi.chat_completions"
             ),
+            AntigravityCloudCodeAdapter(),
         ]
 
-        #expect(adapters.count == 10)
+        #expect(adapters.count == 11)
         #expect(Set(adapters.map(\.presetID)) == Set(ProviderPreset.shipped.map(\.id)))
         for adapter in adapters {
             let preset = try #require(ProviderPreset.shipped.first { $0.id == adapter.presetID })
             let discovery = try adapter.makeDiscoveryRequest()
             let account = try adapter.makeAccountValidationRequest()
-            let model = try adapter.makeModelValidationRequest(modelID: "fixture-model")
+            let model = try adapter.makeModelValidationRequest(
+                modelID: "fixture-model",
+                providerProjectID: "project-fixture"
+            )
 
-            #expect(discovery.method == "GET")
-            #expect(discovery.path == "/models")
-            #expect(account.method == "GET")
-            #expect(account.path == "/models")
+            #expect(discovery.method == (preset.id == .antigravity ? "POST" : "GET"))
+            #expect(discovery.path == (
+                preset.id == .antigravity
+                    ? "/v1internal:loadCodeAssist"
+                    : "/models"
+            ))
+            #expect(account.method == (preset.id == .antigravity ? "POST" : "GET"))
+            #expect(account.path == (
+                preset.id == .antigravity
+                    ? "/v1internal:loadCodeAssist"
+                    : "/models"
+            ))
             #expect(model.method == "POST")
             #expect(model.path == expectedPaths[preset.id])
-            #expect(model.queryItems.isEmpty)
+            #expect(model.queryItems.isEmpty == (preset.id != .antigravity))
             for wire in [discovery, account, model] {
                 #expect(wire.headers.keys.allSatisfy {
                     !["authorization", "x-api-key", "x-goog-api-key"].contains($0.lowercased())
@@ -71,10 +84,18 @@ struct ProviderValidationServiceTests {
             let json = try #require(
                 JSONSerialization.jsonObject(with: body) as? [String: Any]
             )
-            #expect(json["model"] as? String == "fixture-model")
-            #expect(validationPrompt(in: json) == "Reply with OK.")
-            #expect(validationOutputLimit(in: json) == 8)
-            #expect(json["stream"] as? Bool == true)
+            if preset.id == .antigravity {
+                let request = try #require(json["request"] as? [String: Any])
+                #expect(json["model"] as? String == "fixture-model")
+                #expect(json["project"] as? String == "project-fixture")
+                #expect(antigravityValidationPrompt(in: request) == "Reply with OK.")
+                #expect(antigravityValidationOutputLimit(in: request) == 8)
+            } else {
+                #expect(json["model"] as? String == "fixture-model")
+                #expect(validationPrompt(in: json) == "Reply with OK.")
+                #expect(validationOutputLimit(in: json) == 8)
+                #expect(json["stream"] as? Bool == true)
+            }
             #expect(!String(decoding: body, as: UTF8.self).localizedCaseInsensitiveContains("secret"))
 
             if preset.id == .openAI || preset.id == .xAI || preset.id == .gemini {
@@ -509,6 +530,22 @@ private func validationOutputLimit(in json: [String: Any]) -> Int? {
         return value
     }
     return (json["generation_config"] as? [String: Any])?["max_output_tokens"] as? Int
+}
+
+private func antigravityValidationPrompt(
+    in request: [String: Any]
+) -> String? {
+    let contents = request["contents"] as? [[String: Any]]
+    let parts = contents?.first?["parts"] as? [[String: Any]]
+    return parts?.first?["text"] as? String
+}
+
+private func antigravityValidationOutputLimit(
+    in request: [String: Any]
+) -> Int? {
+    (request["generationConfig"] as? [String: Any])?[
+        "maxOutputTokens"
+    ] as? Int
 }
 
 private actor ValidationTransport: CloudHTTPTransport {

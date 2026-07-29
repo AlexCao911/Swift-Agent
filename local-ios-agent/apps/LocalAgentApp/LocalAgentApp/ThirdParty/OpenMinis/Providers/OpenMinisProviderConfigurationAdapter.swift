@@ -13,6 +13,25 @@ struct OpenMinisProviderConfiguration: Codable, Equatable, Sendable {
     let credentialMode: ProviderCredentialMode
     let customBaseURL: URL?
     let appendsV1: Bool
+    let providerProjectID: String?
+
+    init(
+        id: String,
+        rawProviderType: String,
+        displayName: String,
+        credentialMode: ProviderCredentialMode,
+        customBaseURL: URL?,
+        appendsV1: Bool,
+        providerProjectID: String? = nil
+    ) {
+        self.id = id
+        self.rawProviderType = rawProviderType
+        self.displayName = displayName
+        self.credentialMode = credentialMode
+        self.customBaseURL = customBaseURL
+        self.appendsV1 = appendsV1
+        self.providerProjectID = providerProjectID
+    }
 }
 
 struct OpenMinisProviderConfigurationError: Error, Equatable, LocalizedError {
@@ -46,6 +65,13 @@ enum OpenMinisProviderConfigurationAdapter {
                 "The selected credential mode is not supported by this provider."
             )
         }
+        if presetID == .antigravity,
+           configuration.providerProjectID?.isEmpty != false {
+            throw failure(
+                "provider.project_required",
+                "Antigravity requires its discovered Cloud Code project."
+            )
+        }
         guard let preset = ProviderPreset.shipped.first(where: {
             $0.id == presetID
         }) else {
@@ -67,6 +93,7 @@ enum OpenMinisProviderConfigurationAdapter {
             ),
             retentionMode: retentionMode,
             credentialMode: configuration.credentialMode,
+            providerProjectID: configuration.providerProjectID,
             initialSecret: secret
         )
     }

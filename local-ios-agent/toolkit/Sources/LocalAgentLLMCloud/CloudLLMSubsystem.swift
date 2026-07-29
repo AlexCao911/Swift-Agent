@@ -106,7 +106,8 @@ public struct CloudLLMSubsystem: Sendable {
                     modelID: nil
                 ),
                 hasStoredCredential: credential?.lifecycle == .active,
-                credentialMode: profile.revision.credentialMode ?? .apiKey
+                credentialMode: profile.revision.credentialMode ?? .apiKey,
+                providerProjectID: profile.revision.providerProjectID
             ))
         }
         return result
@@ -120,6 +121,7 @@ public struct CloudLLMSubsystem: Sendable {
         baseURL: URL,
         retentionMode: ProviderRetentionMode,
         credentialMode: ProviderCredentialMode = .apiKey,
+        providerProjectID: String? = nil,
         initialSecret: SecretBytes?,
         proposedOperationID: String = UUID().uuidString.lowercased()
     ) async throws -> PublishedProviderProfileRevision {
@@ -160,7 +162,8 @@ public struct CloudLLMSubsystem: Sendable {
             baseURL: baseURL,
             credentialRef: credentialRef,
             retentionMode: retentionMode,
-            credentialMode: credentialMode
+            credentialMode: credentialMode,
+            providerProjectID: providerProjectID
         )
         let operationID = try await profiles.prepareCreatingRevision(
             value,

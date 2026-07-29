@@ -24,6 +24,7 @@ public struct CloudProviderProductState: Equatable, Identifiable, Sendable {
     public let validation: ProviderValidationStatus
     public let hasStoredCredential: Bool
     public let credentialMode: ProviderCredentialMode
+    public let providerProjectID: String?
 
     public init(
         profileID: String,
@@ -35,7 +36,8 @@ public struct CloudProviderProductState: Equatable, Identifiable, Sendable {
         retentionMode: ProviderRetentionMode,
         validation: ProviderValidationStatus,
         hasStoredCredential: Bool,
-        credentialMode: ProviderCredentialMode = .apiKey
+        credentialMode: ProviderCredentialMode = .apiKey,
+        providerProjectID: String? = nil
     ) {
         self.profileID = profileID
         self.revision = revision
@@ -47,6 +49,7 @@ public struct CloudProviderProductState: Equatable, Identifiable, Sendable {
         self.validation = validation
         self.hasStoredCredential = hasStoredCredential
         self.credentialMode = credentialMode
+        self.providerProjectID = providerProjectID
     }
 
     public var id: String { "\(profileID):\(revision)" }

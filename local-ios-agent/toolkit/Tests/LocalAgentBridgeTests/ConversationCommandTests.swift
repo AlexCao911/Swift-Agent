@@ -79,7 +79,11 @@ struct ConversationCommandTests {
         try RunStartSnapshotDTO.make(
             orderedPromptDocuments: [],
             skillDescriptors: [],
-            orderedToolDefinitions: []
+            orderedToolDefinitions: [],
+            modelContextWindow: ModelContextWindowDTO(
+                contextWindowTokens: 8_192,
+                maxOutputTokens: 1_024
+            )
         )
     }
 }

@@ -53,9 +53,15 @@ enum AppBootstrapper {
                 message: "production Rust host composition is unavailable"
             )
         }
+        let modelExecutionRegistry = OpenMinisModelExecutionRegistry()
+        let modelExecutor = OpenMinisModelExecutor(
+            plans: modelExecutionRegistry,
+            runtime: modelExecutionRegistry
+        )
         let host = try await LLMHostProductRuntime.bootstrap(
             rust: rust,
-            hostProcessEpoch: hostProcessEpoch
+            hostProcessEpoch: hostProcessEpoch,
+            modelExecutor: modelExecutor
         )
         let modelCenterClient = AppModelCenterClient(
             local: local,
@@ -104,6 +110,7 @@ enum AppBootstrapper {
             modelCenterClient: modelCenterClient,
             agentBuilderPublishing: agentBuilderPublishing,
             legacyMigration: migration,
+            modelExecutionRegistry: modelExecutionRegistry,
             readinessIssues: Array(Set(readinessIssues)).sorted(),
             activeAgentProfile: activeAgentProfile
         )
@@ -168,7 +175,8 @@ enum AppBootstrapper {
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
-            llmHostRuntime: nil
+            llmHostRuntime: nil,
+            modelExecutionRegistry: nil
         )
     }
 
@@ -234,7 +242,8 @@ enum AppBootstrapper {
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
-            llmHostRuntime: nil
+            llmHostRuntime: nil,
+            modelExecutionRegistry: nil
         )
     }
 
@@ -289,7 +298,8 @@ enum AppBootstrapper {
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
-            llmHostRuntime: nil
+            llmHostRuntime: nil,
+            modelExecutionRegistry: nil
         )
     }
 

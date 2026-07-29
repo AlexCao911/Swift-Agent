@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use local_ios_agent_runtime::context::ModelContextWindow;
 use local_ios_agent_runtime::conversation::{
     ConversationCommandService, ObserveTranscriptProjectionsRequest, PromptDocumentSnapshot,
     RunStartSnapshot, SkillDescriptor, ToolDefinitionSnapshot, TranscriptCommand,
@@ -28,6 +29,10 @@ fn snapshot() -> RunStartSnapshot {
             description: "Read a file.".into(),
             input_schema: json!({"type": "object"}),
         }],
+        ModelContextWindow {
+            context_window_tokens: 8_192,
+            max_output_tokens: 1_024,
+        },
     )
     .unwrap()
 }

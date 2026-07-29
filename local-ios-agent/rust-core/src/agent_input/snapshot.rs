@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::canonical_digest::CanonicalDigestV1;
+use crate::context::{ContextWindowPolicy, ModelContextWindow};
 use crate::skills::validate_skill_descriptors;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -35,6 +36,7 @@ pub struct RunStartSnapshot {
     pub ordered_prompt_documents: Vec<PromptDocumentSnapshot>,
     pub skill_descriptors: Vec<SkillDescriptor>,
     pub ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+    pub model_context_window: ModelContextWindow,
     pub snapshot_digest: String,
 }
 
@@ -49,6 +51,7 @@ struct SnapshotDigestDocument<'a> {
     ordered_prompt_documents: &'a [PromptDocumentSnapshot],
     skill_descriptors: &'a [SkillDescriptor],
     ordered_tool_definitions: &'a [ToolDefinitionSnapshot],
+    model_context_window: ModelContextWindow,
 }
 
 impl RunStartSnapshot {
@@ -56,11 +59,13 @@ impl RunStartSnapshot {
         ordered_prompt_documents: Vec<PromptDocumentSnapshot>,
         skill_descriptors: Vec<SkillDescriptor>,
         ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+        model_context_window: ModelContextWindow,
     ) -> Result<Self, AgentInputError> {
         let mut snapshot = Self {
             ordered_prompt_documents,
             skill_descriptors,
             ordered_tool_definitions,
+            model_context_window,
             snapshot_digest: String::new(),
         };
         snapshot.validate_fields()?;
@@ -92,6 +97,7 @@ impl RunStartSnapshot {
                 ordered_prompt_documents: &self.ordered_prompt_documents,
                 skill_descriptors: &self.skill_descriptors,
                 ordered_tool_definitions: &self.ordered_tool_definitions,
+                model_context_window: self.model_context_window,
             },
         )
         .map(|digest| digest.as_str().to_string())
@@ -99,6 +105,12 @@ impl RunStartSnapshot {
     }
 
     fn validate_fields(&self) -> Result<(), AgentInputError> {
+        ContextWindowPolicy::for_model(self.model_context_window).map_err(|error| {
+            AgentInputError::new(
+                "run_start_snapshot.model_context_window_invalid",
+                error.to_string(),
+            )
+        })?;
         require_unique(
             self.ordered_prompt_documents
                 .iter()

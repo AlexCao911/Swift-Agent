@@ -4,7 +4,11 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use crate::agent_input::{AgentInputAssembler, ToolDefinitionSnapshot};
-use crate::context::{AgentTurnInput, ModelInputRole};
+use crate::context::{
+    approximate_token_count, compact_tool_results_for_context, AgentTurnInput, BranchProjector,
+    CompactionCandidate, ContextCompactionCheckpoint, ContextWindowPolicy, ModelInputRole,
+    PromptMessage,
+};
 use crate::conversation::{ActiveRunRegistry, ProjectionSubscriptionRegistry, TranscriptCommand};
 use crate::core::{EntryId, EventKind, RunId, RuntimeEvent, SessionId};
 use crate::memory::{CompletedTurnMemoryInput, MemoryProvider};
@@ -13,11 +17,10 @@ use crate::tool::{AgentToolCall, ToolBatch, ToolBatchResult};
 
 use super::{
     AgentLoopError, AgentLoopOutcome, AgentRunRequest, AssistantTurn, ModelEventSink, ModelMessage,
-    ModelRequest, ModelRuntime, RunCancellationRecord, ToolRuntime,
+    ModelRequest, ModelRequestPurpose, ModelRuntime, RunCancellationRecord, ToolRuntime,
 };
 
 pub const MAX_MODEL_TURNS: usize = 200;
-const DEFAULT_CONTEXT_BUDGET_TOKENS: usize = 32_000;
 
 pub struct AgentLoopService<S: ConversationEventStore> {
     store: Arc<Mutex<S>>,
@@ -231,24 +234,57 @@ where
         cancellation: &RunCancellationRecord,
         sink: &mut dyn ModelEventSink,
     ) -> Result<AgentLoopOutcome, AgentLoopError> {
-        let mut input_assembler = AgentInputAssembler::new(
-            request.run_start_snapshot.clone(),
-            DEFAULT_CONTEXT_BUDGET_TOKENS,
-        )
-        .map_err(input_error)?;
+        let mut input_assembler = AgentInputAssembler::for_run(request.run_start_snapshot.clone())
+            .map_err(input_error)?;
         if let Some(provider) = &self.memory_provider {
             input_assembler = input_assembler.with_memory_provider(provider.clone());
         }
+        let context_policy =
+            ContextWindowPolicy::for_model(request.run_start_snapshot.model_context_window)
+                .map_err(input_error)?;
         let mut completed_tool_results = Vec::new();
 
         for model_turn in 0..MAX_MODEL_TURNS {
             cancellation.check()?;
-            let branch = self.current_branch(&request.conversation_stream_id)?;
-            let input = input_assembler
-                .assemble_turn(&request.conversation_stream_id, branch)
+            let mut branch = self.current_branch(&request.conversation_stream_id)?;
+            let mut input = input_assembler
+                .assemble_turn(&request.conversation_stream_id, branch.clone())
                 .map_err(input_error)?;
-            let model_request = model_request(request, &input);
-            let turn = self.model.generate(model_request, sink)?;
+            let mut generation_request = model_request(request, &input);
+            if estimated_model_request_tokens(&generation_request)
+                >= context_policy.auto_compact_threshold_tokens()
+            {
+                branch = self.current_branch(&request.conversation_stream_id)?;
+                if let Some(checkpoint) = compaction_checkpoint(&branch) {
+                    cancellation.check()?;
+                    let summary_turn = self.model.generate(
+                        compaction_model_request(request, &branch, &context_policy),
+                        &mut DiscardingModelEventSink,
+                    )?;
+                    cancellation.check()?;
+                    if summary_turn.text.trim().is_empty() || !summary_turn.tool_calls.is_empty() {
+                        return Err(AgentLoopError::new(
+                            "agent_loop.context_compaction_invalid",
+                            "context compaction must return summary text without tool calls",
+                        ));
+                    }
+                    cancellation.commit_if_active(|| {
+                        self.commit_context_summary(
+                            request,
+                            ContextCompactionCheckpoint {
+                                summary: summary_turn.text,
+                                ..checkpoint
+                            },
+                        )
+                    })?;
+                    branch = self.current_branch(&request.conversation_stream_id)?;
+                    input = input_assembler
+                        .assemble_turn(&request.conversation_stream_id, branch)
+                        .map_err(input_error)?;
+                    generation_request = model_request(request, &input);
+                }
+            }
+            let turn = self.model.generate(generation_request, sink)?;
             cancellation.check()?;
 
             if turn.tool_calls.is_empty() {
@@ -443,6 +479,22 @@ where
         Ok(())
     }
 
+    fn commit_context_summary(
+        &self,
+        request: &AgentRunRequest,
+        checkpoint: ContextCompactionCheckpoint,
+    ) -> Result<(), AgentLoopError> {
+        self.commit_status_event(
+            request,
+            format!(
+                "agent-{}-context-summary-{}",
+                request.run_id, checkpoint.covered_through_sequence
+            ),
+            EventKind::BranchSummaryCreated,
+            &serde_json::to_string(&checkpoint).map_err(serialization_error)?,
+        )
+    }
+
     fn remember_completed_turn(
         &self,
         request: &AgentRunRequest,
@@ -606,6 +658,162 @@ fn model_request(request: &AgentRunRequest, input: &AgentTurnInput) -> ModelRequ
             .collect(),
         attachment_references: request.attachment_references.clone(),
         ordered_tool_definitions: input.ordered_tool_definitions().to_vec(),
+        purpose: ModelRequestPurpose::Generation,
+    }
+}
+
+fn estimated_model_request_tokens(request: &ModelRequest) -> usize {
+    let messages = request
+        .ordered_messages
+        .iter()
+        .map(|message| approximate_token_count(&message.content.to_string()))
+        .sum::<usize>();
+    let tools = request
+        .ordered_tool_definitions
+        .iter()
+        .map(|tool| {
+            approximate_token_count(&tool.name)
+                + approximate_token_count(&tool.description)
+                + approximate_token_count(&tool.input_schema.to_string())
+        })
+        .sum::<usize>();
+    approximate_token_count(&request.system_prompt)
+        .saturating_add(messages)
+        .saturating_add(tools)
+}
+
+fn compaction_checkpoint(branch: &[RuntimeEvent]) -> Option<ContextCompactionCheckpoint> {
+    let covered_through_sequence = branch.last()?.sequence;
+    let latest_model_content_sequence = branch
+        .iter()
+        .filter(|event| {
+            is_model_visible_event(event) && event.kind != EventKind::BranchSummaryCreated
+        })
+        .map(|event| event.sequence)
+        .max()
+        .unwrap_or(0);
+    if branch
+        .iter()
+        .rev()
+        .find_map(|event| {
+            (event.kind == EventKind::BranchSummaryCreated)
+                .then(|| serde_json::from_str::<ContextCompactionCheckpoint>(&event.payload).ok())
+                .flatten()
+        })
+        .is_some_and(|checkpoint| {
+            checkpoint.covered_through_sequence >= latest_model_content_sequence
+        })
+    {
+        return None;
+    }
+    let preserved_event_ids = preserved_context_event_ids(branch);
+    let compressible_count = branch
+        .iter()
+        .filter(|event| {
+            is_model_visible_event(event) && !preserved_event_ids.iter().any(|id| id == &event.id.0)
+        })
+        .count();
+    (compressible_count > 0).then(|| ContextCompactionCheckpoint {
+        summary: String::new(),
+        covered_through_sequence,
+        preserved_event_ids,
+    })
+}
+
+fn compaction_model_request(
+    request: &AgentRunRequest,
+    branch: &[RuntimeEvent],
+    policy: &ContextWindowPolicy,
+) -> ModelRequest {
+    let system_prompt = concat!(
+        "Compact the conversation for continued agent work. Preserve user intent, ",
+        "decisions, constraints, unresolved work, important file paths, and tool findings. ",
+        "Return only the compact summary."
+    );
+    let messages = compact_tool_results_for_context(
+        BranchProjector::new().project(branch.to_vec()),
+        policy.model_input_limit_tokens(),
+    )
+    .into_iter()
+    .map(|message| format!("{}: {}", prompt_message_role(&message), message.content()))
+    .collect::<Vec<_>>();
+    let content_budget = policy
+        .model_input_limit_tokens()
+        .saturating_sub(approximate_token_count(system_prompt));
+    ModelRequest {
+        run_id: request.run_id.clone(),
+        conversation_stream_id: request.conversation_stream_id.clone(),
+        system_prompt: system_prompt.into(),
+        ordered_messages: vec![ModelMessage {
+            role: "user".into(),
+            content: Value::String(
+                CompactionCandidate::new(messages).bounded_summary_text(content_budget),
+            ),
+        }],
+        attachment_references: Vec::new(),
+        ordered_tool_definitions: Vec::new(),
+        purpose: ModelRequestPurpose::Compaction,
+    }
+}
+
+fn preserved_context_event_ids(branch: &[RuntimeEvent]) -> Vec<String> {
+    let mut preserved = BTreeSet::new();
+    if let Some(event) = branch
+        .iter()
+        .rev()
+        .find(|event| event.kind == EventKind::UserMessage)
+    {
+        preserved.insert(event.id.0.clone());
+    }
+
+    if let Some(last_result_index) = branch
+        .iter()
+        .rposition(|event| event.kind == EventKind::ToolResultMessage)
+    {
+        let mut first_result_index = last_result_index;
+        while first_result_index > 0
+            && branch[first_result_index - 1].kind == EventKind::ToolResultMessage
+        {
+            first_result_index -= 1;
+        }
+        let mut first_call_index = first_result_index;
+        while first_call_index > 0
+            && branch[first_call_index - 1].kind == EventKind::ToolCallRequested
+        {
+            first_call_index -= 1;
+        }
+        for event in &branch[first_call_index..=last_result_index] {
+            preserved.insert(event.id.0.clone());
+        }
+    }
+    preserved.into_iter().collect()
+}
+
+fn is_model_visible_event(event: &RuntimeEvent) -> bool {
+    matches!(
+        event.kind,
+        EventKind::UserMessage
+            | EventKind::AssistantMessageCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolResultMessage
+            | EventKind::BranchSummaryCreated
+    )
+}
+
+fn prompt_message_role(message: &PromptMessage) -> &'static str {
+    match message {
+        PromptMessage::User(_) | PromptMessage::UserWithBlobRefs { .. } => "user",
+        PromptMessage::Assistant(_) => "assistant",
+        PromptMessage::ToolResult(_) => "tool",
+        PromptMessage::Summary(_) => "summary",
+    }
+}
+
+struct DiscardingModelEventSink;
+
+impl ModelEventSink for DiscardingModelEventSink {
+    fn emit(&mut self, _event: super::ModelEvent) -> Result<(), AgentLoopError> {
+        Ok(())
     }
 }
 

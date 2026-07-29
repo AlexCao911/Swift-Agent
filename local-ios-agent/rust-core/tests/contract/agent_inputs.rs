@@ -5,6 +5,7 @@ use local_ios_agent_runtime::{
         AgentInputAssembler, PromptDocumentSnapshot, RunStartSnapshot, SkillDescriptor,
         ToolDefinitionSnapshot,
     },
+    context::ModelContextWindow,
     memory::{
         CompletedTurnMemoryInput, MemoryContribution, MemoryContributionId, MemoryProvider,
         MemoryProviderError, MemoryProviderId, MemoryQuery, MemoryQueryResult, Provenance,
@@ -15,7 +16,14 @@ use local_ios_agent_runtime::{
 use serde_json::json;
 
 const SHARED_SNAPSHOT_DIGEST: &str =
-    "770d63806ac4bd25a4886d9f7383989bbb2bfe3ad6eb35ca85fc239850581f18";
+    "43492a18fafbde12c99dfc7e37ab97ad006387e00bf4bd6addb113696a853bb7";
+
+fn model_window() -> ModelContextWindow {
+    ModelContextWindow {
+        context_window_tokens: 8_192,
+        max_output_tokens: 1_024,
+    }
+}
 
 #[test]
 fn rust_snapshot_digest_matches_the_swift_fixture() {
@@ -30,12 +38,13 @@ fn snapshot_accepts_twenty_descriptors_and_rejects_twenty_one() {
     let descriptors = (0..MAX_SKILL_DESCRIPTORS)
         .map(skill_descriptor)
         .collect::<Vec<_>>();
-    RunStartSnapshot::make(Vec::new(), descriptors, Vec::new()).unwrap();
+    RunStartSnapshot::make(Vec::new(), descriptors, Vec::new(), model_window()).unwrap();
 
     let too_many = (0..=MAX_SKILL_DESCRIPTORS)
         .map(skill_descriptor)
         .collect::<Vec<_>>();
-    let error = RunStartSnapshot::make(Vec::new(), too_many, Vec::new()).unwrap_err();
+    let error =
+        RunStartSnapshot::make(Vec::new(), too_many, Vec::new(), model_window()).unwrap_err();
 
     assert_eq!(error.code(), "run_start_snapshot.too_many_skills");
 }
@@ -49,7 +58,9 @@ fn snapshot_rejects_host_paths_traversal_duplicate_tools_and_non_object_schemas(
     ] {
         let mut descriptor = skill_descriptor(0);
         descriptor.location = location.to_string();
-        let error = RunStartSnapshot::make(Vec::new(), vec![descriptor], Vec::new()).unwrap_err();
+        let error =
+            RunStartSnapshot::make(Vec::new(), vec![descriptor], Vec::new(), model_window())
+                .unwrap_err();
         assert_eq!(error.code(), "run_start_snapshot.skill_location_invalid");
     }
 
@@ -58,8 +69,13 @@ fn snapshot_rejects_host_paths_traversal_duplicate_tools_and_non_object_schemas(
         description: "Run shell commands.".into(),
         input_schema: json!({"type": "object"}),
     };
-    let duplicate =
-        RunStartSnapshot::make(Vec::new(), Vec::new(), vec![tool.clone(), tool]).unwrap_err();
+    let duplicate = RunStartSnapshot::make(
+        Vec::new(),
+        Vec::new(),
+        vec![tool.clone(), tool],
+        model_window(),
+    )
+    .unwrap_err();
     assert_eq!(duplicate.code(), "run_start_snapshot.duplicate_tool_name");
 
     let non_object = RunStartSnapshot::make(
@@ -70,6 +86,7 @@ fn snapshot_rejects_host_paths_traversal_duplicate_tools_and_non_object_schemas(
             description: "Bad".into(),
             input_schema: json!([]),
         }],
+        model_window(),
     )
     .unwrap_err();
     assert_eq!(
@@ -139,6 +156,7 @@ fn valid_snapshot() -> RunStartSnapshot {
             description: "Run shell commands.".into(),
             input_schema: json!({"type": "object"}),
         }],
+        model_window(),
     )
     .unwrap()
 }

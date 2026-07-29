@@ -107,6 +107,7 @@ package struct CloudProviderAdapterRegistry: Sendable {
                 presetID: .kimiCode,
                 adapterID: "kimi.chat_completions"
             ),
+            AntigravityCloudCodeAdapter(),
         ])
         let expected = Dictionary(uniqueKeysWithValues: ProviderPreset.shipped.map {
             ($0.id, $0.semanticAdapterID)
@@ -403,7 +404,8 @@ public actor CloudLLMRuntime {
                     retentionMode: route.profile.revision.retentionMode,
                     retentionApprovalRevision: route.state.retentionApprovalRevision,
                     retentionApprovalDigest: route.state.retentionApprovalDigest,
-                    hostProcessEpoch: hostProcessEpoch
+                    hostProcessEpoch: hostProcessEpoch,
+                    providerProjectID: route.profile.revision.providerProjectID
                 )
             )
             providerSession = opened

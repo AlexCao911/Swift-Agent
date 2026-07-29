@@ -1,3 +1,4 @@
+use crate::context::ContextCompactionCheckpoint;
 use crate::conversation::ConversationFrameMessage;
 use crate::core::{EventKind, RuntimeEvent};
 
@@ -23,8 +24,12 @@ impl ConversationFrameProjector {
                     messages.push(ConversationFrameMessage::assistant(event.id, event.payload));
                 }
                 EventKind::BranchSummaryCreated => {
+                    let summary =
+                        serde_json::from_str::<ContextCompactionCheckpoint>(&event.payload)
+                            .map(|checkpoint| checkpoint.summary)
+                            .unwrap_or(event.payload);
                     messages.clear();
-                    messages.push(ConversationFrameMessage::summary(event.id, event.payload));
+                    messages.push(ConversationFrameMessage::summary(event.id, summary));
                 }
                 _ => {}
             }

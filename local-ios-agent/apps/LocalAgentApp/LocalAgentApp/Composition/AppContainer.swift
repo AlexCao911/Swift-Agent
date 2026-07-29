@@ -27,6 +27,7 @@ struct AppContainer {
     let localLLMSubsystem: LocalLLMSubsystem?
     let cloudLLMSubsystem: CloudLLMSubsystem?
     let llmHostRuntime: LLMHostProductRuntime?
+    let modelExecutionRegistry: OpenMinisModelExecutionRegistry?
 
     func attaching(
         localLLMSubsystem: LocalLLMSubsystem,
@@ -35,6 +36,7 @@ struct AppContainer {
         modelCenterClient: any ModelCenterClient,
         agentBuilderPublishing: any AgentBuilderPublishing,
         legacyMigration: LegacyLLMMigrationCoordinator,
+        modelExecutionRegistry: OpenMinisModelExecutionRegistry,
         readinessIssues: [String],
         activeAgentProfile: AgentProfileDTO?
     ) -> AppContainer {
@@ -59,7 +61,8 @@ struct AppContainer {
             cloudApprovalBroker: cloudApprovalBroker,
             localLLMSubsystem: localLLMSubsystem,
             cloudLLMSubsystem: cloudLLMSubsystem,
-            llmHostRuntime: llmHostRuntime
+            llmHostRuntime: llmHostRuntime,
+            modelExecutionRegistry: modelExecutionRegistry
         )
     }
 

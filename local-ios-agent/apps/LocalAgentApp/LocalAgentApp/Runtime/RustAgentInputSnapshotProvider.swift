@@ -36,7 +36,8 @@ struct RustAgentInputSnapshotProvider {
     }
 
     func snapshot(
-        conversationStreamID: String?
+        conversationStreamID: String?,
+        modelContextWindow: ModelContextWindowDTO
     ) async throws -> RunStartSnapshotDTO {
         let definitions = try await toolDefinitions()
         return try RunStartSnapshotDTO.make(
@@ -50,7 +51,8 @@ struct RustAgentInputSnapshotProvider {
                     description: $0.description,
                     inputSchema: $0.inputSchema
                 )
-            }
+            },
+            modelContextWindow: modelContextWindow
         )
     }
 }

@@ -14,7 +14,7 @@ struct OpenMinisProviderProductMappingTests {
             ("openRouter", .openAIChatCompletions, .openRouter),
             ("xAI", .openAIResponses, .xAI),
             ("kimiCode", .openAIChatCompletions, .kimiCode),
-            ("antigravity", .antigravityCloudCode, nil),
+            ("antigravity", .antigravityCloudCode, .antigravity),
         ]
 
         for (rawValue, codec, presetID) in expected {
@@ -42,7 +42,7 @@ struct OpenMinisProviderProductMappingTests {
     }
 
     @Test
-    func antigravityAndUnknownTypesFailClosedBeforeNetwork() {
+    func antigravityUsesItsDedicatedCodecWhileUnknownTypesFailClosed() {
         let antigravity = ProviderProductCompatibility.mapping(
             rawProviderType: "antigravity"
         )
@@ -50,8 +50,9 @@ struct OpenMinisProviderProductMappingTests {
             rawProviderType: "futureProvider"
         )
 
-        #expect(antigravity.requiresDedicatedCodec)
-        #expect(!antigravity.isGenerationSupported)
+        #expect(antigravity.codecFamily == .antigravityCloudCode)
+        #expect(antigravity.presetID == .antigravity)
+        #expect(antigravity.isGenerationSupported)
         #expect(unknown.productType == .unsupported("futureProvider"))
         #expect(unknown.presetID == nil)
         #expect(!unknown.isGenerationSupported)

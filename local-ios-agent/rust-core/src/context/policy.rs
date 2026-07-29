@@ -1,6 +1,73 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use crate::context::SegmentSource;
+
+const DEFAULT_AUTO_COMPACT_RATIO_PERCENT: usize = 70;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ModelContextWindow {
+    pub context_window_tokens: usize,
+    pub max_output_tokens: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContextWindowPolicy {
+    model: ModelContextWindow,
+    auto_compact_ratio_percent: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextWindowPolicyError(&'static str);
+
+impl ContextWindowPolicy {
+    pub fn for_model(model: ModelContextWindow) -> Result<Self, ContextWindowPolicyError> {
+        if model.context_window_tokens == 0
+            || model.max_output_tokens >= model.context_window_tokens
+        {
+            return Err(ContextWindowPolicyError(
+                "model context window must exceed its output reservation",
+            ));
+        }
+        Ok(Self {
+            model,
+            auto_compact_ratio_percent: DEFAULT_AUTO_COMPACT_RATIO_PERCENT,
+        })
+    }
+
+    pub fn with_auto_compact_ratio_percent(
+        mut self,
+        percent: usize,
+    ) -> Result<Self, ContextWindowPolicyError> {
+        if !(1..=100).contains(&percent) {
+            return Err(ContextWindowPolicyError(
+                "auto compaction ratio must be between 1 and 100",
+            ));
+        }
+        self.auto_compact_ratio_percent = percent;
+        Ok(self)
+    }
+
+    pub fn auto_compact_threshold_tokens(&self) -> usize {
+        (self.model.context_window_tokens / 100)
+            .saturating_mul(self.auto_compact_ratio_percent)
+            .min(self.model_input_limit_tokens())
+    }
+
+    pub fn model_input_limit_tokens(&self) -> usize {
+        self.model
+            .context_window_tokens
+            .saturating_sub(self.model.max_output_tokens)
+    }
+}
+
+impl fmt::Display for ContextWindowPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ContextWindowPolicyError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextPolicy {

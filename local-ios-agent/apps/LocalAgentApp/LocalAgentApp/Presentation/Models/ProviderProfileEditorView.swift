@@ -12,6 +12,7 @@ final class ProviderProfileEditorViewModel {
     var apiKey = ""
     var credentialMode: ProviderCredentialMode = .apiKey
     var retentionMode: ProviderRetentionMode = .statelessRequired
+    var providerProjectID = ""
     private(set) var hasStoredCredential = false
     private(set) var errorMessage: String?
     private(set) var didSave = false
@@ -41,6 +42,7 @@ final class ProviderProfileEditorViewModel {
             hasStoredCredential = profile.hasStoredCredential
             retentionMode = profile.retentionMode
             credentialMode = profile.credentialMode
+            providerProjectID = profile.providerProjectID ?? ""
             apiKey = ""
             errorMessage = nil
         } catch {
@@ -57,6 +59,9 @@ final class ProviderProfileEditorViewModel {
         baseURL = preset.defaultBaseURL.absoluteString
         if !availableCredentialModes.contains(credentialMode) {
             credentialMode = availableCredentialModes.first ?? .apiKey
+        }
+        if id != .antigravity {
+            providerProjectID = ""
         }
     }
 
@@ -91,6 +96,9 @@ final class ProviderProfileEditorViewModel {
                 baseURL: url,
                 retentionMode: retentionMode,
                 credentialMode: credentialMode,
+                providerProjectID: presetID == .antigravity
+                    ? providerProjectID
+                    : nil,
                 initialSecret: secret
             ))
             didSave = true
@@ -118,6 +126,13 @@ struct ProviderProfileEditorView: View {
                 TextField("HTTPS Base URL", text: $viewModel.baseURL)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
+                if viewModel.presetID == .antigravity {
+                    TextField(
+                        "Cloud Code project ID",
+                        text: $viewModel.providerProjectID
+                    )
+                    .textInputAutocapitalization(.never)
+                }
                 Picker("Credential", selection: $viewModel.credentialMode) {
                     ForEach(viewModel.availableCredentialModes, id: \.rawValue) {
                         Text($0 == .oauth ? "OAuth Token" : "API Key").tag($0)

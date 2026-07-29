@@ -50,7 +50,30 @@ struct ProviderProfileProductDraft: Sendable {
     let baseURL: URL
     let retentionMode: ProviderRetentionMode
     let credentialMode: ProviderCredentialMode
+    let providerProjectID: String?
     let initialSecret: SecretBytes?
+
+    init(
+        profileID: String?,
+        replacingRevision: UInt64?,
+        presetID: ProviderPresetID,
+        displayName: String,
+        baseURL: URL,
+        retentionMode: ProviderRetentionMode,
+        credentialMode: ProviderCredentialMode,
+        providerProjectID: String? = nil,
+        initialSecret: SecretBytes?
+    ) {
+        self.profileID = profileID
+        self.replacingRevision = replacingRevision
+        self.presetID = presetID
+        self.displayName = displayName
+        self.baseURL = baseURL
+        self.retentionMode = retentionMode
+        self.credentialMode = credentialMode
+        self.providerProjectID = providerProjectID
+        self.initialSecret = initialSecret
+    }
 }
 
 protocol ModelCenterClient: Sendable {
@@ -185,6 +208,7 @@ actor AppModelCenterClient: ModelCenterClient {
             baseURL: draft.baseURL,
             retentionMode: draft.retentionMode,
             credentialMode: draft.credentialMode,
+            providerProjectID: draft.providerProjectID,
             initialSecret: draft.initialSecret
         )
         updateContinuation.yield()

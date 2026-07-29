@@ -20,6 +20,7 @@ public struct ProviderPresetID: RawRepresentable, Codable, Hashable, Sendable {
     public static let glm = Self(rawValue: "glm")
     public static let openRouter = Self(rawValue: "openrouter")
     public static let kimiCode = Self(rawValue: "kimi_code")
+    public static let antigravity = Self(rawValue: "antigravity")
 }
 
 public enum ProviderRetentionMode: String, Equatable, Hashable, Sendable {
@@ -156,6 +157,15 @@ public struct ProviderPreset: Codable, Equatable, Sendable {
             "openai_chat_completions",
             .catalogAndManual,
             "kimi.chat_completions"
+        ),
+        preset(
+            .antigravity,
+            "Antigravity",
+            "https://daily-cloudcode-pa.sandbox.googleapis.com",
+            .bearerAuthorization,
+            "antigravity_cloud_code",
+            .catalogAndManual,
+            "antigravity.cloud_code"
         ),
     ]
 

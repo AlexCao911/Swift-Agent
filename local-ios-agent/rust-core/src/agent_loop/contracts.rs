@@ -1,5 +1,6 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent_input::{RunStartSnapshot, ToolDefinitionSnapshot};
@@ -20,6 +21,14 @@ pub struct ModelMessage {
     pub content: Value,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRequestPurpose {
+    #[default]
+    Generation,
+    Compaction,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
     pub run_id: String,
@@ -28,6 +37,7 @@ pub struct ModelRequest {
     pub ordered_messages: Vec<ModelMessage>,
     pub attachment_references: Vec<TranscriptAttachmentReference>,
     pub ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+    pub purpose: ModelRequestPurpose,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

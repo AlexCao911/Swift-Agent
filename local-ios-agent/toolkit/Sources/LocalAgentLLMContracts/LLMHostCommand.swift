@@ -139,6 +139,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
     public let orderedMessages: [HostModelMessage]
     public let attachmentReferences: [HostAttachmentReference]
     public let orderedToolDefinitions: [HostToolDefinition]
+    public let modelRequestPurpose: HostModelRequestPurpose?
     public let toolBatch: HostToolBatch?
     public let targetBatchID: String?
 
@@ -158,6 +159,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         orderedMessages: [HostModelMessage] = [],
         attachmentReferences: [HostAttachmentReference] = [],
         orderedToolDefinitions: [HostToolDefinition] = [],
+        modelRequestPurpose: HostModelRequestPurpose? = nil,
         toolBatch: HostToolBatch? = nil,
         targetBatchID: String? = nil
     ) {
@@ -176,6 +178,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         self.orderedMessages = orderedMessages
         self.attachmentReferences = attachmentReferences
         self.orderedToolDefinitions = orderedToolDefinitions
+        self.modelRequestPurpose = modelRequestPurpose
         self.toolBatch = toolBatch
         self.targetBatchID = targetBatchID
     }
@@ -221,6 +224,10 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             [HostToolDefinition].self,
             forKey: .orderedToolDefinitions
         ) ?? []
+        modelRequestPurpose = try container.decodeIfPresent(
+            HostModelRequestPurpose.self,
+            forKey: .modelRequestPurpose
+        )
         toolBatch = try container.decodeIfPresent(HostToolBatch.self, forKey: .toolBatch)
         targetBatchID = try container.decodeIfPresent(String.self, forKey: .targetBatchID)
     }
@@ -248,6 +255,10 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         if !orderedToolDefinitions.isEmpty {
             try container.encode(orderedToolDefinitions, forKey: .orderedToolDefinitions)
         }
+        try container.encodeIfPresent(
+            modelRequestPurpose,
+            forKey: .modelRequestPurpose
+        )
         try container.encodeIfPresent(toolBatch, forKey: .toolBatch)
         try container.encodeIfPresent(targetBatchID, forKey: .targetBatchID)
     }
@@ -259,7 +270,8 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             conversationStreamID: request.conversationStreamID,
             orderedMessages: request.orderedMessages,
             attachmentReferences: request.attachmentReferences,
-            orderedToolDefinitions: request.orderedToolDefinitions
+            orderedToolDefinitions: request.orderedToolDefinitions,
+            modelRequestPurpose: request.purpose
         )
     }
 
@@ -289,7 +301,8 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             systemPrompt: systemPrompt,
             orderedMessages: orderedMessages,
             attachmentReferences: attachmentReferences,
-            orderedToolDefinitions: orderedToolDefinitions
+            orderedToolDefinitions: orderedToolDefinitions,
+            purpose: try requireModelRequestPurpose()
         )
     }
 
@@ -326,12 +339,14 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             && orderedMessages.isEmpty
             && attachmentReferences.isEmpty
             && orderedToolDefinitions.isEmpty
+            && modelRequestPurpose == nil
         let valid: Bool
         switch kind {
         case .startGeneration, .resumeGeneration:
             valid = modelInputID == envelopeRunID
                 && systemPrompt != nil
                 && conversationStreamID?.isEmpty == false
+                && modelRequestPurpose != nil
                 && toolBatch == nil
                 && targetBatchID == nil
         case .executeToolBatch:
@@ -358,6 +373,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             && orderedMessages.isEmpty
             && attachmentReferences.isEmpty
             && orderedToolDefinitions.isEmpty
+            && modelRequestPurpose == nil
             && toolBatch == nil
             && targetBatchID == nil
     }
@@ -381,6 +397,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         orderedMessages: [HostModelMessage] = [],
         attachmentReferences: [HostAttachmentReference] = [],
         orderedToolDefinitions: [HostToolDefinition] = [],
+        modelRequestPurpose: HostModelRequestPurpose? = nil,
         toolBatch: HostToolBatch? = nil,
         targetBatchID: String? = nil
     ) -> Self {
@@ -400,6 +417,7 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
             orderedMessages: orderedMessages,
             attachmentReferences: attachmentReferences,
             orderedToolDefinitions: orderedToolDefinitions,
+            modelRequestPurpose: modelRequestPurpose,
             toolBatch: toolBatch,
             targetBatchID: targetBatchID
         )
@@ -421,8 +439,16 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         case orderedMessages = "ordered_messages"
         case attachmentReferences = "attachment_references"
         case orderedToolDefinitions = "ordered_tool_definitions"
+        case modelRequestPurpose = "model_request_purpose"
         case toolBatch = "tool_batch"
         case targetBatchID = "target_batch_id"
+    }
+
+    private func requireModelRequestPurpose() throws -> HostModelRequestPurpose {
+        guard let modelRequestPurpose else {
+            throw commandPayloadMismatch()
+        }
+        return modelRequestPurpose
     }
 }
 

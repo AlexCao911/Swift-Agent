@@ -1,8 +1,9 @@
 {
-  "expected_generation_payload_digest": "9c95922b56a03f30a7fe117fe8f7197b73fe6e84914ccd20e958df99267e1792",
+  "expected_generation_payload_digest": "a249b00fb4a77ad25e3c6210fdc9b6748fcc5b7f8fd502f650a23cfd2ab78a1c",
   "model_request": {
     "run_id": "run-v2",
     "conversation_stream_id": "conversation-v2",
+    "purpose": "generation",
     "system_prompt": "You are LocalAgent.",
     "ordered_messages": [
       {

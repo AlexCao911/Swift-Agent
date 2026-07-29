@@ -483,6 +483,7 @@ RunStartSnapshot
   ordered_prompt_documents[]
   skill_descriptors[]       max 20 visible descriptors
   ordered_tool_definitions[]
+  model_context_window      context + reserved output tokens
   snapshot_digest
 ```
 
@@ -499,6 +500,76 @@ and the Skill limit. Swift must not append another:
 Existing Rust Context concepts remain responsible for deterministic ordering,
 budgeting, sensitivity filtering, required-segment validation, preview, and
 compaction before every model request.
+
+#### Context-window policy and compaction
+
+Compaction belongs only to Rust `context`. It is not a Memory operation:
+
+- canonical conversation events remain the complete durable transcript;
+- Context decides which canonical material is visible to a particular model
+  turn;
+- `MemoryProvider` remains an optional interface for durable factual recall
+  and completed-turn fact extraction only.
+
+The frozen run input includes a non-secret model Context snapshot:
+
+```rust
+pub struct ModelContextWindow {
+    pub context_window_tokens: usize,
+    pub max_output_tokens: usize,
+}
+```
+
+Swift derives the values from the selected model and freezes the smallest
+compatible window across the run's fallback candidates. Rust rejects zero or
+inverted values before the first model call. The values contain
+no model credential, provider session, or HTTP configuration.
+
+`ContextWindowPolicy::for_model(window)` computes all model-visible budgets in one
+place. Its default automatic compaction ratio is 70%, but the policy accepts an
+injected ratio for tests and future product configuration. The hard input limit
+also reserves the selected model's maximum output tokens. No agent-loop code
+contains a fixed 32,000-token budget, provider-specific context constant, or
+per-tool byte constant.
+
+Rust uses a centralized conservative model-visible estimate. Exact
+provider/local tokenizers may replace that counter without changing Context or
+the ReAct loop.
+
+Before every ordinary model request, Context applies the cheapest reversible
+steps first:
+
+1. preserve the canonical transcript unchanged;
+2. keep the latest complete tool-call/result batch model-visible;
+3. replace older tool-result bodies with a short stable placeholder while
+   retaining call/result pairing;
+4. bound the latest batch with a Context-derived shared token budget using a
+   head-and-tail preview;
+5. assemble and estimate the complete model-visible input;
+6. if the estimate reaches the policy threshold, request one text-only summary
+   from the current run's frozen model.
+
+The compaction request carries no tools and uses the existing model runtime and
+reliable transport. It does not consume one of the 200 ordinary ReAct model
+turns. A tool call, empty summary, cancellation, or malformed response fails
+the compaction without committing a checkpoint.
+
+On success Rust appends one `BranchSummaryCreated` canonical event containing
+the summary and the highest covered conversation sequence. Projection of a
+compacted branch produces:
+
+- the model-generated summary;
+- the latest exact user instruction;
+- the latest complete tool-call/result batch;
+- any canonical events after the covered sequence.
+
+This preserves the current task boundary and tool pairing while removing older
+ephemeral output from subsequent model requests. It does not delete or rewrite
+the covered canonical events. Context then rebuilds the current request from
+the checkpoint before normal generation continues.
+
+Only one automatic compaction may run at a given conversation sequence.
+Cancellation never commits a checkpoint or starts the ordinary model request.
 
 ### Tool Compatibility
 
@@ -899,6 +970,10 @@ Focused tests cover:
 - tool-batch identity and ordered results;
 - per-run tool-loop detection;
 - provider-run-plan freezing and cancellation without fallback;
+- model-derived Context budgets, 70% automatic compaction, one reactive
+  pre-output recovery, and no repeated compaction at the same sequence;
+- older tool-result elision, bounded latest-batch previews, preserved
+  call/result pairing, and unchanged canonical tool-result events;
 - Skill descriptor-only startup and on-demand file reads;
 - virtual Skill-path resolution without host-path disclosure;
 - source-lock digest rejection and clean-checkout native preparation/build
@@ -955,13 +1030,17 @@ Do not repeat every focused error and race scenario in one product-path test.
 16. When sync, backup, or extension slices are selected, only the main App
     Rust runtime can write canonical transcript storage and those processes
     cannot bypass it.
-17. Zero-caller donor and legacy code is absent from the final tree.
-18. A clean checkout can regenerate device and Simulator native/rootfs
+17. Context uses the selected model's frozen window, automatically compacts at
+    the default 70% policy threshold with the same model, retains only the
+    latest complete tool batch at full fidelity, and never treats compaction as
+    Memory or destructive transcript rewriting.
+18. Zero-caller donor and legacy code is absent from the final tree.
+19. A clean checkout can regenerate device and Simulator native/rootfs
     artifacts from digest-locked inputs, and both required rootfs resources
     are present in the built App bundle.
-19. Every retained donor file or resource appears in its vertical slice's
+20. Every retained donor file or resource appears in its vertical slice's
     lightweight migration manifest.
-20. Focused suites and the three product-level paths pass.
+21. Focused suites and the three product-level paths pass.
 
 ## Implementation Planning Boundary
 

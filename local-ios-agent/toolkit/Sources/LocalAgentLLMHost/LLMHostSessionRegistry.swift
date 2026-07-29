@@ -776,6 +776,7 @@ package actor LLMBridgeActor {
             let generationTask = entry.generationTask
             Task { [weak self] in
                 await generationTask?.value
+                await self?.modelHandler?.finish(runID: command.runID)
                 let result = try? await sequencer.submit(
                     kind: .sessionClosed,
                     payload: LLMEventPayload(

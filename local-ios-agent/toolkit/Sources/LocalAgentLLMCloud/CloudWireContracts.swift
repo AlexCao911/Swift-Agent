@@ -156,6 +156,7 @@ package struct CloudProviderSessionContext: Equatable, Sendable {
     package let retentionApprovalRevision: UInt64?
     package let retentionApprovalDigest: String?
     package let hostProcessEpoch: HostProcessEpoch
+    package let providerProjectID: String?
 
     package init(
         targetID: LLMTargetID,
@@ -166,7 +167,8 @@ package struct CloudProviderSessionContext: Equatable, Sendable {
         retentionMode: ProviderRetentionMode,
         retentionApprovalRevision: UInt64?,
         retentionApprovalDigest: String?,
-        hostProcessEpoch: HostProcessEpoch
+        hostProcessEpoch: HostProcessEpoch,
+        providerProjectID: String? = nil
     ) {
         self.targetID = targetID
         self.targetRevision = targetRevision
@@ -177,6 +179,7 @@ package struct CloudProviderSessionContext: Equatable, Sendable {
         self.retentionApprovalRevision = retentionApprovalRevision
         self.retentionApprovalDigest = retentionApprovalDigest
         self.hostProcessEpoch = hostProcessEpoch
+        self.providerProjectID = providerProjectID
     }
 }
 

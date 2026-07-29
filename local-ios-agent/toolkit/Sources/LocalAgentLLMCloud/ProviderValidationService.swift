@@ -377,16 +377,25 @@ public actor ProviderValidationService {
         lease: CredentialUseLease
     ) async throws -> ProviderValidationResult {
         let discovery = CloudModelDiscoveryService(clock: clock, validity: validity)
-        let discoveryRequest = try await egressPolicy.sealValidationRequest(
-            try adapter.makeDiscoveryRequest(),
-            profileID: profile.revision.profileID,
-            profileRevision: profile.revision.revision,
-            originApprovalRevision: originApprovalRevision,
-            lease: lease,
-            requestClass: .discovery
-        )
-        let discoveryData = try await transport.json(discoveryRequest)
-        let liveModelIDs = try discovery.decodeLiveModelIDs(discoveryData, presetID: preset.id)
+        let liveModelIDs: [String]
+        switch preset.discovery {
+        case .providerModelList:
+            let discoveryRequest = try await egressPolicy.sealValidationRequest(
+                try adapter.makeDiscoveryRequest(),
+                profileID: profile.revision.profileID,
+                profileRevision: profile.revision.revision,
+                originApprovalRevision: originApprovalRevision,
+                lease: lease,
+                requestClass: .discovery
+            )
+            let discoveryData = try await transport.json(discoveryRequest)
+            liveModelIDs = try discovery.decodeLiveModelIDs(
+                discoveryData,
+                presetID: preset.id
+            )
+        case .catalogAndManual:
+            liveModelIDs = []
+        }
 
         let accountRequest = try await egressPolicy.sealValidationRequest(
             try adapter.makeAccountValidationRequest(),
@@ -399,7 +408,10 @@ public actor ProviderValidationService {
         _ = try await transport.json(accountRequest)
 
         let probeRequest = try await egressPolicy.sealValidationRequest(
-            try adapter.makeModelValidationRequest(modelID: modelID),
+            try adapter.makeModelValidationRequest(
+                modelID: modelID,
+                providerProjectID: profile.revision.providerProjectID
+            ),
             profileID: profile.revision.profileID,
             profileRevision: profile.revision.revision,
             originApprovalRevision: originApprovalRevision,
@@ -659,7 +671,8 @@ private func requireCompleteProbe(
             retentionMode: profile.revision.retentionMode,
             retentionApprovalRevision: retention.revision,
             retentionApprovalDigest: retention.digest,
-            hostProcessEpoch: hostProcessEpoch
+            hostProcessEpoch: hostProcessEpoch,
+            providerProjectID: profile.revision.providerProjectID
         ))
     } catch {
         throw validationFailure(

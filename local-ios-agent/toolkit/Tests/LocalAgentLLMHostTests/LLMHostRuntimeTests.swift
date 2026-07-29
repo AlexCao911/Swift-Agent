@@ -156,6 +156,32 @@ struct LLMHostRuntimeTests {
     }
 
     @Test
+    func v2CloseSessionFinishesRunOwnedModelResources() async throws {
+        let executor = RecordingV2ModelExecutor()
+        let harness = try await HostRuntimeHarness.make(
+            lifecycle: .committed,
+            modelExecutor: executor
+        )
+        let start = try harness.v2GenerationCommand(id: "start", sequence: 1)
+        let close = try harness.v2LifecycleCommand(
+            id: "close",
+            sequence: 2,
+            kind: .closeSession
+        )
+
+        #expect(harness.runtime.copy(try dispatch(start)) == .copied)
+        await harness.runtime.drain()
+        await waitUntil { await harness.sink.eventKinds().contains(.generationCompleted) }
+        #expect(harness.runtime.copy(try dispatch(close)) == .copied)
+        await harness.runtime.drain()
+        await waitUntil { await executor.finishedRuns() == ["run-1"] }
+        await waitUntil { await harness.sink.eventKinds().contains(.sessionClosed) }
+
+        #expect(await executor.finishedRuns() == ["run-1"])
+        #expect(await harness.sink.eventKinds().contains(.sessionClosed))
+    }
+
+    @Test
     func rejectedCleanupAcknowledgementQuarantinesTheSession() async throws {
         let harness = try await HostRuntimeHarness.make(
             lifecycle: .registrationInFlight,
@@ -388,6 +414,45 @@ private struct HostRuntimeHarness {
             payload: draft.payload
         )
     }
+
+    func v2LifecycleCommand(
+        id: String,
+        sequence: UInt64,
+        kind: HostCommandKind
+    ) throws -> HostCommandEnvelope {
+        let payload = HostCommandPayload.lifecycleV2()
+        let payloadDigest = try payload.computedDigest().hex
+        let draft = HostCommandEnvelope(
+            schemaVersion: 2,
+            commandID: id,
+            runID: runID,
+            sessionHandle: handle,
+            hostProcessEpoch: Self.epoch.rawValue,
+            commandSequence: sequence,
+            generationTurnID: nil,
+            kind: kind,
+            payloadDigest: payloadDigest,
+            disclosureDigest: nil,
+            commandEnvelopeDigest: "",
+            disclosure: nil,
+            payload: payload
+        )
+        return HostCommandEnvelope(
+            schemaVersion: draft.schemaVersion,
+            commandID: draft.commandID,
+            runID: draft.runID,
+            sessionHandle: draft.sessionHandle,
+            hostProcessEpoch: draft.hostProcessEpoch,
+            commandSequence: draft.commandSequence,
+            generationTurnID: draft.generationTurnID,
+            kind: draft.kind,
+            payloadDigest: draft.payloadDigest,
+            disclosureDigest: draft.disclosureDigest,
+            commandEnvelopeDigest: try draft.recomputedDigest().hex,
+            disclosure: draft.disclosure,
+            payload: draft.payload
+        )
+    }
 }
 
 private actor RecordingDriver: LLMHostSessionDriver {
@@ -478,6 +543,7 @@ private actor RecordingRustSink: LLMHostRustSink {
 
 private actor RecordingV2ModelExecutor: ModelGenerationExecuting {
     private var requests: [HostModelRequest] = []
+    private var finishedRunIDs: [String] = []
 
     func generate(
         _ request: HostModelRequest,
@@ -489,7 +555,12 @@ private actor RecordingV2ModelExecutor: ModelGenerationExecuting {
 
     func cancel(runID: String) async {}
 
+    func finish(runID: String) async {
+        finishedRunIDs.append(runID)
+    }
+
     func requestCount() -> Int { requests.count }
+    func finishedRuns() -> [String] { finishedRunIDs }
 }
 
 private actor CloseCounter {

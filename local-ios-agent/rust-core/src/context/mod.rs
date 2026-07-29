@@ -25,13 +25,18 @@ pub use assembler::{
 };
 pub use branch_projector::BranchProjector;
 pub use budget::ContextBudget;
-pub use compaction::CompactionCandidate;
+pub use compaction::{
+    approximate_token_count, compact_tool_results_for_context, CompactionCandidate,
+    ContextCompactionCheckpoint,
+};
 pub use contribution::{ContextContribution, ContextContributionBundle};
 pub use debug_snapshot::PromptDebugSnapshot;
 pub use graph::ContextGraph;
 pub use injection_policy::ContextInjectionPolicy;
 pub use model_input::{AgentTurnInput, ModelInputMessage, ModelInputMessages, ModelInputRole};
-pub use policy::ContextPolicy;
+pub use policy::{
+    ContextPolicy, ContextWindowPolicy, ContextWindowPolicyError, ModelContextWindow,
+};
 pub use preview::ContextPreview;
 pub use prompt_frame::{ContextController, InferenceOptions, PromptFrame, PromptMessage};
 pub use prompt_layers::PromptLayers;

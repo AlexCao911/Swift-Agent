@@ -5,6 +5,7 @@ use local_ios_agent_runtime::{
         AgentInputAssembler, PromptDocumentSnapshot, RunStartSnapshot, SkillDescriptor,
         ToolDefinitionSnapshot,
     },
+    context::ModelContextWindow,
     conversation::{ConversationCommandService, TranscriptCommand},
     core::{EntryId, EventKind, RuntimeEvent, SessionId},
     memory::{
@@ -104,7 +105,7 @@ fn each_turn_rebuilds_canonical_context_and_sees_atomic_tool_results() {
 #[test]
 fn every_turn_reruns_memory_sensitivity_and_budget_assembly() {
     let provider = Arc::new(CountingMemoryProvider::default());
-    let assembler = AgentInputAssembler::new(snapshot(), 30)
+    let assembler = AgentInputAssembler::new(snapshot(), 60)
         .unwrap()
         .with_memory_provider(provider.clone());
 
@@ -185,6 +186,10 @@ fn snapshot() -> RunStartSnapshot {
             description: "Read a file.".into(),
             input_schema: json!({"type": "object"}),
         }],
+        ModelContextWindow {
+            context_window_tokens: 8_192,
+            max_output_tokens: 1_024,
+        },
     )
     .unwrap()
 }

@@ -764,7 +764,10 @@ public actor ProviderProfileStore {
         guard !revision.profileID.isEmpty,
               !revision.displayName.isEmpty,
               !revision.credentialRef.isEmpty,
-              ProviderPreset.shipped.contains(where: { $0.id == revision.presetID })
+              ProviderPreset.shipped.contains(where: { $0.id == revision.presetID }),
+              revision.presetID == .antigravity
+                ? revision.providerProjectID?.isEmpty == false
+                : revision.providerProjectID == nil
         else {
             throw failure("provider_profile.invalid_revision", "provider profile revision is invalid")
         }

@@ -90,6 +90,15 @@ pub struct HostModelRequest {
     pub ordered_messages: Vec<HostModelMessage>,
     pub attachment_references: Vec<HostAttachmentReference>,
     pub ordered_tool_definitions: Vec<HostToolDefinition>,
+    pub purpose: ModelRequestPurpose,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRequestPurpose {
+    #[default]
+    Generation,
+    Compaction,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -143,6 +152,8 @@ pub struct HostCommandPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ordered_tool_definitions: Vec<HostToolDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_request_purpose: Option<ModelRequestPurpose>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_batch: Option<HostToolBatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_batch_id: Option<String>,
@@ -168,6 +179,7 @@ impl HostCommandPayload {
             ordered_messages: Vec::new(),
             attachment_references: Vec::new(),
             ordered_tool_definitions: Vec::new(),
+            model_request_purpose: None,
             tool_batch: None,
             target_batch_id: None,
         }
@@ -181,6 +193,7 @@ impl HostCommandPayload {
         payload.ordered_messages = request.ordered_messages;
         payload.attachment_references = request.attachment_references;
         payload.ordered_tool_definitions = request.ordered_tool_definitions;
+        payload.model_request_purpose = Some(request.purpose);
         payload
     }
 
@@ -219,6 +232,9 @@ impl HostCommandPayload {
             ordered_messages: self.ordered_messages.clone(),
             attachment_references: self.attachment_references.clone(),
             ordered_tool_definitions: self.ordered_tool_definitions.clone(),
+            purpose: self
+                .model_request_purpose
+                .ok_or_else(command_payload_mismatch)?,
         })
     }
 
@@ -250,7 +266,8 @@ impl HostCommandPayload {
             && self.conversation_stream_id.is_none()
             && self.ordered_messages.is_empty()
             && self.attachment_references.is_empty()
-            && self.ordered_tool_definitions.is_empty();
+            && self.ordered_tool_definitions.is_empty()
+            && self.model_request_purpose.is_none();
         let valid = match kind {
             HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration => {
                 self.model_input_id == envelope_run_id
@@ -261,6 +278,7 @@ impl HostCommandPayload {
                         .is_some_and(|stream_id| !stream_id.is_empty())
                     && self.tool_batch.is_none()
                     && self.target_batch_id.is_none()
+                    && self.model_request_purpose.is_some()
             }
             HostCommandKind::ExecuteToolBatch => {
                 generation_body_is_empty
@@ -399,6 +417,7 @@ impl HostCommandPayload {
             && self.ordered_messages.is_empty()
             && self.attachment_references.is_empty()
             && self.ordered_tool_definitions.is_empty()
+            && self.model_request_purpose.is_none()
             && self.tool_batch.is_none()
             && self.target_batch_id.is_none()
     }

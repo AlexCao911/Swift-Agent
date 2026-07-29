@@ -18,8 +18,9 @@ struct ProviderPresetTests {
             "glm",
             "openrouter",
             "kimi_code",
+            "antigravity",
         ])
-        #expect(Set(presets.map(\.id)).count == 10)
+        #expect(Set(presets.map(\.id)).count == 11)
         #expect(presets.allSatisfy { preset in
             preset.defaultBaseURL.scheme == "https"
                 && preset.defaultBaseURL.user == nil
@@ -42,6 +43,8 @@ struct ProviderPresetTests {
             == "openrouter.chat_completions")
         #expect(try #require(presets[id: .kimiCode]).discovery
             == .catalogAndManual)
+        #expect(try #require(presets[id: .antigravity]).semanticAdapterID
+            == "antigravity.cloud_code")
     }
 }
 

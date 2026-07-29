@@ -102,6 +102,11 @@ public struct HostToolDefinition: Codable, Equatable, Sendable {
     }
 }
 
+public enum HostModelRequestPurpose: String, Codable, Sendable {
+    case generation
+    case compaction
+}
+
 public struct HostModelRequest: Codable, Equatable, Sendable {
     public let runID: String
     public let conversationStreamID: String
@@ -109,6 +114,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
     public let orderedMessages: [HostModelMessage]
     public let attachmentReferences: [HostAttachmentReference]
     public let orderedToolDefinitions: [HostToolDefinition]
+    public let purpose: HostModelRequestPurpose
 
     public init(
         runID: String,
@@ -116,7 +122,8 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         systemPrompt: String,
         orderedMessages: [HostModelMessage],
         attachmentReferences: [HostAttachmentReference],
-        orderedToolDefinitions: [HostToolDefinition]
+        orderedToolDefinitions: [HostToolDefinition],
+        purpose: HostModelRequestPurpose = .generation
     ) {
         self.runID = runID
         self.conversationStreamID = conversationStreamID
@@ -124,6 +131,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         self.orderedMessages = orderedMessages
         self.attachmentReferences = attachmentReferences
         self.orderedToolDefinitions = orderedToolDefinitions
+        self.purpose = purpose
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -133,6 +141,7 @@ public struct HostModelRequest: Codable, Equatable, Sendable {
         case orderedMessages = "ordered_messages"
         case attachmentReferences = "attachment_references"
         case orderedToolDefinitions = "ordered_tool_definitions"
+        case purpose
     }
 }
 

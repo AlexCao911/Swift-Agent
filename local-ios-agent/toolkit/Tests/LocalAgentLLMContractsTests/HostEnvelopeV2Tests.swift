@@ -10,9 +10,13 @@ struct HostEnvelopeV2Tests {
         let generation = HostCommandPayload.generationV2(fixture.modelRequest)
         try generation.validate(for: .startGeneration, envelopeRunID: "run-v2")
         #expect(
-            try generation.computedDigest().hex
-                == fixture.expectedGenerationPayloadDigest
+            try generation.modelRequest(
+                for: .startGeneration,
+                envelopeRunID: "run-v2"
+            ).purpose == .generation
         )
+        let generationDigest = try generation.computedDigest().hex
+        #expect(generationDigest == fixture.expectedGenerationPayloadDigest)
 
         let batch = fixture.toolBatch
         let execute = HostCommandPayload.toolBatchV2(batch)

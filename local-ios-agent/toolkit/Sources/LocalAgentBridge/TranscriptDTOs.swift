@@ -57,35 +57,55 @@ public struct ToolDefinitionSnapshotDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct ModelContextWindowDTO: Codable, Equatable, Sendable {
+    public let contextWindowTokens: UInt64
+    public let maxOutputTokens: UInt64
+
+    public init(contextWindowTokens: UInt64, maxOutputTokens: UInt64) {
+        self.contextWindowTokens = contextWindowTokens
+        self.maxOutputTokens = maxOutputTokens
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case contextWindowTokens = "context_window_tokens"
+        case maxOutputTokens = "max_output_tokens"
+    }
+}
+
 public struct RunStartSnapshotDTO: Codable, Equatable, Sendable {
     public static let maximumSkillDescriptors = 20
 
     public let orderedPromptDocuments: [PromptDocumentSnapshotDTO]
     public let skillDescriptors: [RustSkillDescriptorDTO]
     public let orderedToolDefinitions: [ToolDefinitionSnapshotDTO]
+    public let modelContextWindow: ModelContextWindowDTO
     public let snapshotDigest: String
 
     public init(
         orderedPromptDocuments: [PromptDocumentSnapshotDTO],
         skillDescriptors: [RustSkillDescriptorDTO],
         orderedToolDefinitions: [ToolDefinitionSnapshotDTO],
+        modelContextWindow: ModelContextWindowDTO,
         snapshotDigest: String
     ) {
         self.orderedPromptDocuments = orderedPromptDocuments
         self.skillDescriptors = skillDescriptors
         self.orderedToolDefinitions = orderedToolDefinitions
+        self.modelContextWindow = modelContextWindow
         self.snapshotDigest = snapshotDigest
     }
 
     public static func make(
         orderedPromptDocuments: [PromptDocumentSnapshotDTO],
         skillDescriptors: [RustSkillDescriptorDTO],
-        orderedToolDefinitions: [ToolDefinitionSnapshotDTO]
+        orderedToolDefinitions: [ToolDefinitionSnapshotDTO],
+        modelContextWindow: ModelContextWindowDTO
     ) throws -> Self {
         let unsigned = Self(
             orderedPromptDocuments: orderedPromptDocuments,
             skillDescriptors: skillDescriptors,
             orderedToolDefinitions: orderedToolDefinitions,
+            modelContextWindow: modelContextWindow,
             snapshotDigest: ""
         )
         try unsigned.validateFields()
@@ -93,6 +113,7 @@ public struct RunStartSnapshotDTO: Codable, Equatable, Sendable {
             orderedPromptDocuments: orderedPromptDocuments,
             skillDescriptors: skillDescriptors,
             orderedToolDefinitions: orderedToolDefinitions,
+            modelContextWindow: modelContextWindow,
             snapshotDigest: try unsigned.recomputedDigest()
         )
     }
@@ -114,7 +135,8 @@ public struct RunStartSnapshotDTO: Codable, Equatable, Sendable {
         let document = SnapshotDigestDocument(
             orderedPromptDocuments: orderedPromptDocuments,
             skillDescriptors: skillDescriptors,
-            orderedToolDefinitions: orderedToolDefinitions
+            orderedToolDefinitions: orderedToolDefinitions,
+            modelContextWindow: modelContextWindow
         )
         let data = try JSONEncoder().encode(document)
         let canonical = try JSONDecoder().decode(
@@ -128,6 +150,13 @@ public struct RunStartSnapshotDTO: Codable, Equatable, Sendable {
     }
 
     private func validateFields() throws {
+        guard modelContextWindow.contextWindowTokens > 0,
+              modelContextWindow.maxOutputTokens
+                < modelContextWindow.contextWindowTokens else {
+            throw RunStartSnapshotValidationError(
+                code: "run_start_snapshot.model_context_window_invalid"
+            )
+        }
         guard skillDescriptors.count <= Self.maximumSkillDescriptors else {
             throw RunStartSnapshotValidationError(
                 code: "run_start_snapshot.too_many_skills"
@@ -218,6 +247,7 @@ public struct RunStartSnapshotDTO: Codable, Equatable, Sendable {
         case orderedPromptDocuments = "ordered_prompt_documents"
         case skillDescriptors = "skill_descriptors"
         case orderedToolDefinitions = "ordered_tool_definitions"
+        case modelContextWindow = "model_context_window"
         case snapshotDigest = "snapshot_digest"
     }
 }
@@ -234,11 +264,13 @@ private struct SnapshotDigestDocument: Codable {
     let orderedPromptDocuments: [PromptDocumentSnapshotDTO]
     let skillDescriptors: [RustSkillDescriptorDTO]
     let orderedToolDefinitions: [ToolDefinitionSnapshotDTO]
+    let modelContextWindow: ModelContextWindowDTO
 
     private enum CodingKeys: String, CodingKey {
         case orderedPromptDocuments = "ordered_prompt_documents"
         case skillDescriptors = "skill_descriptors"
         case orderedToolDefinitions = "ordered_tool_definitions"
+        case modelContextWindow = "model_context_window"
     }
 }
 
