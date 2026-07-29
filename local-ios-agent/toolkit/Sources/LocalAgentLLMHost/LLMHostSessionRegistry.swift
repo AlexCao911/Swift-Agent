@@ -461,6 +461,18 @@ package actor LLMBridgeActor {
             await reject(command, code: "llm.command.wrong_run")
             return
         }
+        do {
+            try command.payload.validate(
+                for: command.kind,
+                envelopeRunID: command.runID
+            )
+        } catch let error as HostContractValidationError {
+            await reject(command, code: error.code)
+            return
+        } catch {
+            await reject(command, code: "llm.contract.command_payload_mismatch")
+            return
+        }
         guard let digest = try? command.recomputedDigest().hex,
               digest == command.commandEnvelopeDigest
         else {
@@ -525,6 +537,9 @@ package actor LLMBridgeActor {
             rejection = entry.lifecycle == .committed && driver != nil
                 ? nil
                 : "llm.command.invalid_lifecycle"
+
+        case .executeToolBatch, .cancelToolBatch:
+            rejection = "llm.command.unsupported_until_host_adapter"
 
         case .closeSession:
             rejection = entry.lifecycle == .committed && driver != nil
@@ -594,6 +609,9 @@ package actor LLMBridgeActor {
         return Task {
             switch command.kind {
             case .startGeneration, .resumeGeneration:
+                break
+
+            case .executeToolBatch, .cancelToolBatch:
                 break
 
             case .cancelGeneration:

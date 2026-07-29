@@ -40,10 +40,13 @@ public enum CanonicalDigestV1 {
         "generation-disclosure:v1",
         "host-binding-staging-receipt:v1",
         "host-command-envelope:v1",
+        "host-command-envelope:v2",
         "host-command-payload:v1",
+        "host-command-payload:v2",
         "host-tool-effect-result:v1",
         "legacy-profile-source:v1",
         "llm-event-envelope:v1",
+        "llm-event-envelope:v2",
         "llm-event-receipt:v1",
         "preparation-binding:v1",
         "preparation-token:v1",
@@ -93,11 +96,15 @@ public enum CanonicalDigestV1 {
     }
 
     private static func validate(domain: String) throws {
-        guard domain.hasSuffix(":v1") else {
+        guard let marker = domain.range(of: ":v", options: .backwards) else {
             throw invalidDomain(domain)
         }
-        let name = domain.dropLast(3)
+        let name = domain[..<marker.lowerBound]
+        let version = domain[marker.upperBound...]
         guard !name.isEmpty,
+              !version.isEmpty,
+              version.first != "0",
+              version.utf8.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }),
               name.utf8.allSatisfy({ byte in
                   (byte >= 0x61 && byte <= 0x7A)
                       || (byte >= 0x30 && byte <= 0x39)

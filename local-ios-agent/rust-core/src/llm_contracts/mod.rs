@@ -22,17 +22,19 @@ pub use host_binding_service::{AgentHostBindingService, HostBindingSubjectCatalo
 pub use host_command::{
     EgressDataClassCountDocument, GenerationDisclosureDocument, HostAttachmentReference,
     HostCommandAcknowledgement, HostCommandAcknowledgementDisposition, HostCommandCopyReceipt,
-    HostCommandEnvelope, HostCommandKind, HostCommandPayload, HostContractError,
-    HostDispatchEnvelope, HostDispatchKind, HostSemanticContent, HostSemanticMessage,
-    HostSourceRevision, HostToolResult, SafeDisplaySummaryDocument,
+    HostCommandEnvelope, HostCommandKind, HostCommandPayload, HostContractError, HostDispatchEnvelope,
+    HostDispatchKind, HostModelMessage, HostModelRequest, HostSemanticContent, HostSemanticMessage,
+    HostSourceRevision, HostToolBatch, HostToolCall, HostToolDefinition, HostToolResult,
+    LegacyHostAttachmentReference, SafeDisplaySummaryDocument,
 };
 pub use host_worker::{
     HostExecutionPhase, HostSessionCloseDisposition, HostSessionRecord, HostWatchdogKind,
     HostWorkerRecord, LogicalRunOutcome, ResourceLifecycle,
 };
 pub use llm_event::{
-    LLMBackendCompletionWire, LLMEventEnvelope, LLMEventKind, LLMEventPayload, LLMEventReceipt,
-    LLMEventReceiptDisposition, LLMEventSubmissionResult, SequenceEffect,
+    HostToolBatchCompletion, LLMBackendCompletionWire, LLMEventEnvelope, LLMEventKind,
+    LLMEventPayload, LLMEventReceipt, LLMEventReceiptDisposition, LLMEventSubmissionResult,
+    SequenceEffect,
 };
 pub(crate) use preparation::RunPreparationRequest;
 pub use preparation::{

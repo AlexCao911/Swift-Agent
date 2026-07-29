@@ -88,10 +88,19 @@ package actor LLMEventSequencer {
         guard shouldAllocate(kind: kind, generationTurnID: generationTurnID) else {
             return nil
         }
+        try payload.validate(
+            for: kind,
+            envelopeRunID: runID,
+            expectedBatchID: nil
+        )
 
         let eventID = try HostSessionHandleGenerator.generate()
+        let schemaVersion: UInt32 = switch kind {
+        case .toolBatchStarted, .toolBatchCompleted, .toolBatchFailed: 2
+        default: 1
+        }
         let draft = LLMEventEnvelope(
-            schemaVersion: 1,
+            schemaVersion: schemaVersion,
             eventID: eventID,
             runID: runID,
             sessionHandle: sessionHandle,

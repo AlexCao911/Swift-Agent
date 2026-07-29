@@ -1,0 +1,61 @@
+{
+  "expected_generation_payload_digest": "9c95922b56a03f30a7fe117fe8f7197b73fe6e84914ccd20e958df99267e1792",
+  "model_request": {
+    "run_id": "run-v2",
+    "conversation_stream_id": "conversation-v2",
+    "system_prompt": "You are LocalAgent.",
+    "ordered_messages": [
+      {
+        "role": "user",
+        "content": "hello"
+      }
+    ],
+    "attachment_references": [
+      {
+        "attachment_id": "attachment-1",
+        "display_name": "photo.png",
+        "media_type": "image/png",
+        "modality": "image",
+        "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "ordered_tool_definitions": [
+      {
+        "name": "file_read",
+        "description": "Read a file",
+        "input_schema": {
+          "type": "object"
+        }
+      }
+    ]
+  },
+  "tool_batch": {
+    "batch_id": "batch-1",
+    "run_id": "run-v2",
+    "ordered_calls": [
+      {
+        "call_id": "call-1",
+        "tool_name": "file_read",
+        "arguments_json": "{\"path\":\"/tmp/a\"}"
+      }
+    ]
+  },
+  "tool_batch_completion": {
+    "batch_id": "batch-1",
+    "run_id": "run-v2",
+    "ordered_results": [
+      {
+        "call_id": "call-1",
+        "tool_name": "file_read",
+        "result": {
+          "text": "ok"
+        },
+        "is_error": false,
+        "data_classes": [
+          "public"
+        ],
+        "highest_sensitivity": "public"
+      }
+    ]
+  }
+}

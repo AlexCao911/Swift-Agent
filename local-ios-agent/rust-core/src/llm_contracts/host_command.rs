@@ -11,6 +11,8 @@ pub enum HostCommandKind {
     StartGeneration,
     ResumeGeneration,
     CancelGeneration,
+    ExecuteToolBatch,
+    CancelToolBatch,
     CloseSession,
     CapacityAvailable,
 }
@@ -46,12 +48,64 @@ pub struct HostSourceRevision {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct HostAttachmentReference {
+pub struct LegacyHostAttachmentReference {
     pub attachment_id: String,
     pub revision: String,
     pub modality: String,
     pub media_type: String,
     pub content_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostModelMessage {
+    pub role: String,
+    pub content: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostAttachmentReference {
+    pub attachment_id: String,
+    pub display_name: String,
+    pub media_type: String,
+    pub modality: String,
+    pub content_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostModelRequest {
+    pub run_id: String,
+    pub conversation_stream_id: String,
+    pub system_prompt: String,
+    pub ordered_messages: Vec<HostModelMessage>,
+    pub attachment_references: Vec<HostAttachmentReference>,
+    pub ordered_tool_definitions: Vec<HostToolDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostToolCall {
+    pub call_id: String,
+    pub tool_name: String,
+    pub arguments_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostToolBatch {
+    pub batch_id: String,
+    pub run_id: String,
+    pub ordered_calls: Vec<HostToolCall>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -75,9 +129,23 @@ pub struct HostCommandPayload {
     pub tool_schema_digest: String,
     pub source_revisions: Vec<HostSourceRevision>,
     pub source_revisions_digest: String,
-    pub attachments: Vec<HostAttachmentReference>,
+    pub attachments: Vec<LegacyHostAttachmentReference>,
     pub semantic_history: Vec<HostSemanticMessage>,
     pub tool_results: Vec<HostToolResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_stream_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordered_messages: Vec<HostModelMessage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_references: Vec<HostAttachmentReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordered_tool_definitions: Vec<HostToolDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_batch: Option<HostToolBatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_batch_id: Option<String>,
 }
 
 impl HostCommandPayload {
@@ -95,11 +163,138 @@ impl HostCommandPayload {
             attachments: Vec::new(),
             semantic_history: Vec::new(),
             tool_results: Vec::new(),
+            system_prompt: None,
+            conversation_stream_id: None,
+            ordered_messages: Vec::new(),
+            attachment_references: Vec::new(),
+            ordered_tool_definitions: Vec::new(),
+            tool_batch: None,
+            target_batch_id: None,
+        }
+    }
+
+    pub fn generation_v2(request: HostModelRequest) -> Self {
+        let mut payload = Self::empty_v2();
+        payload.model_input_id = request.run_id;
+        payload.system_prompt = Some(request.system_prompt);
+        payload.conversation_stream_id = Some(request.conversation_stream_id);
+        payload.ordered_messages = request.ordered_messages;
+        payload.attachment_references = request.attachment_references;
+        payload.ordered_tool_definitions = request.ordered_tool_definitions;
+        payload
+    }
+
+    pub fn tool_batch_v2(batch: HostToolBatch) -> Self {
+        let mut payload = Self::empty_v2();
+        payload.tool_batch = Some(batch);
+        payload
+    }
+
+    pub fn cancel_tool_batch_v2(batch_id: impl Into<String>) -> Self {
+        let mut payload = Self::empty_v2();
+        payload.target_batch_id = Some(batch_id.into());
+        payload
+    }
+
+    pub fn lifecycle_v2() -> Self {
+        Self::empty_v2()
+    }
+
+    pub fn model_request_v2(
+        &self,
+        kind: HostCommandKind,
+        envelope_run_id: &str,
+    ) -> Result<HostModelRequest, HostContractError> {
+        self.validate_for(kind, envelope_run_id)?;
+        Ok(HostModelRequest {
+            run_id: envelope_run_id.to_string(),
+            conversation_stream_id: self
+                .conversation_stream_id
+                .clone()
+                .ok_or_else(command_payload_mismatch)?,
+            system_prompt: self
+                .system_prompt
+                .clone()
+                .ok_or_else(command_payload_mismatch)?,
+            ordered_messages: self.ordered_messages.clone(),
+            attachment_references: self.attachment_references.clone(),
+            ordered_tool_definitions: self.ordered_tool_definitions.clone(),
+        })
+    }
+
+    pub fn validate_for(
+        &self,
+        kind: HostCommandKind,
+        envelope_run_id: &str,
+    ) -> Result<(), HostContractError> {
+        if self.schema_version == "1" {
+            return if self.v2_body_is_empty()
+                && matches!(
+                    kind,
+                    HostCommandKind::StartGeneration
+                        | HostCommandKind::ResumeGeneration
+                        | HostCommandKind::CancelGeneration
+                        | HostCommandKind::CloseSession
+                        | HostCommandKind::CapacityAvailable
+                ) {
+                Ok(())
+            } else {
+                Err(command_payload_mismatch())
+            };
+        }
+        if self.schema_version != "2" || !self.legacy_collections_are_empty() {
+            return Err(command_payload_mismatch());
+        }
+
+        let generation_body_is_empty = self.system_prompt.is_none()
+            && self.conversation_stream_id.is_none()
+            && self.ordered_messages.is_empty()
+            && self.attachment_references.is_empty()
+            && self.ordered_tool_definitions.is_empty();
+        let valid = match kind {
+            HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration => {
+                self.model_input_id == envelope_run_id
+                    && self.system_prompt.is_some()
+                    && self
+                        .conversation_stream_id
+                        .as_deref()
+                        .is_some_and(|stream_id| !stream_id.is_empty())
+                    && self.tool_batch.is_none()
+                    && self.target_batch_id.is_none()
+            }
+            HostCommandKind::ExecuteToolBatch => {
+                generation_body_is_empty
+                    && self
+                        .tool_batch
+                        .as_ref()
+                        .is_some_and(|batch| batch.run_id == envelope_run_id)
+                    && self.target_batch_id.is_none()
+            }
+            HostCommandKind::CancelToolBatch => {
+                generation_body_is_empty
+                    && self.tool_batch.is_none()
+                    && self
+                        .target_batch_id
+                        .as_deref()
+                        .is_some_and(|batch_id| !batch_id.is_empty())
+            }
+            HostCommandKind::CancelGeneration
+            | HostCommandKind::CloseSession
+            | HostCommandKind::CapacityAvailable => {
+                generation_body_is_empty
+                    && self.tool_batch.is_none()
+                    && self.target_batch_id.is_none()
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(command_payload_mismatch())
         }
     }
 
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
-        digest("host-command-payload:v1", self)
+        digest(self.digest_domain()?, self)
     }
 
     pub fn agent_input_digest(&self) -> Result<String, HostContractError> {
@@ -112,6 +307,11 @@ impl HostCommandPayload {
     }
 
     fn agent_input_document(&self) -> Result<Value, HostContractError> {
+        if self.schema_version != "1" {
+            return Err(HostContractError::new(
+                "llm.contract.agent_input_schema_unsupported",
+            ));
+        }
         if !self.attachments.is_empty() {
             return Err(HostContractError::new(
                 "llm.contract.attachment_resolution_unavailable",
@@ -172,6 +372,51 @@ impl HostCommandPayload {
             "schema_version": "1",
             "tool_results": tool_results,
         }))
+    }
+
+    fn empty_v2() -> Self {
+        let mut payload = Self::lifecycle();
+        payload.schema_version = "2".into();
+        payload
+    }
+
+    fn legacy_collections_are_empty(&self) -> bool {
+        self.messages.is_empty()
+            && self.source_revisions.is_empty()
+            && self.attachments.is_empty()
+            && self.semantic_history.is_empty()
+            && self.tool_results.is_empty()
+            && self.tool_schema_json == "{}"
+            && self.tool_schema_digest
+                == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            && self.source_revisions_digest
+                == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+
+    fn v2_body_is_empty(&self) -> bool {
+        self.system_prompt.is_none()
+            && self.conversation_stream_id.is_none()
+            && self.ordered_messages.is_empty()
+            && self.attachment_references.is_empty()
+            && self.ordered_tool_definitions.is_empty()
+            && self.tool_batch.is_none()
+            && self.target_batch_id.is_none()
+    }
+
+    fn digest_domain(&self) -> Result<&'static str, HostContractError> {
+        match self.schema_version.as_str() {
+            "1" => Ok("host-command-payload:v1"),
+            "2" => Ok("host-command-payload:v2"),
+            _ => Err(command_payload_mismatch()),
+        }
+    }
+
+    fn envelope_schema_version(&self) -> Result<u32, HostContractError> {
+        match self.schema_version.as_str() {
+            "1" => Ok(1),
+            "2" => Ok(2),
+            _ => Err(command_payload_mismatch()),
+        }
     }
 }
 
@@ -258,12 +503,14 @@ impl HostCommandEnvelope {
         payload: HostCommandPayload,
         disclosure: GenerationDisclosureDocument,
     ) -> Result<Self, HostContractError> {
+        let run_id = run_id.into();
+        payload.validate_for(HostCommandKind::StartGeneration, &run_id)?;
         let payload_digest = payload.expected_digest()?;
         let disclosure_digest = disclosure.expected_digest()?;
         let mut envelope = Self {
-            schema_version: 1,
+            schema_version: payload.envelope_schema_version()?,
             command_id: command_id.into(),
-            run_id: run_id.into(),
+            run_id,
             session_handle: session_handle.into(),
             host_process_epoch: host_process_epoch.into(),
             command_sequence: 1,
@@ -289,12 +536,14 @@ impl HostCommandEnvelope {
         payload: HostCommandPayload,
         disclosure: GenerationDisclosureDocument,
     ) -> Result<Self, HostContractError> {
+        let run_id = run_id.into();
+        payload.validate_for(HostCommandKind::ResumeGeneration, &run_id)?;
         let payload_digest = payload.expected_digest()?;
         let disclosure_digest = disclosure.expected_digest()?;
         let mut envelope = Self {
-            schema_version: 1,
+            schema_version: payload.envelope_schema_version()?,
             command_id: command_id.into(),
-            run_id: run_id.into(),
+            run_id,
             session_handle: session_handle.into(),
             host_process_epoch: host_process_epoch.into(),
             command_sequence,
@@ -347,6 +596,12 @@ impl HostCommandEnvelope {
     }
 
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
+        self.payload.validate_for(self.kind, &self.run_id)?;
+        let domain = match (self.schema_version, self.payload.schema_version.as_str()) {
+            (1, "1") => "host-command-envelope:v1",
+            (2, "2") => "host-command-envelope:v2",
+            _ => return Err(command_payload_mismatch()),
+        };
         if self.payload.expected_digest()? != self.payload_digest {
             return Err(HostContractError::new(
                 "llm.command.payload_digest_mismatch",
@@ -362,7 +617,7 @@ impl HostCommandEnvelope {
             }
         }
         digest(
-            "host-command-envelope:v1",
+            domain,
             &HostCommandEnvelopeDigestDocument {
                 schema_version: self.schema_version,
                 command_id: &self.command_id,
@@ -405,6 +660,44 @@ impl HostCommandEnvelope {
     }
     pub fn command_envelope_digest(&self) -> &str {
         &self.command_envelope_digest
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn command_v2(
+        command_id: impl Into<String>,
+        run_id: impl Into<String>,
+        session_handle: impl Into<String>,
+        host_process_epoch: impl Into<String>,
+        command_sequence: u64,
+        kind: HostCommandKind,
+        payload: HostCommandPayload,
+    ) -> Result<Self, HostContractError> {
+        if matches!(
+            kind,
+            HostCommandKind::StartGeneration | HostCommandKind::ResumeGeneration
+        ) {
+            return Err(HostContractError::new("llm.command.lifecycle_kind_invalid"));
+        }
+        let run_id = run_id.into();
+        payload.validate_for(kind, &run_id)?;
+        let payload_digest = payload.expected_digest()?;
+        let mut envelope = Self {
+            schema_version: 2,
+            command_id: command_id.into(),
+            run_id,
+            session_handle: session_handle.into(),
+            host_process_epoch: host_process_epoch.into(),
+            command_sequence,
+            generation_turn_id: None,
+            kind,
+            payload_digest,
+            disclosure_digest: None,
+            command_envelope_digest: String::new(),
+            disclosure: None,
+            payload,
+        };
+        envelope.command_envelope_digest = envelope.expected_digest()?;
+        Ok(envelope)
     }
 }
 
@@ -564,4 +857,8 @@ fn digest<T: Serialize>(domain: &str, value: &T) -> Result<String, HostContractE
     CanonicalDigestV1::digest(domain, value)
         .map(|value| value.as_str().to_string())
         .map_err(|_| HostContractError::new("llm.contract.digest_failed"))
+}
+
+fn command_payload_mismatch() -> HostContractError {
+    HostContractError::new("llm.contract.command_payload_mismatch")
 }

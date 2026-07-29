@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical_digest::CanonicalDigestV1;
 
-use super::HostContractError;
+use super::{HostContractError, HostToolResult};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,6 +15,9 @@ pub enum LLMEventKind {
     ToolCallCompleted,
     UsageUpdated,
     GenerationCompleted,
+    ToolBatchStarted,
+    ToolBatchCompleted,
+    ToolBatchFailed,
     Failed,
     Cancelled,
     SessionClosed,
@@ -26,6 +29,14 @@ pub struct LLMBackendCompletionWire {
     pub outcome: String,
     pub ordered_call_ids: Vec<String>,
     pub finish_reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostToolBatchCompletion {
+    pub batch_id: String,
+    pub run_id: String,
+    pub ordered_results: Vec<HostToolResult>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -53,6 +64,50 @@ pub struct LLMEventPayload {
     pub opaque_operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_disposition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_batch_completion: Option<HostToolBatchCompletion>,
+}
+
+impl LLMEventPayload {
+    pub fn validate_for(
+        &self,
+        kind: LLMEventKind,
+        envelope_run_id: &str,
+        expected_batch_id: Option<&str>,
+    ) -> Result<(), HostContractError> {
+        if kind == LLMEventKind::ToolBatchCompleted {
+            let completion = self
+                .tool_batch_completion
+                .as_ref()
+                .ok_or_else(event_payload_mismatch)?;
+            let valid = !self.has_non_batch_body()
+                && completion.run_id == envelope_run_id
+                && expected_batch_id.is_none_or(|batch_id| completion.batch_id == batch_id);
+            if valid {
+                Ok(())
+            } else {
+                Err(event_payload_mismatch())
+            }
+        } else if self.tool_batch_completion.is_none() {
+            Ok(())
+        } else {
+            Err(event_payload_mismatch())
+        }
+    }
+
+    fn has_non_batch_body(&self) -> bool {
+        self.text.is_some()
+            || self.call_id.is_some()
+            || self.name.is_some()
+            || self.arguments_json.is_some()
+            || self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.completion.is_some()
+            || self.failure_code.is_some()
+            || self.command_id.is_some()
+            || self.opaque_operation_id.is_some()
+            || self.close_disposition.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -87,8 +142,14 @@ struct EventDigestDocument<'a> {
 
 impl LLMEventEnvelope {
     pub fn expected_digest(&self) -> Result<String, HostContractError> {
+        self.payload.validate_for(self.kind, &self.run_id, None)?;
+        let domain = match self.schema_version {
+            1 => "llm-event-envelope:v1",
+            2 => "llm-event-envelope:v2",
+            _ => return Err(event_payload_mismatch()),
+        };
         digest(
-            "llm-event-envelope:v1",
+            domain,
             &EventDigestDocument {
                 schema_version: self.schema_version,
                 event_id: &self.event_id,
@@ -265,4 +326,8 @@ fn digest<T: Serialize>(domain: &str, value: &T) -> Result<String, HostContractE
     CanonicalDigestV1::digest(domain, value)
         .map(|value| value.as_str().to_string())
         .map_err(|_| HostContractError::new("llm.contract.digest_failed"))
+}
+
+fn event_payload_mismatch() -> HostContractError {
+    HostContractError::new("llm.contract.event_payload_mismatch")
 }

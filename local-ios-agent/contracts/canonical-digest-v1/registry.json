@@ -110,9 +110,21 @@
       "excluded": "delivery metadata"
     },
     {
+      "domain": "host-command-payload:v2",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "complete provider-neutral model request or ordered tool batch command",
+      "excluded": "credential, provider encoding, dispatch attempts and receipt time"
+    },
+    {
       "domain": "host-command-envelope:v1",
       "computing_authority": "rust",
       "required_coverage": "command, run, session, epoch, sequence, turn, kind, payload, disclosure",
+      "excluded": "dispatch attempts and receipt time"
+    },
+    {
+      "domain": "host-command-envelope:v2",
+      "computing_authority": "rust_and_swift",
+      "required_coverage": "command, run, session, epoch, sequence, kind, v2 payload and disclosure",
       "excluded": "dispatch attempts and receipt time"
     },
     {
@@ -143,6 +155,12 @@
       "domain": "llm-event-envelope:v1",
       "computing_authority": "swift_and_rust",
       "required_coverage": "event, run, session, epoch, turn, sequence, kind, payload",
+      "excluded": "arrival time and diagnostics"
+    },
+    {
+      "domain": "llm-event-envelope:v2",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "event, run, session, epoch, turn, sequence, model delta or complete ordered tool batch payload",
       "excluded": "arrival time and diagnostics"
     },
     {

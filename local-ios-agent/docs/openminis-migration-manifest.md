@@ -127,8 +127,8 @@ fact backend interface.
 
 | Source | LocalAgent target | Build target | License | Migration |
 | --- | --- | --- | --- | --- |
-| Existing Rust conversation event stores under `rust-core/src/memory` | `rust-core/src/storage/*conversation*` | `local_ios_agent_runtime` | LocalAgent source | Renamed and reduced to conversation/session events, command receipts, replay and atomic append transactions; concrete long-term-memory tables were removed |
-| Existing reliable Rust/Swift bridge envelopes | `rust-core/src/conversation`, `ffi_bridge.rs`, `LocalAgentBridge/TranscriptDTOs.swift` | Rust runtime and `LocalAgentBridge` | LocalAgent source | Added idempotent transcript commands, one active run per conversation, cancellable per-conversation projection replay and the existing canonical-digest registry; no second transport protocol or projection database |
+| Legacy conversation/session code previously misplaced under `rust-core/src/memory` | `rust-core/src/storage/*conversation*` | `local_ios_agent_runtime` | LocalAgent source | Moved and reduced to conversation events, command receipts, replay and atomic append transactions; `memory` no longer owns conversation/session data |
+| Existing reliable Rust/Swift bridge envelopes | `rust-core/src/conversation`, `ffi_bridge.rs`, `LocalAgentBridge/TranscriptDTOs.swift`, `LocalAgentLLMContracts` | Rust runtime, `LocalAgentBridge`, and `LocalAgentLLMContracts` | LocalAgent source | Reuses the existing receipt/epoch/backpressure transport; schema v2 carries complete model requests and ordered tool batches with symmetric kind/payload validation and shared digests, without adding a second protocol or projection database |
 | LocalAgent Rust execution core | `rust-core/src/agent_loop`, `rust-core/src/tool/batch.rs` | `local_ios_agent_runtime` | LocalAgent source | Replaced Agent business-state orchestration with one direct ReAct loop, fixed 200-model-turn guard, ordered Swift tool batches, atomic completed-round commits, run-scoped cancellation and conservative process-loss recovery |
 
 Only Rust writes the canonical transcript. Swift receives ordered projections

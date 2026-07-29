@@ -7,8 +7,8 @@ use crate::context::ModelInputRole;
 use crate::conversation::ConversationRunFrame;
 use crate::execution::ExecutionContextInputAssembler;
 use crate::llm_contracts::{
-    EgressDataClassCountDocument, GenerationDisclosureDocument, HostAttachmentReference,
-    HostCommandPayload, HostSemanticContent, HostSemanticMessage, HostSourceRevision,
+    EgressDataClassCountDocument, GenerationDisclosureDocument, HostCommandPayload,
+    HostSemanticContent, HostSemanticMessage, HostSourceRevision, LegacyHostAttachmentReference,
     PreparationBinding, SafeDisplaySummaryDocument,
 };
 use crate::run_snapshot::{RunSnapshotError, RunSnapshotResult, StartRunRequest};
@@ -217,7 +217,7 @@ pub(crate) fn derive_authoritative_preparation(
                 attachment_id: &'a str,
                 revision: &'static str,
             }
-            Ok(HostAttachmentReference {
+            Ok(LegacyHostAttachmentReference {
                 attachment_id: attachment_id.clone(),
                 revision: "1".into(),
                 modality: "binary".into(),
@@ -286,6 +286,13 @@ pub(crate) fn derive_authoritative_preparation(
         attachments,
         semantic_history: semantic_messages,
         tool_results: Vec::new(),
+        system_prompt: None,
+        conversation_stream_id: None,
+        ordered_messages: Vec::new(),
+        attachment_references: Vec::new(),
+        ordered_tool_definitions: Vec::new(),
+        tool_batch: None,
+        target_batch_id: None,
     };
     let payload_digest = payload
         .expected_digest()

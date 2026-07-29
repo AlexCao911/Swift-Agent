@@ -4,7 +4,7 @@ use std::fmt::{self, Write};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const REGISTERED_DOMAINS: [&str; 37] = [
+const REGISTERED_DOMAINS: [&str; 40] = [
     "agent-host-binding:v1",
     "agent-input:v1",
     "agent-requirements:v1",
@@ -24,9 +24,12 @@ const REGISTERED_DOMAINS: [&str; 37] = [
     "generation-disclosure:v1",
     "host-binding-staging-receipt:v1",
     "host-command-envelope:v1",
+    "host-command-envelope:v2",
     "host-command-payload:v1",
+    "host-command-payload:v2",
     "host-tool-effect-result:v1",
     "llm-event-envelope:v1",
+    "llm-event-envelope:v2",
     "llm-event-receipt:v1",
     "legacy-profile-source:v1",
     "preparation-binding:v1",
@@ -123,10 +126,13 @@ impl fmt::Display for CanonicalDigestError {
 impl std::error::Error for CanonicalDigestError {}
 
 fn validate_domain(domain: &str) -> Result<(), CanonicalDigestError> {
-    let Some(name) = domain.strip_suffix(":v1") else {
+    let Some((name, version)) = domain.rsplit_once(":v") else {
         return Err(invalid_domain(domain));
     };
     if name.is_empty()
+        || version.is_empty()
+        || version.starts_with('0')
+        || !version.bytes().all(|byte| byte.is_ascii_digit())
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')

@@ -6,6 +6,9 @@ public enum LLMEventKind: String, Codable, Sendable {
     case toolCallStarted = "tool_call_started", toolCallArgumentsDelta = "tool_call_arguments_delta"
     case toolCallCompleted = "tool_call_completed", usageUpdated = "usage_updated"
     case generationCompleted = "generation_completed", failed, cancelled
+    case toolBatchStarted = "tool_batch_started"
+    case toolBatchCompleted = "tool_batch_completed"
+    case toolBatchFailed = "tool_batch_failed"
     case sessionClosed = "session_closed"
 }
 
@@ -21,6 +24,7 @@ public struct LLMEventPayload: Codable, Equatable, Sendable {
     public let commandID: String?
     public let opaqueOperationID: String?
     public let closeDisposition: String?
+    public let toolBatchCompletion: HostToolBatchCompletion?
 
     public init(
         text: String? = nil,
@@ -33,7 +37,8 @@ public struct LLMEventPayload: Codable, Equatable, Sendable {
         failureCode: String? = nil,
         commandID: String? = nil,
         opaqueOperationID: String? = nil,
-        closeDisposition: String? = nil
+        closeDisposition: String? = nil,
+        toolBatchCompletion: HostToolBatchCompletion? = nil
     ) {
         self.text = text
         self.callID = callID
@@ -46,6 +51,39 @@ public struct LLMEventPayload: Codable, Equatable, Sendable {
         self.commandID = commandID
         self.opaqueOperationID = opaqueOperationID
         self.closeDisposition = closeDisposition
+        self.toolBatchCompletion = toolBatchCompletion
+    }
+
+    public func validate(
+        for kind: LLMEventKind,
+        envelopeRunID: String,
+        expectedBatchID: String?
+    ) throws {
+        if kind == .toolBatchCompleted {
+            guard let toolBatchCompletion,
+                  !hasNonBatchBody,
+                  toolBatchCompletion.runID == envelopeRunID,
+                  expectedBatchID == nil || toolBatchCompletion.batchID == expectedBatchID
+            else {
+                throw eventPayloadMismatch()
+            }
+        } else if toolBatchCompletion != nil {
+            throw eventPayloadMismatch()
+        }
+    }
+
+    private var hasNonBatchBody: Bool {
+        text != nil
+            || callID != nil
+            || name != nil
+            || argumentsJSON != nil
+            || inputTokens != nil
+            || outputTokens != nil
+            || completion != nil
+            || failureCode != nil
+            || commandID != nil
+            || opaqueOperationID != nil
+            || closeDisposition != nil
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -54,6 +92,7 @@ public struct LLMEventPayload: Codable, Equatable, Sendable {
         case inputTokens = "input_tokens", outputTokens = "output_tokens"
         case failureCode = "failure_code", commandID = "command_id"
         case opaqueOperationID = "opaque_operation_id", closeDisposition = "close_disposition"
+        case toolBatchCompletion = "tool_batch_completion"
     }
 }
 
@@ -85,7 +124,16 @@ public struct LLMEventEnvelope: Codable, Equatable, Sendable {
     public let eventEnvelopeDigest: String
 
     public func recomputedDigest() throws -> CanonicalDigest {
-        try CanonicalDigestV1.digest(domain: "llm-event-envelope:v1", document: try eventCanonicalValue(DigestDocument(self)))
+        try payload.validate(for: kind, envelopeRunID: runID, expectedBatchID: nil)
+        let domain = switch schemaVersion {
+        case 1: "llm-event-envelope:v1"
+        case 2: "llm-event-envelope:v2"
+        default: throw eventPayloadMismatch()
+        }
+        return try CanonicalDigestV1.digest(
+            domain: domain,
+            document: try eventCanonicalValue(DigestDocument(self))
+        )
     }
 
     public func replacing(eventSequence: UInt64) -> Self {
@@ -213,4 +261,8 @@ public enum LLMEventSubmissionResult: String, Codable, Sendable {
 
 private func eventCanonicalValue<T: Encodable>(_ value: T) throws -> CanonicalJSONValue {
     try JSONDecoder().decode(CanonicalJSONValue.self, from: JSONEncoder().encode(value))
+}
+
+private func eventPayloadMismatch() -> HostContractValidationError {
+    HostContractValidationError(code: "llm.contract.event_payload_mismatch")
 }

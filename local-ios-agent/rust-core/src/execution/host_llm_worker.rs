@@ -584,13 +584,17 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
 }
 
 fn valid_envelope(event: &LLMEventEnvelope) -> bool {
-    if event.schema_version != 1
+    if !matches!(event.schema_version, 1 | 2)
         || event.event_id.is_empty()
         || event.run_id.is_empty()
         || event.session_handle.is_empty()
         || event.host_process_epoch.is_empty()
         || event.event_sequence == 0
         || event.expected_digest().ok().as_deref() != Some(event.event_envelope_digest())
+        || event
+            .payload
+            .validate_for(event.kind, &event.run_id, None)
+            .is_err()
     {
         return false;
     }

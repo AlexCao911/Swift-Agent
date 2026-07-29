@@ -136,7 +136,7 @@ struct CanonicalDigestTests {
         let registry = try DigestRegistry.load()
 
         #expect(CanonicalDigestV1.registeredDomains == registry.domains)
-        #expect(registry.domains.count == 37)
+        #expect(registry.domains.count == 40)
     }
 
     @Test

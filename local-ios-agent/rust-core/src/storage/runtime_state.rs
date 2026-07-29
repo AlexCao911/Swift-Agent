@@ -292,6 +292,7 @@ pub(crate) fn apply_command_acknowledgement_state(
                     Some(runtime_now_millis() + HOST_LIFECYCLE_TIMEOUT_MILLIS),
                 );
             }
+            HostCommandKind::ExecuteToolBatch | HostCommandKind::CancelToolBatch => {}
             HostCommandKind::CloseSession => {
                 lifecycle = ResourceLifecycle::AwaitingSessionClosed;
                 next_worker = next_worker.with_watchdog(
@@ -320,7 +321,9 @@ pub(crate) fn apply_command_acknowledgement_state(
                 }
                 HostCommandKind::StartGeneration
                 | HostCommandKind::ResumeGeneration
-                | HostCommandKind::CancelGeneration => {
+                | HostCommandKind::CancelGeneration
+                | HostCommandKind::ExecuteToolBatch
+                | HostCommandKind::CancelToolBatch => {
                     lifecycle = ResourceLifecycle::AwaitingCloseCommandAck;
                     close_command = Some(close_command_for(row, worker)?);
                     next_worker = next_worker
@@ -2181,7 +2184,10 @@ pub(crate) fn accepted_event_state(
             | LLMEventKind::ToolCallStarted
             | LLMEventKind::ToolCallArgumentsDelta
             | LLMEventKind::ToolCallCompleted
-            | LLMEventKind::UsageUpdated => {
+            | LLMEventKind::UsageUpdated
+            | LLMEventKind::ToolBatchStarted
+            | LLMEventKind::ToolBatchCompleted
+            | LLMEventKind::ToolBatchFailed => {
                 next_worker = next_worker.with_watchdog(
                     Some(HostWatchdogKind::StreamIdle),
                     None,
@@ -2552,6 +2558,9 @@ pub(crate) fn event_kind_name(kind: crate::llm_contracts::LLMEventKind) -> &'sta
         LLMEventKind::ToolCallCompleted => "tool_call_completed",
         LLMEventKind::UsageUpdated => "usage_updated",
         LLMEventKind::GenerationCompleted => "generation_completed",
+        LLMEventKind::ToolBatchStarted => "tool_batch_started",
+        LLMEventKind::ToolBatchCompleted => "tool_batch_completed",
+        LLMEventKind::ToolBatchFailed => "tool_batch_failed",
         LLMEventKind::Failed => "failed",
         LLMEventKind::Cancelled => "cancelled",
         LLMEventKind::SessionClosed => "session_closed",

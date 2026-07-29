@@ -4,6 +4,8 @@ public enum HostCommandKind: String, Codable, Sendable {
     case startGeneration = "start_generation"
     case resumeGeneration = "resume_generation"
     case cancelGeneration = "cancel_generation"
+    case executeToolBatch = "execute_tool_batch"
+    case cancelToolBatch = "cancel_tool_batch"
     case closeSession = "close_session"
     case capacityAvailable = "capacity_available"
 }
@@ -58,12 +60,27 @@ public struct HostSourceRevision: Codable, Equatable, Sendable {
     }
 }
 
-public struct HostAttachmentReference: Codable, Equatable, Sendable {
+public struct LegacyHostAttachmentReference: Codable, Equatable, Sendable {
     public let attachmentID: String
     public let revision: String
     public let modality: String
     public let mediaType: String
     public let contentDigest: String
+
+    public init(
+        attachmentID: String,
+        revision: String,
+        modality: String,
+        mediaType: String,
+        contentDigest: String
+    ) {
+        self.attachmentID = attachmentID
+        self.revision = revision
+        self.modality = modality
+        self.mediaType = mediaType
+        self.contentDigest = contentDigest
+    }
+
     private enum CodingKeys: String, CodingKey {
         case attachmentID = "attachment_id"
         case revision, modality
@@ -114,9 +131,16 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
     public let toolSchemaDigest: String
     public let sourceRevisions: [HostSourceRevision]
     public let sourceRevisionsDigest: String
-    public let attachments: [HostAttachmentReference]
+    public let attachments: [LegacyHostAttachmentReference]
     public let semanticHistory: [HostSemanticMessage]
     public let toolResults: [HostToolResult]
+    public let systemPrompt: String?
+    public let conversationStreamID: String?
+    public let orderedMessages: [HostModelMessage]
+    public let attachmentReferences: [HostAttachmentReference]
+    public let orderedToolDefinitions: [HostToolDefinition]
+    public let toolBatch: HostToolBatch?
+    public let targetBatchID: String?
 
     public init(
         schemaVersion: String,
@@ -126,9 +150,16 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         toolSchemaDigest: String,
         sourceRevisions: [HostSourceRevision],
         sourceRevisionsDigest: String,
-        attachments: [HostAttachmentReference],
+        attachments: [LegacyHostAttachmentReference],
         semanticHistory: [HostSemanticMessage],
-        toolResults: [HostToolResult]
+        toolResults: [HostToolResult],
+        systemPrompt: String? = nil,
+        conversationStreamID: String? = nil,
+        orderedMessages: [HostModelMessage] = [],
+        attachmentReferences: [HostAttachmentReference] = [],
+        orderedToolDefinitions: [HostToolDefinition] = [],
+        toolBatch: HostToolBatch? = nil,
+        targetBatchID: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.modelInputID = modelInputID
@@ -140,12 +171,237 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         self.attachments = attachments
         self.semanticHistory = semanticHistory
         self.toolResults = toolResults
+        self.systemPrompt = systemPrompt
+        self.conversationStreamID = conversationStreamID
+        self.orderedMessages = orderedMessages
+        self.attachmentReferences = attachmentReferences
+        self.orderedToolDefinitions = orderedToolDefinitions
+        self.toolBatch = toolBatch
+        self.targetBatchID = targetBatchID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(String.self, forKey: .schemaVersion)
+        modelInputID = try container.decode(String.self, forKey: .modelInputID)
+        messages = try container.decode([HostSemanticMessage].self, forKey: .messages)
+        toolSchemaJSON = try container.decode(String.self, forKey: .toolSchemaJSON)
+        toolSchemaDigest = try container.decode(String.self, forKey: .toolSchemaDigest)
+        sourceRevisions = try container.decode(
+            [HostSourceRevision].self,
+            forKey: .sourceRevisions
+        )
+        sourceRevisionsDigest = try container.decode(
+            String.self,
+            forKey: .sourceRevisionsDigest
+        )
+        attachments = try container.decode(
+            [LegacyHostAttachmentReference].self,
+            forKey: .attachments
+        )
+        semanticHistory = try container.decode(
+            [HostSemanticMessage].self,
+            forKey: .semanticHistory
+        )
+        toolResults = try container.decode([HostToolResult].self, forKey: .toolResults)
+        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+        conversationStreamID = try container.decodeIfPresent(
+            String.self,
+            forKey: .conversationStreamID
+        )
+        orderedMessages = try container.decodeIfPresent(
+            [HostModelMessage].self,
+            forKey: .orderedMessages
+        ) ?? []
+        attachmentReferences = try container.decodeIfPresent(
+            [HostAttachmentReference].self,
+            forKey: .attachmentReferences
+        ) ?? []
+        orderedToolDefinitions = try container.decodeIfPresent(
+            [HostToolDefinition].self,
+            forKey: .orderedToolDefinitions
+        ) ?? []
+        toolBatch = try container.decodeIfPresent(HostToolBatch.self, forKey: .toolBatch)
+        targetBatchID = try container.decodeIfPresent(String.self, forKey: .targetBatchID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(modelInputID, forKey: .modelInputID)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(toolSchemaJSON, forKey: .toolSchemaJSON)
+        try container.encode(toolSchemaDigest, forKey: .toolSchemaDigest)
+        try container.encode(sourceRevisions, forKey: .sourceRevisions)
+        try container.encode(sourceRevisionsDigest, forKey: .sourceRevisionsDigest)
+        try container.encode(attachments, forKey: .attachments)
+        try container.encode(semanticHistory, forKey: .semanticHistory)
+        try container.encode(toolResults, forKey: .toolResults)
+        try container.encodeIfPresent(systemPrompt, forKey: .systemPrompt)
+        try container.encodeIfPresent(conversationStreamID, forKey: .conversationStreamID)
+        if !orderedMessages.isEmpty {
+            try container.encode(orderedMessages, forKey: .orderedMessages)
+        }
+        if !attachmentReferences.isEmpty {
+            try container.encode(attachmentReferences, forKey: .attachmentReferences)
+        }
+        if !orderedToolDefinitions.isEmpty {
+            try container.encode(orderedToolDefinitions, forKey: .orderedToolDefinitions)
+        }
+        try container.encodeIfPresent(toolBatch, forKey: .toolBatch)
+        try container.encodeIfPresent(targetBatchID, forKey: .targetBatchID)
+    }
+
+    public static func generationV2(_ request: HostModelRequest) -> Self {
+        emptyV2(
+            modelInputID: request.runID,
+            systemPrompt: request.systemPrompt,
+            conversationStreamID: request.conversationStreamID,
+            orderedMessages: request.orderedMessages,
+            attachmentReferences: request.attachmentReferences,
+            orderedToolDefinitions: request.orderedToolDefinitions
+        )
+    }
+
+    public static func toolBatchV2(_ batch: HostToolBatch) -> Self {
+        emptyV2(toolBatch: batch)
+    }
+
+    public static func cancelToolBatchV2(_ batchID: String) -> Self {
+        emptyV2(targetBatchID: batchID)
+    }
+
+    public static func lifecycleV2() -> Self {
+        emptyV2()
+    }
+
+    public func modelRequest(
+        for kind: HostCommandKind,
+        envelopeRunID: String
+    ) throws -> HostModelRequest {
+        try validate(for: kind, envelopeRunID: envelopeRunID)
+        guard let systemPrompt, let conversationStreamID else {
+            throw commandPayloadMismatch()
+        }
+        return HostModelRequest(
+            runID: envelopeRunID,
+            conversationStreamID: conversationStreamID,
+            systemPrompt: systemPrompt,
+            orderedMessages: orderedMessages,
+            attachmentReferences: attachmentReferences,
+            orderedToolDefinitions: orderedToolDefinitions
+        )
+    }
+
+    public func validate(
+        for kind: HostCommandKind,
+        envelopeRunID: String
+    ) throws {
+        if schemaVersion == "1" {
+            guard v2BodyIsEmpty,
+                  kind != .executeToolBatch,
+                  kind != .cancelToolBatch
+            else {
+                throw commandPayloadMismatch()
+            }
+            return
+        }
+        guard schemaVersion == "2",
+              messages.isEmpty,
+              sourceRevisions.isEmpty,
+              attachments.isEmpty,
+              semanticHistory.isEmpty,
+              toolResults.isEmpty,
+              toolSchemaJSON == "{}",
+              toolSchemaDigest
+                  == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              sourceRevisionsDigest
+                  == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        else {
+            throw commandPayloadMismatch()
+        }
+
+        let generationBodyIsEmpty = systemPrompt == nil
+            && conversationStreamID == nil
+            && orderedMessages.isEmpty
+            && attachmentReferences.isEmpty
+            && orderedToolDefinitions.isEmpty
+        let valid: Bool
+        switch kind {
+        case .startGeneration, .resumeGeneration:
+            valid = modelInputID == envelopeRunID
+                && systemPrompt != nil
+                && conversationStreamID?.isEmpty == false
+                && toolBatch == nil
+                && targetBatchID == nil
+        case .executeToolBatch:
+            valid = generationBodyIsEmpty
+                && toolBatch?.runID == envelopeRunID
+                && targetBatchID == nil
+        case .cancelToolBatch:
+            valid = generationBodyIsEmpty
+                && toolBatch == nil
+                && targetBatchID?.isEmpty == false
+        case .cancelGeneration, .closeSession, .capacityAvailable:
+            valid = generationBodyIsEmpty
+                && toolBatch == nil
+                && targetBatchID == nil
+        }
+        guard valid else {
+            throw commandPayloadMismatch()
+        }
+    }
+
+    private var v2BodyIsEmpty: Bool {
+        systemPrompt == nil
+            && conversationStreamID == nil
+            && orderedMessages.isEmpty
+            && attachmentReferences.isEmpty
+            && orderedToolDefinitions.isEmpty
+            && toolBatch == nil
+            && targetBatchID == nil
     }
 
     public func computedDigest() throws -> CanonicalDigest {
-        try CanonicalDigestV1.digest(
-            domain: "host-command-payload:v1",
+        let domain = switch schemaVersion {
+        case "1": "host-command-payload:v1"
+        case "2": "host-command-payload:v2"
+        default: throw commandPayloadMismatch()
+        }
+        return try CanonicalDigestV1.digest(
+            domain: domain,
             document: try canonicalValue(self)
+        )
+    }
+
+    private static func emptyV2(
+        modelInputID: String = "lifecycle",
+        systemPrompt: String? = nil,
+        conversationStreamID: String? = nil,
+        orderedMessages: [HostModelMessage] = [],
+        attachmentReferences: [HostAttachmentReference] = [],
+        orderedToolDefinitions: [HostToolDefinition] = [],
+        toolBatch: HostToolBatch? = nil,
+        targetBatchID: String? = nil
+    ) -> Self {
+        Self(
+            schemaVersion: "2",
+            modelInputID: modelInputID,
+            messages: [],
+            toolSchemaJSON: "{}",
+            toolSchemaDigest: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            sourceRevisions: [],
+            sourceRevisionsDigest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            attachments: [],
+            semanticHistory: [],
+            toolResults: [],
+            systemPrompt: systemPrompt,
+            conversationStreamID: conversationStreamID,
+            orderedMessages: orderedMessages,
+            attachmentReferences: attachmentReferences,
+            orderedToolDefinitions: orderedToolDefinitions,
+            toolBatch: toolBatch,
+            targetBatchID: targetBatchID
         )
     }
 
@@ -160,6 +416,13 @@ public struct HostCommandPayload: Codable, Equatable, Sendable {
         case attachments
         case semanticHistory = "semantic_history"
         case toolResults = "tool_results"
+        case systemPrompt = "system_prompt"
+        case conversationStreamID = "conversation_stream_id"
+        case orderedMessages = "ordered_messages"
+        case attachmentReferences = "attachment_references"
+        case orderedToolDefinitions = "ordered_tool_definitions"
+        case toolBatch = "tool_batch"
+        case targetBatchID = "target_batch_id"
     }
 }
 
@@ -179,6 +442,16 @@ public struct HostCommandEnvelope: Codable, Equatable, Sendable {
     public let payload: HostCommandPayload
 
     public func recomputedDigest() throws -> CanonicalDigest {
+        try payload.validate(for: kind, envelopeRunID: runID)
+        let domain: String
+        switch (schemaVersion, payload.schemaVersion) {
+        case (1, "1"):
+            domain = "host-command-envelope:v1"
+        case (2, "2"):
+            domain = "host-command-envelope:v2"
+        default:
+            throw commandPayloadMismatch()
+        }
         guard try payload.computedDigest().hex == payloadDigest else {
             throw CanonicalDigestError(code: "host_command.payload_digest_mismatch", message: "host command payload digest does not match payload")
         }
@@ -190,7 +463,7 @@ public struct HostCommandEnvelope: Codable, Equatable, Sendable {
             throw CanonicalDigestError(code: "host_command.disclosure_missing", message: "host command disclosure is missing")
         }
         return try CanonicalDigestV1.digest(
-            domain: "host-command-envelope:v1",
+            domain: domain,
             document: try canonicalValue(DigestDocument(self))
         )
     }
@@ -343,4 +616,16 @@ public struct HostDispatchEnvelope: Codable, Equatable, Sendable {
 
 private func canonicalValue<T: Encodable>(_ value: T) throws -> CanonicalJSONValue {
     try JSONDecoder().decode(CanonicalJSONValue.self, from: JSONEncoder().encode(value))
+}
+
+public struct HostContractValidationError: Error, Equatable, Sendable {
+    public let code: String
+
+    public init(code: String) {
+        self.code = code
+    }
+}
+
+private func commandPayloadMismatch() -> HostContractValidationError {
+    HostContractValidationError(code: "llm.contract.command_payload_mismatch")
 }
