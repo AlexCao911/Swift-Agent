@@ -64,6 +64,14 @@ impl ContextAssembler {
     }
 
     pub fn with_compiled_prompt(self, prompt: CompiledPrompt) -> Self {
+        self.with_compiled_prompt_requirement(prompt, false)
+    }
+
+    pub fn with_required_compiled_prompt(self, prompt: CompiledPrompt) -> Self {
+        self.with_compiled_prompt_requirement(prompt, true)
+    }
+
+    fn with_compiled_prompt_requirement(self, prompt: CompiledPrompt, required: bool) -> Self {
         let source_map = prompt.source_map;
         let mut segment = ContextSegment::prompt("prompt.compiled", prompt.text)
             .with_provenance("prompt.compiled");
@@ -78,7 +86,11 @@ impl ContextAssembler {
                 ),
             );
         }
-        self.with_segment(segment.with_prompt_source_map(source_map))
+        segment = segment.with_prompt_source_map(source_map);
+        if required {
+            segment = segment.required_for_model_input();
+        }
+        self.with_segment(segment)
     }
 
     pub fn with_memory_contribution(self, contribution: MemoryContribution) -> Self {

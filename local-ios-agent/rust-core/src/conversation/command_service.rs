@@ -111,6 +111,12 @@ impl<S: ConversationEventStore> ConversationCommandService<S> {
             return decode_outcome(&receipt.outcome_json);
         }
 
+        if let Some(snapshot) = command.run_start_snapshot() {
+            snapshot
+                .validate()
+                .map_err(|error| TranscriptCommandError::new(error.code(), error.to_string()))?;
+        }
+
         let next_sequence = store
             .last_event(&SessionId(stream_id.clone()))
             .map_err(storage_error)?

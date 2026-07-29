@@ -1,6 +1,7 @@
 use serde::Serialize;
 
-use crate::context::ContextSegmentId;
+use crate::agent_input::ToolDefinitionSnapshot;
+use crate::context::{ContextAssemblyTrace, ContextSegmentId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +24,15 @@ pub struct ModelInputMessage {
     content: String,
     blob_refs: Vec<String>,
     source_segment_id: ContextSegmentId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTurnInput {
+    system_prompt: String,
+    ordered_messages: ModelInputMessages,
+    ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+    context_trace: ContextAssemblyTrace,
+    compaction_summary: Option<String>,
 }
 
 impl ModelInputMessages {
@@ -64,5 +74,43 @@ impl ModelInputMessage {
 
     pub fn source_segment_id(&self) -> &str {
         self.source_segment_id.as_str()
+    }
+}
+
+impl AgentTurnInput {
+    pub(crate) fn new(
+        system_prompt: String,
+        ordered_messages: ModelInputMessages,
+        ordered_tool_definitions: Vec<ToolDefinitionSnapshot>,
+        context_trace: ContextAssemblyTrace,
+        compaction_summary: Option<String>,
+    ) -> Self {
+        Self {
+            system_prompt,
+            ordered_messages,
+            ordered_tool_definitions,
+            context_trace,
+            compaction_summary,
+        }
+    }
+
+    pub fn system_prompt(&self) -> &str {
+        &self.system_prompt
+    }
+
+    pub fn ordered_messages(&self) -> &ModelInputMessages {
+        &self.ordered_messages
+    }
+
+    pub fn ordered_tool_definitions(&self) -> &[ToolDefinitionSnapshot] {
+        &self.ordered_tool_definitions
+    }
+
+    pub fn context_trace(&self) -> &ContextAssemblyTrace {
+        &self.context_trace
+    }
+
+    pub fn compaction_summary(&self) -> Option<&str> {
+        self.compaction_summary.as_deref()
     }
 }

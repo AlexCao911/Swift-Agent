@@ -1,5 +1,8 @@
+mod assembler;
 mod snapshot;
 
+pub use assembler::AgentInputAssembler;
 pub use snapshot::{
-    PromptDocumentSnapshot, RunStartSnapshot, SkillDescriptor, ToolDefinitionSnapshot,
+    AgentInputError, PromptDocumentSnapshot, RunStartSnapshot, SkillDescriptor,
+    ToolDefinitionSnapshot,
 };

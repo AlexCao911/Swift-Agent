@@ -11,26 +11,26 @@ use local_ios_agent_runtime::storage::{
 use serde_json::json;
 
 fn snapshot() -> RunStartSnapshot {
-    RunStartSnapshot {
-        ordered_prompt_documents: vec![PromptDocumentSnapshot {
+    RunStartSnapshot::make(
+        vec![PromptDocumentSnapshot {
             id: "base".into(),
             source: "user".into(),
             markdown: "Be useful.".into(),
         }],
-        skill_descriptors: vec![SkillDescriptor {
+        vec![SkillDescriptor {
             id: "files".into(),
             name: "Files".into(),
             description: "Read files when relevant.".into(),
             location: "/var/localagent/skills/files/SKILL.md".into(),
             enabled: true,
         }],
-        ordered_tool_definitions: vec![ToolDefinitionSnapshot {
+        vec![ToolDefinitionSnapshot {
             name: "file_read".into(),
             description: "Read a file.".into(),
             input_schema: json!({"type": "object"}),
         }],
-        snapshot_digest: "0".repeat(64),
-    }
+    )
+    .unwrap()
 }
 
 fn send(stream: &str, request: &str, text: &str) -> TranscriptCommand {
@@ -83,6 +83,29 @@ fn changed_payload_for_same_request_is_an_idempotency_conflict() {
         error,
         TranscriptCommandError::idempotency_conflict("conversation-a", "request-1")
     );
+}
+
+#[test]
+fn invalid_run_snapshot_is_rejected_before_canonical_write() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    let service = ConversationCommandService::new(store.clone());
+    let mut command = send("conversation-a", "request-invalid", "hello");
+    if let TranscriptCommand::Send {
+        run_start_snapshot, ..
+    } = &mut command
+    {
+        run_start_snapshot.snapshot_digest = "0".repeat(64);
+    }
+
+    let error = service.submit(command).unwrap_err();
+
+    assert_eq!(error.code(), "run_start_snapshot.digest_mismatch");
+    assert!(store
+        .lock()
+        .unwrap()
+        .events_after(&SessionId("conversation-a".into()), 0)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

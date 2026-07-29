@@ -19,5 +19,7 @@ mod host_llm_ffi;
 mod llm_profile_migration_ffi;
 #[path = "integration/phase_five_product_path.rs"]
 mod phase_five_product_path;
+#[path = "integration/prompt_skill_context.rs"]
+mod prompt_skill_context;
 #[path = "integration/sqlite_resilience.rs"]
 mod sqlite_resilience;

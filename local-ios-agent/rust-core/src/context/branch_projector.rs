@@ -15,14 +15,13 @@ impl BranchProjector {
         let mut messages = Vec::new();
         for event in branch {
             match event.kind {
-                EventKind::UserMessage if event.blob_refs.is_empty() => {
-                    messages.push(PromptMessage::User(event.payload));
+                EventKind::UserMessage => {
+                    messages.push(project_user_message(event.payload, event.blob_refs))
                 }
-                EventKind::UserMessage => messages.push(PromptMessage::UserWithBlobRefs {
-                    content: event.payload,
-                    blob_refs: event.blob_refs,
-                }),
                 EventKind::AssistantMessageCompleted => {
+                    messages.push(PromptMessage::Assistant(event.payload));
+                }
+                EventKind::ToolCallRequested => {
                     messages.push(PromptMessage::Assistant(event.payload));
                 }
                 EventKind::ToolResultMessage => {
@@ -39,6 +38,40 @@ impl BranchProjector {
         }
 
         messages
+    }
+}
+
+fn project_user_message(payload: String, mut blob_refs: Vec<String>) -> PromptMessage {
+    let parsed = serde_json::from_str::<Value>(&payload).ok();
+    let command = parsed.as_ref().and_then(|value| value.get("command"));
+    let text = command
+        .and_then(|value| value.get("text"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or(payload);
+
+    if blob_refs.is_empty() {
+        blob_refs = command
+            .and_then(|value| value.get("attachments"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|attachment| {
+                attachment
+                    .get("content_digest")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect();
+    }
+
+    if blob_refs.is_empty() {
+        PromptMessage::User(text)
+    } else {
+        PromptMessage::UserWithBlobRefs {
+            content: text,
+            blob_refs,
+        }
     }
 }
 

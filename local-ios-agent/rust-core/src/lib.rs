@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod run_snapshot;
 pub mod runtime;
 pub mod security;
+pub mod skills;
 pub mod storage;
 pub mod tool;
 pub mod user_customization;

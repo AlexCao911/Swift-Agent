@@ -10,7 +10,10 @@ struct RunStartSnapshotDTOTests {
         let snapshot = try makeSnapshot()
 
         try snapshot.validate()
-        #expect(snapshot.snapshotDigest.count == 64)
+        #expect(
+            snapshot.snapshotDigest
+                == "770d63806ac4bd25a4886d9f7383989bbb2bfe3ad6eb35ca85fc239850581f18"
+        )
 
         let data = try JSONEncoder().encode(snapshot)
         let object = try #require(

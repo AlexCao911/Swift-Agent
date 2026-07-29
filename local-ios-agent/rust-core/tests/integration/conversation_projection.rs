@@ -10,26 +10,26 @@ use local_ios_agent_runtime::storage::InMemoryConversationStore;
 use serde_json::json;
 
 fn snapshot() -> RunStartSnapshot {
-    RunStartSnapshot {
-        ordered_prompt_documents: vec![PromptDocumentSnapshot {
+    RunStartSnapshot::make(
+        vec![PromptDocumentSnapshot {
             id: "base".into(),
             source: "user".into(),
             markdown: "Be useful.".into(),
         }],
-        skill_descriptors: vec![SkillDescriptor {
+        vec![SkillDescriptor {
             id: "files".into(),
             name: "Files".into(),
             description: "Read files when relevant.".into(),
             location: "/var/localagent/skills/files/SKILL.md".into(),
             enabled: true,
         }],
-        ordered_tool_definitions: vec![ToolDefinitionSnapshot {
+        vec![ToolDefinitionSnapshot {
             name: "file_read".into(),
             description: "Read a file.".into(),
             input_schema: json!({"type": "object"}),
         }],
-        snapshot_digest: "0".repeat(64),
-    }
+    )
+    .unwrap()
 }
 
 fn send(stream: &str, request: &str) -> TranscriptCommand {

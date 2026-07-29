@@ -91,6 +91,12 @@ that path through the read-only Skills mount only after the Agent chooses the
 Skill. Sibling `scripts/`, `references/`, and `assets/` remain ordinary files
 and are never recursively preloaded.
 
+Rust validates and freezes this snapshot, then rebuilds the complete Context
+from the canonical conversation on every model turn. Its `memory` module now
+contains only contribution data and an injectable `MemoryProvider` contract
+with `recall` and `remember_completed_turn`; no SQLite, HTTP, vector, graph, or
+other production memory backend ships in this slice.
+
 ## Providers, OAuth, and model selection
 
 | OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |

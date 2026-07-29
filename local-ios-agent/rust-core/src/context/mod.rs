@@ -30,7 +30,7 @@ pub use contribution::{ContextContribution, ContextContributionBundle};
 pub use debug_snapshot::PromptDebugSnapshot;
 pub use graph::ContextGraph;
 pub use injection_policy::ContextInjectionPolicy;
-pub use model_input::{ModelInputMessage, ModelInputMessages, ModelInputRole};
+pub use model_input::{AgentTurnInput, ModelInputMessage, ModelInputMessages, ModelInputRole};
 pub use policy::ContextPolicy;
 pub use preview::ContextPreview;
 pub use prompt_frame::{ContextController, InferenceOptions, PromptFrame, PromptMessage};

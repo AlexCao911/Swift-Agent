@@ -118,4 +118,19 @@ impl TranscriptCommand {
             Self::Send { .. } | Self::RetryFrom { .. } | Self::EditMessage { .. }
         )
     }
+
+    pub fn run_start_snapshot(&self) -> Option<&RunStartSnapshot> {
+        match self {
+            Self::Send {
+                run_start_snapshot, ..
+            }
+            | Self::RetryFrom {
+                run_start_snapshot, ..
+            }
+            | Self::EditMessage {
+                run_start_snapshot, ..
+            } => Some(run_start_snapshot),
+            _ => None,
+        }
+    }
 }

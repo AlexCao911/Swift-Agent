@@ -2,10 +2,6 @@ use local_ios_agent_runtime::context::{
     ContextAssembler, ContextContribution, ContextContributionBundle, ContextSegment,
     ModelInputRole,
 };
-use local_ios_agent_runtime::memory::{
-    MemoryCandidate, MemoryExtractionPolicy, MemoryInjectionPolicy, MemoryReviewState,
-    MemorySelectionPolicy, SensitivityLevel,
-};
 use local_ios_agent_runtime::tool::{
     HostPlatform, ToolCapabilityDescriptor, ToolSchema, ToolSchemaMetadata,
 };
@@ -133,52 +129,6 @@ fn tool_schema_metadata_declares_cross_platform_capability() {
         metadata.capabilities()[0].platforms(),
         &[HostPlatform::Ios, HostPlatform::MacOs]
     );
-}
-
-#[test]
-fn memory_policy_models_extraction_selection_and_injection_separately() {
-    let extraction = MemoryExtractionPolicy::review_required()
-        .from_event_kind("user.message")
-        .extract_kind("preference")
-        .extract_kind("project_fact");
-    let selection = MemorySelectionPolicy::new()
-        .with_query_source("conversation.current_turn")
-        .with_max_results(6);
-    let injection = MemoryInjectionPolicy::new()
-        .as_segment_source("memory.selected")
-        .with_budget_tokens(512)
-        .require_reviewed_memories();
-
-    assert!(extraction.requires_review());
-    assert_eq!(extraction.extract_kinds(), &["preference", "project_fact"]);
-    assert_eq!(selection.max_results(), 6);
-    assert_eq!(injection.budget_tokens(), Some(512));
-    assert!(injection.requires_reviewed_memories());
-}
-
-#[test]
-fn memory_candidate_records_extraction_metadata_before_review() {
-    let candidate = MemoryCandidate::new("User prefers local-first agents")
-        .with_source_event_id("event.user.1")
-        .with_kind("preference")
-        .with_confidence(0.84)
-        .unwrap()
-        .with_sensitivity(SensitivityLevel::Sensitive);
-
-    assert_eq!(candidate.source_event_id(), Some("event.user.1"));
-    assert_eq!(candidate.kind(), Some("preference"));
-    assert_eq!(
-        candidate.confidence().map(|confidence| confidence.value()),
-        Some(0.84)
-    );
-    assert_eq!(candidate.sensitivity(), SensitivityLevel::Sensitive);
-    assert_eq!(candidate.review_state(), MemoryReviewState::Pending);
-    assert!(!candidate.confirmed);
-
-    let approved = candidate.confirm();
-
-    assert!(approved.confirmed);
-    assert_eq!(approved.review_state(), MemoryReviewState::Approved);
 }
 
 #[test]

@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::memory::MemoryContribution;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -5,7 +7,17 @@ pub struct MemoryProviderId(String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryQuery {
-    text: String,
+    pub conversation_stream_id: String,
+    pub text: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompletedTurnMemoryInput {
+    pub conversation_stream_id: String,
+    pub user_text: String,
+    pub assistant_text: String,
+    pub tool_results: Vec<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,9 +39,19 @@ pub struct MemoryReadinessIssue {
     message: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryProviderError {
+    pub code: String,
+    pub message: String,
+}
+
 pub trait MemoryProvider: std::fmt::Debug + Send + Sync {
     fn provider_id(&self) -> MemoryProviderId;
-    fn query(&self, query: &MemoryQuery) -> MemoryQueryResult;
+    fn recall(&self, query: &MemoryQuery) -> MemoryQueryResult;
+    fn remember_completed_turn(
+        &self,
+        input: &CompletedTurnMemoryInput,
+    ) -> Result<(), MemoryProviderError>;
 }
 
 impl MemoryProviderId {
@@ -43,14 +65,39 @@ impl MemoryProviderId {
 }
 
 impl MemoryQuery {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+    pub fn for_conversation(
+        conversation_stream_id: impl Into<String>,
+        text: impl Into<String>,
+        limit: usize,
+    ) -> Self {
+        Self {
+            conversation_stream_id: conversation_stream_id.into(),
+            text: text.into(),
+            limit,
+        }
     }
 
     pub fn text(&self) -> &str {
         &self.text
     }
 }
+
+impl MemoryProviderError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryProviderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MemoryProviderError {}
 
 impl MemoryQueryResult {
     pub fn from_contributions(contributions: Vec<MemoryContribution>) -> Self {
