@@ -82,20 +82,62 @@ VENDOR_ARCHIVES=(
 
 ensure_vendor_archives() {
   local vendor_build="$1"
-  if find "$LLAMA_CPP_ROOT/$vendor_build" -type f -name libmtmd.a -path '*/Release*/*' -print -quit \
+  local vendor_build_root="$LLAMA_CPP_ROOT/$vendor_build"
+  if [[ -d "$vendor_build_root" ]] \
+    && find "$vendor_build_root" -type f -name libmtmd.a -path '*/Release*/*' -print -quit \
       | grep -q . \
-    && find "$LLAMA_CPP_ROOT/$vendor_build" -type f -name libllama-common.a -path '*/Release*/*' -print -quit \
+    && find "$vendor_build_root" -type f -name libllama-common.a -path '*/Release*/*' -print -quit \
       | grep -q .
   then
     return
   fi
+
+  local platform_args=()
+  case "$vendor_build" in
+    build-macos)
+      platform_args=(
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+      )
+      ;;
+    build-ios-sim)
+      platform_args=(
+        -DCMAKE_SYSTEM_NAME=iOS
+        -DCMAKE_OSX_SYSROOT=iphonesimulator
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0
+      )
+      ;;
+    build-ios-device)
+      platform_args=(
+        -DCMAKE_SYSTEM_NAME=iOS
+        -DCMAKE_OSX_SYSROOT=iphoneos
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0
+      )
+      ;;
+    *)
+      echo "unsupported llama.cpp vendor build: $vendor_build" >&2
+      exit 1
+      ;;
+  esac
+
+  rm -rf "$vendor_build_root"
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    cmake -S "$LLAMA_CPP_ROOT" -B "$LLAMA_CPP_ROOT/$vendor_build" \
-      -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_COMMON=ON
+    cmake -G Xcode -S "$LLAMA_CPP_ROOT" -B "$vendor_build_root" \
+      -DLLAMA_BUILD_TOOLS=ON \
+      -DLLAMA_BUILD_COMMON=ON \
+      -DLLAMA_BUILD_TESTS=OFF \
+      -DLLAMA_BUILD_EXAMPLES=OFF \
+      -DLLAMA_BUILD_SERVER=OFF \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DGGML_NATIVE=OFF \
+      -DGGML_OPENMP=OFF \
+      "${platform_args[@]}"
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    cmake --build "$LLAMA_CPP_ROOT/$vendor_build" --config Release --target mtmd -- -quiet
+    cmake --build "$vendor_build_root" --config Release --target mtmd
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    cmake --build "$LLAMA_CPP_ROOT/$vendor_build" --config Release --target llama-common -- -quiet
+    cmake --build "$vendor_build_root" --config Release --target llama-common
 }
 
 prepare_headers() {

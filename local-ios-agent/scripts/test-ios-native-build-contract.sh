@@ -63,12 +63,29 @@ test_download_replaces_invalid_cache() {
     [[ ! -e "$destination.partial" ]] || fail "partial download was not removed"
 }
 
+test_inference_xcframework_uses_platform_specific_vendor_builds() {
+    local builder="$LOCALAGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
+
+    /usr/bin/grep -q -- '-G Xcode' "$builder" \
+        || fail "inference builder must use the Xcode CMake generator"
+    /usr/bin/grep -q -- 'CMAKE_OSX_SYSROOT=iphonesimulator' "$builder" \
+        || fail "inference builder is missing the Simulator vendor slice"
+    /usr/bin/grep -q -- 'CMAKE_OSX_SYSROOT=iphoneos' "$builder" \
+        || fail "inference builder is missing the device vendor slice"
+    /usr/bin/grep -q -- 'BUILD_SHARED_LIBS=OFF' "$builder" \
+        || fail "inference builder must produce static vendor archives"
+    if /usr/bin/grep -q -- ' -- -quiet' "$builder"; then
+        fail "inference builder passes Xcode-only flags through CMake"
+    fi
+}
+
 assert_lock_record alpine-minirootfs 3.21.0-aarch64
 assert_lock_record lame 3.100
 assert_lock_record ffmpeg 6.1.2
 assert_lock_record llama-cpp 5d44db60089b0381cdbf7c45ce9ded43fc0c7f4c
 test_digest_rejects_changed_input
 test_download_replaces_invalid_cache
+test_inference_xcframework_uses_platform_specific_vendor_builds
 
 if [[ "${1:-}" == "--lock-only" ]]; then
     echo "native lock contract passed"
