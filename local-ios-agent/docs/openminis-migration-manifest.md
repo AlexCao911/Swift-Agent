@@ -129,8 +129,13 @@ fact backend interface.
 | --- | --- | --- | --- | --- |
 | Existing Rust conversation event stores under `rust-core/src/memory` | `rust-core/src/storage/*conversation*` | `local_ios_agent_runtime` | LocalAgent source | Renamed and reduced to conversation/session events, command receipts, replay and atomic append transactions; concrete long-term-memory tables were removed |
 | Existing reliable Rust/Swift bridge envelopes | `rust-core/src/conversation`, `ffi_bridge.rs`, `LocalAgentBridge/TranscriptDTOs.swift` | Rust runtime and `LocalAgentBridge` | LocalAgent source | Added idempotent transcript commands, one active run per conversation, cancellable per-conversation projection replay and the existing canonical-digest registry; no second transport protocol or projection database |
+| LocalAgent Rust execution core | `rust-core/src/agent_loop`, `rust-core/src/tool/batch.rs` | `local_ios_agent_runtime` | LocalAgent source | Replaced Agent business-state orchestration with one direct ReAct loop, fixed 200-model-turn guard, ordered Swift tool batches, atomic completed-round commits, run-scoped cancellation and conservative process-loss recovery |
 
 Only Rust writes the canonical transcript. Swift receives ordered projections
 identified by `(conversation_stream_id, sequence)` and can replay from its last
 cursor after launch or a sequence gap. Presentation streaming remains
 ephemeral and does not commit partial assistant or tool turns.
+
+`rust-core/src/memory` is not conversation or session storage. It is only the
+optional long-term-fact contribution/provider boundary; this slice ships no
+concrete Memory backend.

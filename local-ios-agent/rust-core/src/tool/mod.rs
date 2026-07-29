@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod compiled_recipe;
 pub mod execution_request;
 pub mod parser;
@@ -8,6 +9,7 @@ pub mod result;
 pub mod router;
 pub mod schema;
 
+pub use batch::{AgentToolCall, ToolBatch, ToolBatchResult, ToolCallResult};
 pub use compiled_recipe::{CompiledToolRecipe, CompiledToolRecipeContent};
 pub use execution_request::ToolExecutionRequest;
 pub use parser::ToolCallParser;

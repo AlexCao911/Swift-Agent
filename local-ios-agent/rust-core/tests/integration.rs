@@ -21,5 +21,7 @@ mod llm_profile_migration_ffi;
 mod phase_five_product_path;
 #[path = "integration/prompt_skill_context.rs"]
 mod prompt_skill_context;
+#[path = "integration/react_loop.rs"]
+mod react_loop;
 #[path = "integration/sqlite_resilience.rs"]
 mod sqlite_resilience;

@@ -74,10 +74,22 @@ pub struct ConversationCommandService<S: ConversationEventStore> {
 
 impl<S: ConversationEventStore> ConversationCommandService<S> {
     pub fn new(store: Arc<Mutex<S>>) -> Self {
+        Self::with_registries(
+            store,
+            ActiveRunRegistry::default(),
+            ProjectionSubscriptionRegistry::default(),
+        )
+    }
+
+    pub fn with_registries(
+        store: Arc<Mutex<S>>,
+        active_runs: ActiveRunRegistry,
+        projection_subscriptions: ProjectionSubscriptionRegistry,
+    ) -> Self {
         Self {
             store,
-            active_runs: ActiveRunRegistry::default(),
-            projection_subscriptions: ProjectionSubscriptionRegistry::default(),
+            active_runs,
+            projection_subscriptions,
         }
     }
 

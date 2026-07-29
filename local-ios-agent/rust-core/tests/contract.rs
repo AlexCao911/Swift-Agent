@@ -9,6 +9,8 @@ mod agent_builder_assembly_graph_agent_os;
 mod agent_capability_contract;
 #[path = "contract/agent_inputs.rs"]
 mod agent_inputs;
+#[path = "contract/agent_loop_contract.rs"]
+mod agent_loop_contract;
 #[path = "contract/agent_package_agent_os.rs"]
 mod agent_package_agent_os;
 #[path = "contract/agent_profile_contract.rs"]
