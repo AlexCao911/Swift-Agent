@@ -444,7 +444,7 @@ fn disclosure(generation_turn_id: String, content_digest: String) -> GenerationD
         data_classes: vec!["text".into()],
         highest_sensitivity: "private".into(),
         safe_display_summary: SafeDisplaySummaryDocument {
-            source_kinds: vec!["conversation".into(), "agent_configuration".into()],
+            source_kinds: vec!["agent_configuration".into(), "conversation".into()],
             added_item_counts: vec![EgressDataClassCountDocument {
                 data_class: "text".into(),
                 count: "1".into(),

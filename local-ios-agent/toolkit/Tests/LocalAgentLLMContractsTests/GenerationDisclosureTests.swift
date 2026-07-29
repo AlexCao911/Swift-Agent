@@ -138,6 +138,16 @@ struct GenerationDisclosureTests {
     }
 
     @Test
+    func agentConfigurationSourceMatchesRustDisclosureContract() throws {
+        let encoded = Data(#""agent_configuration""#.utf8)
+
+        #expect(
+            try JSONDecoder().decode(EgressSourceKind.self, from: encoded)
+                == .agentConfiguration
+        )
+    }
+
+    @Test
     func backendContractExposesOnlyReasoningSummaryDelta() {
         let event = LLMBackendEvent.reasoningSummaryDelta("short user-visible summary")
 

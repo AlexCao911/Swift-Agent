@@ -313,7 +313,7 @@ pub(crate) fn derive_authoritative_preparation(
         data_classes: data_classes.iter().map(ToString::to_string).collect(),
         highest_sensitivity: "private".into(),
         safe_display_summary: SafeDisplaySummaryDocument {
-            source_kinds: vec!["conversation".into(), "agent_configuration".into()],
+            source_kinds: vec!["agent_configuration".into(), "conversation".into()],
             added_item_counts: data_classes
                 .iter()
                 .map(|data_class| EgressDataClassCountDocument {

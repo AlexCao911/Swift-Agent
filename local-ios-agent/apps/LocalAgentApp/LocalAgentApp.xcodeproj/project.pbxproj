@@ -101,6 +101,11 @@
 		0F7000010000000000000003 /* ChatStoreProjectionApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7000010000000000000103 /* ChatStoreProjectionApplier.swift */; };
 		0F7000010000000000000004 /* RustAgentCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7000010000000000000104 /* RustAgentCoordinatorTests.swift */; };
 		0F7000010000000000000005 /* ChatStoreProjectionApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7000010000000000000105 /* ChatStoreProjectionApplierTests.swift */; };
+		0F8000010000000000000001 /* RustReActProductPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000010000000000000101 /* RustReActProductPathTests.swift */; };
+		0F8000010000000000000002 /* RelaunchProjectionReplayProductTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000010000000000000102 /* RelaunchProjectionReplayProductTests.swift */; };
+		0F8000010000000000000003 /* OpenMinisProductBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000010000000000000103 /* OpenMinisProductBenchmarkTests.swift */; };
+		0F8000010000000000000004 /* OpenMinisPerfTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000010000000000000104 /* OpenMinisPerfTrace.swift */; };
+		0F8000010000000000000005 /* OpenMinisAgentRequestTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000010000000000000105 /* OpenMinisAgentRequestTrace.swift */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -270,6 +275,11 @@
 		0F7000010000000000000103 /* ChatStoreProjectionApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStoreProjectionApplier.swift; sourceTree = "<group>"; };
 		0F7000010000000000000104 /* RustAgentCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustAgentCoordinatorTests.swift; sourceTree = "<group>"; };
 		0F7000010000000000000105 /* ChatStoreProjectionApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStoreProjectionApplierTests.swift; sourceTree = "<group>"; };
+		0F8000010000000000000101 /* RustReActProductPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustReActProductPathTests.swift; sourceTree = "<group>"; };
+		0F8000010000000000000102 /* RelaunchProjectionReplayProductTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaunchProjectionReplayProductTests.swift; sourceTree = "<group>"; };
+		0F8000010000000000000103 /* OpenMinisProductBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductBenchmarkTests.swift; sourceTree = "<group>"; };
+		0F8000010000000000000104 /* OpenMinisPerfTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisPerfTrace.swift; sourceTree = "<group>"; };
+		0F8000010000000000000105 /* OpenMinisAgentRequestTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisAgentRequestTrace.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A000001000000000000011B /* AppIntentRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouter.swift; sourceTree = "<group>"; };
@@ -383,6 +393,7 @@
 				0A0000010000000000000501 /* App */,
 				0A0000010000000000000502 /* Composition */,
 				0A0000010000000000000503 /* Runtime */,
+				0F8000010000000000000501 /* Debug */,
 				0A0000010000000000000504 /* Tools */,
 				0A0000010000000000000505 /* State */,
 				0A0000010000000000000506 /* Presentation */,
@@ -658,6 +669,15 @@
 				0E5000040000000000000011 /* LegacyLLMMigrationCoordinator.swift */,
 			);
 			path = Runtime;
+			sourceTree = "<group>";
+		};
+		0F8000010000000000000501 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				0F8000010000000000000104 /* OpenMinisPerfTrace.swift */,
+				0F8000010000000000000105 /* OpenMinisAgentRequestTrace.swift */,
+			);
+			path = Debug;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000504 /* Tools */ = {
@@ -946,6 +966,9 @@
 			children = (
 				0E5000030000000000000012 /* HostBoundAgentPublishTests.swift */,
 				0A0000010000000000000115 /* RustRuntimeAppIntegrationTests.swift */,
+				0F8000010000000000000101 /* RustReActProductPathTests.swift */,
+				0F8000010000000000000102 /* RelaunchProjectionReplayProductTests.swift */,
+				0F8000010000000000000103 /* OpenMinisProductBenchmarkTests.swift */,
 				0F0000010000000000000102 /* LLMHostCompositionTests.swift */,
 				0E5000050000000000000011 /* LLMProductBootstrapTests.swift */,
 				0A00000100000000000001F5 /* LocalInferenceNativeLinkTests.swift */,
@@ -1205,6 +1228,8 @@
 				0F7000010000000000000001 /* RustAgentCoordinator.swift in Sources */,
 				0F7000010000000000000002 /* ProjectionFeedController.swift in Sources */,
 				0F7000010000000000000003 /* ChatStoreProjectionApplier.swift in Sources */,
+				0F8000010000000000000004 /* OpenMinisPerfTrace.swift in Sources */,
+				0F8000010000000000000005 /* OpenMinisAgentRequestTrace.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1257,6 +1282,9 @@
 				0F6000010000000000000002 /* OpenMinisModelExecutorTests.swift in Sources */,
 				0F7000010000000000000004 /* RustAgentCoordinatorTests.swift in Sources */,
 				0F7000010000000000000005 /* ChatStoreProjectionApplierTests.swift in Sources */,
+				0F8000010000000000000001 /* RustReActProductPathTests.swift in Sources */,
+				0F8000010000000000000002 /* RelaunchProjectionReplayProductTests.swift in Sources */,
+				0F8000010000000000000003 /* OpenMinisProductBenchmarkTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

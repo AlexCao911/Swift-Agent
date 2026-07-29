@@ -35,6 +35,7 @@ public enum DataSensitivity: String, Codable, CaseIterable, Sendable, Comparable
 
 public enum EgressSourceKind: String, Codable, CaseIterable, Hashable, Sendable {
     case conversation
+    case agentConfiguration = "agent_configuration"
     case memory
     case contacts
     case files

@@ -170,6 +170,9 @@ impl<R: UnifiedRuntimeStateRepository + ?Sized> HostLLMWorkerService<R> {
                 .completion
                 .as_ref()
                 .is_some_and(|completion| completion.outcome == "tool_calls_ready")
+            && worker
+                .generation_payload()
+                .is_none_or(|payload| payload.schema_version != "2")
         {
             self.process_tool_batch(event)?;
         }

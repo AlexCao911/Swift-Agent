@@ -692,10 +692,24 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         if matches!(
             receipt,
             LLMEventSubmissionResult::Accepted | LLMEventSubmissionResult::Duplicate
-        ) {
+        ) && !self.is_direct_react_event(&event)?
+        {
             self.consume_host_events()?;
         }
         to_json(&receipt)
+    }
+
+    fn is_direct_react_event(&self, event: &LLMEventEnvelope) -> Result<bool, AgentError> {
+        Ok(self
+            .runtime_state
+            .host_worker(event.run_id())
+            .map_err(runtime_state_agent_error)?
+            .and_then(|worker| {
+                worker
+                    .generation_payload()
+                    .map(|payload| payload.schema_version.as_str() == "2")
+            })
+            .unwrap_or(false))
     }
 
     fn consume_host_events(&self) -> Result<(), AgentError> {
@@ -704,6 +718,9 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             .pending_inbound_events(usize::MAX)
             .map_err(runtime_state_agent_error)?
         {
+            if self.is_direct_react_event(&event)? {
+                continue;
+            }
             if self.host_event_projection_exists(&event) {
                 self.runtime_state
                     .acknowledge_inbound_event_projection(&event)
@@ -3745,6 +3762,88 @@ mod tests {
                 .unwrap()
                 .event_count,
             0
+        );
+    }
+
+    #[test]
+    fn direct_react_event_is_left_for_the_agent_loop_consumer() {
+        let bridge = BridgeRuntime::new(
+            AgentRuntime::new(AgentRuntimeConfig {
+                tool_router: None,
+            }),
+            AgentOSApplicationService::empty(),
+        );
+        let payload = crate::llm_contracts::HostCommandPayload::lifecycle_v2();
+        let disclosure = crate::llm_contracts::GenerationDisclosureDocument {
+            schema_version: "1".into(),
+            generation_turn_id: "turn-react".into(),
+            content_digest:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            source_revision_digest:
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            data_classes: vec!["text".into()],
+            highest_sensitivity: "private".into(),
+            safe_display_summary: crate::llm_contracts::SafeDisplaySummaryDocument {
+                source_kinds: vec!["conversation".into()],
+                added_item_counts: Vec::new(),
+                approximate_added_size: "less_than_1_kib".into(),
+                triggering_tool_display_keys: Vec::new(),
+            },
+        };
+        bridge
+            .runtime_state
+            .insert_worker_and_session(
+                crate::llm_contracts::HostWorkerRecord::new(
+                    "run-react",
+                    "session-react",
+                    TEST_HOST_PROCESS_EPOCH,
+                )
+                .with_execution_phase(Some(
+                    crate::llm_contracts::HostExecutionPhase::ConsumingLlmTurn,
+                ))
+                .with_generation_turn_id(Some("turn-react".into()))
+                .with_generation_request(payload, disclosure)
+                .with_resource_lifecycle(crate::llm_contracts::ResourceLifecycle::Generating),
+                crate::llm_contracts::HostSessionRecord::new(
+                    "run-react",
+                    "session-react",
+                    TEST_HOST_PROCESS_EPOCH,
+                    "react:run-react",
+                    1,
+                    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                ),
+            )
+            .unwrap();
+
+        let mut event = LLMEventEnvelope {
+            schema_version: 1,
+            event_id: "delta-react".into(),
+            run_id: "run-react".into(),
+            session_handle: "session-react".into(),
+            host_process_epoch: TEST_HOST_PROCESS_EPOCH.into(),
+            generation_turn_id: Some("turn-react".into()),
+            event_sequence: 1,
+            kind: crate::llm_contracts::LLMEventKind::TextDelta,
+            payload: crate::llm_contracts::LLMEventPayload {
+                text: Some("hello".into()),
+                ..Default::default()
+            },
+            event_envelope_digest: String::new(),
+        };
+        event.event_envelope_digest = event.expected_digest().unwrap();
+
+        assert_eq!(
+            bridge
+                .submit_llm_event_json(&serde_json::to_string(&event).unwrap())
+                .unwrap(),
+            "\"accepted\""
+        );
+        assert_eq!(
+            bridge
+                .runtime_state
+                .pending_inbound_events(usize::MAX)
+                .unwrap(),
+            vec![event]
         );
     }
 
