@@ -45,11 +45,30 @@ test_digest_rejects_changed_input() {
         || fail "digest mismatch did not return the stable error code"
 }
 
+test_download_replaces_invalid_cache() {
+    local fixture_dir source destination lock_file digest
+    fixture_dir="$(mktemp -d)"
+    trap 'rm -rf "$fixture_dir"' RETURN
+    source="$fixture_dir/source"
+    destination="$fixture_dir/destination"
+    lock_file="$fixture_dir/sources.lock"
+
+    printf 'locked-source\n' > "$source"
+    printf 'incomplete\n' > "$destination"
+    digest="$(/usr/bin/shasum -a 256 "$source" | /usr/bin/awk '{print $1}')"
+    printf 'fixture|1|file://%s|%s\n' "$source" "$digest" > "$lock_file"
+
+    download_locked_source fixture "$lock_file" "$destination"
+    verify_sha256 "$destination" "$digest"
+    [[ ! -e "$destination.partial" ]] || fail "partial download was not removed"
+}
+
 assert_lock_record alpine-minirootfs 3.21.0-aarch64
 assert_lock_record lame 3.100
 assert_lock_record ffmpeg 6.1.2
 assert_lock_record llama-cpp 5d44db60089b0381cdbf7c45ce9ded43fc0c7f4c
 test_digest_rejects_changed_input
+test_download_replaces_invalid_cache
 
 if [[ "${1:-}" == "--lock-only" ]]; then
     echo "native lock contract passed"

@@ -48,9 +48,19 @@ download_locked_source() {
         return 1
     fi
 
+    local partial="$destination.partial"
+
     /bin/mkdir -p "$(/usr/bin/dirname "$destination")"
-    if [[ ! -f "$destination" ]]; then
-        /usr/bin/curl --fail --location "$url" --output "$destination"
+    if [[ -f "$destination" ]] && verify_sha256 "$destination" "$digest" 2>/dev/null; then
+        return
     fi
-    verify_sha256 "$destination" "$digest"
+
+    /bin/rm -f "$destination" "$partial"
+    if ! /usr/bin/curl --fail --location --retry 3 --retry-all-errors \
+        "$url" --output "$partial"; then
+        /bin/rm -f "$partial"
+        return 1
+    fi
+    verify_sha256 "$partial" "$digest"
+    /bin/mv "$partial" "$destination"
 }
