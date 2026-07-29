@@ -80,6 +80,12 @@
       "excluded": "provider account, provider ID, model ID, credential, origin, local path and adapter details"
     },
     {
+      "domain": "run-start-snapshot:v1",
+      "computing_authority": "swift_and_rust",
+      "required_coverage": "ordered prompt documents, Skill descriptors, and complete ordered tool definitions",
+      "excluded": "snapshot digest, Skill bodies, provider plan, credential, host path, and mutable conversation context"
+    },
+    {
       "domain": "saga-token:v1",
       "computing_authority": "rust_and_swift",
       "required_coverage": "operation kind and ID, token generation, random token bytes",

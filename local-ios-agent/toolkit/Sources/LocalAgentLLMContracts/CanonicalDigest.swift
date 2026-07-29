@@ -53,6 +53,7 @@ public enum CanonicalDigestV1 {
         "provider-retention-approval:v1",
         "resolved-parameters:v1",
         "resolved-run-snapshot:v1",
+        "run-start-snapshot:v1",
         "saga-token:v1",
         "source-revisions:v1",
         "tool-schema:v1",

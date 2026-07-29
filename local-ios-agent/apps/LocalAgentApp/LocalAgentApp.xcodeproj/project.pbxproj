@@ -87,6 +87,14 @@
 		0F3200010000000000000002 /* OpenMinisProductToolDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000102 /* OpenMinisProductToolDispatcher.swift */; };
 		0F3200010000000000000003 /* OpenMinisProductToolDispatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000103 /* OpenMinisProductToolDispatcherTests.swift */; };
 		0F3200010000000000000004 /* OpenMinisToolArgumentRepair.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3200010000000000000104 /* OpenMinisToolArgumentRepair.swift */; };
+		0F4000010000000000000001 /* SkillStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000101 /* SkillStore.swift */; };
+		0F4000010000000000000002 /* PromptDocumentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000102 /* PromptDocumentStore.swift */; };
+		0F4000010000000000000003 /* SkillsManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000103 /* SkillsManagementView.swift */; };
+		0F4000010000000000000004 /* PromptDocumentsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000104 /* PromptDocumentsSettingsView.swift */; };
+		0F4000010000000000000005 /* RustAgentInputSnapshotProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000105 /* RustAgentInputSnapshotProvider.swift */; };
+		0F4000010000000000000006 /* SkillStoreMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000106 /* SkillStoreMigrationTests.swift */; };
+		0F4000010000000000000007 /* PromptDocumentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000107 /* PromptDocumentStoreTests.swift */; };
+		0F4000010000000000000008 /* RustAgentInputSnapshotProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4000010000000000000108 /* RustAgentInputSnapshotProviderTests.swift */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -271,6 +279,14 @@
 		0F3200010000000000000102 /* OpenMinisProductToolDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductToolDispatcher.swift; sourceTree = "<group>"; };
 		0F3200010000000000000103 /* OpenMinisProductToolDispatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductToolDispatcherTests.swift; sourceTree = "<group>"; };
 		0F3200010000000000000104 /* OpenMinisToolArgumentRepair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisToolArgumentRepair.swift; sourceTree = "<group>"; };
+		0F4000010000000000000101 /* SkillStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillStore.swift; sourceTree = "<group>"; };
+		0F4000010000000000000102 /* PromptDocumentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptDocumentStore.swift; sourceTree = "<group>"; };
+		0F4000010000000000000103 /* SkillsManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsManagementView.swift; sourceTree = "<group>"; };
+		0F4000010000000000000104 /* PromptDocumentsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptDocumentsSettingsView.swift; sourceTree = "<group>"; };
+		0F4000010000000000000105 /* RustAgentInputSnapshotProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustAgentInputSnapshotProvider.swift; sourceTree = "<group>"; };
+		0F4000010000000000000106 /* SkillStoreMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillStoreMigrationTests.swift; sourceTree = "<group>"; };
+		0F4000010000000000000107 /* PromptDocumentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptDocumentStoreTests.swift; sourceTree = "<group>"; };
+		0F4000010000000000000108 /* RustAgentInputSnapshotProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustAgentInputSnapshotProviderTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -439,10 +455,22 @@
 				0F1000010000000000000507 /* Resources */,
 				0F1000010000000000000508 /* Licenses */,
 				0F3000010000000000000502 /* Tools */,
+				0F4000010000000000000501 /* Skills */,
 				0F3100010000000000000502 /* Diagnostics */,
 				0F3100010000000000000503 /* Support */,
 			);
 			path = OpenMinis;
+			sourceTree = "<group>";
+		};
+		0F4000010000000000000501 /* Skills */ = {
+			isa = PBXGroup;
+			children = (
+				0F4000010000000000000101 /* SkillStore.swift */,
+				0F4000010000000000000102 /* PromptDocumentStore.swift */,
+				0F4000010000000000000103 /* SkillsManagementView.swift */,
+				0F4000010000000000000104 /* PromptDocumentsSettingsView.swift */,
+			);
+			path = Skills;
 			sourceTree = "<group>";
 		};
 		0F3000010000000000000501 /* ISH */ = {
@@ -582,6 +610,7 @@
 				0C0000010000000000002510 /* AppIntents */,
 				0F1000010000000000000501 /* Architecture */,
 				0A0000010000000000000511 /* Runtime */,
+				0F4000010000000000000502 /* Skills */,
 				0A0000010000000000000512 /* Tools */,
 				0A0000010000000000000513 /* State */,
 				0A0000010000000000000514 /* Presentation */,
@@ -596,6 +625,15 @@
 				0F1000010000000000000101 /* ShippingTargetOwnershipTests.swift */,
 			);
 			path = Architecture;
+			sourceTree = "<group>";
+		};
+		0F4000010000000000000502 /* Skills */ = {
+			isa = PBXGroup;
+			children = (
+				0F4000010000000000000106 /* SkillStoreMigrationTests.swift */,
+				0F4000010000000000000107 /* PromptDocumentStoreTests.swift */,
+			);
+			path = Skills;
 			sourceTree = "<group>";
 		};
 		0C0000010000000000002509 /* App */ = {
@@ -634,6 +672,7 @@
 			isa = PBXGroup;
 			children = (
 				0D5000010000000000000101 /* AppCloudApprovalBroker.swift */,
+				0F4000010000000000000105 /* RustAgentInputSnapshotProvider.swift */,
 				0B0000010000000000001501 /* Conversation */,
 				0B0000010000000000001502 /* Execution */,
 				0A0000010000000000000105 /* AgentRuntimeService.swift */,
@@ -803,6 +842,7 @@
 			isa = PBXGroup;
 			children = (
 				0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */,
+				0F4000010000000000000108 /* RustAgentInputSnapshotProviderTests.swift */,
 				0A0000010000000000000113 /* AgentRuntimeServiceTests.swift */,
 				0B0000010000000000001151 /* ChatInteractionCoordinatorTests.swift */,
 				0B0000010000000000001120 /* ConversationDomainTests.swift */,
@@ -1227,6 +1267,11 @@
 				0F3200010000000000000001 /* OpenMinisBrowserRuntime.swift in Sources */,
 				0F3200010000000000000002 /* OpenMinisProductToolDispatcher.swift in Sources */,
 				0F3200010000000000000004 /* OpenMinisToolArgumentRepair.swift in Sources */,
+				0F4000010000000000000001 /* SkillStore.swift in Sources */,
+				0F4000010000000000000002 /* PromptDocumentStore.swift in Sources */,
+				0F4000010000000000000003 /* SkillsManagementView.swift in Sources */,
+				0F4000010000000000000004 /* PromptDocumentsSettingsView.swift in Sources */,
+				0F4000010000000000000005 /* RustAgentInputSnapshotProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1281,6 +1326,9 @@
 				0F3000010000000000000005 /* OpenMinisToolBatchExecutorTests.swift in Sources */,
 				0F3000010000000000000010 /* ISHEnvironmentPolicyTests.swift in Sources */,
 				0F3200010000000000000003 /* OpenMinisProductToolDispatcherTests.swift in Sources */,
+				0F4000010000000000000006 /* SkillStoreMigrationTests.swift in Sources */,
+				0F4000010000000000000007 /* PromptDocumentStoreTests.swift in Sources */,
+				0F4000010000000000000008 /* RustAgentInputSnapshotProviderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

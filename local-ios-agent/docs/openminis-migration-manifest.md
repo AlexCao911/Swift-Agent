@@ -74,3 +74,19 @@ The broad donor `NativeOffloads` directory and its device-specific UI are not
 copied wholesale. Individual capabilities that the existing
 `LocalNativeToolkit` does not cover (for example FFmpeg command offload) remain
 eligible, caller-driven migration slices after the core Agent path is working.
+
+## Skills and prompt documents
+
+| OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
+| --- | --- | --- | --- | --- |
+| `src/ios/Agent/Session/SkillStore.swift` and Skill import helpers | `LocalAgentApp/ThirdParty/OpenMinis/Skills/SkillStore.swift` | `LocalAgentApp` Sources; `/var/localagent/skills` host mount | GPLv3 | Import, archive validation, metadata parsing, editing, ordering, enablement, bundled installation, and conversation overrides adapted into one file-backed product store; eligible global changes expose a sync hook, while conversation overrides remain local |
+| `src/ios/Views/Skills/SkillsManagementView.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Skills/SkillsManagementView.swift` | `LocalAgentApp` Sources | GPLv3 | File/directory/URL/`.skill`/`.zip` management UI adapted to the LocalAgent store; the same file also contains the conversation-scoped Skills sheet reached from the chat header |
+| OpenMinis prompt-building product UI | `LocalAgentApp/ThirdParty/OpenMinis/Skills/PromptDocumentStore.swift`, `PromptDocumentsSettingsView.swift` | `LocalAgentApp` Sources | LocalAgent implementation informed by GPLv3 donor UX | One ordered Markdown document store and native document-picker UI; no prompt graph or template engine |
+| OpenMinis Skill/tool metadata assembly behavior | `LocalAgentApp/Runtime/RustAgentInputSnapshotProvider.swift`, `toolkit/Sources/LocalAgentBridge/TranscriptDTOs.swift` | `LocalAgentApp` Sources and `LocalAgentBridge` Swift package target | LocalAgent implementation | Freezes prompt documents, at most twenty Skill descriptors, and the single Swift tool catalog behind canonical digest domain `run-start-snapshot:v1`; Skill bodies, host paths, credentials, providers, Memory, and per-round Context are excluded |
+
+Skills use Claude-style progressive disclosure. Rust initially receives only
+ordered descriptor metadata with a stable virtual location such as
+`/var/localagent/skills/example/SKILL.md`. The normal `file_read` tool resolves
+that path through the read-only Skills mount only after the Agent chooses the
+Skill. Sibling `scripts/`, `references/`, and `assets/` remain ordinary files
+and are never recursively preloaded.

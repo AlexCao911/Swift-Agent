@@ -87,6 +87,19 @@ struct PrivacySettingsView: View {
                 }
             }
 
+            Section("Agent Context") {
+                NavigationLink {
+                    SkillsManagementView()
+                } label: {
+                    Label("Skills", systemImage: "puzzlepiece.extension")
+                }
+                NavigationLink {
+                    PromptDocumentsSettingsView()
+                } label: {
+                    Label("Prompt Documents", systemImage: "doc.text")
+                }
+            }
+
             Section("Privacy") {
                 SettingsSummaryRow(title: "Tools", value: snapshot.toolPermissionSummary, systemImageName: "wrench.and.screwdriver")
                 SettingsSummaryRow(title: "Attachments", value: snapshot.attachmentStorageSummary, systemImageName: "paperclip")

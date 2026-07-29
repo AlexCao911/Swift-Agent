@@ -4,7 +4,7 @@ use std::fmt::{self, Write};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const REGISTERED_DOMAINS: [&str; 35] = [
+const REGISTERED_DOMAINS: [&str; 36] = [
     "agent-host-binding:v1",
     "agent-input:v1",
     "agent-requirements:v1",
@@ -37,6 +37,7 @@ const REGISTERED_DOMAINS: [&str; 35] = [
     "provider-retention-approval:v1",
     "resolved-parameters:v1",
     "resolved-run-snapshot:v1",
+    "run-start-snapshot:v1",
     "saga-token:v1",
     "source-revisions:v1",
     "tool-schema:v1",

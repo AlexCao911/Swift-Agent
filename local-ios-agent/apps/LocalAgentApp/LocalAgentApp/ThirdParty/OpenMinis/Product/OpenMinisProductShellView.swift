@@ -19,6 +19,7 @@ struct OpenMinisProductShellView: View {
     @AppStorage("localagent.ish.raw-networking-disclosure.seen")
     private var hasSeenLinuxNetworkDisclosure = false
     @State private var showsLinuxNetworkDisclosure = false
+    @State private var showsConversationSkills = false
 
     @Bindable var shellViewModel: AppShellViewModel
     @Bindable var runtimeViewModel: AgentViewModel
@@ -51,6 +52,20 @@ struct OpenMinisProductShellView: View {
                 "Linux tools have raw network access enabled. curl, wget, apk, DNS, and sockets use an independent network path and do not pass through the cloud-model egress filter."
             )
         }
+        .sheet(isPresented: $showsConversationSkills) {
+            NavigationStack {
+                SessionSkillsView(
+                    conversationStreamID: viewModel.conversationStreamID
+                )
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showsConversationSkills = false
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var productHeader: some View {
@@ -65,6 +80,15 @@ struct OpenMinisProductShellView: View {
             }
 
             Spacer()
+
+            Button {
+                showsConversationSkills = true
+            } label: {
+                Label("Skills", systemImage: "puzzlepiece.extension")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Conversation Skills")
 
             Button(action: onOpenBuilder) {
                 Label("Agent", systemImage: "slider.horizontal.3")
