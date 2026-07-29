@@ -44,7 +44,7 @@ pub struct MemoryContributionBuilder {
     sensitivity: Option<SensitivityLevel>,
 }
 
-impl MemoryContribution {
+impl MemoryContributionBuilder {
     pub fn new(content: impl Into<String>) -> MemoryContributionBuilder {
         MemoryContributionBuilder {
             content: content.into(),

@@ -7,7 +7,7 @@ use local_ios_agent_runtime::{
     },
     context::ModelContextWindow,
     memory::{
-        CompletedTurnMemoryInput, MemoryContribution, MemoryContributionId, MemoryProvider,
+        CompletedTurnMemoryInput, MemoryContributionBuilder, MemoryContributionId, MemoryProvider,
         MemoryProviderError, MemoryProviderId, MemoryQuery, MemoryQueryResult, Provenance,
         SensitivityLevel,
     },
@@ -184,7 +184,7 @@ impl MemoryProvider for RecordingMemoryProvider {
 
     fn recall(&self, query: &MemoryQuery) -> MemoryQueryResult {
         self.recalled.lock().unwrap().push(query.clone());
-        MemoryQueryResult::from_contributions(vec![MemoryContribution::new(
+        MemoryQueryResult::from_contributions(vec![MemoryContributionBuilder::new(
             "User prefers concise answers",
         )
         .with_id(MemoryContributionId::new("preference"))

@@ -111,7 +111,7 @@ impl ComponentCatalogService {
             .get(&component_id)
             .ok_or_else(|| StorageError::new("component.not_found", "component draft not found"))?;
         let content = component.current_draft().clone();
-        let validation = ComponentValidator::default().validate(&content);
+        let validation = ComponentValidator.validate(&content);
         if !validation.is_valid {
             let issue_codes = validation
                 .issues

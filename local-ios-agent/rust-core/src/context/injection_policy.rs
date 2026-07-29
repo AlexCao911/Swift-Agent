@@ -1,16 +1,8 @@
 use crate::tool::{RetentionPolicy, Sensitivity, ToolResult};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ContextInjectionPolicy {
     pub include_secret_results: bool,
-}
-
-impl Default for ContextInjectionPolicy {
-    fn default() -> Self {
-        Self {
-            include_secret_results: false,
-        }
-    }
 }
 
 impl ContextInjectionPolicy {

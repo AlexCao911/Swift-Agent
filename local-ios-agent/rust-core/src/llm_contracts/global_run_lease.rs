@@ -21,6 +21,7 @@ impl GlobalRunLeaseState {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Result<Self, GlobalRunLeaseError> {
         match value {
             "preparing" => Ok(Self::Preparing),

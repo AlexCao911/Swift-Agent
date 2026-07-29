@@ -233,10 +233,7 @@ fn compiled_http_connector_preserves_credential() {
 
     match compiled.content {
         CompiledToolRecipeContent::HttpConnector { credential, .. } => {
-            assert_eq!(
-                credential,
-                Some(CredentialRef::new("tool.remote_lookup"))
-            );
+            assert_eq!(credential, Some(CredentialRef::new("tool.remote_lookup")));
         }
         other => panic!("expected compiled http connector, got {other:?}"),
     }

@@ -1,14 +1,12 @@
 use crate::{
-    llm_contracts::{
-        AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
-    },
+    llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode},
     storage::{InMemoryTransactionRunner, StorageError},
     user_customization::{
-        AgentAssemblyPlan, AgentProfile, AgentProfileDraft, AgentProfileId,
-        AgentProfilePublisher, AgentReadinessIssue, AgentReadinessReport, AgentSlotId,
-        AgentSlotKind, AgentTemplate, ComponentBinding, ComponentCatalogService, ComponentContent,
-        ComponentGraphBuilder, ComponentNode, InMemoryAgentProfileRepository, MissingRequirement,
-        UserComponentVersionId, UserFacingCapabilityId, UserProvidedBindings,
+        AgentAssemblyPlan, AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfilePublisher,
+        AgentReadinessIssue, AgentReadinessReport, AgentSlotId, AgentSlotKind, AgentTemplate,
+        ComponentBinding, ComponentCatalogService, ComponentContent, ComponentGraphBuilder,
+        ComponentNode, InMemoryAgentProfileRepository, MissingRequirement, UserComponentVersionId,
+        UserFacingCapabilityId, UserProvidedBindings,
     },
 };
 
@@ -165,17 +163,16 @@ impl AgentBuilderResolver {
 
         let template = AgentTemplate::assistant_default();
 
-        AgentAssemblyPlan::new(graph)
-            .with_profile_draft(
-                profile_draft_for_template(
-                    &template,
-                    true,
-                    true,
-                    self.persona_version_id,
-                    self.llm_slot.clone(),
-                ),
-                template,
-            )
+        AgentAssemblyPlan::new(graph).with_profile_draft(
+            profile_draft_for_template(
+                &template,
+                true,
+                true,
+                self.persona_version_id,
+                self.llm_slot.clone(),
+            ),
+            template,
+        )
     }
 
     pub fn finalize(
@@ -213,11 +210,7 @@ impl AgentBuilderResolver {
             self.profile_repository.clone(),
         );
         let reference = publisher
-            .publish(
-                draft,
-                &template,
-                &self.component_catalog,
-            )
+            .publish(draft, &template, &self.component_catalog)
             .map_err(AgentBuilderError::from)?;
 
         self.profile_repository.profile(&reference).ok_or_else(|| {
@@ -327,11 +320,7 @@ impl AgentBuilderResolver {
             InMemoryAgentProfileRepository::default(),
         );
 
-        match publisher.publish(
-            draft,
-            template,
-            &self.component_catalog,
-        ) {
+        match publisher.publish(draft, template, &self.component_catalog) {
             Ok(_) => plan,
             Err(error) => plan.with_readiness_issue(AgentReadinessIssue::new(
                 error.code().to_string(),

@@ -1503,7 +1503,7 @@ void fakefs_install_change_consumer(fakefs_change_handler_t handler) {
 
     g_change_handler = Block_copy(handler);
     g_change_consumer_queue = dispatch_queue_create(
-        "com.openminis.ish.fakechange", DISPATCH_QUEUE_SERIAL);
+        "com.localagent.ish.fakechange", DISPATCH_QUEUE_SERIAL);
     g_change_consumer_source = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_DATA_ADD, 0, 0, g_change_consumer_queue);
 

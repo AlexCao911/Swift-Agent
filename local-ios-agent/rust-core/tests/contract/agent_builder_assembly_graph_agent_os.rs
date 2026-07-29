@@ -154,7 +154,7 @@ fn settings_schema_drops_secret_like_and_local_path_defaults() {
 fn finalize_publishes_profile_with_component_versions_and_bindings() {
     let resolver = AgentBuilderResolver::fixture_with_openai_binding_request();
     let plan = resolver.fixture_plan_with_openai_binding_request();
-    let bindings = UserProvidedBindings::default()
+    let bindings = UserProvidedBindings
         .credential("credential.openai.api_key", "credential_ref.openai.default");
 
     let profile: AgentProfile = resolver.finalize(plan, bindings).unwrap();
@@ -170,7 +170,7 @@ fn finalize_publishes_profile_with_component_versions_and_bindings() {
 fn finalize_rejects_profile_draft_with_unknown_component_version() {
     let resolver = AgentBuilderResolver::fixture_with_missing_component_catalog_entry();
     let plan = resolver.fixture_plan_with_openai_binding_request();
-    let bindings = UserProvidedBindings::default()
+    let bindings = UserProvidedBindings
         .credential("credential.openai.api_key", "credential_ref.openai.default");
 
     let error = resolver.finalize(plan, bindings).unwrap_err();

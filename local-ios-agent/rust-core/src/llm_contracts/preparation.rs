@@ -878,7 +878,9 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => {
+            29
+        }
         2 => 28,
         _ => 0,
     }
@@ -1173,7 +1175,7 @@ impl PreparedSessionClosedReceipt {
             session_handle: session_handle.into(),
             host_process_epoch: cleanup.host_process_epoch.clone(),
             preparation_cleanup_sequence: cleanup.preparation_cleanup_sequence,
-            close_disposition: close_disposition.into(),
+            close_disposition,
             receipt_digest: receipt_digest.into(),
         }
     }

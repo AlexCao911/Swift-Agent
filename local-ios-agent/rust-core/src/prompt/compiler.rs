@@ -93,9 +93,7 @@ impl PromptCompiler {
                         name: variable.name.clone(),
                         provenance: variable.provenance.clone(),
                         redacted_value: "[redacted]".to_string(),
-                        spans: variable_spans
-                            .remove(&variable.name)
-                            .unwrap_or_else(Vec::new),
+                        spans: variable_spans.remove(&variable.name).unwrap_or_default(),
                     })
                     .collect(),
             },

@@ -17,6 +17,7 @@ impl HostBindingKind {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Result<Self, HostBindingError> {
         match value {
             "profile_publish" => Ok(Self::ProfilePublish),
@@ -46,6 +47,7 @@ impl HostBindingOperationState {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Result<Self, HostBindingError> {
         match value {
             "pending" => Ok(Self::Pending),

@@ -1,6 +1,4 @@
-use local_ios_agent_runtime::llm_contracts::{
-    AgentLLMRequirements, LLMSlotV2, LLMToolCallingMode,
-};
+use local_ios_agent_runtime::llm_contracts::{AgentLLMRequirements, LLMSlotV2, LLMToolCallingMode};
 use local_ios_agent_runtime::storage::InMemoryTransactionRunner;
 use local_ios_agent_runtime::user_customization::{
     AgentProfileDraft, AgentProfileId, AgentProfilePublisher, AgentSlotKind, AgentTemplate,
@@ -44,7 +42,10 @@ fn profile_publishes_component_versions_and_portable_llm_slot() {
     let reference = publisher.publish(draft, &template, &catalog).unwrap();
     let profile = repository.profile(&reference).unwrap();
 
-    assert_eq!(profile.bindings()[0].component_version_id(), persona_version);
+    assert_eq!(
+        profile.bindings()[0].component_version_id(),
+        persona_version
+    );
     assert_eq!(
         profile.llm_slot().unwrap().requirements().slot_id(),
         "slot.model.primary"

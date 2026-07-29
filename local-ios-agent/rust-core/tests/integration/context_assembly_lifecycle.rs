@@ -4,7 +4,8 @@ use local_ios_agent_runtime::context::{
 };
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::memory::{
-    MemoryContribution, MemoryContributionId, Provenance, SensitivityLevel as MemorySensitivity,
+    MemoryContributionBuilder, MemoryContributionId, Provenance,
+    SensitivityLevel as MemorySensitivity,
 };
 use local_ios_agent_runtime::prompt::{PromptCompiler, PromptStack};
 use local_ios_agent_runtime::tool::{RetentionPolicy, Sensitivity as ToolSensitivity, ToolResult};
@@ -66,10 +67,10 @@ fn runtime_message(kind: EventKind, payload: &str) -> RuntimeEvent {
 
 #[test]
 fn context_assembler_combines_prompt_memory_tool_and_conversation_without_calling_runtime() {
-    let compiled_prompt = PromptCompiler::default()
+    let compiled_prompt = PromptCompiler
         .compile(PromptStack::fixture_identity_persona())
         .unwrap();
-    let memory = MemoryContribution::new("prefers concise answers")
+    let memory = MemoryContributionBuilder::new("prefers concise answers")
         .with_id(MemoryContributionId::new("memory.local.preference"))
         .with_provenance(Provenance::local("profile-memory"))
         .with_confidence(0.9)

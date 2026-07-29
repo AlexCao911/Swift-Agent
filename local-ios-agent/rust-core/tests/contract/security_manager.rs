@@ -113,7 +113,7 @@ use local_ios_agent_runtime::security::{PolicyDecision, PolicyEngine, RiskLevel}
 
 #[test]
 fn policy_requires_approval_when_permission_is_not_granted() {
-    let engine = PolicyEngine::default();
+    let engine = PolicyEngine;
     let decision = engine.decide_with_permission(
         &RiskLevel::ReadOnly,
         "calendar.search_events",
@@ -125,7 +125,7 @@ fn policy_requires_approval_when_permission_is_not_granted() {
 
 #[test]
 fn policy_denies_when_permission_is_denied_or_restricted() {
-    let engine = PolicyEngine::default();
+    let engine = PolicyEngine;
 
     assert!(matches!(
         engine.decide_with_permission(
@@ -147,7 +147,7 @@ fn policy_denies_when_permission_is_denied_or_restricted() {
 
 #[test]
 fn policy_granted_permission_falls_back_to_tool_risk() {
-    let engine = PolicyEngine::default();
+    let engine = PolicyEngine;
 
     assert!(matches!(
         engine.decide_with_permission(
@@ -161,7 +161,7 @@ fn policy_granted_permission_falls_back_to_tool_risk() {
 
 #[test]
 fn policy_denies_destructive_tools() {
-    let engine = PolicyEngine::default();
+    let engine = PolicyEngine;
 
     assert!(matches!(
         engine.decide(&RiskLevel::Destructive, "files.delete_all"),
@@ -173,9 +173,9 @@ use local_ios_agent_runtime::security::AuditPolicy;
 
 #[test]
 fn audit_policy_requires_audit_for_tools_and_approvals() {
-    assert!(AuditPolicy::default().should_audit_event("ToolExecutionCompleted"));
-    assert!(AuditPolicy::default().should_audit_event("RunSuspended"));
-    assert!(!AuditPolicy::default().should_audit_event("AssistantTextDelta"));
+    assert!(AuditPolicy.should_audit_event("ToolExecutionCompleted"));
+    assert!(AuditPolicy.should_audit_event("RunSuspended"));
+    assert!(!AuditPolicy.should_audit_event("AssistantTextDelta"));
 }
 
 use local_ios_agent_runtime::security::SecurityManager;

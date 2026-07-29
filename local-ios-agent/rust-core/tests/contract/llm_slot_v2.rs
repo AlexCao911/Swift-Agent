@@ -1,7 +1,6 @@
 use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
 use local_ios_agent_runtime::llm_contracts::{
-    AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMSlotV2,
-    LLMToolCallingMode,
+    AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
 };
 use serde_json::{json, Value};
 

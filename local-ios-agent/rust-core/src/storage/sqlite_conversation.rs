@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
+use crate::storage::agent_os_state::SqliteAgentOSStateStore;
 use crate::storage::conversation_event_store::{
     ConversationEventStore, StoredTranscriptCommandReceipt,
 };
-use crate::storage::agent_os_state::SqliteAgentOSStateStore;
 
 pub struct SqliteConversationStore {
     connection: SqliteConversationStoreConnection,
@@ -356,7 +356,6 @@ impl SqliteConversationStore {
             .map_err(storage_error)?;
         Ok(())
     }
-
 }
 
 impl ConversationEventStore for SqliteConversationStore {
@@ -796,7 +795,6 @@ impl ConversationEventStore for SqliteConversationStore {
         tx.commit().map_err(storage_error)?;
         Ok(())
     }
-
 }
 
 fn append_event_in_transaction(

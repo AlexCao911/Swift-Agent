@@ -118,16 +118,13 @@ impl InMemoryArchiveStore {
         }
 
         let inner = self.inner.lock().expect("archive store mutex poisoned");
-        let mut next_id = inner.next_id_value();
-
-        for pending in records {
+        for (next_id, pending) in (inner.next_id_value()..).zip(records) {
             if pending.id.as_u64() != next_id || inner.records.contains_key(&pending.id) {
                 return Err(StorageError::new(
                     "storage.archive_conflict",
                     "archive id already exists or is out of order",
                 ));
             }
-            next_id += 1;
         }
 
         Ok(())

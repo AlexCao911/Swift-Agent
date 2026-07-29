@@ -14,6 +14,7 @@ use crate::tool::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolRouteOutcome {
     ExecuteInSwift(ToolExecutionRequest),
     ApprovalRequired {

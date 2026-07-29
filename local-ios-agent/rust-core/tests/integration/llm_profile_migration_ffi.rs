@@ -10,9 +10,7 @@ use local_ios_agent_runtime::ffi_bridge::{
     local_agent_runtime_bridge_list_legacy_profile_migration_actions,
     local_agent_runtime_bridge_new_with_config, local_agent_runtime_bridge_string_free,
 };
-use local_ios_agent_runtime::llm_contracts::{
-    AgentLLMRequirements, LLMToolCallingMode,
-};
+use local_ios_agent_runtime::llm_contracts::{AgentLLMRequirements, LLMToolCallingMode};
 use local_ios_agent_runtime::storage::SqliteRuntimeStateStore;
 use rusqlite::params;
 use serde_json::{json, Value};

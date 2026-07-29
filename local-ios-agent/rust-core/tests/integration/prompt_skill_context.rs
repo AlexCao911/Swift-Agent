@@ -9,7 +9,7 @@ use local_ios_agent_runtime::{
     conversation::{ConversationCommandService, TranscriptCommand},
     core::{EntryId, EventKind, RuntimeEvent, SessionId},
     memory::{
-        MemoryContribution, MemoryContributionId, MemoryProvider, MemoryProviderError,
+        MemoryContributionBuilder, MemoryContributionId, MemoryProvider, MemoryProviderError,
         MemoryProviderId, MemoryQuery, MemoryQueryResult, Provenance, SensitivityLevel,
     },
     storage::{ConversationEventStore, InMemoryConversationStore},
@@ -245,13 +245,15 @@ impl MemoryProvider for CountingMemoryProvider {
 
     fn recall(&self, _query: &MemoryQuery) -> MemoryQueryResult {
         *self.recalls.lock().unwrap() += 1;
-        MemoryQueryResult::from_contributions(vec![MemoryContribution::new("never expose this")
-            .with_id(MemoryContributionId::new("memory.secret"))
-            .with_provenance(Provenance::local("test"))
-            .with_confidence(1.0)
-            .with_sensitivity(SensitivityLevel::Secret)
-            .build()
-            .unwrap()])
+        MemoryQueryResult::from_contributions(vec![MemoryContributionBuilder::new(
+            "never expose this",
+        )
+        .with_id(MemoryContributionId::new("memory.secret"))
+        .with_provenance(Provenance::local("test"))
+        .with_confidence(1.0)
+        .with_sensitivity(SensitivityLevel::Secret)
+        .build()
+        .unwrap()])
     }
 
     fn remember_completed_turn(

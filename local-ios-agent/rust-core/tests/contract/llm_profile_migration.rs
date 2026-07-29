@@ -8,13 +8,11 @@ use local_ios_agent_runtime::canonical_digest::CanonicalDigestV1;
 use local_ios_agent_runtime::llm_contracts::{
     AgentHostBindingService, AgentLLMRequirements, BeginLegacyProfileMigration,
     HostBindingActivationConfirmation, HostBindingCommit, HostBindingStagingReceipt,
-    HostBindingSubjectCatalog, HostBindingTuple, LegacyProfileMigrationService,
-    LegacyProfileMigrationState, LLMToolCallingMode, ProfilePublishPreparation,
+    HostBindingSubjectCatalog, HostBindingTuple, LLMToolCallingMode, LegacyProfileMigrationService,
+    LegacyProfileMigrationState, ProfilePublishPreparation,
 };
 use local_ios_agent_runtime::migration::LegacyAgentProfileTranslator;
-use local_ios_agent_runtime::storage::{
-    SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
-};
+use local_ios_agent_runtime::storage::{SqliteRuntimeStateStore, UnifiedRuntimeStateRepository};
 use local_ios_agent_runtime::user_customization::{
     AgentProfileHostBindingState, AgentProfileId, AgentProfileVersion, AgentSlotKind,
 };

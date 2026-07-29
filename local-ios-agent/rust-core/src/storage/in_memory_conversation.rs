@@ -191,9 +191,7 @@ impl ConversationEventStore for InMemoryConversationStore {
         let mut events = self
             .events
             .values()
-            .filter(|event| {
-                event.session_id == *session_id && event.sequence > after_sequence
-            })
+            .filter(|event| event.session_id == *session_id && event.sequence > after_sequence)
             .cloned()
             .collect::<Vec<_>>();
         events.sort_by_key(|event| event.sequence);
@@ -231,11 +229,7 @@ impl ConversationEventStore for InMemoryConversationStore {
             ));
         }
         let backup = self.clone();
-        match self.append_transaction(
-            conversation_stream_id,
-            expected_next_sequence,
-            events,
-        ) {
+        match self.append_transaction(conversation_stream_id, expected_next_sequence, events) {
             Ok(committed) => {
                 self.command_receipts.insert(key, receipt);
                 Ok(committed)
@@ -354,5 +348,4 @@ impl ConversationEventStore for InMemoryConversationStore {
         self.session_title_overrides.remove(session_id);
         Ok(())
     }
-
 }

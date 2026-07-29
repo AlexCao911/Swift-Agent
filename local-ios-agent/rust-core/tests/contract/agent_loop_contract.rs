@@ -78,7 +78,8 @@ fn batch_result_requires_exact_batch_run_count_identity_and_order() {
     };
     validate_batch_result(&batch, &valid).unwrap();
 
-    let mutations: Vec<Box<dyn Fn(&mut ToolBatchResult)>> = vec![
+    type BatchMutation = Box<dyn Fn(&mut ToolBatchResult)>;
+    let mutations: Vec<BatchMutation> = vec![
         Box::new(|value| value.batch_id = "other".into()),
         Box::new(|value| value.run_id = "other".into()),
         Box::new(|value| {

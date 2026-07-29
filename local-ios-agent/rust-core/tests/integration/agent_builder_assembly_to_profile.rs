@@ -11,9 +11,7 @@ fn builder_create_plan_finalize_produces_snapshot_consumable_profile() {
         .unwrap();
 
     assert!(plan.readiness_report().is_ready());
-    let profile = resolver
-        .finalize(plan, UserProvidedBindings::default())
-        .unwrap();
+    let profile = resolver.finalize(plan, UserProvidedBindings).unwrap();
 
     assert!(profile.reference().profile_version().is_some());
     assert!(profile.readiness().has_issue("host_binding.missing"));

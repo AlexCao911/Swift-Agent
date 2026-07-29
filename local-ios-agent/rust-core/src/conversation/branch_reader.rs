@@ -3,6 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::{AgentError, EntryId, RuntimeEvent, SessionId};
 
+type BranchKey = (SessionId, EntryId);
+type Branches = HashMap<BranchKey, Vec<RuntimeEvent>>;
+
 pub trait BranchEventReader: Clone + Send + Sync + 'static {
     fn active_branch(
         &self,
@@ -13,7 +16,7 @@ pub trait BranchEventReader: Clone + Send + Sync + 'static {
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryBranchEventReader {
-    branches: Arc<Mutex<HashMap<(SessionId, EntryId), Vec<RuntimeEvent>>>>,
+    branches: Arc<Mutex<Branches>>,
 }
 
 impl InMemoryBranchEventReader {

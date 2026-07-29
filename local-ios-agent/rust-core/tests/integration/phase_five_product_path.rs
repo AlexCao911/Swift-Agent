@@ -5,12 +5,10 @@ use local_ios_agent_runtime::app_service::{
     AgentBuilderCardDraftInput, AgentOSApplicationService, AgentOSApplicationServiceConfig,
 };
 use local_ios_agent_runtime::llm_contracts::{
-    AgentLLMRequirements, BeginLegacyProfileMigration, LegacyProfileMigrationService,
-    LLMToolCallingMode,
+    AgentLLMRequirements, BeginLegacyProfileMigration, LLMToolCallingMode,
+    LegacyProfileMigrationService,
 };
-use local_ios_agent_runtime::storage::{
-    SqliteRuntimeStateStore, UnifiedRuntimeStateRepository,
-};
+use local_ios_agent_runtime::storage::{SqliteRuntimeStateStore, UnifiedRuntimeStateRepository};
 use local_ios_agent_runtime::user_customization::{
     AgentProfileId, AgentProfileVersion, AgentSlotKind,
 };
@@ -64,7 +62,10 @@ fn final_binary_keeps_translation_but_has_no_v1_execution_entrypoint() {
         "start_run_json",
         "send_message_streaming",
     ] {
-        assert!(!bridge.contains(forbidden), "legacy entrypoint remains: {forbidden}");
+        assert!(
+            !bridge.contains(forbidden),
+            "legacy entrypoint remains: {forbidden}"
+        );
     }
 }
 
@@ -85,10 +86,7 @@ fn seed_direct_upgrade_store(root: &Path) -> Arc<SqliteRuntimeStateStore> {
                 display_name: Some("Imported Agent".into()),
                 persona: Some("Migration fixture".into()),
                 system_prompt: Some("Preserve the published profile graph".into()),
-                selected_tool_ids: vec![
-                    "contacts.read".into(),
-                    "calendar.events.create".into(),
-                ],
+                selected_tool_ids: vec!["contacts.read".into(), "calendar.events.create".into()],
                 context_step_ids: vec!["memory.retrieve".into(), "attachments.index".into()],
                 ..AgentBuilderCardDraftInput::default()
             },

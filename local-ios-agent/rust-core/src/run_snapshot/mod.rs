@@ -11,10 +11,9 @@ pub use resolved_bindings::{
 };
 pub use resolver::{RunSnapshotRepository, RunSnapshotResolver, RunSnapshotSourceCatalog};
 pub use snapshot::{
-    PersistedResolvedHostSlotBinding, PersistedResolvedRunSnapshotV2,
-    PersistedRunSnapshotError, ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview,
-    RunSnapshotReadinessIssue, RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent,
-    StartRunRequest,
+    PersistedResolvedHostSlotBinding, PersistedResolvedRunSnapshotV2, PersistedRunSnapshotError,
+    ResolvedRunSnapshot, RunSnapshotId, RunSnapshotPreview, RunSnapshotReadinessIssue,
+    RunSnapshotReadinessReport, RunSnapshotResolveInput, RunUserIntent, StartRunRequest,
 };
 pub use snapshot_service::{
     RunPreparationService, RunSnapshotError, RunSnapshotResult, RunSnapshotService,

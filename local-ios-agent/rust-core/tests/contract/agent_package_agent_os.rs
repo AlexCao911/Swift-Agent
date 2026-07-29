@@ -24,7 +24,10 @@ fn v2_package_install_creates_only_a_host_bound_profile() {
     assert!(profile.llm_slot().is_some());
     assert!(profile.readiness().has_issue("host_binding.missing"));
     assert_eq!(
-        store.installation("agent.fixture").unwrap().host_binding_state,
+        store
+            .installation("agent.fixture")
+            .unwrap()
+            .host_binding_state,
         PackageHostBindingState::NeedsLLMBinding
     );
     assert_eq!(store.package_locks()[0].schema_version, 2);
@@ -59,7 +62,7 @@ fn private_schema_v1_reader_returns_v2_portable_state() {
 #[test]
 fn exported_v2_package_round_trips_without_model_sidecar() {
     let lock = AgentPackageLock::from_installed_manifest(AgentPackageManifest::fixture_valid());
-    let exported = AgentPackageExporter::default().export(&lock).unwrap();
+    let exported = AgentPackageExporter.export(&lock).unwrap();
     let manifest = AgentPackageReader::fixture_with_files(exported.files.clone())
         .read_manifest(&PackagePath::fixture())
         .unwrap();
@@ -84,7 +87,7 @@ fn validator_requires_schema_v2_and_portable_llm_slot() {
     manifest.schema_version = 1;
     manifest.llm_slot = None;
 
-    let report = AgentPackageValidator::default().validate(&manifest);
+    let report = AgentPackageValidator.validate(&manifest);
 
     assert!(report.has_issue("package.schema_version.invalid"));
     assert!(report.has_issue("package.llm_slot.required"));

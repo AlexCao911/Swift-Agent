@@ -1,7 +1,5 @@
 use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId, SessionTree};
-use local_ios_agent_runtime::storage::{
-    InMemoryConversationStore, SqliteConversationStore,
-};
+use local_ios_agent_runtime::storage::{InMemoryConversationStore, SqliteConversationStore};
 
 fn event(id: &str, parent: Option<&str>, sequence: u64, depth: u32, payload: &str) -> RuntimeEvent {
     RuntimeEvent::new(

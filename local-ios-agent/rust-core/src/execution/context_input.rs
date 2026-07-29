@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::context::{ContextAssembler, ContextBudget, ContextSegment, ModelInputMessages, PromptMessage};
+use crate::context::{
+    ContextAssembler, ContextBudget, ContextSegment, ModelInputMessages, PromptMessage,
+};
 use crate::conversation::{ConversationFrameMessage, ConversationRunFrame};
 use crate::execution::ExecutionToolObservation;
 

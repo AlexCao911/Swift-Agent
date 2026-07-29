@@ -66,7 +66,7 @@ fn component_kind_is_pinned_for_component_identity() {
 
 #[test]
 fn empty_prompt_component_is_invalid() {
-    let report = local_ios_agent_runtime::user_customization::ComponentValidator::default()
+    let report = local_ios_agent_runtime::user_customization::ComponentValidator
         .validate(&ComponentContent::prompt(""));
 
     assert!(!report.is_valid);

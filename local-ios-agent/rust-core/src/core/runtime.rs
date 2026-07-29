@@ -3,24 +3,19 @@ use std::collections::HashMap;
 use crate::conversation::ConversationRunFrameRef;
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionCursor, SessionId};
 use crate::execution::{ExecutionToolObservation, ExecutionToolOutcome};
-use crate::storage::{ConversationEventStore, InMemoryConversationStore};
 use crate::security::{
     ApprovalDecision, ApprovalProtocolRequest, ApprovalProtocolResponse, AuditPolicy,
     PermissionScope,
 };
+use crate::storage::{ConversationEventStore, InMemoryConversationStore};
 use crate::tool::{
     ToolCall, ToolExecutionRequest, ToolRegistry, ToolRouteOutcome, ToolRouter, ToolSchema,
 };
 use crate::utils::id::IdGenerator;
 
+#[derive(Default)]
 pub struct AgentRuntimeConfig {
     pub tool_router: Option<ToolRouter>,
-}
-
-impl Default for AgentRuntimeConfig {
-    fn default() -> Self {
-        Self { tool_router: None }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -442,6 +437,7 @@ impl<S: ConversationEventStore> AgentRuntime<S> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_event_with_id_and_blob_refs(
         &mut self,
         entry_id: EntryId,

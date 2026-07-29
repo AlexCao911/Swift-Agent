@@ -2134,21 +2134,20 @@ pub(crate) fn queues_inbound_event(
         && event.kind() != crate::llm_contracts::LLMEventKind::SessionClosed
 }
 
+type AcceptedEventState = (
+    HostWorkerRecord,
+    HostSessionRecord,
+    Option<HostCommandEnvelope>,
+    Vec<(String, String)>,
+);
+
 pub(crate) fn accepted_event_state(
     worker: &HostWorkerRecord,
     session: &HostSessionRecord,
     event: &LLMEventEnvelope,
     result: LLMEventSubmissionResult,
     prior_events: &[LLMEventEnvelope],
-) -> Result<
-    (
-        HostWorkerRecord,
-        HostSessionRecord,
-        Option<HostCommandEnvelope>,
-        Vec<(String, String)>,
-    ),
-    RuntimeStateError,
-> {
+) -> Result<AcceptedEventState, RuntimeStateError> {
     let mut next_worker = worker
         .clone()
         .with_revision(worker.revision() + 1)

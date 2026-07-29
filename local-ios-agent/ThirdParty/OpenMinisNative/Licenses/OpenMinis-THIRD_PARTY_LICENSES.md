@@ -16,7 +16,7 @@ OpenMinis bundles, links, or depends on the following third-party components. Ve
 
 ## iOS — Swift Package Manager dependencies
 
-Direct packages declared in `src/ios/Minis.xcodeproj`:
+Direct packages declared by the upstream iOS project:
 
 | Package | Version | Repository | License |
 |---|---|---|---|

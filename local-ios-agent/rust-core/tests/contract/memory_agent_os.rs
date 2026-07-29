@@ -1,6 +1,7 @@
 use local_ios_agent_runtime::memory::{
-    MemoryContribution, MemoryContributionId, MemoryProviderId, MemoryQuery, MemoryQueryResult,
-    MemoryReadinessIssue, MemoryRetrievalTrace, Provenance, SensitivityLevel,
+    MemoryContribution, MemoryContributionBuilder, MemoryContributionId, MemoryProviderId,
+    MemoryQuery, MemoryQueryResult, MemoryReadinessIssue, MemoryRetrievalTrace, Provenance,
+    SensitivityLevel,
 };
 
 #[test]
@@ -15,17 +16,17 @@ fn memory_contribution_requires_provenance_confidence_and_sensitivity() {
 
 #[test]
 fn incomplete_or_invalid_memory_contributions_are_rejected() {
-    let missing_id = MemoryContribution::new("User prefers concise answers")
+    let missing_id = MemoryContributionBuilder::new("User prefers concise answers")
         .with_provenance(Provenance::local("memory_1"))
         .with_confidence(0.91)
         .with_sensitivity(SensitivityLevel::Normal)
         .build();
-    let missing_provenance = MemoryContribution::new("User prefers concise answers")
+    let missing_provenance = MemoryContributionBuilder::new("User prefers concise answers")
         .with_id(MemoryContributionId::new("contribution_1"))
         .with_confidence(0.91)
         .with_sensitivity(SensitivityLevel::Normal)
         .build();
-    let invalid_confidence = MemoryContribution::new("User prefers concise answers")
+    let invalid_confidence = MemoryContributionBuilder::new("User prefers concise answers")
         .with_id(MemoryContributionId::new("contribution_1"))
         .with_provenance(Provenance::local("memory_1"))
         .with_confidence(1.5)
@@ -75,7 +76,7 @@ fn memory_query_result_carries_trace_and_readiness_issues() {
 }
 
 fn memory_contribution(source_id: &str) -> MemoryContribution {
-    MemoryContribution::new("User prefers concise answers")
+    MemoryContributionBuilder::new("User prefers concise answers")
         .with_id(MemoryContributionId::new(format!(
             "contribution_{source_id}"
         )))

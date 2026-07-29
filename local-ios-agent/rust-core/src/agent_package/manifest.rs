@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::llm_contracts::{
-    AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMSlotV2,
-    LLMToolCallingMode,
+    AgentLLMRequirements, LLMCapabilityRequirement, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -83,7 +83,10 @@ fn rust_profile_snapshot_and_bridge_are_v2_only() {
         &read("rust-core/src/run_snapshot/resolved_bindings.rs"),
         "ResolvedModelBinding",
     );
-    assert_no_occurrence(&read("rust-core/src/ffi_bridge.rs"), "profile_execution_route_json");
+    assert_no_occurrence(
+        &read("rust-core/src/ffi_bridge.rs"),
+        "profile_execution_route_json",
+    );
 }
 
 #[test]

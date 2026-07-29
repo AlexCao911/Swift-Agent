@@ -93,10 +93,7 @@ impl RunSnapshotService {
         runner: Box<dyn TransactionRunner>,
     ) -> Self {
         Self::new(
-            RunSnapshotSourceCatalog::new(
-                profile_repository,
-                component_catalog,
-            ),
+            RunSnapshotSourceCatalog::new(profile_repository, component_catalog),
             RunSnapshotRepository::default(),
             runner,
         )
@@ -150,7 +147,6 @@ impl RunSnapshotService {
             Box::new(InMemoryTransactionRunner::default()),
         )
     }
-
 }
 
 impl RunPreparationService {

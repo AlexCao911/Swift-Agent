@@ -20,7 +20,7 @@ fn prompt_document_versions_are_immutable() {
 #[test]
 fn compiler_records_source_map_entries() {
     let stack = PromptStack::fixture_identity_persona();
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
 
     assert!(compiled
         .source_map
@@ -32,7 +32,7 @@ fn compiler_records_source_map_entries() {
 
 #[test]
 fn compiler_redacts_sensitive_variables_before_returning_compiled_prompt() {
-    let compiled = PromptCompiler::default()
+    let compiled = PromptCompiler
         .compile(PromptStack::fixture_with_variable("api_key", "abcd1234"))
         .unwrap();
 
@@ -43,7 +43,7 @@ fn compiler_redacts_sensitive_variables_before_returning_compiled_prompt() {
 #[test]
 fn prompt_archive_redacts_secret_like_variables() {
     let stack = PromptStack::fixture_with_variable("api_key", "sk-secret");
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled.clone()).unwrap();
 
     assert!(!archive.redacted_text.contains("sk-secret"));
@@ -54,7 +54,7 @@ fn prompt_archive_redacts_secret_like_variables() {
 #[test]
 fn prompt_archive_redacts_sensitive_variable_by_name_when_value_looks_plain() {
     let stack = PromptStack::fixture_with_variable("api_key", "abcd1234");
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled).unwrap();
 
     assert!(!archive.redacted_text.contains("abcd1234"));
@@ -65,7 +65,7 @@ fn prompt_archive_redacts_sensitive_variable_by_name_when_value_looks_plain() {
 #[test]
 fn prompt_archive_never_exposes_unredacted_secret_text() {
     let stack = PromptStack::fixture_with_variable("api_key", "sk-secret");
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled).unwrap();
 
     assert!(!archive.compiled_text.contains("sk-secret"));
@@ -75,7 +75,7 @@ fn prompt_archive_never_exposes_unredacted_secret_text() {
 #[test]
 fn prompt_preview_uses_compile_redaction_without_runtime() {
     let stack = PromptStack::fixture_with_variable("api_key", "sk-secret");
-    let preview = PromptCompiler::default().preview(stack).unwrap();
+    let preview = PromptCompiler.preview(stack).unwrap();
 
     assert!(!preview.redacted_text.contains("sk-secret"));
     assert!(preview.source_map.variables.iter().any(|variable| {
@@ -87,7 +87,7 @@ fn prompt_preview_uses_compile_redaction_without_runtime() {
 fn prompt_archive_writes_append_only_storage_record_in_transaction() {
     let runner = InMemoryTransactionRunner::default();
     let archive_store = runner.archive_store();
-    let compiled = PromptCompiler::default()
+    let compiled = PromptCompiler
         .compile(PromptStack::fixture_identity_persona())
         .unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled).unwrap();
@@ -117,7 +117,7 @@ fn prompt_archive_writes_append_only_storage_record_in_transaction() {
 #[test]
 fn prompt_archive_record_persists_redacted_prompt_and_source_map_payload() {
     let stack = PromptStack::fixture_with_variable("api_key", "abcd1234");
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled).unwrap();
     let record = archive.to_archive_record();
     let payload: serde_json::Value = serde_json::from_str(record.payload()).unwrap();
@@ -144,7 +144,7 @@ fn prompt_redaction_preserves_source_map_offsets_and_whitespace() {
         "abcd1234",
         "user.secret",
     ));
-    let compiled = PromptCompiler::default().compile(stack).unwrap();
+    let compiled = PromptCompiler.compile(stack).unwrap();
     let archive = CompiledPromptArchive::from_compiled("run_1", compiled.clone()).unwrap();
 
     assert_eq!(archive.redacted_text.len(), compiled.text.len());

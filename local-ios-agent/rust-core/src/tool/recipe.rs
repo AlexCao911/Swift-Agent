@@ -34,7 +34,7 @@ pub enum ToolRecipeContent {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct HttpConnectorPolicy {
     pub timeout_millis: Option<u64>,
     pub retry_policy: Option<HttpRetryPolicy>,
@@ -201,20 +201,6 @@ impl ToolRecipe {
             *existing = policy;
         }
         self
-    }
-}
-
-impl Default for HttpConnectorPolicy {
-    fn default() -> Self {
-        Self {
-            timeout_millis: None,
-            retry_policy: None,
-            rate_limit_policy: None,
-            network_allowlist: Vec::new(),
-            data_egress_disclosure: None,
-            credential_purpose: None,
-            response_sensitivity: None,
-        }
     }
 }
 

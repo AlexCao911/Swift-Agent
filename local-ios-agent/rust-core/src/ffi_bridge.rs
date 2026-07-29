@@ -1,3 +1,6 @@
+// The C header owns the pointer-validity and lifetime contract for this FFI surface.
+#![allow(clippy::missing_safety_doc)]
+
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
@@ -22,8 +25,8 @@ use crate::conversation::{
     ConversationFrameId, ConversationFrameMessage, ConversationFrameRepository,
     ConversationRunFrame, ConversationRunFrameRef, ConversationService,
     InMemoryConversationFrameRepository, ObserveTranscriptProjectionsRequest,
-    PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader,
-    RuntimeConversationStore, TranscriptCommand,
+    PrepareUserTurnRequest, PreparedUserTurn, RuntimeBranchEventReader, RuntimeConversationStore,
+    TranscriptCommand,
 };
 use crate::core::{
     AgentError, AgentRuntime, AgentRuntimeConfig, EntryId, EventKind, RunId, RuntimeEvent,
@@ -209,9 +212,7 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         }
         let frames = InMemoryConversationFrameRepository::default();
         let runtime = Arc::new(Mutex::new(runtime));
-        let transcript_store = Arc::new(Mutex::new(RuntimeConversationStore::new(
-            runtime.clone(),
-        )));
+        let transcript_store = Arc::new(Mutex::new(RuntimeConversationStore::new(runtime.clone())));
         let transcript_commands = ConversationCommandService::new(transcript_store.clone());
         let agent_loop = AgentLoopService::new(
             transcript_store,
@@ -916,17 +917,12 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         )
     }
 
-    fn submit_transcript_command_json(
-        &self,
-        request_json: &str,
-    ) -> Result<String, AgentError> {
+    fn submit_transcript_command_json(&self, request_json: &str) -> Result<String, AgentError> {
         let command: TranscriptCommand = from_json(request_json)?;
         let result = self
             .transcript_commands
             .submit(command.clone())
-            .map_err(|error| {
-                AgentError::Storage(format!("{}: {error}", error.code()))
-            })?;
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
         if let Some(run_id) = &result.run_id {
             self.start_react_run_if_needed(&command, run_id)?;
         }
@@ -987,12 +983,11 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             .transcript_commands
             .projection_registry()
             .observe(self.transcript_commands.store_handle(), request)
-            .map_err(|error| {
-                AgentError::Storage(format!("{}: {error}", error.code()))
-            })?;
-        while let Some(event) = feed.next().map_err(|error| {
-            AgentError::Storage(format!("{}: {error}", error.code()))
-        })? {
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        while let Some(event) = feed
+            .next()
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?
+        {
             emit(to_json(&event)?)?;
         }
         Ok(())
@@ -1002,8 +997,7 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         &self,
         request_json: &str,
     ) -> Result<String, AgentError> {
-        let request: CancelTranscriptProjectionSubscriptionJson =
-            from_json(request_json)?;
+        let request: CancelTranscriptProjectionSubscriptionJson = from_json(request_json)?;
         self.transcript_commands
             .projection_registry()
             .cancel(&request.subscription_id);
@@ -1691,17 +1685,10 @@ impl RuntimeJsonBridge {
         }
     }
 
-    pub fn submit_transcript_command_json(
-        &self,
-        request_json: &str,
-    ) -> Result<String, AgentError> {
+    pub fn submit_transcript_command_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
-            Self::InMemory(runtime) => {
-                runtime.submit_transcript_command_json(request_json)
-            }
-            Self::Sqlite(runtime) => {
-                runtime.submit_transcript_command_json(request_json)
-            }
+            Self::InMemory(runtime) => runtime.submit_transcript_command_json(request_json),
+            Self::Sqlite(runtime) => runtime.submit_transcript_command_json(request_json),
         }
     }
 
@@ -1714,10 +1701,12 @@ impl RuntimeJsonBridge {
         F: FnMut(String) -> Result<(), AgentError>,
     {
         match self {
-            Self::InMemory(runtime) => runtime
-                .observe_transcript_projections_stream_json(request_json, &mut emit),
-            Self::Sqlite(runtime) => runtime
-                .observe_transcript_projections_stream_json(request_json, &mut emit),
+            Self::InMemory(runtime) => {
+                runtime.observe_transcript_projections_stream_json(request_json, &mut emit)
+            }
+            Self::Sqlite(runtime) => {
+                runtime.observe_transcript_projections_stream_json(request_json, &mut emit)
+            }
         }
     }
 
@@ -1726,10 +1715,12 @@ impl RuntimeJsonBridge {
         request_json: &str,
     ) -> Result<String, AgentError> {
         match self {
-            Self::InMemory(runtime) => runtime
-                .cancel_transcript_projection_subscription_json(request_json),
-            Self::Sqlite(runtime) => runtime
-                .cancel_transcript_projection_subscription_json(request_json),
+            Self::InMemory(runtime) => {
+                runtime.cancel_transcript_projection_subscription_json(request_json)
+            }
+            Self::Sqlite(runtime) => {
+                runtime.cancel_transcript_projection_subscription_json(request_json)
+            }
         }
     }
 
@@ -2177,10 +2168,10 @@ pub unsafe extern "C" fn local_agent_runtime_bridge_observe_transcript_projectio
 ) -> *mut c_char {
     c_runtime_result(runtime, || {
         let request_json = c_str_arg(request_json, "request_json")?;
-        bridge_ref(runtime)?.observe_transcript_projections_stream_json(
-            request_json,
-            |event_json| dispatch_stream_event(on_event, user_data, &event_json),
-        )?;
+        bridge_ref(runtime)?
+            .observe_transcript_projections_stream_json(request_json, |event_json| {
+                dispatch_stream_event(on_event, user_data, &event_json)
+            })?;
         Ok("null".to_string())
     })
 }
@@ -3574,9 +3565,7 @@ mod ffi_boundary_tests {
     #[test]
     fn caught_panic_taints_runtime_and_follow_up_call_returns_stable_error() {
         let runtime = Box::into_raw(Box::new(RuntimeJsonBridge::new(AgentRuntime::new(
-            AgentRuntimeConfig {
-                tool_router: None,
-            },
+            AgentRuntimeConfig { tool_router: None },
         ))));
 
         unsafe {
@@ -3636,9 +3625,7 @@ mod tests {
     #[test]
     fn accepted_transcript_run_registers_the_react_host_session() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         let snapshot = crate::agent_input::RunStartSnapshot::make(
@@ -3682,9 +3669,7 @@ mod tests {
     #[test]
     fn accepted_host_delta_is_consumed_and_wakes_the_execution_stream() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         bridge
@@ -3768,17 +3753,15 @@ mod tests {
     #[test]
     fn direct_react_event_is_left_for_the_agent_loop_consumer() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         let payload = crate::llm_contracts::HostCommandPayload::lifecycle_v2();
         let disclosure = crate::llm_contracts::GenerationDisclosureDocument {
             schema_version: "1".into(),
             generation_turn_id: "turn-react".into(),
-            content_digest:
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            content_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .into(),
             source_revision_digest:
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
             data_classes: vec!["text".into()],
@@ -3850,9 +3833,7 @@ mod tests {
     #[test]
     fn duplicate_host_event_recovers_a_pending_execution_projection() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         bridge
@@ -3936,9 +3917,7 @@ mod tests {
     #[test]
     fn duplicate_host_event_does_not_repeat_an_already_persisted_projection() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         bridge
@@ -4069,9 +4048,7 @@ mod tests {
             .unwrap();
 
         let bridge = BridgeRuntime::try_new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
             store.agent_os_state(),
             TEST_HOST_PROCESS_EPOCH.into(),
@@ -4103,9 +4080,7 @@ mod tests {
     #[test]
     fn cancel_run_routes_v2_to_the_durable_host_outbox() {
         let bridge = BridgeRuntime::new(
-            AgentRuntime::new(AgentRuntimeConfig {
-                tool_router: None,
-            }),
+            AgentRuntime::new(AgentRuntimeConfig { tool_router: None }),
             AgentOSApplicationService::empty(),
         );
         bridge

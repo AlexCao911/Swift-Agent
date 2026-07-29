@@ -33,7 +33,7 @@ impl ExecutionService {
         Self {
             event_log,
             completed_runs,
-            tool_approval: ToolApprovalService::default(),
+            tool_approval: ToolApprovalService,
             tool_loop: ToolLoopService::default(),
             debug_store: RunDebugStore,
             run_lifecycle,
@@ -58,8 +58,7 @@ impl ExecutionService {
         code: &str,
         payload: impl Into<String>,
     ) -> Result<(), ExecutionStartError> {
-        self.event_log
-            .append_with_payload(run_id, code, payload);
+        self.event_log.append_with_payload(run_id, code, payload);
         self.run_lifecycle.release_if_terminal(run_id, code)?;
         Ok(())
     }

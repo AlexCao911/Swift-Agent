@@ -79,9 +79,10 @@ fn context_assembler_uses_only_the_pinned_conversation_frame() {
         .assemble_initial(&frame(reference))
         .unwrap();
 
-    assert!(input.messages().iter().any(|message| {
-        message.role() == ModelInputRole::User && message.content() == "hello"
-    }));
+    assert!(input
+        .messages()
+        .iter()
+        .any(|message| { message.role() == ModelInputRole::User && message.content() == "hello" }));
     assert!(!input
         .messages()
         .iter()
@@ -123,12 +124,9 @@ fn assistant_commit_recovers_durable_completion_after_restart() {
     );
 
     let result = service
-        .commit_assistant_result_with_persist(
-            "run_1",
-            "assistant:run_1:turn_1",
-            &reference,
-            |_| Ok("assistant.persisted".into()),
-        )
+        .commit_assistant_result_with_persist("run_1", "assistant:run_1:turn_1", &reference, |_| {
+            Ok("assistant.persisted".into())
+        })
         .unwrap();
 
     assert_eq!(result.assistant_message_id(), "assistant.persisted");

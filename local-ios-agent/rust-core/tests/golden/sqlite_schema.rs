@@ -43,8 +43,7 @@ fn sqlite_v1_legacy_fixture_migrates_without_losing_runtime_history() {
 #[test]
 fn clean_conversation_store_does_not_create_memory_backend_tables() {
     let tempdir = tempfile::tempdir().unwrap();
-    let store =
-        SqliteConversationStore::open(tempdir.path().join("agent.sqlite")).unwrap();
+    let store = SqliteConversationStore::open(tempdir.path().join("agent.sqlite")).unwrap();
     let tables = store.table_names().unwrap();
 
     for memory_table in [

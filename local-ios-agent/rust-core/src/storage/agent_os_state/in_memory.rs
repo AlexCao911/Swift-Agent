@@ -35,6 +35,7 @@ impl InMemoryAgentOSStateStore {
         Self::default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &mut self,
         key_kind: HostBindingKindKey,

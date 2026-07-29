@@ -48,6 +48,7 @@ pub struct RuntimeEvent {
 }
 
 impl RuntimeEvent {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: EntryId,
         session_id: SessionId,

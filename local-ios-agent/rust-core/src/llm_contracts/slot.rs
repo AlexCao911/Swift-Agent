@@ -17,6 +17,7 @@ impl LLMBindingSchema {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
             "legacy_v1" => Some(Self::LegacyV1),

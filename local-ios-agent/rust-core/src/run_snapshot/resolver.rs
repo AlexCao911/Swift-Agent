@@ -3,17 +3,15 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::llm_contracts::{
-    AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
-};
+use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
 use crate::run_snapshot::{
     ResolvedComponentBinding, ResolvedMemoryBinding, ResolvedRunSnapshot, ResolvedToolBinding,
     ResolvedVoiceBinding, RunSnapshotError, RunSnapshotId, RunSnapshotResolveInput,
     RunSnapshotResult, StartRunRequest,
 };
 use crate::storage::{
-    InMemoryTransactionRunner, PendingStoreWrite, StorageError, StorageResult, TransactionName,
-    TransactionOperation, TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
+    InMemoryTransactionRunner, StorageError, StorageResult, TransactionName, TransactionOperation,
+    TransactionRunner, UnifiedRuntimeStateRepository, UnitOfWork,
 };
 use crate::user_customization::{
     AgentProfile, AgentProfileDraft, AgentProfileId, AgentProfileReference, AgentProfileVersion,
@@ -58,10 +56,9 @@ pub(crate) struct ToolSchemaSourceDocument {
     content: ComponentContent,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RunSnapshotRepositoryRecords {
     snapshots: BTreeMap<RunSnapshotId, ResolvedRunSnapshot>,
-    next_snapshot_id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -72,24 +69,9 @@ struct ComponentSnapshotSource {
     content: ComponentContent,
 }
 
-struct PendingRunSnapshotWrite {
-    repository: RunSnapshotRepository,
-    snapshot: ResolvedRunSnapshot,
-    committed_snapshot: Arc<Mutex<Option<ResolvedRunSnapshot>>>,
-}
-
 struct AgentProfileStageOperation {
     repository: InMemoryAgentProfileRepository,
     profile: Option<AgentProfile>,
-}
-
-impl Default for RunSnapshotRepositoryRecords {
-    fn default() -> Self {
-        Self {
-            snapshots: BTreeMap::new(),
-            next_snapshot_id: 1,
-        }
-    }
 }
 
 impl RunSnapshotResolver {
@@ -362,20 +344,6 @@ impl RunSnapshotSourceCatalog {
 }
 
 impl RunSnapshotRepository {
-    pub(in crate::run_snapshot) fn stage_snapshot(
-        &self,
-        tx: &mut UnitOfWork,
-        snapshot: ResolvedRunSnapshot,
-        committed_snapshot: Arc<Mutex<Option<ResolvedRunSnapshot>>>,
-    ) -> StorageResult<()> {
-        tx.push_store_write(Box::new(PendingRunSnapshotWrite {
-            repository: self.clone(),
-            snapshot,
-            committed_snapshot,
-        }));
-        Ok(())
-    }
-
     pub fn contains(&self, snapshot_id: RunSnapshotId) -> bool {
         self.inner
             .lock()
@@ -392,32 +360,6 @@ impl RunSnapshotRepository {
             .get(&snapshot_id)
             .map(|snapshot| snapshot.profile_version().as_u64())
             .unwrap_or(0)
-    }
-
-    fn commit_snapshot(&self, snapshot: ResolvedRunSnapshot) -> ResolvedRunSnapshot {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("run snapshot repository mutex poisoned");
-        let snapshot_id = RunSnapshotId::new(inner.next_snapshot_id);
-        inner.next_snapshot_id += 1;
-        let snapshot = snapshot.with_snapshot_id(snapshot_id);
-        inner.snapshots.insert(snapshot_id, snapshot.clone());
-        snapshot
-    }
-}
-
-impl PendingStoreWrite for PendingRunSnapshotWrite {
-    fn validate(&self) -> StorageResult<()> {
-        Ok(())
-    }
-
-    fn commit(self: Box<Self>) {
-        let snapshot = self.repository.commit_snapshot(self.snapshot);
-        *self
-            .committed_snapshot
-            .lock()
-            .expect("committed snapshot mutex poisoned") = Some(snapshot);
     }
 }
 

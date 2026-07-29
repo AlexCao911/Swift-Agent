@@ -332,9 +332,7 @@ impl AgentProfileDraft {
 
     pub(crate) fn into_published(self) -> AgentProfile {
         let host_binding_state = match self.llm_slot.as_ref() {
-            Some(_) => {
-                AgentProfileHostBindingState::PendingHostBinding
-            }
+            Some(_) => AgentProfileHostBindingState::PendingHostBinding,
             _ => AgentProfileHostBindingState::NotRequired,
         };
         AgentProfile {
@@ -496,12 +494,7 @@ impl AgentProfilePublisher {
         template: &AgentTemplate,
         catalog: &ComponentCatalogService,
     ) -> StorageResult<AgentProfileReference> {
-        self.publish_with_version(
-            draft,
-            AgentProfileVersion::initial(),
-            template,
-            catalog,
-        )
+        self.publish_with_version(draft, AgentProfileVersion::initial(), template, catalog)
     }
 
     pub fn publish_with_version(

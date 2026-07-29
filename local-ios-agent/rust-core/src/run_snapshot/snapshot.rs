@@ -221,10 +221,6 @@ impl StartRunRequest {
 }
 
 impl RunSnapshotResolveInput {
-    pub(in crate::run_snapshot) fn new(request: StartRunRequest) -> Self {
-        Self { request }
-    }
-
     pub fn request(&self) -> &StartRunRequest {
         &self.request
     }
@@ -266,11 +262,6 @@ impl ResolvedRunSnapshot {
             conversation_run_frame_ref: request.conversation_run_frame_ref().clone(),
             created_at_millis,
         }
-    }
-
-    pub(in crate::run_snapshot) fn with_snapshot_id(mut self, snapshot_id: RunSnapshotId) -> Self {
-        self.snapshot_id = snapshot_id;
-        self
     }
 
     pub fn snapshot_id(&self) -> RunSnapshotId {
@@ -569,14 +560,6 @@ fn parse_slot_kind(value: &str) -> Result<AgentSlotKind, PersistedRunSnapshotErr
 }
 
 impl RunSnapshotPreview {
-    pub(crate) fn new(request: StartRunRequest, snapshot: ResolvedRunSnapshot) -> Self {
-        Self { request, snapshot }
-    }
-
-    pub(crate) fn request(&self) -> &StartRunRequest {
-        &self.request
-    }
-
     pub fn snapshot(&self) -> &ResolvedRunSnapshot {
         &self.snapshot
     }
@@ -585,11 +568,6 @@ impl RunSnapshotPreview {
 impl RunSnapshotReadinessReport {
     pub(in crate::run_snapshot) fn ready() -> Self {
         Self { issues: Vec::new() }
-    }
-
-    pub(in crate::run_snapshot) fn with_issue(mut self, issue: RunSnapshotReadinessIssue) -> Self {
-        self.issues.push(issue);
-        self
     }
 
     pub fn is_ready(&self) -> bool {
@@ -606,16 +584,6 @@ impl RunSnapshotReadinessReport {
 }
 
 impl RunSnapshotReadinessIssue {
-    pub(in crate::run_snapshot) fn new(
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-
     pub fn code(&self) -> &str {
         &self.code
     }

@@ -1623,21 +1623,21 @@ impl UnifiedRuntimeStateRepository for SqliteRuntimeStateStore {
         let connection = store.connection();
         Ok(RuntimeAggregateInspection {
             committed_preparation: row_exists(
-                &connection,
+                connection,
                 "host_committed_preparations",
                 "preparation_id",
                 preparation_id,
             )?,
-            snapshot: row_exists(&connection, "host_run_snapshots", "run_id", run_id)?,
-            agent_event: row_exists(&connection, "host_agent_events", "run_id", run_id)?,
-            worker: row_exists(&connection, "host_workers", "run_id", run_id)?,
+            snapshot: row_exists(connection, "host_run_snapshots", "run_id", run_id)?,
+            agent_event: row_exists(connection, "host_agent_events", "run_id", run_id)?,
+            worker: row_exists(connection, "host_workers", "run_id", run_id)?,
             session: row_exists(
-                &connection,
+                connection,
                 "host_sessions",
                 "session_handle",
                 session_handle,
             )?,
-            outbox: row_exists(&connection, "host_command_outbox", "run_id", run_id)?,
+            outbox: row_exists(connection, "host_command_outbox", "run_id", run_id)?,
         })
     }
 }
@@ -2820,14 +2820,15 @@ fn validate_legacy_source(transaction: &Transaction<'_>) -> Result<(), RuntimeSt
         ));
     }
 
-    let lease: Option<(
+    type LegacyGlobalRunLeaseRow = (
         String,
         Option<String>,
         Option<String>,
         String,
         String,
         String,
-    )> = transaction
+    );
+    let lease: Option<LegacyGlobalRunLeaseRow> = transaction
         .query_row(
             "select cast(lease_generation as text), owner_run_id, preparation_id,
                     binding_schema, host_process_epoch, state

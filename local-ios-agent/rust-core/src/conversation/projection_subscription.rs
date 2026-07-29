@@ -142,6 +142,8 @@ pub struct TranscriptProjectionFeed<S: ConversationEventStore + Send + 'static> 
 }
 
 impl<S: ConversationEventStore + Send + 'static> TranscriptProjectionFeed<S> {
+    // This is a blocking, fallible feed operation rather than Iterator::next.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<TranscriptProjectionEvent>, TranscriptProjectionError> {
         loop {
             if let Some(event) = self.pending.pop_front() {

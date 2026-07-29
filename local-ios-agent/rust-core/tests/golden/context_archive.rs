@@ -1,18 +1,19 @@
 use local_ios_agent_runtime::context::{ContextAssembler, ContextBudget};
 use local_ios_agent_runtime::memory::{
-    MemoryContribution, MemoryContributionId, Provenance, SensitivityLevel as MemorySensitivity,
+    MemoryContributionBuilder, MemoryContributionId, Provenance,
+    SensitivityLevel as MemorySensitivity,
 };
 use local_ios_agent_runtime::prompt::{PromptCompiler, PromptStack};
 
 #[test]
 fn context_archive_summary_matches_golden_and_is_redacted() {
-    let compiled_prompt = PromptCompiler::default()
+    let compiled_prompt = PromptCompiler
         .compile(PromptStack::fixture_with_variable(
             "api_key",
             "plain-secret-value",
         ))
         .unwrap();
-    let memory = MemoryContribution::new("likes quiet mornings")
+    let memory = MemoryContributionBuilder::new("likes quiet mornings")
         .with_id(MemoryContributionId::new("memory.local.preference"))
         .with_provenance(Provenance::local("profile-memory"))
         .with_confidence(0.9)

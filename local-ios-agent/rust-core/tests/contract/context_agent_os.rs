@@ -3,7 +3,8 @@ use local_ios_agent_runtime::context::{
     ContextSensitivity, ModelInputRole, PromptMessage, SegmentSource,
 };
 use local_ios_agent_runtime::memory::{
-    MemoryContribution, MemoryContributionId, Provenance, SensitivityLevel as MemorySensitivity,
+    MemoryContributionBuilder, MemoryContributionId, Provenance,
+    SensitivityLevel as MemorySensitivity,
 };
 use local_ios_agent_runtime::tool::{RetentionPolicy, Sensitivity as ToolSensitivity, ToolResult};
 
@@ -203,7 +204,7 @@ fn preview_and_archive_use_same_assembly_path() {
 
 #[test]
 fn context_archive_keeps_prompt_source_map_backlink_for_checkpoint_debugging() {
-    let compiled = local_ios_agent_runtime::prompt::PromptCompiler::default()
+    let compiled = local_ios_agent_runtime::prompt::PromptCompiler
         .compile(local_ios_agent_runtime::prompt::PromptStack::fixture_identity_persona())
         .unwrap();
     let expected_entries = compiled.source_map.entries.clone();
@@ -324,7 +325,7 @@ fn archive_redacts_sensitive_tool_result_and_preserves_provenance() {
 
 #[test]
 fn memory_contribution_becomes_segment_with_provenance_and_sensitivity() {
-    let memory = MemoryContribution::new("likes quiet mornings")
+    let memory = MemoryContributionBuilder::new("likes quiet mornings")
         .with_id(MemoryContributionId::new("memory.local.1"))
         .with_provenance(Provenance::local("memory-db"))
         .with_confidence(0.8)

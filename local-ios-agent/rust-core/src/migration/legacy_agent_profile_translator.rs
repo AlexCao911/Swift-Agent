@@ -4,12 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::canonical_digest::CanonicalDigestV1;
-use crate::llm_contracts::{
-    AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode,
-};
+use crate::llm_contracts::{AgentLLMRequirements, LLMInputModality, LLMSlotV2, LLMToolCallingMode};
 use crate::user_customization::{
-    AgentProfile, AgentProfileId, AgentProfileVersion, AgentSlotId, AgentSlotKind,
-    AgentTemplateId, ComponentBinding,
+    AgentProfile, AgentProfileId, AgentProfileVersion, AgentSlotId, AgentSlotKind, AgentTemplateId,
+    ComponentBinding,
 };
 
 const LEGACY_PROFILE_RECORD_SCHEMA: &str = "agent-profile:v2";
@@ -96,13 +94,9 @@ impl LegacyAgentProfileTranslator {
         } else {
             LLMToolCallingMode::Disabled
         };
-        let requirements = AgentLLMRequirements::new(
-            binding.slot_id.as_str(),
-            4096,
-            true,
-            tool_calling_mode,
-        )
-        .requiring_input_modality(LLMInputModality::Text);
+        let requirements =
+            AgentLLMRequirements::new(binding.slot_id.as_str(), 4096, true, tool_calling_mode)
+                .requiring_input_modality(LLMInputModality::Text);
         let llm_slot = LLMSlotV2::new(requirements)
             .with_model_family_hint(binding.selection.provider_id)
             .with_model_id_hint(binding.selection.model_id.clone());
@@ -125,9 +119,7 @@ impl LegacyAgentProfileTranslator {
         })
     }
 
-    pub fn source_digest(
-        source_json: &str,
-    ) -> Result<String, LegacyProfileTranslationError> {
+    pub fn source_digest(source_json: &str) -> Result<String, LegacyProfileTranslationError> {
         let source_record: Value = serde_json::from_str(source_json).map_err(|error| {
             translation_error(
                 "legacy_profile.source_unreadable",

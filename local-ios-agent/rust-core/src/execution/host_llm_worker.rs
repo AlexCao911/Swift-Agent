@@ -655,14 +655,13 @@ fn lifecycle_result(
     if !matches!(worker.logical_outcome(), LogicalRunOutcome::Pending) {
         return LLMEventSubmissionResult::GenerationTerminal;
     }
-    if event.kind == LLMEventKind::Cancelled {
-        if !matches!(
+    if event.kind == LLMEventKind::Cancelled
+        && (!matches!(
             worker.resource_lifecycle(),
             ResourceLifecycle::AwaitingCancelledTerminal
-        ) || event.payload.command_id.as_deref() != worker.watchdog_command_id()
-        {
-            return LLMEventSubmissionResult::IdentityConflict;
-        }
+        ) || event.payload.command_id.as_deref() != worker.watchdog_command_id())
+    {
+        return LLMEventSubmissionResult::IdentityConflict;
     }
     match worker.execution_phase() {
         Some(HostExecutionPhase::AwaitingGenerationStarted)

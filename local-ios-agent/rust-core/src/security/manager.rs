@@ -20,10 +20,16 @@ pub struct SecurityManager {
     tool_permission_scopes: HashMap<String, String>,
 }
 
+impl Default for SecurityManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SecurityManager {
     pub fn new() -> Self {
         Self {
-            policy: PolicyEngine::default(),
+            policy: PolicyEngine,
             audit_policy: AuditPolicy,
             egress_service: Arc::new(StaticSecurityPermissionService::default()),
             approvals: ApprovalQueue::new(),

@@ -145,11 +145,7 @@ impl AgentOSApplicationService {
                     .map_err(runtime_state_error)?,
             )
             .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
-        let service = Self::from_repositories(
-            profile_repository,
-            runtime_state,
-            component_catalog,
-        );
+        let service = Self::from_repositories(profile_repository, runtime_state, component_catalog);
         Ok(service)
     }
 
@@ -274,12 +270,7 @@ impl AgentOSApplicationService {
             Box::new(InMemoryTransactionRunner::default()),
             self.profile_repository.clone(),
         )
-        .publish_with_version(
-            draft,
-            profile_version,
-            &template,
-            &self.component_catalog,
-        )
+        .publish_with_version(draft, profile_version, &template, &self.component_catalog)
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
         let profile = self.profile_repository.profile(&reference).ok_or_else(|| {
             RunSnapshotError::new(
@@ -409,12 +400,7 @@ impl AgentOSApplicationService {
             Box::new(InMemoryTransactionRunner::default()),
             staged.clone(),
         )
-        .publish_with_version(
-            draft,
-            profile_version,
-            &template,
-            &self.component_catalog,
-        )
+        .publish_with_version(draft, profile_version, &template, &self.component_catalog)
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
         let profile = staged.profile(&reference).ok_or_else(|| {
             RunSnapshotError::new(
@@ -492,11 +478,7 @@ impl AgentOSApplicationService {
             Box::new(InMemoryTransactionRunner::default()),
             profile_repository.clone(),
         )
-        .publish(
-            draft,
-            &template,
-            &component_catalog,
-        )
+        .publish(draft, &template, &component_catalog)
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
         let v2_draft = AgentProfileDraft::new(
@@ -516,11 +498,7 @@ impl AgentOSApplicationService {
             Box::new(InMemoryTransactionRunner::default()),
             profile_repository.clone(),
         )
-        .publish(
-            v2_draft,
-            &template,
-            &component_catalog,
-        )
+        .publish(v2_draft, &template, &component_catalog)
         .map_err(|error| RunSnapshotError::new(error.code().to_string(), error.to_string()))?;
 
         let service = Self::from_repositories(
