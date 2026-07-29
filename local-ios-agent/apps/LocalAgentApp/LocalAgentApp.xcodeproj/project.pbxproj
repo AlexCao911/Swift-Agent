@@ -131,8 +131,6 @@
 		0C0000010000000000002006 /* AgentBuilderToolPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */; };
 		0C0000010000000000002007 /* AgentBuilderContextPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */; };
 		0C0000010000000000002008 /* AgentBuilderPublishReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */; };
-		0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */; };
-		0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210A /* BuilderFirstHostView.swift */; };
 		0C000001000000000000200B /* NativeToolkitClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210B /* NativeToolkitClient.swift */; };
 		0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210C /* NativeHostToolDriver.swift */; };
 		0C000001000000000000200D /* NativeToolkitClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C000001000000000000210D /* NativeToolkitClientTests.swift */; };
@@ -330,8 +328,6 @@
 		0C0000010000000000002106 /* AgentBuilderToolPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderToolPickerView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002107 /* AgentBuilderContextPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderContextPreviewView.swift; sourceTree = "<group>"; };
 		0C0000010000000000002108 /* AgentBuilderPublishReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuilderPublishReviewView.swift; sourceTree = "<group>"; };
-		0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostViewModelTests.swift; sourceTree = "<group>"; };
-		0C000001000000000000210A /* BuilderFirstHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuilderFirstHostView.swift; sourceTree = "<group>"; };
 		0C000001000000000000210B /* NativeToolkitClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeToolkitClient.swift; sourceTree = "<group>"; };
 		0C000001000000000000210C /* NativeHostToolDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHostToolDriver.swift; sourceTree = "<group>"; };
 		0C000001000000000000210D /* NativeToolkitClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeToolkitClientTests.swift; sourceTree = "<group>"; };
@@ -681,7 +677,6 @@
 		0C0000010000000000002509 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				0C0000010000000000002109 /* BuilderFirstHostViewModelTests.swift */,
 				0C0000010000000000002116 /* AppShellViewModelTests.swift */,
 			);
 			path = App;
@@ -693,7 +688,6 @@
 				0C0000010000000000002114 /* AppRoute.swift */,
 				0C0000010000000000002117 /* AppShellView.swift */,
 				0C0000010000000000002115 /* AppShellViewModel.swift */,
-				0C000001000000000000210A /* BuilderFirstHostView.swift */,
 				0A0000010000000000000101 /* LocalAgentApp.swift */,
 			);
 			path = App;
@@ -1255,7 +1249,6 @@
 				0B0000010000000000001009 /* ToolApprovalService.swift in Sources */,
 				0B000001000000000000100A /* RunDebugService.swift in Sources */,
 				0B0000010000000000001050 /* ChatInteractionCoordinator.swift in Sources */,
-				0C000001000000000000200A /* BuilderFirstHostView.swift in Sources */,
 				0C000001000000000000200C /* NativeHostToolDriver.swift in Sources */,
 				0C000001000000000000200F /* NativeInteractionBroker.swift in Sources */,
 				0C0000010000000000002011 /* AgentEntity.swift in Sources */,
@@ -1367,7 +1360,6 @@
 				0A0000010000000000000016 /* RuntimeStreamBufferTests.swift in Sources */,
 				0C0000010000000000002001 /* AgentBuilderDraftModelsTests.swift in Sources */,
 				0C0000010000000000002003 /* AgentBuilderToolCatalogTests.swift in Sources */,
-				0C0000010000000000002009 /* BuilderFirstHostViewModelTests.swift in Sources */,
 				0C000001000000000000200E /* NativeHostToolDriverTests.swift in Sources */,
 				0C0000010000000000002010 /* NativeInteractionBrokerTests.swift in Sources */,
 				0C000001000000000000200D /* NativeToolkitClientTests.swift in Sources */,

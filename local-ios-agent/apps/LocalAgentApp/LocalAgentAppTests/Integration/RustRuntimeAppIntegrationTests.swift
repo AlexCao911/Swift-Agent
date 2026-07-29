@@ -85,15 +85,15 @@ struct RustRuntimeAppIntegrationTests {
         #expect(toolNames.contains("photos.pick_images"))
     }
 
-    @Test("App bootstrapper always installs exact-revision execution routing")
-    func appBootstrapperAlwaysInstallsExactRevisionExecutionRouting() async throws {
+    @Test("App bootstrapper installs the Rust host route without a Swift agent loop")
+    func appBootstrapperInstallsRustHostRouting() throws {
         let container = try AppBootstrapper.makeContainer(
             hostProcessEpoch: try testHostProcessEpoch(),
             store: .inMemory
         )
 
-        let usesCoordinator = await container.runtimeService.usesConversationExecutionCoordinatorForTesting()
-        #expect(usesCoordinator)
+        #expect(container.hostRunStarter != nil)
+        #expect(container.llmHostSelections != nil)
     }
 
     @Test("App container exposes Rust backed agent builder")
@@ -108,6 +108,7 @@ struct RustRuntimeAppIntegrationTests {
             templateId: "template_1"
         )
 
+        await viewModel.load()
         await viewModel.validateCurrentDraft()
         await viewModel.publishCurrentDraft()
 

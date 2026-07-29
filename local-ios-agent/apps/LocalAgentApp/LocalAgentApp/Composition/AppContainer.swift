@@ -7,7 +7,6 @@ import LocalNativeToolkit
 
 struct AppContainer {
     let hostProcessEpoch: HostProcessEpoch
-    let runtimeService: AgentRuntimeService
     let runDebugService: RunDebugService?
     let hostToolDriver: any HostToolDriving
     let nativeToolkitClient: any NativeToolkitClientProtocol
@@ -43,7 +42,6 @@ struct AppContainer {
     ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
-            runtimeService: runtimeService,
             runDebugService: runDebugService,
             hostToolDriver: hostToolDriver,
             nativeToolkitClient: nativeToolkitClient,
@@ -78,11 +76,6 @@ struct AppContainer {
 
     func shutdownLLMHost() {
         try? llmHostRuntime?.shutdown()
-    }
-
-    @MainActor
-    func makeAgentViewModel() -> AgentViewModel {
-        AgentViewModel(service: runtimeService)
     }
 
     @MainActor
