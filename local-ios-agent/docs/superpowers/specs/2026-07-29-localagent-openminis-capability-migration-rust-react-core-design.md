@@ -309,6 +309,8 @@ LocalAgent ownership:
 - the iSH source snapshot, including source that the donor currently obtains
   through nested submodules;
 - the LAME, FFmpeg, iSH, fakefs/rootfs, and platform-selection build scripts;
+- the existing LocalAgent C++ inference XCFramework build script and its
+  pinned llama.cpp source input;
 - OpenMinis/iSH integration sources, local patches, headers, resource
   templates, and license notices;
 - a data-only `native-sources.lock` containing the exact version, canonical
@@ -325,6 +327,7 @@ mismatch. The lock is initialized with these verified inputs:
 | Alpine minirootfs | `3.21.0`, `aarch64` | `https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.0-aarch64.tar.gz` | `f31202c4070c4ef7de9e157e1bd01cb4da3a2150035d74ea5372c5e86f1efac1` |
 | LAME | `3.100` | `https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download` | `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e` |
 | FFmpeg | `6.1.2` | `https://ffmpeg.org/releases/ffmpeg-6.1.2.tar.xz` | `3b624649725ecdc565c903ca6643d41f33bd49239922e45c9b1442c63dca4e38` |
+| llama.cpp | `5d44db60089b0381cdbf7c45ce9ded43fc0c7f4c` | `https://github.com/ggml-org/llama.cpp/archive/5d44db60089b0381cdbf7c45ce9ded43fc0c7f4c.tar.gz` | `03f6cf5f8437abdf5c27414843d3e13b18f12737975fcfb5a668997f1a601296` |
 
 One committed entry point runs the migrated scripts in dependency order:
 
@@ -333,7 +336,8 @@ One committed entry point runs the migrated scripts in dependency order:
 # Or use: --platform iphoneos
 ```
 
-The order is LAME, FFmpeg, iSH, then Alpine fakefs/rootfs. The command may
+The order is LAME, FFmpeg, iSH, Alpine fakefs/rootfs, then the LocalAgent
+inference XCFramework when it is absent. The command may
 reuse a valid local cache, but it must apply the same digest checks. It emits
 platform-specific native outputs and the platform-neutral
 `alpine-rootfs.zip`, then verifies:
@@ -342,6 +346,8 @@ platform-specific native outputs and the platform-neutral
 - the matching `RootfsPatch.bundle` exists;
 - `alpine-rootfs.zip` exists and contains the expected fakefs data and
   metadata;
+- `LocalAgentInferenceNative.xcframework` contains macOS, Simulator, and
+  device slices built from the locked llama.cpp revision;
 - `LocalAgentApp.xcodeproj` places both `alpine-rootfs.zip` and the selected
   `RootfsPatch.bundle` in the App target's Copy Bundle Resources phase.
 
@@ -1036,8 +1042,9 @@ Do not repeat every focused error and race scenario in one product-path test.
     Memory or destructive transcript rewriting.
 18. Zero-caller donor and legacy code is absent from the final tree.
 19. A clean checkout can regenerate device and Simulator native/rootfs
-    artifacts from digest-locked inputs, and both required rootfs resources
-    are present in the built App bundle.
+    artifacts plus `LocalAgentInferenceNative.xcframework` from digest-locked
+    inputs, and both required rootfs resources are present in the built App
+    bundle.
 20. Every retained donor file or resource appears in its vertical slice's
     lightweight migration manifest.
 21. Focused suites and the three product-level paths pass.

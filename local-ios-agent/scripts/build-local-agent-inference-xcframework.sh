@@ -2,16 +2,41 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GIT_COMMON_DIR="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
-MAIN_REPOSITORY="$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)"
-PROJECTS_ROOT="$(dirname "$MAIN_REPOSITORY")"
-LLAMA_CPP_ROOT="${LLAMA_CPP_ROOT:-$PROJECTS_ROOT/minicpmv-town/third_party/llama.cpp}"
+NATIVE_ROOT="$ROOT/ThirdParty/OpenMinisNative"
+LOCK_FILE="$NATIVE_ROOT/native-sources.lock"
+SOURCE_ROOT="$NATIVE_ROOT/.build/sources"
+ARCHIVE_ROOT="$NATIVE_ROOT/.build/downloads"
 RELEASE_ENGINES="$ROOT/inference/release-engines.json"
 OUTPUT="${LOCAL_AGENT_INFERENCE_XCFRAMEWORK:-$ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework}"
 BUILD_ROOT="${LOCAL_AGENT_INFERENCE_BUILD_ROOT:-/private/tmp/local-agent-inference-native}"
 CXX="${CXX:-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++}"
 LIBTOOL="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool"
 LIPO="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"
+
+# shellcheck source=./native/common.sh
+source "$ROOT/scripts/native/common.sh"
+
+llama_record="$(native_source_record llama-cpp "$LOCK_FILE")"
+IFS='|' read -r _ LLAMA_CPP_COMMIT LLAMA_CPP_URL LLAMA_CPP_DIGEST <<< "$llama_record"
+if [[ ! "$LLAMA_CPP_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "locked llama.cpp revision must be a 40-character commit" >&2
+  exit 1
+fi
+
+prepare_llama_cpp_source() {
+  local archive="$ARCHIVE_ROOT/llama.cpp-$LLAMA_CPP_COMMIT.tar.gz"
+  local destination="$SOURCE_ROOT/llama.cpp-$LLAMA_CPP_COMMIT"
+
+  if [[ ! -f "$destination/include/llama.h" ]]; then
+    download_locked_source llama-cpp "$LOCK_FILE" "$archive"
+    /bin/mkdir -p "$SOURCE_ROOT"
+    /bin/rm -rf "$destination"
+    /usr/bin/tar -xzf "$archive" -C "$SOURCE_ROOT"
+  fi
+  printf '%s\n' "$destination"
+}
+
+LLAMA_CPP_ROOT="${LLAMA_CPP_ROOT:-$(prepare_llama_cpp_source)}"
 
 if [[ ! -x "$CXX" || ! -x "$LIBTOOL" || ! -x "$LIPO" ]]; then
   echo "Xcode C++/libtool/lipo tools are required" >&2
@@ -22,11 +47,6 @@ if [[ ! -f "$LLAMA_CPP_ROOT/include/llama.h" ]]; then
   exit 1
 fi
 
-LLAMA_CPP_COMMIT="${LOCAL_AGENT_LLAMA_CPP_COMMIT:-$(git -C "$LLAMA_CPP_ROOT" rev-parse HEAD)}"
-if [[ ! "$LLAMA_CPP_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "LOCAL_AGENT_LLAMA_CPP_COMMIT must be a pinned 40-character commit" >&2
-  exit 1
-fi
 LLAMA_CPP_ENGINE_VERSION="${LLAMA_CPP_COMMIT}+local-adapter-v2"
 
 release_engine_count="$(/usr/bin/plutil -extract engine_ids raw -o - "$RELEASE_ENGINES")"

@@ -420,7 +420,8 @@ verify_sha256() {
 }
 ```
 
-Each build script reads its exact URL/version/digest from
+Each build script, including the existing LocalAgent inference XCFramework
+builder for its pinned llama.cpp source, reads its exact URL/version/digest from
 `native-sources.lock`, downloads to `.build/downloads/`, verifies before
 extracting, and uses `LOCALAGENT_NATIVE_PLATFORM` with accepted values
 `iphoneos` or `iphonesimulator`. Device remains the default.
@@ -434,7 +435,9 @@ extracting, and uses `LOCALAGENT_NATIVE_PLATFORM` with accepted values
 --platform iphonesimulator
 ```
 
-It runs LAME → FFmpeg → iSH → Alpine fakefs/rootfs, then checks:
+It runs LAME → FFmpeg → iSH → Alpine fakefs/rootfs, builds the existing
+LocalAgent inference XCFramework from locked llama.cpp source when absent,
+then checks:
 
 ```bash
 test -f "$artifact_root/lame/lib/libmp3lame.a"
@@ -3550,6 +3553,7 @@ git worktree add --detach "$validation_worktree" HEAD
     CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES ARCHS=arm64
   test -f /private/tmp/localagent-core-clean-simulator/Build/Products/Debug-iphonesimulator/LocalAgentApp.app/alpine-rootfs.zip
   test -d /private/tmp/localagent-core-clean-simulator/Build/Products/Debug-iphonesimulator/LocalAgentApp.app/RootfsPatch.bundle
+  test -f local-ios-agent/toolkit/Artifacts/LocalAgentInferenceNative.xcframework/Info.plist
 
   bash local-ios-agent/scripts/prepare-ios-native.sh --platform iphoneos
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build \
@@ -3572,8 +3576,8 @@ rmdir "$validation_parent"
 Expected:
 
 - every source archive matches the checked-in SHA-256 lock;
-- `alpine-rootfs.zip`, iSH, FFmpeg, and LAME outputs regenerate for required
-  platforms;
+- `alpine-rootfs.zip`, iSH, FFmpeg, LAME, and the C++ inference XCFramework
+  regenerate from locked source inputs for required platforms;
 - Xcode Copy Bundle Resources contains the generated rootfs;
 - generated products remain ignored;
 - no tracked file changes appear.
@@ -3694,7 +3698,8 @@ Implementation is complete only when:
   identity;
 - OpenMinis code exists only in selective LocalAgent-owned destinations and
   every shipping slice is present in the migration manifest;
-- the clean checkout build regenerates pinned iSH/rootfs/FFmpeg/LAME outputs;
+- the clean checkout build regenerates pinned
+  iSH/rootfs/FFmpeg/LAME/llama.cpp inference outputs;
 - file tools preserve ordinary iSH guest paths such as `/tmp`, `/root`, and
   `/usr`, while `/var/localagent/{skills,shared,attachments,mounts}` uses the
   separate checked host-mount boundary;

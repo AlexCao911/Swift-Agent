@@ -45,6 +45,7 @@ export LOCALAGENT_NATIVE_PLATFORM="$platform"
 artifact_root="$NATIVE_ROOT/.build/$platform"
 rootfs_zip="$NATIVE_ROOT/.build/resources/alpine-rootfs.zip"
 shared_rootfs_patch="$NATIVE_ROOT/.build/resources/RootfsPatch.bundle"
+inference_xcframework="$LOCALAGENT_ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework"
 
 rm -rf "$shared_rootfs_patch"
 /usr/bin/ditto "$artifact_root/resources/RootfsPatch.bundle" "$shared_rootfs_patch"
@@ -90,5 +91,10 @@ verify_archive_platform() {
 verify_archive_platform "$artifact_root/lame/lib/libmp3lame.a" "$platform"
 verify_archive_platform "$artifact_root/libs/libish.a" "$platform"
 verify_macho_platform "$artifact_root/frameworks/FFmpeg.framework/FFmpeg" "$platform"
+
+if [[ ! -f "$inference_xcframework/Info.plist" ]]; then
+    "$LOCALAGENT_ROOT/scripts/build-local-agent-inference-xcframework.sh"
+fi
+test -f "$inference_xcframework/Info.plist"
 
 echo "LocalAgent native preparation completed for $platform"

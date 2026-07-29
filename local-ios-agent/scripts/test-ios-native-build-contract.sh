@@ -48,6 +48,7 @@ test_digest_rejects_changed_input() {
 assert_lock_record alpine-minirootfs 3.21.0-aarch64
 assert_lock_record lame 3.100
 assert_lock_record ffmpeg 6.1.2
+assert_lock_record llama-cpp 5d44db60089b0381cdbf7c45ce9ded43fc0c7f4c
 test_digest_rejects_changed_input
 
 if [[ "${1:-}" == "--lock-only" ]]; then
@@ -75,6 +76,8 @@ ROOTFS_ZIP="$NATIVE_ROOT/.build/resources/alpine-rootfs.zip"
 [[ -f "$ROOTFS_ZIP" ]] || fail "missing Alpine rootfs bundle resource"
 [[ -d "$NATIVE_ROOT/.build/resources/RootfsPatch.bundle" ]] \
     || fail "missing shared RootfsPatch.bundle resource"
+[[ -f "$LOCALAGENT_ROOT/toolkit/Artifacts/LocalAgentInferenceNative.xcframework/Info.plist" ]] \
+    || fail "missing LocalAgentInferenceNative.xcframework"
 rootfs_listing="$(/usr/bin/unzip -l "$ROOTFS_ZIP")"
 /usr/bin/grep -Eq 'alpine-rootfs/(data/|meta\.db)' <<< "$rootfs_listing" \
     || fail "rootfs zip does not contain fakefs data and metadata"
