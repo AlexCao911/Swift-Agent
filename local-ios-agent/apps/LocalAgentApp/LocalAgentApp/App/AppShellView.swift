@@ -6,6 +6,8 @@ struct AppShellView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var chatViewModel: AgentViewModel
+    @StateObject private var openMinisChatViewModel: AIChatViewModel
+    @StateObject private var openMinisChatStore: ChatStore
     @State private var builderViewModel: AgentBuilderViewModel
     @State private var toolCenterViewModel: ToolCenterViewModel
     @State private var modelCenterViewModel: ModelCenterViewModel
@@ -17,7 +19,16 @@ struct AppShellView: View {
     init(viewModel: AppShellViewModel, container: AppContainer) {
         self.viewModel = viewModel
         self.container = container
-        _chatViewModel = State(initialValue: container.makeAgentViewModel())
+        let runtimeViewModel = container.makeAgentViewModel()
+        _chatViewModel = State(initialValue: runtimeViewModel)
+        _openMinisChatViewModel = StateObject(
+            wrappedValue: container.makeOpenMinisChatViewModel(
+                runtimeViewModel: runtimeViewModel
+            )
+        )
+        _openMinisChatStore = StateObject(
+            wrappedValue: container.makeOpenMinisChatStore()
+        )
         _builderViewModel = State(initialValue: container.makeAgentBuilderViewModel())
         _toolCenterViewModel = State(initialValue: container.makeToolCenterViewModel())
         _modelCenterViewModel = State(initialValue: container.makeModelCenterViewModel())
@@ -94,16 +105,17 @@ struct AppShellView: View {
     private func destination(for family: AppRouteFamily) -> some View {
         switch family {
         case .chat:
-            ConversationWorkspaceView(
+            OpenMinisProductShellView(
                 shellViewModel: viewModel,
-                chatViewModel: chatViewModel,
+                runtimeViewModel: chatViewModel,
+                viewModel: openMinisChatViewModel,
+                chatStore: openMinisChatStore,
                 onOpenBuilder: {
                     viewModel.openBuilder(
                         profileId: viewModel.activeAgent?.profileId,
                         revisionId: viewModel.activeAgent?.profileRevisionId
                     )
-                },
-                runInlineCardActionHandler: container.runInlineCardActionHandler
+                }
             )
             .navigationTitle("Chat")
         case .agents:

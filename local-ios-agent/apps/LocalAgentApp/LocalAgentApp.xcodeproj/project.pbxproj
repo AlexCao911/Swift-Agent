@@ -36,6 +36,21 @@
 		0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */ = {isa = PBXBuildFile; productRef = 0E0000010000000000000301 /* LocalAgentLLMHost */; };
 		0F0000010000000000000001 /* AppLLMHostRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000101 /* AppLLMHostRouting.swift */; };
 		0F0000010000000000000002 /* LLMHostCompositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0000010000000000000102 /* LLMHostCompositionTests.swift */; };
+		0F1000010000000000000001 /* ShippingTargetOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000101 /* ShippingTargetOwnershipTests.swift */; };
+		0F1000010000000000000002 /* OpenMinisChatFacadeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */; };
+		0F1000010000000000000003 /* AIChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000103 /* AIChatViewModel.swift */; };
+		0F1000010000000000000004 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000104 /* ChatStore.swift */; };
+		0F1000010000000000000005 /* OpenMinisProductShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000105 /* OpenMinisProductShellView.swift */; };
+		0F1000010000000000000006 /* MinisMarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000106 /* MinisMarkdownParser.swift */; };
+		0F1000010000000000000007 /* SwiftMathRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000107 /* SwiftMathRenderer.swift */; };
+		0F1000010000000000000008 /* KaTeXRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000108 /* KaTeXRenderer.swift */; };
+		0F1000010000000000000009 /* OpenMinisMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000109 /* OpenMinisMarkdownView.swift */; };
+		0F100001000000000000000A /* KaTeX in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010A /* KaTeX */; };
+		0F100001000000000000000B /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = 0F1000010000000000000305 /* cmark-gfm */; };
+		0F100001000000000000000C /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 0F1000010000000000000306 /* cmark-gfm-extensions */; };
+		0F100001000000000000000D /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = 0F1000010000000000000307 /* SwiftMath */; };
+		0F100001000000000000000E /* GPL-3.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010B /* GPL-3.0.txt */; };
+		0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = 0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */; };
 		0A0000010000000000000013 /* ReasoningTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000010000000000000116 /* ReasoningTagParserTests.swift */; };
 		0A0000010000000000000014 /* MessageContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010C /* MessageContent.swift */; };
 		0A0000010000000000000015 /* ReasoningTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A000001000000000000010D /* ReasoningTagParser.swift */; };
@@ -168,6 +183,18 @@
 		0D5000010000000000000103 /* AppCloudApprovalBrokerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCloudApprovalBrokerTests.swift; sourceTree = "<group>"; };
 		0F0000010000000000000101 /* AppLLMHostRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLLMHostRouting.swift; sourceTree = "<group>"; };
 		0F0000010000000000000102 /* LLMHostCompositionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMHostCompositionTests.swift; sourceTree = "<group>"; };
+		0F1000010000000000000101 /* ShippingTargetOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShippingTargetOwnershipTests.swift; sourceTree = "<group>"; };
+		0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisChatFacadeTests.swift; sourceTree = "<group>"; };
+		0F1000010000000000000103 /* AIChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIChatViewModel.swift; sourceTree = "<group>"; };
+		0F1000010000000000000104 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
+		0F1000010000000000000105 /* OpenMinisProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductShellView.swift; sourceTree = "<group>"; };
+		0F1000010000000000000106 /* MinisMarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinisMarkdownParser.swift; sourceTree = "<group>"; };
+		0F1000010000000000000107 /* SwiftMathRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftMathRenderer.swift; sourceTree = "<group>"; };
+		0F1000010000000000000108 /* KaTeXRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaTeXRenderer.swift; sourceTree = "<group>"; };
+		0F1000010000000000000109 /* OpenMinisMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisMarkdownView.swift; sourceTree = "<group>"; };
+		0F100001000000000000010A /* KaTeX */ = {isa = PBXFileReference; lastKnownFileType = folder; path = KaTeX; sourceTree = "<group>"; };
+		0F100001000000000000010B /* GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GPL-3.0.txt"; sourceTree = "<group>"; };
+		0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_LICENSES.md; sourceTree = "<group>"; };
 		0A0000010000000000000116 /* ReasoningTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningTagParserTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000117 /* RuntimeStreamBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeStreamBufferTests.swift; sourceTree = "<group>"; };
 		0A0000010000000000000118 /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -266,6 +293,9 @@
 				0D0000010000000000000002 /* LocalAgentLLMCloud in Frameworks */,
 				0E5000020000000000000003 /* LocalAgentLLMCore in Frameworks */,
 				0E0000010000000000000001 /* LocalAgentLLMHost in Frameworks */,
+				0F100001000000000000000B /* cmark-gfm in Frameworks */,
+				0F100001000000000000000C /* cmark-gfm-extensions in Frameworks */,
+				0F100001000000000000000D /* SwiftMath in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,8 +329,74 @@
 				0A0000010000000000000506 /* Presentation */,
 				0A0000010000000000000509 /* AppIntents */,
 				0A0000010000000000000508 /* Resources */,
+				0F1000010000000000000502 /* ThirdParty */,
 			);
 			path = LocalAgentApp;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000502 /* ThirdParty */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000503 /* OpenMinis */,
+			);
+			path = ThirdParty;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000503 /* OpenMinis */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000504 /* ChatUI */,
+				0F1000010000000000000505 /* Product */,
+				0F1000010000000000000507 /* Resources */,
+				0F1000010000000000000508 /* Licenses */,
+			);
+			path = OpenMinis;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000504 /* ChatUI */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000103 /* AIChatViewModel.swift */,
+				0F1000010000000000000104 /* ChatStore.swift */,
+				0F1000010000000000000506 /* Markdown */,
+			);
+			path = ChatUI;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000506 /* Markdown */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000106 /* MinisMarkdownParser.swift */,
+				0F1000010000000000000107 /* SwiftMathRenderer.swift */,
+				0F1000010000000000000108 /* KaTeXRenderer.swift */,
+				0F1000010000000000000109 /* OpenMinisMarkdownView.swift */,
+			);
+			path = Markdown;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000505 /* Product */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000105 /* OpenMinisProductShellView.swift */,
+			);
+			path = Product;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000507 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0F100001000000000000010A /* KaTeX */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000508 /* Licenses */ = {
+			isa = PBXGroup;
+			children = (
+				0F100001000000000000010B /* GPL-3.0.txt */,
+				0F100001000000000000010C /* THIRD_PARTY_LICENSES.md */,
+			);
+			path = Licenses;
 			sourceTree = "<group>";
 		};
 		0A0000010000000000000052 /* LocalAgentAppTests */ = {
@@ -308,6 +404,7 @@
 			children = (
 				0C0000010000000000002509 /* App */,
 				0C0000010000000000002510 /* AppIntents */,
+				0F1000010000000000000501 /* Architecture */,
 				0A0000010000000000000511 /* Runtime */,
 				0A0000010000000000000512 /* Tools */,
 				0A0000010000000000000513 /* State */,
@@ -315,6 +412,14 @@
 				0A0000010000000000000516 /* Integration */,
 			);
 			path = LocalAgentAppTests;
+			sourceTree = "<group>";
+		};
+		0F1000010000000000000501 /* Architecture */ = {
+			isa = PBXGroup;
+			children = (
+				0F1000010000000000000101 /* ShippingTargetOwnershipTests.swift */,
+			);
+			path = Architecture;
 			sourceTree = "<group>";
 		};
 		0C0000010000000000002509 /* App */ = {
@@ -659,6 +764,7 @@
 				0C000001000000000000211E /* ContextInspectorViewModelTests.swift */,
 				0C000001000000000000211A /* ConversationWorkspaceViewModelTests.swift */,
 				0B0000010000000000001131 /* ConversationViewModelTests.swift */,
+				0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */,
 				0C000001000000000000211C /* RunInlineCardsTests.swift */,
 			);
 			path = Chat;
@@ -711,6 +817,9 @@
 				0D0000010000000000000301 /* LocalAgentLLMCloud */,
 				0E5000020000000000000301 /* LocalAgentLLMCore */,
 				0E0000010000000000000301 /* LocalAgentLLMHost */,
+				0F1000010000000000000305 /* cmark-gfm */,
+				0F1000010000000000000306 /* cmark-gfm-extensions */,
+				0F1000010000000000000307 /* SwiftMath */,
 			);
 			productName = LocalAgentApp;
 			productReference = 0A0000010000000000000022 /* LocalAgentApp.app */;
@@ -766,6 +875,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */,
+				0F1000010000000000000601 /* XCRemoteSwiftPackageReference "swift-cmark" */,
+				0F1000010000000000000602 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0A0000010000000000000053 /* Products */;
@@ -784,6 +895,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				0A000001000000000000000A /* Assets.xcassets in Resources */,
+				0F100001000000000000000A /* KaTeX in Resources */,
+				0F100001000000000000000E /* GPL-3.0.txt in Resources */,
+				0F100001000000000000000F /* THIRD_PARTY_LICENSES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -801,6 +915,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1000010000000000000003 /* AIChatViewModel.swift in Sources */,
+				0F1000010000000000000004 /* ChatStore.swift in Sources */,
+				0F1000010000000000000005 /* OpenMinisProductShellView.swift in Sources */,
+				0F1000010000000000000006 /* MinisMarkdownParser.swift in Sources */,
+				0F1000010000000000000007 /* SwiftMathRenderer.swift in Sources */,
+				0F1000010000000000000008 /* KaTeXRenderer.swift in Sources */,
+				0F1000010000000000000009 /* OpenMinisMarkdownView.swift in Sources */,
 				0A0000010000000000000001 /* LocalAgentApp.swift in Sources */,
 				0A0000010000000000000002 /* AppBootstrapper.swift in Sources */,
 				0A0000010000000000000003 /* AppContainer.swift in Sources */,
@@ -878,6 +999,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1000010000000000000001 /* ShippingTargetOwnershipTests.swift in Sources */,
+				0F1000010000000000000002 /* OpenMinisChatFacadeTests.swift in Sources */,
 				0A000001000000000000000D /* RuntimeEventReducerTests.swift in Sources */,
 				0A000001000000000000000E /* MinimalHostToolDriverTests.swift in Sources */,
 				0A000001000000000000000F /* AgentRuntimeServiceTests.swift in Sources */,
@@ -1177,6 +1300,25 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		0F1000010000000000000601 /* XCRemoteSwiftPackageReference "swift-cmark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-cmark";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.0;
+			};
+		};
+		0F1000010000000000000602 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		0A0000010000000000000301 /* LocalAgentBridge */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1212,6 +1354,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0A0000010000000000000300 /* XCLocalSwiftPackageReference "../../toolkit" */;
 			productName = LocalAgentLLMCore;
+		};
+		0F1000010000000000000305 /* cmark-gfm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0F1000010000000000000601 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm";
+		};
+		0F1000010000000000000306 /* cmark-gfm-extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0F1000010000000000000601 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm-extensions";
+		};
+		0F1000010000000000000307 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0F1000010000000000000602 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

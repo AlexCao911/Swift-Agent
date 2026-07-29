@@ -81,6 +81,25 @@ struct AppContainer {
     }
 
     @MainActor
+    func makeOpenMinisChatViewModel(
+        runtimeViewModel: AgentViewModel
+    ) -> AIChatViewModel {
+        AIChatViewModel(
+            conversationStreamID: runtimeViewModel.state.currentSessionId
+                ?? "localagent-draft"
+        ) { submission in
+            runtimeViewModel.state.draftText = submission.text
+            runtimeViewModel.state.draft.attachments = submission.attachments
+            await runtimeViewModel.send()
+        }
+    }
+
+    @MainActor
+    func makeOpenMinisChatStore() -> ChatStore {
+        ChatStore()
+    }
+
+    @MainActor
     func makeAppShellViewModel() -> AppShellViewModel {
         AppShellViewModel(
             activeAgent: activeAgentProfile.map {
