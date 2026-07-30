@@ -13,6 +13,8 @@ final class ProjectionFeedController {
     private let client: any ConversationBridgeClient
     private let applier: ChatStoreProjectionApplier
     private var feeds: [String: Feed] = [:]
+    private var currentConversationID: String?
+    private var runningConversationIDs: Set<String> = []
 
     init(
         client: any ConversationBridgeClient,
@@ -26,28 +28,50 @@ final class ProjectionFeedController {
         Set(feeds.keys)
     }
 
+    func selectCurrentConversation(
+        _ conversationStreamID: String
+    ) async throws {
+        currentConversationID = conversationStreamID
+        try ensureFeed(
+            conversationStreamID: conversationStreamID,
+            persistent: true
+        )
+        await reconcileManagedFeeds()
+    }
+
+    func selectCurrentConversationSynchronously(
+        _ conversationStreamID: String
+    ) throws {
+        currentConversationID = conversationStreamID
+        try ensureFeed(
+            conversationStreamID: conversationStreamID,
+            persistent: true
+        )
+        Task { [weak self] in
+            await self?.reconcileManagedFeeds()
+        }
+    }
+
+    func markRunStarted(conversationStreamID: String) throws {
+        runningConversationIDs.insert(conversationStreamID)
+        try ensureFeed(
+            conversationStreamID: conversationStreamID,
+            persistent: true
+        )
+    }
+
+    func markRunFinished(conversationStreamID: String) async {
+        runningConversationIDs.remove(conversationStreamID)
+        await reconcileManagedFeeds()
+    }
+
     func reconcilePersistentFeeds(
         runningConversationIDs: Set<String>,
         currentConversationID: String?
     ) async {
-        var desired = runningConversationIDs
-        if let currentConversationID {
-            desired.insert(currentConversationID)
-        }
-
-        for streamID in desired {
-            try? ensureFeed(
-                conversationStreamID: streamID,
-                persistent: true
-            )
-        }
-        for streamID in Set(feeds.keys).subtracting(desired) {
-            guard feeds[streamID]?.temporaryThroughSequence == nil else {
-                feeds[streamID]?.persistent = false
-                continue
-            }
-            await stopFeed(conversationStreamID: streamID)
-        }
+        self.runningConversationIDs = runningConversationIDs
+        self.currentConversationID = currentConversationID
+        await reconcileManagedFeeds()
     }
 
     func ensureFeed(
@@ -67,6 +91,18 @@ final class ProjectionFeedController {
                     feed.temporaryThroughSequence ?? 0,
                     temporaryThroughSequence
                 )
+            }
+            if !feed.persistent,
+               let target = feed.temporaryThroughSequence,
+               try applier.cursor(for: conversationStreamID) >= target {
+                feeds.removeValue(forKey: conversationStreamID)
+                feed.task.cancel()
+                Task { [client] in
+                    await client.cancelTranscriptProjectionSubscription(
+                        subscriptionID: feed.subscriptionID
+                    )
+                }
+                return
             }
             feeds[conversationStreamID] = feed
             return
@@ -113,6 +149,11 @@ final class ProjectionFeedController {
                     let result = try self.applier.apply(event)
                     switch result {
                     case .applied, .duplicate:
+                        if Self.isRunTerminal(event) {
+                            await self.markRunFinished(
+                                conversationStreamID: conversationStreamID
+                            )
+                        }
                         await self.closeTemporaryFeedIfSatisfied(
                             conversationStreamID: conversationStreamID,
                             appliedSequence: event.sequence
@@ -170,12 +211,53 @@ final class ProjectionFeedController {
         await stopFeed(conversationStreamID: conversationStreamID)
     }
 
-    private func stopFeed(conversationStreamID: String) async {
+    func stopFeed(conversationStreamID: String) async {
         guard let feed = feeds.removeValue(forKey: conversationStreamID)
         else { return }
         feed.task.cancel()
         await client.cancelTranscriptProjectionSubscription(
             subscriptionID: feed.subscriptionID
         )
+    }
+
+    func stopFeedIfUnmanaged(conversationStreamID: String) async {
+        guard currentConversationID != conversationStreamID,
+              !runningConversationIDs.contains(conversationStreamID),
+              feeds[conversationStreamID]?.temporaryThroughSequence == nil
+        else { return }
+        await stopFeed(conversationStreamID: conversationStreamID)
+    }
+
+    private func reconcileManagedFeeds() async {
+        var desired = runningConversationIDs
+        if let currentConversationID {
+            desired.insert(currentConversationID)
+        }
+        for streamID in desired {
+            try? ensureFeed(
+                conversationStreamID: streamID,
+                persistent: true
+            )
+        }
+        for streamID in Set(feeds.keys).subtracting(desired) {
+            guard feeds[streamID]?.temporaryThroughSequence != nil else {
+                await stopFeed(conversationStreamID: streamID)
+                continue
+            }
+            feeds[streamID]?.persistent = false
+        }
+    }
+
+    private static func isRunTerminal(
+        _ event: TranscriptProjectionEventDTO
+    ) -> Bool {
+        switch event.kind {
+        case .runCancelled, .runFailed:
+            true
+        case .assistantMessageCompleted:
+            event.eventID.hasSuffix("-final")
+        default:
+            false
+        }
     }
 }

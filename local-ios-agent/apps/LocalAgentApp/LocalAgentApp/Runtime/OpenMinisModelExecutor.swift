@@ -2,14 +2,15 @@ import Foundation
 import LocalAgentBridge
 import LocalAgentLLMCloud
 import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import LocalAgentLLMHost
 
-enum ProviderRunCandidateKind: String, Equatable, Sendable {
+enum ProviderRunCandidateKind: String, Codable, Equatable, Sendable {
     case cloud
     case local
 }
 
-struct ProviderRunCandidate: Equatable, Sendable {
+struct ProviderRunCandidate: Codable, Equatable, Sendable {
     let id: String
     let kind: ProviderRunCandidateKind
     let providerConfigurationID: String?
@@ -37,11 +38,22 @@ struct ProviderRunCandidate: Equatable, Sendable {
     }
 }
 
-struct ProviderRunPlan: Equatable, Sendable {
+struct ProviderRunPlan: Codable, Equatable, Sendable {
     let logicalModelID: String
     let orderedCandidates: [ProviderRunCandidate]
     let modelContextWindow: ModelContextWindowDTO
 }
+
+struct ProviderRunRouteSnapshot: Codable, Equatable, Sendable {
+    let candidateID: String
+    let configuration: AgentHostConfiguration
+    let target: LLMTargetRevision
+}
+
+typealias ProviderRouteRestorer = @Sendable (
+    _ runID: String,
+    _ snapshot: ProviderRunRouteSnapshot
+) async throws -> any ProviderCandidateModelRoute
 
 protocol ProviderRunPlanProviding: Sendable {
     func plan(for runID: String) async throws -> ProviderRunPlan
@@ -62,8 +74,20 @@ protocol ProviderCandidateModelExecuting: Sendable {
 
     func finish(
         runID: String,
+        candidate: ProviderRunCandidate
+    ) async
+
+    func finish(
+        runID: String,
         candidates: [ProviderRunCandidate]
     ) async
+}
+
+extension ProviderCandidateModelExecuting {
+    func finish(
+        runID _: String,
+        candidate _: ProviderRunCandidate
+    ) async {}
 }
 
 protocol ProviderCandidateModelRoute: Sendable {
@@ -87,15 +111,45 @@ actor OpenMinisModelExecutionRegistry:
     ProviderRunPlanProviding,
     ProviderCandidateModelExecuting
 {
+    private struct PersistedRun: Codable {
+        let plan: ProviderRunPlan
+        let routeSnapshots: [String: ProviderRunRouteSnapshot]
+    }
+
+    private let persistenceURL: URL?
+    private let routeRestorer: ProviderRouteRestorer?
     private var plansByRun: [String: ProviderRunPlan] = [:]
+    private var routeSnapshotsByRun: [
+        String: [String: ProviderRunRouteSnapshot]
+    ] = [:]
     private var routesByRun: [
         String: [String: any ProviderCandidateModelRoute]
     ] = [:]
 
+    init(
+        persistenceURL: URL? = nil,
+        routeRestorer: ProviderRouteRestorer? = nil
+    ) {
+        self.persistenceURL = persistenceURL
+        self.routeRestorer = routeRestorer
+        guard let persistenceURL,
+              let data = try? Data(contentsOf: persistenceURL),
+              let records = try? JSONDecoder().decode(
+                  [String: PersistedRun].self,
+                  from: data
+              )
+        else {
+            return
+        }
+        plansByRun = records.mapValues(\.plan)
+        routeSnapshotsByRun = records.mapValues(\.routeSnapshots)
+    }
+
     func bind(
         runID: String,
         plan: ProviderRunPlan,
-        routes: [String: any ProviderCandidateModelRoute]
+        routes: [String: any ProviderCandidateModelRoute],
+        routeSnapshots: [String: ProviderRunRouteSnapshot] = [:]
     ) throws {
         guard !runID.isEmpty,
               Set(plan.orderedCandidates.map(\.id)) == Set(routes.keys)
@@ -112,10 +166,43 @@ actor OpenMinisModelExecutionRegistry:
                     "the run already has a different provider plan"
                 )
             }
+            guard routeSnapshotsByRun[runID] == routeSnapshots
+                || routeSnapshots.isEmpty else {
+                throw failure(
+                    "model_executor.route_binding_conflict",
+                    "the run already has different restorable provider routes"
+                )
+            }
+            routesByRun[runID] = routes
             return
         }
+        if persistenceURL != nil {
+            guard Set(routeSnapshots.keys)
+                == Set(plan.orderedCandidates.map(\.id)),
+                routeSnapshots.allSatisfy({ key, value in
+                    key == value.candidateID
+                })
+            else {
+                throw failure(
+                    "model_executor.route_snapshot_invalid",
+                    "persistent run plans require one non-secret snapshot per route"
+                )
+            }
+        }
         plansByRun[runID] = plan
+        routeSnapshotsByRun[runID] = routeSnapshots
         routesByRun[runID] = routes
+        do {
+            try persist()
+        } catch {
+            plansByRun.removeValue(forKey: runID)
+            routeSnapshotsByRun.removeValue(forKey: runID)
+            routesByRun.removeValue(forKey: runID)
+            throw failure(
+                "model_executor.run_plan_persistence_failed",
+                "the frozen provider plan could not be persisted"
+            )
+        }
     }
 
     func plan(for runID: String) async throws -> ProviderRunPlan {
@@ -133,12 +220,10 @@ actor OpenMinisModelExecutionRegistry:
         candidate: ProviderRunCandidate,
         emit: @escaping @Sendable (HostModelEvent) async throws -> Void
     ) async throws {
-        guard let route = routesByRun[request.runID]?[candidate.id] else {
-            throw failure(
-                "model_executor.route_missing",
-                "the model candidate route is unavailable"
-            )
-        }
+        let route = try await route(
+            runID: request.runID,
+            candidateID: candidate.id
+        )
         try await route.generate(request, emit: emit)
     }
 
@@ -147,6 +232,17 @@ actor OpenMinisModelExecutionRegistry:
         candidate: ProviderRunCandidate
     ) async {
         await routesByRun[runID]?[candidate.id]?.cancel(runID: runID)
+    }
+
+    func finish(
+        runID: String,
+        candidate: ProviderRunCandidate
+    ) async {
+        guard var routes = routesByRun[runID],
+              let route = routes.removeValue(forKey: candidate.id)
+        else { return }
+        routesByRun[runID] = routes
+        await route.finish(runID: runID)
     }
 
     func finish(
@@ -161,7 +257,51 @@ actor OpenMinisModelExecutionRegistry:
 
     func finish(runID: String) async {
         plansByRun.removeValue(forKey: runID)
+        routeSnapshotsByRun.removeValue(forKey: runID)
         routesByRun.removeValue(forKey: runID)
+        try? persist()
+    }
+
+    private func route(
+        runID: String,
+        candidateID: String
+    ) async throws -> any ProviderCandidateModelRoute {
+        if let route = routesByRun[runID]?[candidateID] {
+            return route
+        }
+        guard let snapshot = routeSnapshotsByRun[runID]?[candidateID],
+              let routeRestorer else {
+            throw failure(
+                "model_executor.route_missing",
+                "the model candidate route is unavailable"
+            )
+        }
+        let route = try await routeRestorer(runID, snapshot)
+        routesByRun[runID, default: [:]][candidateID] = route
+        return route
+    }
+
+    private func persist() throws {
+        guard let persistenceURL else { return }
+        let records = Dictionary(
+            uniqueKeysWithValues: plansByRun.map { runID, plan in
+                (
+                    runID,
+                    PersistedRun(
+                        plan: plan,
+                        routeSnapshots: routeSnapshotsByRun[runID] ?? [:]
+                    )
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(records)
+        try FileManager.default.createDirectory(
+            at: persistenceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: persistenceURL, options: .atomic)
     }
 }
 
@@ -170,6 +310,7 @@ actor OpenMinisModelExecutor: ModelGenerationExecuting {
     private let runtime: any ProviderCandidateModelExecuting
     private var frozenPlans: [String: ProviderRunPlan] = [:]
     private var activeCandidates: [String: ProviderRunCandidate] = [:]
+    private var candidateIndices: [String: Int] = [:]
     private var cancelledRunIDs: Set<String> = []
 
     init(
@@ -195,8 +336,16 @@ actor OpenMinisModelExecutor: ModelGenerationExecuting {
         }
 
         let plan = try await frozenPlan(for: request.runID)
+        let startIndex = candidateIndices[request.runID] ?? 0
+        guard startIndex < plan.orderedCandidates.count else {
+            throw failure(
+                "model_executor.no_candidate",
+                "the run has no executable model candidate"
+            )
+        }
         var lastError: Error?
-        for candidate in plan.orderedCandidates {
+        for index in startIndex..<plan.orderedCandidates.count {
+            let candidate = plan.orderedCandidates[index]
             try Task.checkCancellation()
             guard !cancelledRunIDs.contains(request.runID) else {
                 throw CancellationError()
@@ -217,6 +366,7 @@ actor OpenMinisModelExecutor: ModelGenerationExecuting {
                       !Task.isCancelled else {
                     throw CancellationError()
                 }
+                candidateIndices[request.runID] = index
                 return
             } catch {
                 activeCandidates.removeValue(forKey: request.runID)
@@ -226,10 +376,15 @@ actor OpenMinisModelExecutor: ModelGenerationExecuting {
                 {
                     throw CancellationError()
                 }
+                await runtime.finish(
+                    runID: request.runID,
+                    candidate: candidate
+                )
                 lastError = error
                 if await emission.hasModelContent {
                     throw error
                 }
+                candidateIndices[request.runID] = index + 1
             }
         }
         throw lastError ?? failure(
@@ -247,6 +402,7 @@ actor OpenMinisModelExecutor: ModelGenerationExecuting {
     func finish(runID: String) async {
         let plan = frozenPlans.removeValue(forKey: runID)
         activeCandidates.removeValue(forKey: runID)
+        candidateIndices.removeValue(forKey: runID)
         cancelledRunIDs.remove(runID)
         if let plan {
             await runtime.finish(

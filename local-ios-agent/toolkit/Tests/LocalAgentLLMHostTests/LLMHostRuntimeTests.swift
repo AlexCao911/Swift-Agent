@@ -177,11 +177,13 @@ struct LLMHostRuntimeTests {
     }
 
     @Test
-    func v2CloseSessionFinishesRunOwnedModelResources() async throws {
+    func v2CloseSessionFinishesRunOwnedModelAndToolResources() async throws {
         let executor = RecordingV2ModelExecutor()
+        let toolExecutor = RecordingV2ToolExecutor()
         let harness = try await HostRuntimeHarness.make(
             lifecycle: .committed,
-            modelExecutor: executor
+            modelExecutor: executor,
+            toolExecutor: toolExecutor
         )
         let start = try harness.v2GenerationCommand(id: "start", sequence: 1)
         let close = try harness.v2LifecycleCommand(
@@ -196,9 +198,11 @@ struct LLMHostRuntimeTests {
         #expect(harness.runtime.copy(try dispatch(close)) == .copied)
         await harness.runtime.drain()
         await waitUntil { await executor.finishedRuns() == ["run-1"] }
+        await waitUntil { await toolExecutor.finishedRuns() == ["run-1"] }
         await waitUntil { await harness.sink.eventKinds().contains(.sessionClosed) }
 
         #expect(await executor.finishedRuns() == ["run-1"])
+        #expect(await toolExecutor.finishedRuns() == ["run-1"])
         #expect(await harness.sink.eventKinds().contains(.sessionClosed))
     }
 
@@ -280,7 +284,8 @@ private struct HostRuntimeHarness {
         lifecycle: HostSessionLifecycle,
         installDriver: Bool = true,
         acceptsCleanupAcknowledgement: Bool = true,
-        modelExecutor: (any ModelGenerationExecuting)? = nil
+        modelExecutor: (any ModelGenerationExecuting)? = nil,
+        toolExecutor: (any ToolBatchExecuting)? = nil
     ) async throws -> HostRuntimeHarness {
         let sink = RecordingRustSink(
             acceptsCleanupAcknowledgement: acceptsCleanupAcknowledgement
@@ -288,7 +293,8 @@ private struct HostRuntimeHarness {
         let runtime = LLMHostRuntime(
             hostProcessEpoch: epoch,
             rustSink: sink,
-            modelExecutor: modelExecutor
+            modelExecutor: modelExecutor,
+            toolExecutor: toolExecutor
         )
         let harness = try HostRuntimeHarness(
             runtime: runtime,
@@ -581,6 +587,26 @@ private actor RecordingV2ModelExecutor: ModelGenerationExecuting {
     }
 
     func requestCount() -> Int { requests.count }
+    func finishedRuns() -> [String] { finishedRunIDs }
+}
+
+private actor RecordingV2ToolExecutor: ToolBatchExecuting {
+    private var finishedRunIDs: [String] = []
+
+    func execute(_ batch: HostToolBatch) async -> HostToolBatchCompletion {
+        HostToolBatchCompletion(
+            batchID: batch.batchID,
+            runID: batch.runID,
+            orderedResults: []
+        )
+    }
+
+    func cancel(batchID _: String) async {}
+
+    func finish(runID: String) async {
+        finishedRunIDs.append(runID)
+    }
+
     func finishedRuns() -> [String] { finishedRunIDs }
 }
 

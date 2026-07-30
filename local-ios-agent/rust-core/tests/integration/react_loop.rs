@@ -15,7 +15,7 @@ use local_ios_agent_runtime::{
     context::ModelContextWindow,
     conversation::{
         ActiveRunRegistry, ConversationCommandService, ProjectionSubscriptionRegistry,
-        TranscriptCommand,
+        TranscriptAttachmentReference, TranscriptCommand,
     },
     core::{EntryId, EventKind, RunId, RuntimeEvent, SessionId},
     storage::{ConversationEventStore, InMemoryConversationStore},
@@ -75,6 +75,174 @@ fn two_tool_batch_is_ordered_and_the_next_model_turn_sees_results() {
     assert!(second_text.contains("call-1"));
     assert!(second_text.contains("call-2"));
     assert_eq!(model.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn later_runs_restore_attachments_from_the_retained_model_context() {
+    let attachment = TranscriptAttachmentReference {
+        attachment_id: "attachment-1".into(),
+        display_name: "requirements.txt".into(),
+        media_type: "text/plain".into(),
+        modality: "file".into(),
+        content_digest: "a".repeat(64),
+    };
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::default()));
+    let active = ActiveRunRegistry::default();
+    let projections = ProjectionSubscriptionRegistry::default();
+    let commands = ConversationCommandService::with_registries(
+        store.clone(),
+        active.clone(),
+        projections.clone(),
+    );
+    let historical = commands
+        .submit(TranscriptCommand::Send {
+            request_id: "historical-request".into(),
+            conversation_stream_id: "conversation-attachments".into(),
+            client_message_id: "historical-message".into(),
+            text: "Read the attached requirements.".into(),
+            attachments: vec![attachment.clone()],
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+    commands
+        .complete_run(
+            "conversation-attachments",
+            historical.run_id.as_deref().unwrap(),
+        )
+        .unwrap();
+    let current = commands
+        .submit(TranscriptCommand::Send {
+            request_id: "current-request".into(),
+            conversation_stream_id: "conversation-attachments".into(),
+            client_message_id: "current-message".into(),
+            text: "What does it imply?".into(),
+            attachments: Vec::new(),
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+    let model = Arc::new(ScriptedModel::new(vec![Ok(final_turn("done"))]));
+    let service = AgentLoopService::new(
+        store,
+        model.clone(),
+        Arc::new(RecordingTools::default()),
+        active,
+        projections,
+    );
+
+    service
+        .run(
+            AgentRunRequest {
+                run_id: current.run_id.unwrap(),
+                conversation_stream_id: "conversation-attachments".into(),
+                run_start_snapshot: snapshot(),
+                attachment_references: Vec::new(),
+            },
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests[0].attachment_references, vec![attachment]);
+}
+
+#[test]
+fn retry_restores_attachments_from_the_user_anchor() {
+    let attachment = TranscriptAttachmentReference {
+        attachment_id: "attachment-retry".into(),
+        display_name: "design.md".into(),
+        media_type: "text/markdown".into(),
+        modality: "file".into(),
+        content_digest: "b".repeat(64),
+    };
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::default()));
+    let active = ActiveRunRegistry::default();
+    let projections = ProjectionSubscriptionRegistry::default();
+    let commands = ConversationCommandService::with_registries(
+        store.clone(),
+        active.clone(),
+        projections.clone(),
+    );
+    let historical = commands
+        .submit(TranscriptCommand::Send {
+            request_id: "retry-historical-request".into(),
+            conversation_stream_id: "conversation-retry-attachment".into(),
+            client_message_id: "retry-historical-message".into(),
+            text: "Review the attached design.".into(),
+            attachments: vec![attachment.clone()],
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+    commands
+        .complete_run(
+            "conversation-retry-attachment",
+            historical.run_id.as_deref().unwrap(),
+        )
+        .unwrap();
+    let user_event = store
+        .lock()
+        .unwrap()
+        .last_event(&SessionId("conversation-retry-attachment".into()))
+        .unwrap()
+        .unwrap();
+    {
+        let old_answer = RuntimeEvent::new(
+            EntryId("old-answer".into()),
+            SessionId("conversation-retry-attachment".into()),
+            Some(user_event.id.clone()),
+            None,
+            0,
+            user_event.depth + 1,
+            EventKind::AssistantMessageCompleted,
+            "old answer",
+        );
+        store
+            .lock()
+            .unwrap()
+            .append_transaction(
+                "conversation-retry-attachment",
+                user_event.sequence + 1,
+                vec![old_answer],
+            )
+            .unwrap();
+    }
+    let retry = commands
+        .submit(TranscriptCommand::RetryFrom {
+            request_id: "retry-request".into(),
+            conversation_stream_id: "conversation-retry-attachment".into(),
+            anchor_event_id: user_event.id.0,
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+    let model = Arc::new(ScriptedModel::new(vec![Ok(final_turn("new answer"))]));
+    let service = AgentLoopService::new(
+        store,
+        model.clone(),
+        Arc::new(RecordingTools::default()),
+        active,
+        projections,
+    );
+
+    service
+        .run(
+            AgentRunRequest {
+                run_id: retry.run_id.unwrap(),
+                conversation_stream_id: "conversation-retry-attachment".into(),
+                run_start_snapshot: snapshot(),
+                attachment_references: Vec::new(),
+            },
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests[0].attachment_references, vec![attachment]);
+    let visible = requests[0]
+        .ordered_messages
+        .iter()
+        .map(|message| message.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("old answer"));
 }
 
 #[test]

@@ -8,6 +8,7 @@ struct LocalAgentApp: App {
     private let hostProcessEpoch: HostProcessEpoch
     @State private var container: AppContainer?
     @State private var shellViewModel: AppShellViewModel?
+    @State private var intentRouter: AppIntentRouter
 
     @MainActor
     init() {
@@ -17,6 +18,7 @@ struct LocalAgentApp: App {
         self.hostProcessEpoch = hostProcessEpoch
         _container = State(initialValue: nil)
         _shellViewModel = State(initialValue: nil)
+        _intentRouter = State(initialValue: .shared)
     }
 
     var body: some Scene {
@@ -28,6 +30,9 @@ struct LocalAgentApp: App {
                     ProgressView("Preparing local runtime…")
                         .task { await bootstrap() }
                 }
+            }
+            .onChange(of: intentRouter.pendingRoute) {
+                consumePendingIntent()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -72,5 +77,14 @@ struct LocalAgentApp: App {
         }
         container = ready
         shellViewModel = ready.makeAppShellViewModel()
+        consumePendingIntent()
+    }
+
+    @MainActor
+    private func consumePendingIntent() {
+        guard let shellViewModel,
+              let route = intentRouter.consumePendingRoute()
+        else { return }
+        shellViewModel.handleAppIntent(route)
     }
 }

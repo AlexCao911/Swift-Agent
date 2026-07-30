@@ -18,15 +18,19 @@ enum AppBootstrapper {
         remoteCatalog: Data? = nil,
         remoteCloudCatalog: Data? = nil
     ) async throws -> AppContainer {
-        let container = try makeContainer(
-            hostProcessEpoch: hostProcessEpoch,
-            store: store
-        )
         let appSupportRoot = try localAppSupportRoot ?? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
+        )
+        let container = try makeContainer(
+            hostProcessEpoch: hostProcessEpoch,
+            store: store,
+            attachmentStoreRoot: appSupportRoot.appending(
+                path: "LocalAgent/Attachments",
+                directoryHint: .isDirectory
+            )
         )
         let llmStore = try LLMStore(fileURL: appSupportRoot.appending(
             path: "LocalAgent/LLM/llm-state.sqlite"
@@ -53,25 +57,37 @@ enum AppBootstrapper {
                 message: "production Rust host composition is unavailable"
             )
         }
-        let modelExecutionRegistry = OpenMinisModelExecutionRegistry()
+        let modelExecutionRegistry = OpenMinisModelExecutionRegistry(
+            persistenceURL: appSupportRoot.appending(
+                path: "LocalAgent/LLM/provider-run-plans.json"
+            )
+        ) { runID, snapshot in
+            switch snapshot.target.kind {
+            case .local:
+                RustReActModelRoute(
+                    runID: runID,
+                    local: local,
+                    configuration: snapshot.configuration,
+                    target: snapshot.target,
+                    attachmentResolver: container.attachmentRepository
+                )
+            case .cloud:
+                RustReActModelRoute(
+                    runID: runID,
+                    cloud: cloud,
+                    configuration: snapshot.configuration,
+                    target: snapshot.target,
+                    attachmentResolver: container.attachmentRepository
+                )
+            }
+        }
         let modelExecutor = OpenMinisModelExecutor(
             plans: modelExecutionRegistry,
             runtime: modelExecutionRegistry
         )
-        let nativeTools = await container.nativeToolkitClient
-            .registrationSnapshot()
-        let toolExecutor = OpenMinisToolBatchExecutor(
-            dispatcher: OpenMinisProductToolDispatcher(
-                nativeTools: container.hostToolDriver
-            ),
-            definitions: try OpenMinisToolDefinitionSnapshotProvider
-                .productDefaults(nativeSchemas: nativeTools.schemas)
-        )
-        let host = try await LLMHostProductRuntime.bootstrap(
-            rust: rust,
-            hostProcessEpoch: hostProcessEpoch,
-            modelExecutor: modelExecutor,
-            toolExecutor: toolExecutor
+        let host = try await bootstrapLLMHost(
+            container: container,
+            modelExecutor: modelExecutor
         )
         let modelCenterClient = AppModelCenterClient(
             local: local,
@@ -122,13 +138,41 @@ enum AppBootstrapper {
             legacyMigration: migration,
             modelExecutionRegistry: modelExecutionRegistry,
             readinessIssues: Array(Set(readinessIssues)).sorted(),
-            activeAgentProfile: activeAgentProfile
+            activeAgentProfile: activeAgentProfile,
+            availableAgentProfiles: profiles
+        )
+    }
+
+    static func bootstrapLLMHost(
+        container: AppContainer,
+        modelExecutor: any ModelGenerationExecuting
+    ) async throws -> LLMHostProductRuntime {
+        guard let rust = container.rustRuntimeClient else {
+            throw LLMHostFailure(
+                code: "execution.host_composition_unavailable",
+                message: "production Rust host composition is unavailable"
+            )
+        }
+        let nativeTools = await container.nativeToolkitClient
+            .registrationSnapshot()
+        return try await LLMHostProductRuntime.bootstrap(
+            rust: rust,
+            hostProcessEpoch: container.hostProcessEpoch,
+            modelExecutor: modelExecutor,
+            toolExecutor: OpenMinisToolBatchExecutor(
+                dispatcher: OpenMinisProductToolDispatcher(
+                    nativeTools: container.hostToolDriver
+                ),
+                definitions: try OpenMinisToolDefinitionSnapshotProvider
+                    .productDefaults(nativeSchemas: nativeTools.schemas)
+            )
         )
     }
 
     static func makeContainer(
         hostProcessEpoch: HostProcessEpoch,
-        store: RustRuntimeStoreConfiguration? = nil
+        store: RustRuntimeStoreConfiguration? = nil,
+        attachmentStoreRoot: URL? = nil
     ) throws -> AppContainer {
         LocalInferenceNativeLinkProbe.requireAllExports()
         let runtimeStore: RustRuntimeStoreConfiguration
@@ -145,6 +189,10 @@ enum AppBootstrapper {
         let nativeBundle = try makeNativeToolkitBundle()
         let selections = AppLLMHostSelectionRegistry()
         let hostStarter = AppHostRunStarter(selections: selections)
+        let attachments = OpenMinisAttachmentRepository(
+            directory: try attachmentStoreRoot ?? attachmentStoreURL(),
+            policy: .productDefault
+        )
 
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -167,11 +215,13 @@ enum AppBootstrapper {
             legacyMigration: nil,
             readinessIssues: [],
             activeAgentProfile: nil,
+            availableAgentProfiles: [],
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil,
-            modelExecutionRegistry: nil
+            modelExecutionRegistry: nil,
+            attachmentRepository: attachments
         )
     }
 
@@ -182,6 +232,10 @@ enum AppBootstrapper {
         let nativeBundle = try makeNativeToolkitBundle()
         let selections = AppLLMHostSelectionRegistry()
         let hostStarter = AppHostRunStarter(selections: selections)
+        let attachments = OpenMinisAttachmentRepository(
+            directory: try attachmentStoreURL(),
+            policy: .productDefault
+        )
 
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -212,11 +266,19 @@ enum AppBootstrapper {
                 profileRevisionId: 1,
                 displayName: "Recovery Agent"
             ),
+            availableAgentProfiles: [
+                AgentProfileDTO(
+                    profileId: "profile_1",
+                    profileRevisionId: 1,
+                    displayName: "Recovery Agent"
+                ),
+            ],
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil,
-            modelExecutionRegistry: nil
+            modelExecutionRegistry: nil,
+            attachmentRepository: attachments
         )
     }
 
@@ -228,6 +290,14 @@ enum AppBootstrapper {
         let toolDriver = MinimalHostToolDriver()
         let selections = AppLLMHostSelectionRegistry()
         let hostStarter = AppHostRunStarter(selections: selections)
+        let attachments = OpenMinisAttachmentRepository(
+            directory: (try? attachmentStoreURL())
+                ?? FileManager.default.temporaryDirectory.appending(
+                    path: "LocalAgent-Fallback-Attachments",
+                    directoryHint: .isDirectory
+                ),
+            policy: .productDefault
+        )
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
             runDebugService: nil,
@@ -256,11 +326,13 @@ enum AppBootstrapper {
             legacyMigration: nil,
             readinessIssues: ["app.bootstrap.last_resort"],
             activeAgentProfile: nil,
+            availableAgentProfiles: [],
             cloudApprovalBroker: AppCloudApprovalBroker(),
             localLLMSubsystem: nil,
             cloudLLMSubsystem: nil,
             llmHostRuntime: nil,
-            modelExecutionRegistry: nil
+            modelExecutionRegistry: nil,
+            attachmentRepository: attachments
         )
     }
 
@@ -412,6 +484,19 @@ enum AppBootstrapper {
         try sqliteURL(fileManager: fileManager)
             .deletingLastPathComponent()
             .appendingPathComponent("transcript-projection.sqlite")
+    }
+
+    static func attachmentStoreURL(
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let directory = try sqliteURL(fileManager: fileManager)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Attachments", isDirectory: true)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 
     private static func recoverSQLiteStore(

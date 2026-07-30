@@ -15,6 +15,11 @@ protocol OpenMinisToolDispatching: Sendable {
     ) async -> HostToolResult
 
     func cancel(processID: Int32) async
+    func finish(runID: String) async
+}
+
+extension OpenMinisToolDispatching {
+    func finish(runID _: String) async {}
 }
 
 final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable {
@@ -82,8 +87,9 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
         await cancellationRegistry.cancel(batchID: batchID)
     }
 
-    func finish(runID: String) {
+    func finish(runID: String) async {
         detectorRegistry.remove(runID: runID)
+        await dispatcher.finish(runID: runID)
     }
 
     func hasLoopDetector(runID: String) -> Bool {

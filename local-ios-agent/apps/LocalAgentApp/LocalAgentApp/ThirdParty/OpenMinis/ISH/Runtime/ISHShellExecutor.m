@@ -31,6 +31,103 @@
 @implementation ISHShellExecutionResult
 @end
 
+#pragma mark - Bounded Output Capture
+
+@interface ISHBoundedOutputBuffer ()
+@property (nonatomic) NSUInteger maximumCharacters;
+@property (nonatomic) NSUInteger headCharacters;
+@property (nonatomic) NSUInteger tailCharacters;
+@property (nonatomic) NSUInteger totalCharacters;
+@property (nonatomic) BOOL truncated;
+@property (nonatomic) NSMutableString *content;
+@property (nonatomic) NSMutableString *head;
+@property (nonatomic) NSMutableString *tail;
+@end
+
+@implementation ISHBoundedOutputBuffer
+
+- (instancetype)initWithMaximumCharacters:(NSUInteger)maximumCharacters {
+    if (self = [super init]) {
+        _maximumCharacters = MAX(maximumCharacters, 2);
+        _headCharacters = _maximumCharacters / 2;
+        _tailCharacters = _maximumCharacters - _headCharacters;
+        _content = [NSMutableString string];
+        _head = [NSMutableString string];
+        _tail = [NSMutableString string];
+    }
+    return self;
+}
+
+- (NSUInteger)length {
+    if (!self.truncated) return self.content.length;
+    return self.head.length + self.tail.length;
+}
+
+- (void)appendString:(NSString *)string {
+    if (string.length == 0) return;
+    NSUInteger previousTotal = self.totalCharacters;
+    self.totalCharacters += string.length;
+
+    if (!self.truncated &&
+        previousTotal <= self.maximumCharacters &&
+        string.length <= self.maximumCharacters - previousTotal) {
+        [self.content appendString:string];
+        return;
+    }
+
+    if (!self.truncated) {
+        self.truncated = YES;
+        NSUInteger existingHead = MIN(self.headCharacters, self.content.length);
+        if (existingHead > 0) {
+            [self.head appendString:[self.content substringToIndex:existingHead]];
+        }
+        if (self.head.length < self.headCharacters) {
+            NSUInteger needed = self.headCharacters - self.head.length;
+            NSUInteger take = MIN(needed, string.length);
+            if (take > 0) {
+                [self.head appendString:[string substringToIndex:take]];
+            }
+        }
+        NSUInteger existingTail = MIN(self.tailCharacters, self.content.length);
+        if (existingTail > 0) {
+            [self.tail appendString:[
+                self.content substringFromIndex:self.content.length - existingTail
+            ]];
+        }
+        [self.content setString:@""];
+    }
+
+    [self appendToTail:string];
+}
+
+- (void)appendToTail:(NSString *)string {
+    if (string.length >= self.tailCharacters) {
+        [self.tail setString:[
+            string substringFromIndex:string.length - self.tailCharacters
+        ]];
+        return;
+    }
+    [self.tail appendString:string];
+    if (self.tail.length > self.tailCharacters) {
+        [self.tail deleteCharactersInRange:NSMakeRange(
+            0,
+            self.tail.length - self.tailCharacters
+        )];
+    }
+}
+
+- (NSString *)snapshot {
+    if (!self.truncated) return [self.content copy];
+    NSUInteger omitted = self.totalCharacters - self.head.length - self.tail.length;
+    NSString *marker = [NSString stringWithFormat:
+        @"\n…[truncated %lu characters; showing head and tail]…\n",
+        (unsigned long)omitted
+    ];
+    return [NSString stringWithFormat:@"%@%@%@", self.head, marker, self.tail];
+}
+
+@end
+
 #pragma mark - Execution Context
 
 @interface ISHShellExecutionContext : NSObject {
@@ -41,8 +138,8 @@
 @property (nonatomic) NSDate *startTime;
 @property (nonatomic, copy) ISHShellLineCallback lineCallback;
 @property (nonatomic, copy) ISHShellCompletionCallback completion;
-@property (nonatomic) NSMutableString *stdoutBuffer;
-@property (nonatomic) NSMutableString *stderrBuffer;
+@property (nonatomic) ISHBoundedOutputBuffer *stdoutBuffer;
+@property (nonatomic) ISHBoundedOutputBuffer *stderrBuffer;
 @property (nonatomic) dispatch_semaphore_t waitSemaphore;
 @property (nonatomic) ISHShellExecutionResult *result;
 @property (atomic) BOOL isCompleted;
@@ -64,8 +161,11 @@
 
 - (instancetype)init {
     if (self = [super init]) {
-        _stdoutBuffer = [NSMutableString string];
-        _stderrBuffer = [NSMutableString string];
+        static const NSUInteger maximumCapturedCharacters = 256 * 1024;
+        _stdoutBuffer = [[ISHBoundedOutputBuffer alloc]
+            initWithMaximumCharacters:maximumCapturedCharacters];
+        _stderrBuffer = [[ISHBoundedOutputBuffer alloc]
+            initWithMaximumCharacters:maximumCapturedCharacters];
         _stdoutPipe[0] = -1;
         _stdoutPipe[1] = -1;
         _stderrPipe[0] = -1;
@@ -669,8 +769,8 @@ static BOOL ISHTaskIsDescendantOf(struct task *t, pid_t_ rootPid) {
         // appendString — see the readPipe heap-corruption crash reports.
         NSString *outCopy;
         NSString *errCopy;
-        @synchronized(ctx.stdoutBuffer) { outCopy = [ctx.stdoutBuffer copy]; }
-        @synchronized(ctx.stderrBuffer) { errCopy = [ctx.stderrBuffer copy]; }
+        @synchronized(ctx.stdoutBuffer) { outCopy = [ctx.stdoutBuffer snapshot]; }
+        @synchronized(ctx.stderrBuffer) { errCopy = [ctx.stderrBuffer snapshot]; }
         ctx.result.output = outCopy;
         ctx.result.errorOutput = errCopy;
 
@@ -736,7 +836,8 @@ static BOOL ISHTaskIsDescendantOf(struct task *t, pid_t_ rootPid) {
 + (void)readPipe:(int)fd context:(ISHShellExecutionContext *)ctx isStdErr:(BOOL)isStdErr {
     char buffer[4096];
     NSMutableString *lineBuffer = [NSMutableString string];
-    NSMutableString *outputBuffer = isStdErr ? ctx.stderrBuffer : ctx.stdoutBuffer;
+    ISHBoundedOutputBuffer *outputBuffer =
+        isStdErr ? ctx.stderrBuffer : ctx.stdoutBuffer;
     NSMutableData *pendingBytes = [NSMutableData data];
     const char *streamName = isStdErr ? "stderr" : "stdout";
     int idlePollCount = 0; // consecutive poll timeouts with no data
@@ -807,6 +908,25 @@ static BOOL ISHTaskIsDescendantOf(struct task *t, pid_t_ rootPid) {
                        context:ctx
                   outputBuffer:outputBuffer
                       isStdErr:isStdErr];
+            static const NSUInteger maximumPendingLineCharacters = 64 * 1024;
+            if (lineBuffer.length > maximumPendingLineCharacters) {
+                NSUInteger flushLength =
+                    lineBuffer.length - maximumPendingLineCharacters / 2;
+                NSString *fragment = [lineBuffer substringToIndex:flushLength];
+                [lineBuffer deleteCharactersInRange:NSMakeRange(0, flushLength)];
+                @synchronized(outputBuffer) {
+                    [outputBuffer appendString:fragment];
+                }
+                if (ctx.lineCallback) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        ctx.lineCallback(
+                            [fragment stringByAppendingString:
+                                @"…[continued; line chunked for safety]"],
+                            isStdErr
+                        );
+                    });
+                }
+            }
 
         } else if (bytesRead == 0) {
             // EOF - pipe closed
@@ -847,7 +967,7 @@ static BOOL ISHTaskIsDescendantOf(struct task *t, pid_t_ rootPid) {
 
 + (void)processLines:(NSMutableString *)lineBuffer
              context:(ISHShellExecutionContext *)ctx
-        outputBuffer:(NSMutableString *)outputBuffer
+        outputBuffer:(ISHBoundedOutputBuffer *)outputBuffer
             isStdErr:(BOOL)isStdErr {
 
     while (YES) {

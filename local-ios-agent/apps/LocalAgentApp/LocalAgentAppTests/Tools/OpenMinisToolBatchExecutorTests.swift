@@ -95,7 +95,7 @@ struct OpenMinisToolBatchExecutorTests {
         #expect(executor.hasLoopDetector(runID: "run-a"))
         #expect(executor.hasLoopDetector(runID: "run-b"))
 
-        executor.finish(runID: "run-a")
+        await executor.finish(runID: "run-a")
 
         #expect(executor.hasLoopDetector(runID: "run-a") == false)
         #expect(executor.hasLoopDetector(runID: "run-b"))

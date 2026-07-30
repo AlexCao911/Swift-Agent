@@ -74,6 +74,18 @@ package struct StablePublicOriginValidator: ProviderOriginValidating {
     }
 }
 
+/// Validates an arbitrary outbound HTTPS URL with the same DNS and reserved
+/// address checks used by the cloud model transport.
+public struct PublicNetworkURLValidator: Sendable {
+    private let policy = CloudTransportPolicy()
+
+    public init() {}
+
+    public func validate(_ url: URL) async throws {
+        try await policy.validatePublicURL(url)
+    }
+}
+
 package struct CloudTransportPolicy: Sendable {
     private let resolver: any CloudHostResolving
     package let maximumRedirects: Int
@@ -91,6 +103,12 @@ package struct CloudTransportPolicy: Sendable {
         try Self.validateWirePath(baseURL.path)
         try await requirePublicAnswers(host: origin.host)
         return origin
+    }
+
+    package func validatePublicURL(_ url: URL) async throws {
+        let origin = try Self.normalizedOrigin(url, allowQuery: true)
+        try Self.validateWirePath(url.path)
+        try await requirePublicAnswers(host: origin.host)
     }
 
     package func preflight(baseURL: URL, expectedOrigin: EgressOrigin) async throws {

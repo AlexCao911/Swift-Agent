@@ -14,6 +14,7 @@ impl BranchProjector {
     }
 
     pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<PromptMessage> {
+        let branch = apply_transcript_mutations(branch);
         if let Some(checkpoint) = branch.iter().rev().find_map(|event| {
             (event.kind == EventKind::BranchSummaryCreated)
                 .then(|| serde_json::from_str::<ContextCompactionCheckpoint>(&event.payload).ok())
@@ -49,6 +50,107 @@ impl BranchProjector {
 
         messages
     }
+}
+
+fn apply_transcript_mutations(branch: Vec<RuntimeEvent>) -> Vec<RuntimeEvent> {
+    let mut effective = Vec::with_capacity(branch.len());
+
+    for mut event in branch {
+        match event.kind {
+            EventKind::TranscriptRetryRequested => {
+                truncate_at_command_target(&mut effective, &event.payload, "anchor_event_id", true);
+            }
+            EventKind::MessageEdited => {
+                let Some(command) = command_payload(&event.payload) else {
+                    effective.clear();
+                    continue;
+                };
+                let Some(target_id) = command.get("target_event_id").and_then(Value::as_str) else {
+                    effective.clear();
+                    continue;
+                };
+                let Some(target_index) = effective
+                    .iter()
+                    .rposition(|candidate| candidate.id.0 == target_id)
+                else {
+                    effective.clear();
+                    continue;
+                };
+                let Some(replacement_text) =
+                    command.get("replacement_text").and_then(Value::as_str)
+                else {
+                    effective.clear();
+                    continue;
+                };
+
+                effective.truncate(target_index);
+                event.kind = EventKind::UserMessage;
+                event.payload = replacement_text.to_string();
+                event.blob_refs = attachment_ids(&command, "replacement_attachments");
+                effective.push(event);
+            }
+            EventKind::MessageDeleted => {
+                truncate_at_command_target(
+                    &mut effective,
+                    &event.payload,
+                    "target_event_id",
+                    false,
+                );
+            }
+            EventKind::ConversationCleared | EventKind::ConversationDeleted => effective.clear(),
+            _ => effective.push(event),
+        }
+    }
+
+    effective
+}
+
+fn truncate_at_command_target(
+    effective: &mut Vec<RuntimeEvent>,
+    payload: &str,
+    field: &str,
+    include_target: bool,
+) {
+    let Some(command) = command_payload(payload) else {
+        effective.clear();
+        return;
+    };
+    let Some(target_id) = command.get(field).and_then(Value::as_str) else {
+        effective.clear();
+        return;
+    };
+    let Some(target_index) = effective
+        .iter()
+        .rposition(|candidate| candidate.id.0 == target_id)
+    else {
+        effective.clear();
+        return;
+    };
+
+    effective.truncate(target_index + usize::from(include_target));
+}
+
+fn command_payload(payload: &str) -> Option<Value> {
+    // Mutation events are only created by ConversationCommandService, which validates
+    // their target before committing. Treat malformed persisted events as a reset so
+    // stale transcript content cannot silently remain model-visible.
+    let value = serde_json::from_str::<Value>(payload).ok()?;
+    value.get("command").cloned()
+}
+
+fn attachment_ids(command: &Value, field: &str) -> Vec<String> {
+    command
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| {
+            attachment
+                .get("attachment_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .collect()
 }
 
 fn project_checkpointed_branch(
@@ -107,7 +209,7 @@ fn project_user_message(payload: String, mut blob_refs: Vec<String>) -> PromptMe
             .flatten()
             .filter_map(|attachment| {
                 attachment
-                    .get("content_digest")
+                    .get("attachment_id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string)
             })

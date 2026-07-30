@@ -33,6 +33,17 @@ pub trait ConversationEventStore {
         events: Vec<RuntimeEvent>,
         receipt: StoredTranscriptCommandReceipt,
     ) -> Result<Vec<RuntimeEvent>, AgentError>;
+    #[allow(clippy::too_many_arguments)]
+    fn commit_branch_command(
+        &mut self,
+        source_stream_id: &str,
+        source_expected_next_sequence: u64,
+        source_events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+        target_stream_id: &str,
+        target_expected_next_sequence: u64,
+        target_events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError>;
     fn write_audit(
         &self,
         _session_id: &SessionId,

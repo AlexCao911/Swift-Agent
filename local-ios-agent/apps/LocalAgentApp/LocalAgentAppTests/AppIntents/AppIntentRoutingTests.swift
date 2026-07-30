@@ -61,4 +61,77 @@ struct AppIntentRoutingTests {
         #expect(route.intentIdentifier == "agent.continue_conversation")
         #expect(route.destination == .openConversationList)
     }
+
+    @Test("shell consumes chat intents into route and composer draft")
+    func shellConsumesChatIntent() {
+        let shell = AppShellViewModel()
+
+        shell.handleAppIntent(.startChat(prefilledText: "Inspect this"))
+
+        guard case let .chat(sessionID) = shell.route else {
+            Issue.record("start chat did not open chat")
+            return
+        }
+        #expect(sessionID?.hasPrefix("conversation-") == true)
+        #expect(shell.consumePendingChatDraft() == "Inspect this")
+        #expect(shell.consumePendingChatDraft() == nil)
+    }
+
+    @Test("a nil chat route allocates a new stream instead of reusing current")
+    func nilChatRouteCreatesNewConversation() {
+        let shell = AppShellViewModel(route: .chat(sessionId: nil))
+
+        let resolved = shell.resolveChatConversationID(
+            currentConversationID: "conversation-current"
+        )
+
+        #expect(resolved != "conversation-current")
+        #expect(shell.route == .chat(sessionId: resolved))
+    }
+
+    @Test("capture text selects the requested agent and starts a new stream")
+    func captureTextSelectsTargetAgent() {
+        let shell = AppShellViewModel(
+            activeAgent: .init(
+                profileId: "agent-a",
+                profileRevisionId: 1,
+                displayName: "Agent A"
+            ),
+            availableAgents: [
+                .init(
+                    profileId: "agent-a",
+                    profileRevisionId: 1,
+                    displayName: "Agent A"
+                ),
+                .init(
+                    profileId: "agent-b",
+                    profileRevisionId: 3,
+                    displayName: "Agent B"
+                ),
+            ]
+        )
+
+        shell.handleAppIntent(.captureText(
+            text: "Inspect this",
+            targetAgentProfileId: "agent-b"
+        ))
+
+        #expect(shell.activeAgent?.profileId == "agent-b")
+        #expect(shell.activeAgent?.profileRevisionId == 3)
+        guard case let .chat(sessionID) = shell.route else {
+            Issue.record("capture text did not open chat")
+            return
+        }
+        #expect(sessionID?.hasPrefix("conversation-") == true)
+        #expect(shell.consumePendingChatDraft() == "Inspect this")
+    }
+
+    @Test("shell routes continue-conversation intent to the requested stream")
+    func shellConsumesContinueConversationIntent() {
+        let shell = AppShellViewModel()
+
+        shell.handleAppIntent(.continueConversation(conversationId: "session_7"))
+
+        #expect(shell.route == .chat(sessionId: "session_7"))
+    }
 }

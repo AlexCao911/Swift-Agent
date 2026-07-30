@@ -146,7 +146,15 @@ final class RustAgentCoordinator: ObservableObject {
         try projections.ensureFeed(
             conversationStreamID: command.conversationStreamID
         )
-        let result = try await conversation.submitTranscriptCommand(command)
+        let result: TranscriptCommandResultDTO
+        do {
+            result = try await conversation.submitTranscriptCommand(command)
+        } catch {
+            await projections.stopFeedIfUnmanaged(
+                conversationStreamID: command.conversationStreamID
+            )
+            throw error
+        }
         try projections.ensureFeed(
             conversationStreamID: command.conversationStreamID,
             temporaryThroughSequence: result.acceptedSequence
@@ -155,10 +163,42 @@ final class RustAgentCoordinator: ObservableObject {
     }
 
     func startProjection(conversationStreamID: String) throws {
-        try projections.ensureFeed(
-            conversationStreamID: conversationStreamID,
-            persistent: true
+        try projections.selectCurrentConversationSynchronously(
+            conversationStreamID
         )
+    }
+
+    func selectConversation(
+        conversationStreamID: String
+    ) async throws {
+        try await projections.selectCurrentConversation(
+            conversationStreamID
+        )
+    }
+
+    @discardableResult
+    func createBranch(
+        requestID: String,
+        conversationStreamID: String,
+        anchorEventID: String,
+        newConversationStreamID: String
+    ) async throws -> TranscriptCommandResultDTO {
+        try projections.ensureFeed(
+            conversationStreamID: newConversationStreamID
+        )
+        do {
+            return try await submit(.createBranch(
+                requestID: requestID,
+                conversationStreamID: conversationStreamID,
+                anchorEventID: anchorEventID,
+                newConversationStreamID: newConversationStreamID
+            ))
+        } catch {
+            await projections.stopFeed(
+                conversationStreamID: newConversationStreamID
+            )
+            throw error
+        }
     }
 
     func reconcileProjectionFeeds(
@@ -179,9 +219,8 @@ final class RustAgentCoordinator: ObservableObject {
         guard let predictedRunID = try command.predictedRunID() else {
             preconditionFailure("run command did not produce a run ID")
         }
-        try projections.ensureFeed(
-            conversationStreamID: command.conversationStreamID,
-            persistent: true
+        try projections.markRunStarted(
+            conversationStreamID: command.conversationStreamID
         )
         try await models.prepareModelRun(
             runID: predictedRunID,
@@ -198,6 +237,9 @@ final class RustAgentCoordinator: ObservableObject {
             return result
         } catch {
             await models.finishModelRun(runID: predictedRunID)
+            await projections.markRunFinished(
+                conversationStreamID: command.conversationStreamID
+            )
             throw error
         }
     }

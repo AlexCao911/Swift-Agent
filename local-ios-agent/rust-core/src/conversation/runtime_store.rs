@@ -72,6 +72,30 @@ impl<S: ConversationEventStore> ConversationEventStore for RuntimeConversationSt
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn commit_branch_command(
+        &mut self,
+        source_stream_id: &str,
+        source_expected_next_sequence: u64,
+        source_events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+        target_stream_id: &str,
+        target_expected_next_sequence: u64,
+        target_events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        self.runtime()?
+            .conversation_store_mut()
+            .commit_branch_command(
+                source_stream_id,
+                source_expected_next_sequence,
+                source_events,
+                receipt,
+                target_stream_id,
+                target_expected_next_sequence,
+                target_events,
+            )
+    }
+
     fn write_audit(
         &self,
         session_id: &SessionId,

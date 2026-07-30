@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
 
-use local_ios_agent_runtime::context::ModelContextWindow;
+use local_ios_agent_runtime::context::{BranchProjector, ModelContextWindow, PromptMessage};
 use local_ios_agent_runtime::conversation::{
     ConversationCommandService, PromptDocumentSnapshot, RunStartSnapshot, SkillDescriptor,
     ToolDefinitionSnapshot, TranscriptCommand, TranscriptCommandError,
 };
-use local_ios_agent_runtime::core::{EventKind, SessionId};
+use local_ios_agent_runtime::core::{EntryId, EventKind, RuntimeEvent, SessionId};
 use local_ios_agent_runtime::storage::{
     ConversationEventStore, InMemoryConversationStore, SqliteConversationStore,
 };
@@ -47,6 +47,26 @@ fn send(stream: &str, request: &str, text: &str) -> TranscriptCommand {
         attachments: Vec::new(),
         run_start_snapshot: snapshot(),
     }
+}
+
+fn transcript_event(
+    stream: &str,
+    id: &str,
+    parent_id: Option<&str>,
+    depth: u32,
+    kind: EventKind,
+    payload: &str,
+) -> RuntimeEvent {
+    RuntimeEvent::new(
+        EntryId(id.into()),
+        SessionId(stream.into()),
+        parent_id.map(|parent| EntryId(parent.into())),
+        None,
+        0,
+        depth,
+        kind,
+        payload,
+    )
 }
 
 #[test]
@@ -143,6 +163,22 @@ fn active_run_guard_is_per_conversation_and_busy_is_idempotent() {
 #[test]
 fn transcript_mutations_are_append_only_events() {
     let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    store
+        .lock()
+        .unwrap()
+        .append_transaction(
+            "conversation-a",
+            1,
+            vec![transcript_event(
+                "conversation-a",
+                "old-message",
+                None,
+                0,
+                EventKind::UserMessage,
+                "old",
+            )],
+        )
+        .unwrap();
     let service = ConversationCommandService::new(store.clone());
 
     let commands = [
@@ -181,7 +217,10 @@ fn transcript_mutations_are_append_only_events() {
         .events_after(&SessionId("conversation-a".into()), 0)
         .unwrap();
     assert_eq!(
-        events.iter().map(|event| &event.kind).collect::<Vec<_>>(),
+        events[1..]
+            .iter()
+            .map(|event| &event.kind)
+            .collect::<Vec<_>>(),
         vec![
             &EventKind::MessageDeleted,
             &EventKind::ConversationCleared,
@@ -191,11 +230,138 @@ fn transcript_mutations_are_append_only_events() {
         ]
     );
     assert_eq!(
-        events
+        events[1..]
             .iter()
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5]
+        vec![2, 3, 4, 5, 6]
+    );
+}
+
+#[test]
+fn unknown_mutation_target_is_rejected_without_a_canonical_write() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    let service = ConversationCommandService::new(store.clone());
+
+    let error = service
+        .submit(TranscriptCommand::DeleteMessage {
+            request_id: "delete-missing".into(),
+            conversation_stream_id: "conversation-a".into(),
+            target_event_id: "missing".into(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "conversation.target_not_found");
+    assert!(store
+        .lock()
+        .unwrap()
+        .events_after(&SessionId("conversation-a".into()), 0)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn retry_rejects_an_assistant_anchor_instead_of_replaying_the_old_answer() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    store
+        .lock()
+        .unwrap()
+        .append_transaction(
+            "conversation-a",
+            1,
+            vec![
+                transcript_event(
+                    "conversation-a",
+                    "user-1",
+                    None,
+                    0,
+                    EventKind::UserMessage,
+                    "question",
+                ),
+                transcript_event(
+                    "conversation-a",
+                    "assistant-1",
+                    Some("user-1"),
+                    1,
+                    EventKind::AssistantMessageCompleted,
+                    "old answer",
+                ),
+            ],
+        )
+        .unwrap();
+    let service = ConversationCommandService::new(store);
+
+    let error = service
+        .submit(TranscriptCommand::RetryFrom {
+            request_id: "retry".into(),
+            conversation_stream_id: "conversation-a".into(),
+            anchor_event_id: "assistant-1".into(),
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "conversation.retry_anchor_not_user");
+}
+
+#[test]
+fn create_branch_materializes_source_history_through_the_anchor() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    store
+        .lock()
+        .unwrap()
+        .append_transaction(
+            "conversation-a",
+            1,
+            vec![
+                transcript_event(
+                    "conversation-a",
+                    "user-1",
+                    None,
+                    0,
+                    EventKind::UserMessage,
+                    "first",
+                ),
+                transcript_event(
+                    "conversation-a",
+                    "assistant-1",
+                    Some("user-1"),
+                    1,
+                    EventKind::AssistantMessageCompleted,
+                    "first answer",
+                ),
+                transcript_event(
+                    "conversation-a",
+                    "user-2",
+                    Some("assistant-1"),
+                    2,
+                    EventKind::UserMessage,
+                    "not copied",
+                ),
+            ],
+        )
+        .unwrap();
+    let service = ConversationCommandService::new(store.clone());
+
+    service
+        .submit(TranscriptCommand::CreateBranch {
+            request_id: "branch".into(),
+            conversation_stream_id: "conversation-a".into(),
+            anchor_event_id: "assistant-1".into(),
+            new_conversation_stream_id: "conversation-b".into(),
+        })
+        .unwrap();
+
+    let target_events = store
+        .lock()
+        .unwrap()
+        .events_after(&SessionId("conversation-b".into()), 0)
+        .unwrap();
+    assert_eq!(
+        BranchProjector::new().project(target_events),
+        vec![
+            PromptMessage::User("first".into()),
+            PromptMessage::Assistant("first answer".into()),
+        ]
     );
 }
 

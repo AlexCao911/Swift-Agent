@@ -70,6 +70,98 @@ final class RustAgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(feeds.observedConversationIDs, ["dormant"])
         await feeds.stopAll()
     }
+
+    func testConversationSwitchReleasesPreviouslyOpenedIdleFeed() async throws {
+        let conversation = RecordingTranscriptClient()
+        let feeds = ProjectionFeedController(
+            client: conversation,
+            applier: ChatStoreProjectionApplier(
+                store: ChatStore(),
+                persistence: try TranscriptProjectionStore(fileURL: nil)
+            )
+        )
+        let coordinator = RustAgentCoordinator(
+            conversation: conversation,
+            snapshots: StaticSnapshotProvider(),
+            models: RecordingModelPreparation(),
+            projections: feeds
+        )
+        try coordinator.startProjection(conversationStreamID: "conversation-a")
+
+        try await coordinator.selectConversation(
+            conversationStreamID: "conversation-b"
+        )
+
+        XCTAssertEqual(feeds.observedConversationIDs, ["conversation-b"])
+        XCTAssertEqual(conversation.cancelledFeedCount, 1)
+        await feeds.stopAll()
+    }
+
+    func testFailedBranchClosesItsPreinstalledTargetFeed() async throws {
+        let conversation = RecordingTranscriptClient()
+        conversation.submitError = TestCoordinatorFailure()
+        let feeds = ProjectionFeedController(
+            client: conversation,
+            applier: ChatStoreProjectionApplier(
+                store: ChatStore(),
+                persistence: try TranscriptProjectionStore(fileURL: nil)
+            )
+        )
+        let coordinator = RustAgentCoordinator(
+            conversation: conversation,
+            snapshots: StaticSnapshotProvider(),
+            models: RecordingModelPreparation(),
+            projections: feeds
+        )
+
+        do {
+            _ = try await coordinator.createBranch(
+                requestID: "branch-request",
+                conversationStreamID: "conversation-a",
+                anchorEventID: "user-1",
+                newConversationStreamID: "conversation-branch"
+            )
+            XCTFail("expected branch submission to fail")
+        } catch {}
+
+        XCTAssertFalse(
+            feeds.observedConversationIDs.contains("conversation-branch")
+        )
+        XCTAssertTrue(feeds.observedConversationIDs.isEmpty)
+        await feeds.stopAll()
+    }
+
+    func testTemporaryFeedClosesWhenProjectionArrivedBeforeTargetWasRegistered() async throws {
+        let conversation = RecordingTranscriptClient()
+        let feeds = ProjectionFeedController(
+            client: conversation,
+            applier: ChatStoreProjectionApplier(
+                store: ChatStore(),
+                persistence: try TranscriptProjectionStore(fileURL: nil)
+            )
+        )
+        try feeds.ensureFeed(conversationStreamID: "dormant")
+        conversation.yield(TranscriptProjectionEventDTO(
+            conversationStreamID: "dormant",
+            sequence: 1,
+            eventID: "archive-1",
+            runID: nil,
+            kind: .conversationArchived,
+            payload: .string("")
+        ))
+        try await feeds.waitUntilApplied(
+            conversationStreamID: "dormant",
+            sequence: 1
+        )
+
+        try feeds.ensureFeed(
+            conversationStreamID: "dormant",
+            temporaryThroughSequence: 1
+        )
+
+        XCTAssertTrue(feeds.observedConversationIDs.isEmpty)
+        await feeds.stopAll()
+    }
 }
 
 @MainActor
@@ -118,12 +210,23 @@ private final class RecordingTranscriptClient:
 {
     private let lock = NSLock()
     private var feedCount = 0
+    private var continuations: [
+        String: AsyncThrowingStream<
+            TranscriptProjectionEventDTO,
+            Error
+        >.Continuation
+    ] = [:]
     private(set) var submittedCommand: TranscriptCommandDTO?
     private(set) var feedWasInstalledBeforeSubmit = false
+    var submitError: Error?
+    private(set) var cancelledFeedCount = 0
 
     func submitTranscriptCommand(
         _ command: TranscriptCommandDTO
     ) async throws -> TranscriptCommandResultDTO {
+        if let submitError {
+            throw submitError
+        }
         lock.withLock {
             submittedCommand = command
             feedWasInstalledBeforeSubmit = feedCount > 0
@@ -137,18 +240,33 @@ private final class RecordingTranscriptClient:
 
     func observeTranscriptProjections(
         subscriptionID _: String,
-        conversationStreamID _: String,
+        conversationStreamID: String,
         afterSequence _: UInt64
     ) -> AsyncThrowingStream<TranscriptProjectionEventDTO, Error> {
         lock.withLock {
             feedCount += 1
         }
-        return AsyncThrowingStream { _ in }
+        return AsyncThrowingStream { continuation in
+            lock.withLock {
+                continuations[conversationStreamID] = continuation
+            }
+        }
     }
 
     func cancelTranscriptProjectionSubscription(
         subscriptionID _: String
-    ) async {}
+    ) async {
+        lock.withLock {
+            feedCount -= 1
+            cancelledFeedCount += 1
+        }
+    }
+
+    func yield(_ event: TranscriptProjectionEventDTO) {
+        lock.withLock {
+            continuations[event.conversationStreamID]
+        }?.yield(event)
+    }
 
     func listSessions() async throws -> [ConversationSummaryDTO] { [] }
 

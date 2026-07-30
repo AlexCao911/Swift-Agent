@@ -11,21 +11,26 @@ struct RustReActProductPathTests {
     @MainActor
     func rustDrivesToolTurnAndFinalProjection() async throws {
         let epoch = try HostProcessEpoch.generate()
-        let rust = try RustRuntimeClient(configuration: RustRuntimeConfiguration(
-            hostProcessEpoch: epoch,
-            store: .inMemory
-        ))
-        let model = ProductPathModelExecutor()
-        let dispatcher = ProductPathToolDispatcher()
-        let tools = OpenMinisToolBatchExecutor(
-            dispatcher: dispatcher,
-            definitions: try OpenMinisToolDefinitionSnapshotProvider.productDefaults()
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
         )
-        let host = try await LLMHostProductRuntime.bootstrap(
-            rust: rust,
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try AppBootstrapper.makeContainer(
             hostProcessEpoch: epoch,
-            modelExecutor: model,
-            toolExecutor: tools
+            store: .inMemory,
+            attachmentStoreRoot: root.appending(path: "attachments")
+        )
+        let rust = try #require(container.rustRuntimeClient)
+        let providerRoute = ProductPathProviderRoute()
+        let modelRegistry = OpenMinisModelExecutionRegistry()
+        let modelExecutor = OpenMinisModelExecutor(
+            plans: modelRegistry,
+            runtime: modelRegistry
+        )
+        let host = try await AppBootstrapper.bootstrapLLMHost(
+            container: container,
+            modelExecutor: modelExecutor
         )
         let conversation = RustConversationBridgeClient(
             gateway: rust,
@@ -43,8 +48,21 @@ struct RustReActProductPathTests {
         )
         let coordinator = RustAgentCoordinator(
             conversation: conversation,
-            snapshots: ProductPathSnapshotProvider(),
-            models: ProductPathModelRunPreparer(),
+            snapshots: RustAgentInputSnapshotProvider(
+                promptDocuments: try PromptDocumentStore(
+                    fileURL: root.appending(path: "prompt-documents.json")
+                ),
+                skills: try SkillStore(
+                    skillsDirectory: root.appending(path: "skills"),
+                    metadataURL: root.appending(path: "skills.json"),
+                    overridesURL: root.appending(path: "skill-overrides.json")
+                ),
+                nativeToolkit: container.nativeToolkitClient
+            ),
+            models: ProductPathModelRunPreparer(
+                registry: modelRegistry,
+                route: providerRoute
+            ),
             projections: projections
         )
 
@@ -62,7 +80,7 @@ struct RustReActProductPathTests {
             (try? applier.cursor(for: "product-conversation")) == 7
         }
 
-        let requests = await model.requests
+        let requests = await providerRoute.requests
         let cursor = try applier.cursor(for: "product-conversation")
         let projectedEvents = try projectionStore.events(
             for: "product-conversation"
@@ -84,10 +102,9 @@ struct RustReActProductPathTests {
         } else {
             Issue.record("expected two model requests, received \(requests.count)")
         }
-        #expect(await dispatcher.maximumActive == 2)
         #expect(
-            await dispatcher.completedCallIDs.sorted()
-                == ["call-1", "call-2"]
+            requests.last?.orderedToolResults.map(\.toolName)
+                == ["native.list_tools", "native.permission_status"]
         )
         #expect(
             chatStore.projectedMessages(
@@ -112,45 +129,10 @@ private func waitForProductProjection(
 }
 
 @MainActor
-private struct ProductPathSnapshotProvider: RustAgentSnapshotProviding {
-    func snapshot(
-        conversationStreamID _: String?,
-        modelContextWindow: ModelContextWindowDTO
-    ) async throws -> RunStartSnapshotDTO {
-        try RunStartSnapshotDTO.make(
-            orderedPromptDocuments: [],
-            skillDescriptors: [],
-            orderedToolDefinitions: [
-                ToolDefinitionSnapshotDTO(
-                    name: "shell_execute",
-                    description: "Execute a shell command.",
-                    inputSchema: try .object(entries: [
-                        .init(name: "type", value: .string("object")),
-                        .init(
-                            name: "properties",
-                            value: try .object(entries: [
-                                .init(
-                                    name: "command",
-                                    value: try .object(entries: [
-                                        .init(name: "type", value: .string("string")),
-                                    ])
-                                ),
-                            ])
-                        ),
-                        .init(
-                            name: "required",
-                            value: .array([.string("command")])
-                        ),
-                    ])
-                ),
-            ],
-            modelContextWindow: modelContextWindow
-        )
-    }
-}
-
-@MainActor
 private struct ProductPathModelRunPreparer: RustAgentModelRunPreparing {
+    let registry: OpenMinisModelExecutionRegistry
+    let route: ProductPathProviderRoute
+
     func modelContextWindow(
         agentProfileID _: String,
         agentProfileRevisionID _: UInt64
@@ -162,15 +144,39 @@ private struct ProductPathModelRunPreparer: RustAgentModelRunPreparing {
     }
 
     func prepareModelRun(
-        runID _: String,
+        runID: String,
         agentProfileID _: String,
         agentProfileRevisionID _: UInt64
-    ) async throws {}
+    ) async throws {
+        let candidate = ProviderRunCandidate(
+            id: "product-provider",
+            kind: .cloud,
+            providerConfigurationID: "product-provider-configuration",
+            providerType: "openAI",
+            modelID: "product-model",
+            baseURL: URL(string: "https://example.com/v1"),
+            presetID: .openAIChatCompletions
+        )
+        try await registry.bind(
+            runID: runID,
+            plan: ProviderRunPlan(
+                logicalModelID: candidate.modelID,
+                orderedCandidates: [candidate],
+                modelContextWindow: ModelContextWindowDTO(
+                    contextWindowTokens: 32_768,
+                    maxOutputTokens: 4_096
+                )
+            ),
+            routes: [candidate.id: route]
+        )
+    }
 
-    func finishModelRun(runID _: String) async {}
+    func finishModelRun(runID: String) async {
+        await registry.finish(runID: runID)
+    }
 }
 
-private actor ProductPathModelExecutor: ModelGenerationExecuting {
+private actor ProductPathProviderRoute: ProviderCandidateModelRoute {
     private(set) var requests: [HostModelRequest] = []
 
     func generate(
@@ -181,13 +187,13 @@ private actor ProductPathModelExecutor: ModelGenerationExecuting {
         if request.orderedToolResults.isEmpty {
             try await emit(.toolCallDelta(
                 callID: "call-1",
-                toolName: "shell_execute",
-                argumentsFragment: #"{"command":"printf one"}"#
+                toolName: "native.list_tools",
+                argumentsFragment: "{}"
             ))
             try await emit(.toolCallDelta(
                 callID: "call-2",
-                toolName: "shell_execute",
-                argumentsFragment: #"{"command":"printf two"}"#
+                toolName: "native.permission_status",
+                argumentsFragment: "{}"
             ))
         } else {
             try await emit(.textDelta("Both tools finished."))
@@ -195,31 +201,5 @@ private actor ProductPathModelExecutor: ModelGenerationExecuting {
     }
 
     func cancel(runID _: String) async {}
-}
-
-private actor ProductPathToolDispatcher: OpenMinisToolDispatching {
-    private var active = 0
-    private(set) var maximumActive = 0
-    private(set) var completedCallIDs: [String] = []
-
-    func execute(
-        _ call: HostToolCall,
-        context _: OpenMinisToolExecutionContext
-    ) async -> HostToolResult {
-        active += 1
-        maximumActive = max(maximumActive, active)
-        try? await Task.sleep(for: .milliseconds(20))
-        active -= 1
-        completedCallIDs.append(call.callID)
-        return HostToolResult(
-            callID: call.callID,
-            toolName: call.toolName,
-            result: .string("ok"),
-            isError: false,
-            dataClasses: [],
-            highestSensitivity: "public"
-        )
-    }
-
-    func cancel(processID _: Int32) async {}
+    func finish(runID _: String) async {}
 }

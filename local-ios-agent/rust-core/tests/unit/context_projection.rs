@@ -110,6 +110,107 @@ fn projector_keeps_legacy_plain_text_tool_result_payload() {
 }
 
 #[test]
+fn retry_projects_history_through_the_user_anchor_without_the_old_answer() {
+    let messages = BranchProjector::new().project(vec![
+        event("user-1", EventKind::UserMessage, "first"),
+        event(
+            "assistant-1",
+            EventKind::AssistantMessageCompleted,
+            "first answer",
+        ),
+        event("user-2", EventKind::UserMessage, "second"),
+        event(
+            "assistant-2",
+            EventKind::AssistantMessageCompleted,
+            "second answer",
+        ),
+        event(
+            "retry",
+            EventKind::TranscriptRetryRequested,
+            r#"{"command":{"anchor_event_id":"user-1"}}"#,
+        ),
+    ]);
+
+    assert_eq!(messages, vec![PromptMessage::User("first".into())]);
+}
+
+#[test]
+fn edit_replaces_the_target_and_discards_its_descendants() {
+    let messages = BranchProjector::new().project(vec![
+        event("user-1", EventKind::UserMessage, "first"),
+        event(
+            "assistant-1",
+            EventKind::AssistantMessageCompleted,
+            "stale answer",
+        ),
+        event(
+            "edit",
+            EventKind::MessageEdited,
+            r#"{"command":{"target_event_id":"user-1","replacement_text":"replacement","replacement_attachments":[{"attachment_id":"attachment-1","content_digest":"sha256:attachment"}]}}"#,
+        ),
+    ]);
+
+    assert_eq!(
+        messages,
+        vec![PromptMessage::UserWithBlobRefs {
+            content: "replacement".into(),
+            blob_refs: vec!["attachment-1".into()],
+        }]
+    );
+}
+
+#[test]
+fn delete_removes_the_target_and_its_descendants() {
+    let messages = BranchProjector::new().project(vec![
+        event("user-1", EventKind::UserMessage, "first"),
+        event(
+            "assistant-1",
+            EventKind::AssistantMessageCompleted,
+            "first answer",
+        ),
+        event("user-2", EventKind::UserMessage, "second"),
+        event(
+            "assistant-2",
+            EventKind::AssistantMessageCompleted,
+            "second answer",
+        ),
+        event(
+            "delete",
+            EventKind::MessageDeleted,
+            r#"{"command":{"target_event_id":"user-2"}}"#,
+        ),
+    ]);
+
+    assert_eq!(
+        messages,
+        vec![
+            PromptMessage::User("first".into()),
+            PromptMessage::Assistant("first answer".into()),
+        ]
+    );
+}
+
+#[test]
+fn clear_removes_prior_history_but_keeps_later_messages() {
+    let messages = BranchProjector::new().project(vec![
+        event("old-user", EventKind::UserMessage, "old"),
+        event(
+            "old-assistant",
+            EventKind::AssistantMessageCompleted,
+            "old answer",
+        ),
+        event(
+            "clear",
+            EventKind::ConversationCleared,
+            r#"{"command":{"kind":"clear_conversation"}}"#,
+        ),
+        event("new-user", EventKind::UserMessage, "new"),
+    ]);
+
+    assert_eq!(messages, vec![PromptMessage::User("new".into())]);
+}
+
+#[test]
 fn prompt_layers_render_system_policy_and_memory() {
     let layers = PromptLayers {
         system: "system".into(),

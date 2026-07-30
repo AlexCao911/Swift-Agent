@@ -20,6 +20,21 @@ final class ChatStore: ObservableObject {
         messagesByConversation[conversationStreamID, default: []]
     }
 
+    func retryAnchorEventID(
+        forAssistantMessageID assistantMessageID: String,
+        conversationStreamID: String
+    ) -> String? {
+        let messages = messagesByConversation[conversationStreamID, default: []]
+        guard let assistantIndex = messages.firstIndex(where: {
+            $0.id == assistantMessageID && $0.role == .assistant
+        }) else {
+            return nil
+        }
+        return messages[..<assistantIndex]
+            .last(where: { $0.role == .user })?
+            .id
+    }
+
     func resetProjection(conversationStreamID: String) {
         messagesByConversation[conversationStreamID] = []
     }
@@ -67,9 +82,18 @@ final class ChatStore: ObservableObject {
                 event.payload,
                 key: "replacement_text"
             )
-            updateMessage(target, in: streamID) { $0.text = replacement }
+            replaceMessageAndDiscardDescendants(
+                target,
+                with: ChatMessage(
+                    id: event.eventID,
+                    sessionId: streamID,
+                    role: .user,
+                    parts: textParts(replacement)
+                ),
+                in: streamID
+            )
         case .messageDeleted:
-            deleteMessage(
+            discardMessageAndDescendants(
                 projectionCommand(event.payload, key: "target_event_id"),
                 in: streamID
             )
@@ -88,8 +112,13 @@ final class ChatStore: ObservableObject {
             if !branch.isEmpty {
                 ensureSession(branch)
             }
+        case .transcriptRetryRequested:
+            discardDescendants(
+                after: projectionCommand(event.payload, key: "anchor_event_id"),
+                in: streamID
+            )
         case .sessionCreated, .providerChanged, .toolRegistered,
-             .transcriptRetryRequested, .assistantMessageStarted,
+             .assistantMessageStarted,
              .assistantTextDelta, .toolCallApproved, .toolCallRejected,
              .toolExecutionStarted, .toolExecutionUpdate,
              .toolExecutionCompleted, .toolExecutionFailed,
@@ -136,21 +165,39 @@ final class ChatStore: ObservableObject {
         messagesByConversation[streamID] = messages
     }
 
-    private func updateMessage(
+    private func replaceMessageAndDiscardDescendants(
         _ id: String,
-        in streamID: String,
-        update: (inout ChatMessage) -> Void
+        with replacement: ChatMessage,
+        in streamID: String
     ) {
         guard !id.isEmpty,
               var messages = messagesByConversation[streamID],
               let index = messages.firstIndex(where: { $0.id == id })
         else { return }
-        update(&messages[index])
+        messages.replaceSubrange(index..., with: [replacement])
         messagesByConversation[streamID] = messages
     }
 
-    private func deleteMessage(_ id: String, in streamID: String) {
-        messagesByConversation[streamID]?.removeAll { $0.id == id }
+    private func discardMessageAndDescendants(
+        _ id: String,
+        in streamID: String
+    ) {
+        guard !id.isEmpty,
+              var messages = messagesByConversation[streamID],
+              let index = messages.firstIndex(where: { $0.id == id })
+        else { return }
+        messages.removeSubrange(index...)
+        messagesByConversation[streamID] = messages
+    }
+
+    private func discardDescendants(after id: String, in streamID: String) {
+        guard !id.isEmpty,
+              var messages = messagesByConversation[streamID],
+              let index = messages.firstIndex(where: { $0.id == id }),
+              messages.index(after: index) < messages.endIndex
+        else { return }
+        messages.removeSubrange(messages.index(after: index)...)
+        messagesByConversation[streamID] = messages
     }
 }
 

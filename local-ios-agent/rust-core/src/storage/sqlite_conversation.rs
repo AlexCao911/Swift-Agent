@@ -514,6 +514,86 @@ impl ConversationEventStore for SqliteConversationStore {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn commit_branch_command(
+        &mut self,
+        source_stream_id: &str,
+        source_expected_next_sequence: u64,
+        mut source_events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+        target_stream_id: &str,
+        target_expected_next_sequence: u64,
+        mut target_events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        if source_stream_id == target_stream_id {
+            return Err(AgentError::Storage(
+                "branch target must differ from source stream".into(),
+            ));
+        }
+
+        let mut connection = self.connection_mut()?;
+        let tx = connection.transaction().map_err(storage_error)?;
+        for (stream_id, expected_next_sequence) in [
+            (source_stream_id, source_expected_next_sequence),
+            (target_stream_id, target_expected_next_sequence),
+        ] {
+            let actual_next_sequence = tx
+                .query_row(
+                    "
+                    select coalesce(max(sequence), 0) + 1
+                    from events
+                    where session_id = ?1
+                    ",
+                    params![stream_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(storage_error)?
+                .max(1) as u64;
+            if actual_next_sequence != expected_next_sequence {
+                return Err(AgentError::Storage(format!(
+                    "conversation sequence conflict: expected {expected_next_sequence}, actual {actual_next_sequence}"
+                )));
+            }
+        }
+
+        for (offset, event) in target_events.iter_mut().enumerate() {
+            if event.session_id.0 != target_stream_id {
+                return Err(AgentError::Storage(
+                    "branch target transaction mixed stream identifiers".into(),
+                ));
+            }
+            event.sequence = target_expected_next_sequence + offset as u64;
+            append_event_in_transaction(&tx, event)?;
+        }
+        for (offset, event) in source_events.iter_mut().enumerate() {
+            if event.session_id.0 != source_stream_id {
+                return Err(AgentError::Storage(
+                    "branch source transaction mixed stream identifiers".into(),
+                ));
+            }
+            event.sequence = source_expected_next_sequence + offset as u64;
+            append_event_in_transaction(&tx, event)?;
+        }
+
+        tx.execute(
+            "
+            insert into conversation_command_receipt(
+              conversation_stream_id, request_id, command_digest, outcome_json
+            )
+            values (?1, ?2, ?3, ?4)
+            ",
+            params![
+                receipt.conversation_stream_id,
+                receipt.request_id,
+                receipt.command_digest,
+                receipt.outcome_json,
+            ],
+        )
+        .map_err(storage_error)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(source_events)
+    }
+
     fn write_audit(
         &self,
         session_id: &SessionId,

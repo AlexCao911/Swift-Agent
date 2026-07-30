@@ -20,11 +20,16 @@ struct OpenMinisProductShellView: View {
     private var hasSeenLinuxNetworkDisclosure = false
     @State private var showsLinuxNetworkDisclosure = false
     @State private var showsConversationSkills = false
+    @State private var showsClearConfirmation = false
+    @State private var editingMessageID: String?
+    @State private var editDraft = ""
 
     @Bindable var shellViewModel: AppShellViewModel
     @ObservedObject var viewModel: AIChatViewModel
     @ObservedObject var chatStore: ChatStore
     var onOpenBuilder: () -> Void
+    var onOpenConversation: (String) -> Void
+    var onShowConversations: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,6 +69,32 @@ struct OpenMinisProductShellView: View {
                 }
             }
         }
+        .alert("Edit message", isPresented: editAlertBinding) {
+            TextField("Message", text: $editDraft)
+            Button("Cancel", role: .cancel) {
+                editingMessageID = nil
+            }
+            Button("Save") {
+                guard let editingMessageID else { return }
+                let replacement = editDraft
+                self.editingMessageID = nil
+                Task {
+                    await viewModel.edit(
+                        targetEventID: editingMessageID,
+                        replacementText: replacement
+                    )
+                }
+            }
+        }
+        .confirmationDialog(
+            "Clear this conversation?",
+            isPresented: $showsClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear conversation", role: .destructive) {
+                Task { await viewModel.clear() }
+            }
+        }
     }
 
     private var productHeader: some View {
@@ -94,6 +125,40 @@ struct OpenMinisProductShellView: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Configure agent")
+
+            Menu {
+                Button(action: onShowConversations) {
+                    Label("Conversations", systemImage: "list.bullet")
+                }
+                Button {
+                    onOpenConversation(
+                        "conversation-\(UUID().uuidString.lowercased())"
+                    )
+                } label: {
+                    Label("New conversation", systemImage: "square.and.pencil")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    showsClearConfirmation = true
+                } label: {
+                    Label("Clear conversation", systemImage: "eraser")
+                }
+                Button(role: .destructive) {
+                    Task {
+                        await viewModel.archive()
+                        if viewModel.errorMessage == nil {
+                            onOpenConversation(
+                                "conversation-\(UUID().uuidString.lowercased())"
+                            )
+                        }
+                    }
+                } label: {
+                    Label("Archive conversation", systemImage: "archivebox")
+                }
+            } label: {
+                Label("Conversation actions", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -107,7 +172,40 @@ struct OpenMinisProductShellView: View {
                         emptyConversation
                     } else {
                         ForEach(visibleMessages) { message in
-                            OpenMinisMessageRow(message: message)
+                            OpenMinisMessageRow(
+                                message: message,
+                                onRetry: retryAnchorEventID(for: message).map { anchorID in {
+                                    Task {
+                                        await viewModel.retry(
+                                            anchorEventID: anchorID
+                                        )
+                                    }
+                                }},
+                                onEdit: {
+                                    editDraft = message.text
+                                    editingMessageID = message.id
+                                },
+                                onDelete: {
+                                    Task {
+                                        await viewModel.delete(
+                                            targetEventID: message.id
+                                        )
+                                    }
+                                },
+                                onBranch: {
+                                    let branchID =
+                                        "conversation-\(UUID().uuidString.lowercased())"
+                                    Task {
+                                        await viewModel.branch(
+                                            anchorEventID: message.id,
+                                            newConversationStreamID: branchID
+                                        )
+                                        if viewModel.errorMessage == nil {
+                                            onOpenConversation(branchID)
+                                        }
+                                    }
+                                }
+                            )
                                 .id(message.id)
                         }
                     }
@@ -127,8 +225,27 @@ struct OpenMinisProductShellView: View {
         }
     }
 
+    private var editAlertBinding: Binding<Bool> {
+        Binding(
+            get: { editingMessageID != nil },
+            set: { presented in
+                if !presented {
+                    editingMessageID = nil
+                }
+            }
+        )
+    }
+
     private var visibleMessages: [ChatMessage] {
         chatStore.projectedMessages(
+            conversationStreamID: viewModel.conversationStreamID
+        )
+    }
+
+    private func retryAnchorEventID(for message: ChatMessage) -> String? {
+        guard message.role == .assistant else { return nil }
+        return chatStore.retryAnchorEventID(
+            forAssistantMessageID: message.id,
             conversationStreamID: viewModel.conversationStreamID
         )
     }
@@ -216,30 +333,56 @@ struct OpenMinisProductShellView: View {
 
 private struct OpenMinisMessageRow: View {
     let message: AgentMessageViewState
+    var onRetry: (() -> Void)?
+    var onEdit: () -> Void
+    var onDelete: () -> Void
+    var onBranch: () -> Void
 
     var body: some View {
-        switch message.role {
-        case .user:
-            HStack {
-                Spacer(minLength: 54)
-                messageBody
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(OpenMinisChatColors.userBubble)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        Group {
+            switch message.role {
+            case .user:
+                HStack {
+                    Spacer(minLength: 54)
+                    messageBody
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(OpenMinisChatColors.userBubble)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+            case .assistant:
+                HStack {
+                    messageBody
+                    Spacer(minLength: 24)
+                }
+            case .tool:
+                HStack {
+                    messageBody
+                        .padding(10)
+                        .background(OpenMinisChatColors.toolBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Spacer(minLength: 24)
+                }
             }
-        case .assistant:
-            HStack {
-                messageBody
-                Spacer(minLength: 24)
+        }
+        .contextMenu {
+            if let onRetry {
+                Button(action: onRetry) {
+                    Label("Retry from here", systemImage: "arrow.clockwise")
+                }
             }
-        case .tool:
-            HStack {
-                messageBody
-                    .padding(10)
-                    .background(OpenMinisChatColors.toolBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Spacer(minLength: 24)
+            if message.role == .user {
+                Button(action: onEdit) {
+                    Label("Edit", systemImage: "pencil")
+                }
+            }
+            if message.role != .tool {
+                Button(action: onBranch) {
+                    Label("Branch", systemImage: "arrow.triangle.branch")
+                }
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete from here", systemImage: "trash")
+                }
             }
         }
     }

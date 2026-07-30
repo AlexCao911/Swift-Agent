@@ -4,6 +4,47 @@ import LocalAgentLLMContracts
 import LocalAgentLLMCore
 import LocalAgentLLMLocal
 
+public enum RustReActResolvedAttachmentContent: Equatable, Sendable {
+    case text(String)
+    case imageRGB8(Data, width: UInt32, height: UInt32)
+    case opaque
+}
+
+public struct RustReActResolvedAttachment: Equatable, Sendable {
+    public let reference: HostAttachmentReference
+    public let content: RustReActResolvedAttachmentContent
+
+    public init(
+        reference: HostAttachmentReference,
+        content: RustReActResolvedAttachmentContent
+    ) {
+        self.reference = reference
+        self.content = content
+    }
+}
+
+public protocol RustReActAttachmentResolving: Sendable {
+    func resolve(
+        _ references: [HostAttachmentReference]
+    ) async throws -> [RustReActResolvedAttachment]
+}
+
+public struct EmptyRustReActAttachmentResolver: RustReActAttachmentResolving {
+    public init() {}
+
+    public func resolve(
+        _ references: [HostAttachmentReference]
+    ) async throws -> [RustReActResolvedAttachment] {
+        guard references.isEmpty else {
+            throw routeFailure(
+                "model_route.attachment_resolver_unavailable",
+                "the attachment store is unavailable"
+            )
+        }
+        return []
+    }
+}
+
 public actor RustReActModelRoute: ModelGenerationExecuting {
     private enum Backend: Sendable {
         case local(
@@ -25,6 +66,7 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
 
     private let runID: String
     private let backend: Backend
+    private let attachmentResolver: any RustReActAttachmentResolving
     private var session: Session?
     private var awaitingToolResults = false
     private var turn = 0
@@ -34,9 +76,12 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         runID: String,
         local: LocalLLMSubsystem,
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision
+        target: LLMTargetRevision,
+        attachmentResolver: any RustReActAttachmentResolving =
+            EmptyRustReActAttachmentResolver()
     ) {
         self.runID = runID
+        self.attachmentResolver = attachmentResolver
         backend = .local(
             runtime: local.runtime,
             configuration: configuration,
@@ -48,9 +93,12 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         runID: String,
         cloud: CloudLLMSubsystem,
         configuration: AgentHostConfiguration,
-        target: LLMTargetRevision
+        target: LLMTargetRevision,
+        attachmentResolver: any RustReActAttachmentResolving =
+            EmptyRustReActAttachmentResolver()
     ) {
         self.runID = runID
+        self.attachmentResolver = attachmentResolver
         backend = .cloud(
             runtime: cloud.runtime,
             configuration: configuration,
@@ -71,6 +119,9 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         if case .compaction = request.purpose, session != nil {
             try await closeSession()
         }
+        let attachments = session == nil
+            ? try await attachmentResolver.resolve(request.attachmentReferences)
+            : []
 
         let completion: LLMBackendCompletion
         switch backend {
@@ -80,6 +131,7 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
                 runtime: runtime,
                 configuration: configuration,
                 target: target,
+                attachments: attachments,
                 emit: emit
             )
         case let .cloud(runtime, configuration, target):
@@ -88,6 +140,7 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
                 runtime: runtime,
                 configuration: configuration,
                 target: target,
+                attachments: attachments,
                 emit: emit
             )
         }
@@ -120,6 +173,7 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         runtime: LocalModelRuntime,
         configuration: AgentHostConfiguration,
         target: LLMTargetRevision,
+        attachments: [RustReActResolvedAttachment],
         emit: @escaping @Sendable (HostModelEvent) async throws -> Void
     ) async throws -> LLMBackendCompletion {
         let sessionID: String
@@ -161,8 +215,12 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
             session = .local(sessionID)
             events = try await runtime.startGeneration(
                 sessionID: sessionID,
-                input: try rustReActInput(request, includeContext: true),
-                attachments: [],
+                input: try rustReActInput(
+                    request,
+                    includeContext: true,
+                    resolvedAttachments: attachments
+                ),
+                attachments: localResolvedAttachments(attachments),
                 toolSchema: try rustReActToolSchema(request)
             )
         }
@@ -174,6 +232,7 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         runtime: CloudLLMRuntime,
         configuration: AgentHostConfiguration,
         target: LLMTargetRevision,
+        attachments: [RustReActResolvedAttachment],
         emit: @escaping @Sendable (HostModelEvent) async throws -> Void
     ) async throws -> LLMBackendCompletion {
         let parameters: GenerationConfiguration
@@ -206,7 +265,8 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
                     request,
                     parameters: parameters,
                     includeContext: false,
-                    includeToolResults: true
+                    includeToolResults: true,
+                    attachments: []
                 )
             )
         } else {
@@ -214,7 +274,8 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
                 request,
                 parameters: parameters,
                 includeContext: true,
-                includeToolResults: false
+                includeToolResults: false,
+                attachments: attachments
             )
             let prepared = try await runtime.prepareSession(
                 context: CloudSessionPreparationContext(
@@ -242,10 +303,15 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
         _ request: HostModelRequest,
         parameters: GenerationConfiguration,
         includeContext: Bool,
-        includeToolResults: Bool
+        includeToolResults: Bool,
+        attachments: [RustReActResolvedAttachment]
     ) throws -> CloudGenerationTurnRequest {
         turn += 1
-        let input = try rustReActInput(request, includeContext: includeContext)
+        let input = try rustReActInput(
+            request,
+            includeContext: includeContext,
+            resolvedAttachments: attachments
+        )
         let tools = try rustReActToolSchema(request)
         let results = includeToolResults
             ? try rustReActToolResults(request.orderedToolResults)
@@ -313,12 +379,13 @@ public actor RustReActModelRoute: ModelGenerationExecuting {
 
 package func rustReActInput(
     _ request: HostModelRequest,
-    includeContext: Bool
+    includeContext: Bool,
+    resolvedAttachments: [RustReActResolvedAttachment] = []
 ) throws -> AgentLLMInput {
-    guard request.attachmentReferences.isEmpty else {
+    guard request.attachmentReferences == resolvedAttachments.map(\.reference) else {
         throw routeFailure(
-            "unsupported_capability",
-            "Rust ReAct attachment byte resolution is not connected"
+            "model_route.attachment_mismatch",
+            "resolved attachments do not match the ordered Rust references"
         )
     }
     guard includeContext else {
@@ -351,7 +418,49 @@ package func rustReActInput(
         }
         return LLMInputMessage(role: role, content: [.text(text)])
     })
+    if !resolvedAttachments.isEmpty {
+        messages.append(LLMInputMessage(
+            role: .user,
+            content: resolvedAttachments.map { attachment in
+                switch attachment.content {
+                case let .text(text):
+                    .text(
+                        "[Attachment: \(attachment.reference.displayName) "
+                            + "(\(attachment.reference.mediaType))]\n\(text)"
+                    )
+                case .imageRGB8:
+                    .attachment(
+                        modality: .image,
+                        attachmentID: attachment.reference.attachmentID,
+                        mediaType: "image/rgb8"
+                    )
+                case .opaque:
+                    .text(
+                        "[Attachment: \(attachment.reference.displayName) "
+                            + "(\(attachment.reference.mediaType)); "
+                            + "binary content is available to tools]"
+                    )
+                }
+            }
+        ))
+    }
     return AgentLLMInput(inputID: request.runID, messages: messages)
+}
+
+package func localResolvedAttachments(
+    _ attachments: [RustReActResolvedAttachment]
+) -> [LocalResolvedAttachment] {
+    attachments.compactMap { attachment in
+        guard case let .imageRGB8(data, width, height) = attachment.content else {
+            return nil
+        }
+        return LocalResolvedAttachment(
+            attachmentID: attachment.reference.attachmentID,
+            rgb8: data,
+            width: width,
+            height: height
+        )
+    }
 }
 
 package func rustReActToolSchema(

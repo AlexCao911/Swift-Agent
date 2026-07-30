@@ -127,7 +127,9 @@ final class PromptDocumentStore: ObservableObject {
         )
         ordered.insert(contentsOf: moving, at: insertionIndex)
         documents = ordered
-        normalizeOrder()
+        for index in documents.indices {
+            documents[index].sortOrder = index
+        }
         try save()
     }
 

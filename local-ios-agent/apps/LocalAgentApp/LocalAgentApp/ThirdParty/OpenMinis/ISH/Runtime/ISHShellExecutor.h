@@ -17,6 +17,20 @@ typedef NS_ENUM(NSInteger, ISHShellExecutorError) {
     ISHShellExecutorErrorCancelled = -4,
 };
 
+/// Bounded capture used for guest stdout/stderr. It retains the beginning and
+/// end of a stream and inserts an explicit marker when middle content is
+/// discarded.
+@interface ISHBoundedOutputBuffer : NSObject
+
+@property (nonatomic, readonly) NSUInteger length;
+@property (nonatomic, readonly) NSUInteger totalCharacters;
+
+- (instancetype)initWithMaximumCharacters:(NSUInteger)maximumCharacters;
+- (void)appendString:(NSString *)string;
+- (NSString *)snapshot;
+
+@end
+
 @interface ISHShellExecutionResult : NSObject
 
 /// Exit code of the shell process (0 = success)

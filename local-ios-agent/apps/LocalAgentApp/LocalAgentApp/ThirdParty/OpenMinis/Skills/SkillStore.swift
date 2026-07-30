@@ -2,6 +2,276 @@ import Combine
 import Compression
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMCloud
+
+struct SkillDownloadPayload: @unchecked Sendable {
+    let data: Data
+    let response: HTTPURLResponse
+}
+
+protocol SkillDownloading: Sendable {
+    func download(
+        from url: URL,
+        maximumBytes: Int
+    ) async throws -> SkillDownloadPayload
+}
+
+protocol SkillURLValidating: Sendable {
+    func validate(_ url: URL) async throws
+}
+
+private struct ProductSkillURLValidator: SkillURLValidating {
+    private let validator = PublicNetworkURLValidator()
+
+    func validate(_ url: URL) async throws {
+        try await validator.validate(url)
+    }
+}
+
+enum ControlledSkillDownloadError: Error, Equatable {
+    case responseTooLarge
+    case redirectLimit
+    case invalidResponse
+    case policyDenied
+    case networkFailure
+}
+
+final class ControlledSkillDownloader: SkillDownloading, @unchecked Sendable {
+    private let validator: any SkillURLValidating
+    private let configuration: URLSessionConfiguration
+    private let maximumRedirects: Int
+
+    init(
+        validator: any SkillURLValidating = ProductSkillURLValidator(),
+        configuration: URLSessionConfiguration = .ephemeral,
+        maximumRedirects: Int = 5
+    ) {
+        self.validator = validator
+        self.configuration = configuration.copy() as! URLSessionConfiguration
+        self.maximumRedirects = maximumRedirects
+    }
+
+    func download(
+        from url: URL,
+        maximumBytes: Int
+    ) async throws -> SkillDownloadPayload {
+        guard maximumBytes > 0 else {
+            throw ControlledSkillDownloadError.responseTooLarge
+        }
+        var current = url
+        for redirectCount in 0...maximumRedirects {
+            do {
+                try await validator.validate(current)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ControlledSkillDownloadError.policyDenied
+            }
+            let attempt = try await request(
+                current,
+                maximumBytes: maximumBytes
+            )
+            if let redirect = attempt.redirectURL {
+                guard redirectCount < maximumRedirects else {
+                    throw ControlledSkillDownloadError.redirectLimit
+                }
+                current = redirect
+                continue
+            }
+            return SkillDownloadPayload(
+                data: attempt.data,
+                response: attempt.response
+            )
+        }
+        throw ControlledSkillDownloadError.redirectLimit
+    }
+
+    private func request(
+        _ url: URL,
+        maximumBytes: Int
+    ) async throws -> ControlledSkillDownloadAttempt {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.httpShouldHandleCookies = false
+        request.setValue(
+            "text/markdown, text/plain, application/zip, application/octet-stream",
+            forHTTPHeaderField: "Accept"
+        )
+        let sessionConfiguration =
+            configuration.copy() as! URLSessionConfiguration
+        sessionConfiguration.httpShouldSetCookies = false
+        sessionConfiguration.httpCookieAcceptPolicy = .never
+        sessionConfiguration.urlCache = nil
+        sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let delegate = ControlledSkillDownloadDelegate(
+            maximumBytes: maximumBytes
+        )
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        let session = URLSession(
+            configuration: sessionConfiguration,
+            delegate: delegate,
+            delegateQueue: queue
+        )
+        defer { session.invalidateAndCancel() }
+        return try await delegate.perform(request, in: session)
+    }
+}
+
+private struct ControlledSkillDownloadAttempt: @unchecked Sendable {
+    let data: Data
+    let response: HTTPURLResponse
+    let redirectURL: URL?
+}
+
+private final class ControlledSkillDownloadDelegate:
+    NSObject,
+    URLSessionDataDelegate,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    private let maximumBytes: Int
+    private let lock = NSLock()
+    private var data = Data()
+    private var response: HTTPURLResponse?
+    private var redirectURL: URL?
+    private var continuation:
+        CheckedContinuation<ControlledSkillDownloadAttempt, Error>?
+    private var task: URLSessionDataTask?
+    private var overflow = false
+    private var terminal = false
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func perform(
+        _ request: URLRequest,
+        in session: URLSession
+    ) async throws -> ControlledSkillDownloadAttempt {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                self.continuation = continuation
+                let task = session.dataTask(with: request)
+                self.task = task
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: {
+            self.cancel()
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (
+            URLSession.ResponseDisposition
+        ) -> Void
+    ) {
+        guard let response = response as? HTTPURLResponse else {
+            finish(.failure(ControlledSkillDownloadError.invalidResponse))
+            completionHandler(.cancel)
+            return
+        }
+        lock.lock()
+        self.response = response
+        if response.expectedContentLength > Int64(maximumBytes) {
+            overflow = true
+        }
+        let shouldCancel = overflow || terminal
+        lock.unlock()
+        completionHandler(shouldCancel ? .cancel : .allow)
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive incoming: Data
+    ) {
+        lock.lock()
+        guard !terminal, !overflow else {
+            lock.unlock()
+            return
+        }
+        guard data.count <= maximumBytes - incoming.count else {
+            overflow = true
+            lock.unlock()
+            dataTask.cancel()
+            return
+        }
+        data.append(incoming)
+        lock.unlock()
+    }
+
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        lock.lock()
+        self.response = response
+        redirectURL = request.url
+        lock.unlock()
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        lock.lock()
+        let overflow = overflow
+        let response = response
+        let data = data
+        let redirectURL = redirectURL
+        lock.unlock()
+        if overflow {
+            finish(.failure(ControlledSkillDownloadError.responseTooLarge))
+        } else if let error {
+            if (error as? URLError)?.code == .cancelled {
+                finish(.failure(CancellationError()))
+            } else {
+                finish(.failure(ControlledSkillDownloadError.networkFailure))
+            }
+        } else if let response {
+            finish(.success(.init(
+                data: data,
+                response: response,
+                redirectURL: redirectURL
+            )))
+        } else {
+            finish(.failure(ControlledSkillDownloadError.invalidResponse))
+        }
+    }
+
+    private func cancel() {
+        lock.lock()
+        let task = task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    private func finish(
+        _ result: Result<ControlledSkillDownloadAttempt, Error>
+    ) {
+        lock.lock()
+        guard !terminal else {
+            lock.unlock()
+            return
+        }
+        terminal = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
 
 enum SkillImportSource: Codable, Equatable, Sendable {
     case url(String)
@@ -87,6 +357,7 @@ final class SkillStore: ObservableObject {
     private let skillsDirectory: URL
     private let metadataURL: URL
     private let overridesURL: URL
+    private let downloader: any SkillDownloading
     private let onEligibleGlobalChange: @Sendable (SkillStoreChange) -> Void
     private var overrides: [String: [String: Bool]]
 
@@ -95,6 +366,7 @@ final class SkillStore: ObservableObject {
         metadataURL: URL,
         overridesURL: URL,
         fileManager: FileManager = .default,
+        downloader: any SkillDownloading = ControlledSkillDownloader(),
         onEligibleGlobalChange: @escaping @Sendable (SkillStoreChange) -> Void
             = { _ in }
     ) throws {
@@ -102,6 +374,7 @@ final class SkillStore: ObservableObject {
         self.skillsDirectory = skillsDirectory
         self.metadataURL = metadataURL
         self.overridesURL = overridesURL
+        self.downloader = downloader
         self.onEligibleGlobalChange = onEligibleGlobalChange
         try fileManager.createDirectory(
             at: skillsDirectory,
@@ -187,16 +460,23 @@ final class SkillStore: ObservableObject {
     @discardableResult
     func importFromURL(_ urlString: String) async throws -> Skill {
         let sourceURL = try Self.downloadURL(from: urlString)
-        let (data, response) = try await URLSession.shared.data(from: sourceURL)
-        guard let response = response as? HTTPURLResponse,
-              (200..<300).contains(response.statusCode) else {
-            throw SkillStoreError.downloadFailed(
-                (response as? HTTPURLResponse)?.statusCode ?? -1
+        let download: SkillDownloadPayload
+        do {
+            download = try await downloader.download(
+                from: sourceURL,
+                maximumBytes: Self.maximumArchiveBytes
             )
-        }
-        guard data.count <= Self.maximumArchiveBytes else {
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ControlledSkillDownloadError.responseTooLarge {
             throw SkillStoreError.archiveTooLarge
+        } catch {
+            throw SkillStoreError.downloadFailed(-1)
         }
+        guard (200..<300).contains(download.response.statusCode) else {
+            throw SkillStoreError.downloadFailed(download.response.statusCode)
+        }
+        let data = download.data
         if Self.looksLikeZip(data) {
             return try importFromArchive(
                 data: data,

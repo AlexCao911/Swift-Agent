@@ -277,8 +277,12 @@ where
             let mut input = input_assembler
                 .assemble_turn(&request.conversation_stream_id, branch.clone())
                 .map_err(input_error)?;
-            let mut generation_request =
-                model_request(request, &input, pending_tool_results.clone());
+            let mut generation_request = model_request(
+                request,
+                &input,
+                attachment_references_for_input(&input, &branch),
+                pending_tool_results.clone(),
+            );
             if estimated_model_request_tokens(&generation_request)
                 >= context_policy.auto_compact_threshold_tokens()
             {
@@ -313,9 +317,14 @@ where
                     })?;
                     branch = self.current_branch(&request.conversation_stream_id)?;
                     input = input_assembler
-                        .assemble_turn(&request.conversation_stream_id, branch)
+                        .assemble_turn(&request.conversation_stream_id, branch.clone())
                         .map_err(input_error)?;
-                    generation_request = model_request(request, &input, Vec::new());
+                    generation_request = model_request(
+                        request,
+                        &input,
+                        attachment_references_for_input(&input, &branch),
+                        Vec::new(),
+                    );
                 }
             }
             let turn = self.model.generate(generation_request, sink)?;
@@ -691,6 +700,7 @@ pub fn validate_batch_result(
 fn model_request(
     request: &AgentRunRequest,
     input: &AgentTurnInput,
+    attachment_references: Vec<crate::conversation::TranscriptAttachmentReference>,
     ordered_tool_results: Vec<crate::tool::ToolCallResult>,
 ) -> ModelRequest {
     ModelRequest {
@@ -706,11 +716,50 @@ fn model_request(
                 content: Value::String(message.content().to_string()),
             })
             .collect(),
-        attachment_references: request.attachment_references.clone(),
+        attachment_references,
         ordered_tool_definitions: input.ordered_tool_definitions().to_vec(),
         ordered_tool_results,
         purpose: ModelRequestPurpose::Generation,
     }
+}
+
+fn attachment_references_for_input(
+    input: &AgentTurnInput,
+    branch: &[RuntimeEvent],
+) -> Vec<crate::conversation::TranscriptAttachmentReference> {
+    let mut catalog = HashMap::new();
+    for event in branch {
+        let Some(command) = serde_json::from_str::<Value>(&event.payload)
+            .ok()
+            .and_then(|payload| payload.get("command").cloned())
+            .and_then(|command| serde_json::from_value::<TranscriptCommand>(command).ok())
+        else {
+            continue;
+        };
+        let attachments = match command {
+            TranscriptCommand::Send { attachments, .. } => attachments,
+            TranscriptCommand::EditMessage {
+                replacement_attachments,
+                ..
+            } => replacement_attachments,
+            _ => Vec::new(),
+        };
+        for attachment in attachments {
+            catalog.insert(attachment.attachment_id.clone(), attachment.clone());
+            catalog.insert(attachment.content_digest.clone(), attachment);
+        }
+    }
+
+    let mut seen = BTreeSet::new();
+    input
+        .ordered_messages()
+        .messages()
+        .iter()
+        .flat_map(|message| message.blob_refs())
+        .filter_map(|blob_ref| catalog.get(blob_ref))
+        .filter(|reference| seen.insert(reference.attachment_id.clone()))
+        .cloned()
+        .collect()
 }
 
 fn estimated_model_request_tokens(request: &ModelRequest) -> usize {

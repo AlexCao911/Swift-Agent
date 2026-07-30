@@ -56,4 +56,8 @@ package struct ToolBatchCommandHandler: Sendable {
     package func cancel(batchID: String) async {
         await executor.cancel(batchID: batchID)
     }
+
+    package func finish(runID: String) async {
+        await executor.finish(runID: runID)
+    }
 }

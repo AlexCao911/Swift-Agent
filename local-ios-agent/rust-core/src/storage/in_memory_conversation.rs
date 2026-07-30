@@ -241,6 +241,40 @@ impl ConversationEventStore for InMemoryConversationStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn commit_branch_command(
+        &mut self,
+        source_stream_id: &str,
+        source_expected_next_sequence: u64,
+        source_events: Vec<RuntimeEvent>,
+        receipt: StoredTranscriptCommandReceipt,
+        target_stream_id: &str,
+        target_expected_next_sequence: u64,
+        target_events: Vec<RuntimeEvent>,
+    ) -> Result<Vec<RuntimeEvent>, AgentError> {
+        let backup = self.clone();
+        if let Err(error) = self.append_transaction(
+            target_stream_id,
+            target_expected_next_sequence,
+            target_events,
+        ) {
+            *self = backup;
+            return Err(error);
+        }
+        match self.commit_command(
+            source_stream_id,
+            source_expected_next_sequence,
+            source_events,
+            receipt,
+        ) {
+            Ok(committed) => Ok(committed),
+            Err(error) => {
+                *self = backup;
+                Err(error)
+            }
+        }
+    }
+
     fn get(&self, session_id: &SessionId, entry_id: &EntryId) -> Result<RuntimeEvent, AgentError> {
         self.events
             .get(&(session_id.clone(), entry_id.clone()))

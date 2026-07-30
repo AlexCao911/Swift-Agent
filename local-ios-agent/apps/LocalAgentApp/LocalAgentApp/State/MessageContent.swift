@@ -75,7 +75,7 @@ enum MessageStreamingState: Equatable, Sendable {
     }
 }
 
-enum AttachmentKindViewState: String, Equatable, Sendable {
+enum AttachmentKindViewState: String, Codable, Equatable, Sendable {
     case image
     case link
     case file

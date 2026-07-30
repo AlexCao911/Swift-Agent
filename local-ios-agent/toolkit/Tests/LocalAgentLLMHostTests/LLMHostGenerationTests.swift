@@ -194,6 +194,61 @@ struct LLMHostGenerationTests {
         #expect(result.dataClasses == [.unknownData])
         #expect(result.highestSensitivity == .unknown)
     }
+
+    @Test
+    func rustReActRequestResolvesTextAndLocalImageAttachments() throws {
+        let textReference = HostAttachmentReference(
+            attachmentID: "attachment-text",
+            displayName: "notes.txt",
+            mediaType: "text/plain",
+            modality: "file",
+            contentDigest: String(repeating: "a", count: 64)
+        )
+        let imageReference = HostAttachmentReference(
+            attachmentID: "attachment-image",
+            displayName: "pixel.rgb",
+            mediaType: "image/rgb8",
+            modality: "image",
+            contentDigest: String(repeating: "b", count: 64)
+        )
+        let request = HostModelRequest(
+            runID: "run-with-attachments",
+            conversationStreamID: "conversation-with-attachments",
+            systemPrompt: "system",
+            orderedMessages: [
+                HostModelMessage(role: "user", content: .string("inspect")),
+            ],
+            attachmentReferences: [textReference, imageReference],
+            orderedToolDefinitions: []
+        )
+        let resolved = [
+            RustReActResolvedAttachment(
+                reference: textReference,
+                content: .text("hello attachment")
+            ),
+            RustReActResolvedAttachment(
+                reference: imageReference,
+                content: .imageRGB8(Data([1, 2, 3]), width: 1, height: 1)
+            ),
+        ]
+
+        let input = try rustReActInput(
+            request,
+            includeContext: true,
+            resolvedAttachments: resolved
+        )
+
+        #expect(input.messages.map(\.role) == [.system, .user, .user])
+        let expectedContent: [LLMInputContent] = [
+            .text("[Attachment: notes.txt (text/plain)]\nhello attachment"),
+            .attachment(
+                modality: .image,
+                attachmentID: "attachment-image",
+                mediaType: "image/rgb8"
+            ),
+        ]
+        #expect(input.messages.last?.content == expectedContent)
+    }
 }
 
 private struct GenerationHarness {

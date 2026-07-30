@@ -32,6 +32,45 @@ struct LLMProductBootstrapTests {
         ) != nil)
     }
 
+    @Test("hydration preserves the ordered fallback bindings for one model slot")
+    func hydratesOrderedFallbackBindings() async throws {
+        let primaryTarget = fixtureTarget()
+        let fallbackTarget = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.fallback"),
+            revision: 1,
+            kind: .local(installationID: "installation.fallback"),
+            modelID: "model.fallback",
+            defaultParameters: GenerationConfiguration()
+        )
+        let primary = fixtureBinding(target: primaryTarget)
+        let fallback = fixtureBinding(
+            target: fallbackTarget,
+            bindingID: "binding.fallback"
+        )
+        let registry = AppLLMHostSelectionRegistry()
+
+        let issues = await registry.hydrate(
+            bindings: [fallback, primary],
+            targets: [fallbackTarget, primaryTarget],
+            available: [primaryTarget, fallbackTarget].map {
+                AgentLLMTargetOption(
+                    target: $0,
+                    parameterSchema: LLMParameterSchema(definitions: [])
+                )
+            }
+        )
+
+        #expect(issues.isEmpty)
+        let group = await registry.selectionGroup(
+            profileID: primary.configuration.agentProfileID,
+            revision: primary.configuration.agentProfileRevision
+        )
+        #expect(group?.map(\.binding.bindingID) == [
+            "binding.bootstrap",
+            "binding.fallback",
+        ])
+    }
+
     @Test("hydration never substitutes a missing target")
     func missingTargetStaysUnconfigured() async throws {
         let target = fixtureTarget()
@@ -167,10 +206,13 @@ private func fixtureTarget() -> LLMTargetRevision {
     )
 }
 
-private func fixtureBinding(target: LLMTargetRevision) -> ActiveAgentHostBinding {
+private func fixtureBinding(
+    target: LLMTargetRevision,
+    bindingID: String = "binding.bootstrap"
+) -> ActiveAgentHostBinding {
     ActiveAgentHostBinding(
         configuration: AgentHostConfiguration(
-            bindingID: "binding.bootstrap",
+            bindingID: bindingID,
             revision: 2,
             agentProfileID: "profile.bootstrap",
             agentProfileRevision: 7,
@@ -181,7 +223,7 @@ private func fixtureBinding(target: LLMTargetRevision) -> ActiveAgentHostBinding
             parameterOverrides: GenerationConfiguration()
         ),
         binding: HostBindingTuple(
-            bindingID: "binding.bootstrap",
+            bindingID: bindingID,
             bindingRevision: 2,
             bindingHash: "binding-hash.bootstrap"
         )

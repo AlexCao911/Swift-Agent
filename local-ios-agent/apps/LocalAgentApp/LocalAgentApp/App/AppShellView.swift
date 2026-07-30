@@ -62,11 +62,42 @@ struct AppShellView: View {
                 cloudApprovalRequest = request
             }
         }
+        .task {
+            synchronizeChatRoute()
+        }
+        .onChange(of: viewModel.route) {
+            synchronizeChatRoute()
+        }
         .sheet(item: $cloudApprovalRequest, onDismiss: {
             Task { await container.cloudApprovalBroker.dismissCurrent() }
         }) { request in
             CloudApprovalSheet(request: request) { decision in
                 Task { await container.cloudApprovalBroker.respond(decision) }
+            }
+        }
+        .sheet(isPresented: $viewModel.showsConversationList) {
+            ConversationListSheet(
+                sessions: openMinisChatStore.sessions,
+                onSelect: { sessionID in
+                    viewModel.showsConversationList = false
+                    viewModel.open(.chat(sessionId: sessionID))
+                },
+                onNewConversation: {
+                    viewModel.showsConversationList = false
+                    viewModel.open(.chat(sessionId: nil))
+                }
+            )
+        }
+        .sheet(isPresented: $viewModel.showsPromptDocuments) {
+            NavigationStack {
+                PromptDocumentsSettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                viewModel.showsPromptDocuments = false
+                            }
+                        }
+                    }
             }
         }
     }
@@ -113,6 +144,12 @@ struct AppShellView: View {
                         profileId: viewModel.activeAgent?.profileId,
                         revisionId: viewModel.activeAgent?.profileRevisionId
                     )
+                },
+                onOpenConversation: { conversationStreamID in
+                    viewModel.open(.chat(sessionId: conversationStreamID))
+                },
+                onShowConversations: {
+                    viewModel.showsConversationList = true
                 }
             )
             .navigationTitle("Chat")
@@ -162,5 +199,52 @@ struct AppShellView: View {
     private func usePublishedAgentInChat(_ selection: PublishedAgentSelection) {
         viewModel.usePublishedAgent(selection)
         viewModel.open(.chat(sessionId: nil))
+    }
+
+    @MainActor
+    private func synchronizeChatRoute() {
+        guard case let .chat(sessionID) = viewModel.route else {
+            return
+        }
+        let conversationStreamID = sessionID
+            ?? viewModel.resolveChatConversationID(
+                currentConversationID: openMinisChatViewModel.conversationStreamID
+            )
+        openMinisChatViewModel.switchConversation(to: conversationStreamID)
+        if let draft = viewModel.consumePendingChatDraft() {
+            openMinisChatViewModel.prefill(draft)
+        }
+    }
+}
+
+private struct ConversationListSheet: View {
+    let sessions: [ChatSession]
+    var onSelect: (String) -> Void
+    var onNewConversation: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Button(action: onNewConversation) {
+                    Label("New conversation", systemImage: "square.and.pencil")
+                }
+                ForEach(sessions.sorted {
+                    ($0.lastMessageDate ?? .distantPast)
+                        > ($1.lastMessageDate ?? .distantPast)
+                }) { session in
+                    Button {
+                        onSelect(session.sessionId)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(session.title)
+                            Text(session.sessionId)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Conversations")
+        }
     }
 }

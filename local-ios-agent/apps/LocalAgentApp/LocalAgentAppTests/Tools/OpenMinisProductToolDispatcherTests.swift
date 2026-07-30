@@ -5,6 +5,21 @@ import XCTest
 @testable import LocalAgentApp
 
 final class OpenMinisProductToolDispatcherTests: XCTestCase {
+    func testISHOutputBufferKeepsBoundedHeadAndTailWithMarker() {
+        let buffer = ISHBoundedOutputBuffer(maximumCharacters: 32)
+
+        buffer.append("HEAD-0123456789")
+        buffer.append(String(repeating: "x", count: 100))
+        buffer.append("TAIL-9876543210")
+        let output = buffer.snapshot()
+
+        XCTAssertTrue(output.hasPrefix("HEAD-"))
+        XCTAssertTrue(output.hasSuffix("TAIL-9876543210"))
+        XCTAssertTrue(output.contains("[truncated "))
+        XCTAssertLessThan(output.count, 160)
+        XCTAssertGreaterThan(buffer.totalCharacters, UInt(32))
+    }
+
     func testHostMountedWriteAndReadUseVirtualPathWithoutISH() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

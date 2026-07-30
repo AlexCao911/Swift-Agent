@@ -283,6 +283,16 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
             host_process_epoch,
             ffi_tainted: AtomicBool::new(false),
         };
+        let recovered = bridge
+            .agent_loop
+            .recover_after_process_loss()
+            .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        for request in recovered {
+            bridge
+                .agent_loop
+                .spawn(request)
+                .map_err(|error| AgentError::Storage(format!("{}: {error}", error.code())))?;
+        }
         bridge.consume_host_events()?;
         Ok(bridge)
     }
@@ -3664,6 +3674,79 @@ mod tests {
             .host_session(worker.session_handle())
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn bridge_startup_marks_a_started_nonterminal_agent_run_interrupted() {
+        let snapshot = crate::agent_input::RunStartSnapshot::make(
+            vec![crate::agent_input::PromptDocumentSnapshot {
+                id: "base".into(),
+                source: "test".into(),
+                markdown: "Be useful.".into(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            crate::context::ModelContextWindow {
+                context_window_tokens: 8_192,
+                max_output_tokens: 1_024,
+            },
+        )
+        .unwrap();
+        let command = TranscriptCommand::Send {
+            request_id: "request-recovery".into(),
+            conversation_stream_id: "conversation-recovery".into(),
+            client_message_id: "message-recovery".into(),
+            text: "hello".into(),
+            attachments: Vec::new(),
+            run_start_snapshot: snapshot,
+        };
+        let mut runtime = AgentRuntime::new(AgentRuntimeConfig { tool_router: None });
+        runtime
+            .conversation_store_mut()
+            .append_transaction(
+                "conversation-recovery",
+                1,
+                vec![
+                    RuntimeEvent::new(
+                        EntryId("command-recovery".into()),
+                        SessionId("conversation-recovery".into()),
+                        None,
+                        Some(RunId("run-recovery".into())),
+                        0,
+                        0,
+                        EventKind::UserMessage,
+                        serde_json::to_string(&json!({ "command": command })).unwrap(),
+                    ),
+                    RuntimeEvent::new(
+                        EntryId("started-recovery".into()),
+                        SessionId("conversation-recovery".into()),
+                        Some(EntryId("command-recovery".into())),
+                        Some(RunId("run-recovery".into())),
+                        0,
+                        1,
+                        EventKind::AssistantMessageStarted,
+                        "",
+                    ),
+                ],
+            )
+            .unwrap();
+
+        let bridge = BridgeRuntime::new(runtime, AgentOSApplicationService::empty());
+
+        let events = bridge
+            .runtime
+            .lock()
+            .unwrap()
+            .conversation_store()
+            .events_after(&SessionId("conversation-recovery".into()), 0)
+            .unwrap();
+        assert_eq!(
+            events.last().map(|event| &event.kind),
+            Some(&EventKind::RunFailed)
+        );
+        assert!(events
+            .last()
+            .is_some_and(|event| event.payload.contains("agent_loop.process_interrupted")));
     }
 
     #[test]

@@ -5,6 +5,104 @@ import XCTest
 
 @MainActor
 final class SkillStoreMigrationTests: XCTestCase {
+    func testURLImportUsesTheBoundedDownloaderContract() async throws {
+        let downloader = RecordingSkillDownloader(
+            payload: SkillDownloadPayload(
+                data: Data("""
+                ---
+                name: Downloaded Skill
+                description: Imported safely.
+                ---
+                Body
+                """.utf8),
+                response: try XCTUnwrap(HTTPURLResponse(
+                    url: URL(string: "https://example.com/SKILL.md")!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                ))
+            )
+        )
+        let fixture = try makeFixture(downloader: downloader)
+        defer { fixture.cleanup() }
+
+        let skill = try await fixture.store.importFromURL(
+            "https://example.com/SKILL.md"
+        )
+
+        XCTAssertEqual(skill.id, "downloaded-skill")
+        let recordedRequest = await downloader.lastRequest()
+        let request = try XCTUnwrap(recordedRequest)
+        XCTAssertEqual(request.url.absoluteString, "https://example.com/SKILL.md")
+        XCTAssertEqual(request.maximumBytes, 50 * 1024 * 1024)
+    }
+
+    func testControlledDownloaderValidatesRedirectBeforeFollowingIt() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SkillDownloadURLProtocol.self]
+        SkillDownloadURLProtocol.install { request in
+            if request.url?.host == "public.example" {
+                return .redirect(URL(string: "https://127.0.0.1/private")!)
+            }
+            return .response(status: 200, chunks: [Data("secret".utf8)])
+        }
+        defer { SkillDownloadURLProtocol.reset() }
+        let validator = RecordingSkillURLValidator(
+            deniedHosts: ["127.0.0.1"]
+        )
+        let downloader = ControlledSkillDownloader(
+            validator: validator,
+            configuration: configuration
+        )
+
+        do {
+            _ = try await downloader.download(
+                from: URL(string: "https://public.example/SKILL.md")!,
+                maximumBytes: 1_024
+            )
+            XCTFail("private redirect must be rejected")
+        } catch let error as ControlledSkillDownloadError {
+            XCTAssertEqual(error, .policyDenied)
+        }
+
+        let validatedHosts = await validator.validatedHosts()
+        XCTAssertEqual(validatedHosts, ["public.example", "127.0.0.1"])
+        XCTAssertEqual(
+            SkillDownloadURLProtocol.requestedHosts(),
+            ["public.example"]
+        )
+    }
+
+    func testControlledDownloaderStopsAtTheStreamingByteLimit() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SkillDownloadURLProtocol.self]
+        SkillDownloadURLProtocol.install { _ in
+            .response(
+                status: 200,
+                chunks: [
+                    Data("1234".utf8),
+                    Data("5678".utf8),
+                    Data("overflow".utf8),
+                ]
+            )
+        }
+        defer { SkillDownloadURLProtocol.reset() }
+        let downloader = ControlledSkillDownloader(
+            validator: RecordingSkillURLValidator(),
+            configuration: configuration
+        )
+
+        do {
+            _ = try await downloader.download(
+                from: URL(string: "https://public.example/SKILL.md")!,
+                maximumBytes: 8
+            )
+            XCTFail("stream exceeding the byte limit must be cancelled")
+        } catch let error as ControlledSkillDownloadError {
+            XCTAssertEqual(error, .responseTooLarge)
+        }
+    }
+
     func testDescriptorContainsOnlyMetadataAndVirtualSkillPath() throws {
         let fixture = try makeFixture()
         defer { fixture.cleanup() }
@@ -165,7 +263,9 @@ final class SkillStoreMigrationTests: XCTestCase {
         XCTAssertFalse(text.contains(fixture.root.path))
     }
 
-    private func makeFixture() throws -> Fixture {
+    private func makeFixture(
+        downloader: any SkillDownloading = ControlledSkillDownloader()
+    ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let skillsRoot = root.appendingPathComponent(
@@ -179,7 +279,8 @@ final class SkillStoreMigrationTests: XCTestCase {
         let store = try SkillStore(
             skillsDirectory: skillsRoot,
             metadataURL: root.appendingPathComponent("skills.json"),
-            overridesURL: root.appendingPathComponent("overrides.json")
+            overridesURL: root.appendingPathComponent("overrides.json"),
+            downloader: downloader
         )
         return Fixture(root: root, skillsRoot: skillsRoot, store: store)
     }
@@ -193,6 +294,141 @@ final class SkillStoreMigrationTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
     }
+}
+
+private actor RecordingSkillDownloader: SkillDownloading {
+    struct Request {
+        let url: URL
+        let maximumBytes: Int
+    }
+
+    private let payload: SkillDownloadPayload
+    private var request: Request?
+
+    init(payload: SkillDownloadPayload) {
+        self.payload = payload
+    }
+
+    func download(
+        from url: URL,
+        maximumBytes: Int
+    ) async throws -> SkillDownloadPayload {
+        request = Request(url: url, maximumBytes: maximumBytes)
+        return payload
+    }
+
+    func lastRequest() -> Request? { request }
+}
+
+private actor RecordingSkillURLValidator: SkillURLValidating {
+    private let deniedHosts: Set<String>
+    private var hosts: [String] = []
+
+    init(deniedHosts: Set<String> = []) {
+        self.deniedHosts = deniedHosts
+    }
+
+    func validate(_ url: URL) async throws {
+        let host = url.host ?? ""
+        hosts.append(host)
+        if deniedHosts.contains(host) {
+            throw ControlledSkillDownloadError.policyDenied
+        }
+    }
+
+    func validatedHosts() -> [String] { hosts }
+}
+
+private final class SkillDownloadURLProtocol:
+    URLProtocol,
+    @unchecked Sendable
+{
+    enum Result {
+        case redirect(URL)
+        case response(status: Int, chunks: [Data])
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var handler:
+        (@Sendable (URLRequest) -> Result)?
+    nonisolated(unsafe) private static var hosts: [String] = []
+
+    static func install(
+        _ handler: @escaping @Sendable (URLRequest) -> Result
+    ) {
+        lock.lock()
+        self.handler = handler
+        hosts = []
+        lock.unlock()
+    }
+
+    static func reset() {
+        lock.lock()
+        handler = nil
+        hosts = []
+        lock.unlock()
+    }
+
+    static func requestedHosts() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return hosts
+    }
+
+    override class func canInit(with _: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(
+        for request: URLRequest
+    ) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.lock.lock()
+        let handler = Self.handler
+        Self.hosts.append(request.url?.host ?? "")
+        Self.lock.unlock()
+        guard let handler, let url = request.url else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: URLError(.badServerResponse)
+            )
+            return
+        }
+        switch handler(request) {
+        case let .redirect(target):
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 302,
+                httpVersion: nil,
+                headerFields: ["Location": target.absoluteString]
+            )!
+            client?.urlProtocol(
+                self,
+                wasRedirectedTo: URLRequest(url: target),
+                redirectResponse: response
+            )
+            client?.urlProtocolDidFinishLoading(self)
+        case let .response(status, chunks):
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/markdown"]
+            )!
+            client?.urlProtocol(
+                self,
+                didReceive: response,
+                cacheStoragePolicy: .notAllowed
+            )
+            for chunk in chunks {
+                client?.urlProtocol(self, didLoad: chunk)
+            }
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 private actor SkillStoreISHStub: OpenMinisISHRunning {

@@ -23,11 +23,13 @@ struct AppContainer {
     let legacyMigration: LegacyLLMMigrationCoordinator?
     let readinessIssues: [String]
     let activeAgentProfile: AgentProfileDTO?
+    let availableAgentProfiles: [AgentProfileDTO]
     let cloudApprovalBroker: AppCloudApprovalBroker
     let localLLMSubsystem: LocalLLMSubsystem?
     let cloudLLMSubsystem: CloudLLMSubsystem?
     let llmHostRuntime: LLMHostProductRuntime?
     let modelExecutionRegistry: OpenMinisModelExecutionRegistry?
+    let attachmentRepository: OpenMinisAttachmentRepository
 
     func attaching(
         localLLMSubsystem: LocalLLMSubsystem,
@@ -38,7 +40,8 @@ struct AppContainer {
         legacyMigration: LegacyLLMMigrationCoordinator,
         modelExecutionRegistry: OpenMinisModelExecutionRegistry,
         readinessIssues: [String],
-        activeAgentProfile: AgentProfileDTO?
+        activeAgentProfile: AgentProfileDTO?,
+        availableAgentProfiles: [AgentProfileDTO]
     ) -> AppContainer {
         AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -58,11 +61,13 @@ struct AppContainer {
             legacyMigration: legacyMigration,
             readinessIssues: readinessIssues,
             activeAgentProfile: activeAgentProfile,
+            availableAgentProfiles: availableAgentProfiles,
             cloudApprovalBroker: cloudApprovalBroker,
             localLLMSubsystem: localLLMSubsystem,
             cloudLLMSubsystem: cloudLLMSubsystem,
             llmHostRuntime: llmHostRuntime,
-            modelExecutionRegistry: modelExecutionRegistry
+            modelExecutionRegistry: modelExecutionRegistry,
+            attachmentRepository: attachmentRepository
         )
     }
 
@@ -121,17 +126,19 @@ struct AppContainer {
                     persistence: persistence
                 )
             )
+            let modelPreparer = AppRustAgentModelRunPreparer(
+                selections: llmHostSelections,
+                local: localLLMSubsystem,
+                cloud: cloudLLMSubsystem,
+                registry: modelExecutionRegistry,
+                attachmentResolver: attachmentRepository
+            )
             let coordinator = RustAgentCoordinator(
                 conversation: conversation,
                 snapshots: RustAgentInputSnapshotProvider(
                     nativeToolkit: nativeToolkitClient
                 ),
-                models: AppRustAgentModelRunPreparer(
-                    selections: llmHostSelections,
-                    local: localLLMSubsystem,
-                    cloud: cloudLLMSubsystem,
-                    registry: modelExecutionRegistry
-                ),
+                models: modelPreparer,
                 projections: projections
             )
             try coordinator.startProjection(
@@ -140,24 +147,99 @@ struct AppContainer {
             return AIChatViewModel(
                 conversationStreamID: conversationStreamID
             ) { submission in
-                guard submission.attachments.isEmpty else {
-                    throw RustAgentCoordinatorError(
-                        message: "Attachments are not connected to the Rust ReAct path yet"
-                    )
-                }
                 guard let agent = shellViewModel.activeAgent else {
                     throw RustAgentCoordinatorError(
                         message: "Choose an agent and model before sending"
                     )
                 }
+                let modelWindow = try await modelPreparer.modelContextWindow(
+                    agentProfileID: agent.profileId,
+                    agentProfileRevisionID: agent.profileRevisionId
+                )
+                let attachmentReferences = try await attachmentRepository
+                    .ingest(
+                        submission.attachments,
+                        modelContextWindow: modelWindow
+                    )
                 _ = try await coordinator.send(
                     requestID: UUID().uuidString.lowercased(),
                     conversationStreamID: submission.conversationStreamID,
                     clientMessageID: UUID().uuidString.lowercased(),
                     text: submission.text,
-                    attachments: [],
+                    attachments: attachmentReferences,
                     agentProfileID: agent.profileId,
                     agentProfileRevisionID: agent.profileRevisionId
+                )
+            } performTranscriptAction: { conversationStreamID, action in
+                switch action {
+                case let .retry(anchorEventID):
+                    guard let agent = shellViewModel.activeAgent else {
+                        throw RustAgentCoordinatorError(
+                            message: "Choose an agent and model before retrying"
+                        )
+                    }
+                    _ = try await coordinator.retry(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID,
+                        anchorEventID: anchorEventID,
+                        agentProfileID: agent.profileId,
+                        agentProfileRevisionID: agent.profileRevisionId
+                    )
+                case let .edit(
+                    targetEventID,
+                    replacementText,
+                    replacementAttachments
+                ):
+                    guard let agent = shellViewModel.activeAgent else {
+                        throw RustAgentCoordinatorError(
+                            message: "Choose an agent and model before editing"
+                        )
+                    }
+                    let modelWindow = try await modelPreparer.modelContextWindow(
+                        agentProfileID: agent.profileId,
+                        agentProfileRevisionID: agent.profileRevisionId
+                    )
+                    let attachmentReferences = try await attachmentRepository
+                        .ingest(
+                            replacementAttachments,
+                            modelContextWindow: modelWindow
+                        )
+                    _ = try await coordinator.edit(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID,
+                        targetEventID: targetEventID,
+                        replacementText: replacementText,
+                        replacementAttachments: attachmentReferences,
+                        agentProfileID: agent.profileId,
+                        agentProfileRevisionID: agent.profileRevisionId
+                    )
+                case let .delete(targetEventID):
+                    _ = try await coordinator.submit(.deleteMessage(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID,
+                        targetEventID: targetEventID
+                    ))
+                case .clear:
+                    _ = try await coordinator.submit(.clearConversation(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID
+                    ))
+                case let .branch(anchorEventID, newConversationStreamID):
+                    _ = try await coordinator.createBranch(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID,
+                        anchorEventID: anchorEventID,
+                        newConversationStreamID: newConversationStreamID
+                    )
+                case .archive:
+                    _ = try await coordinator.submit(.archiveConversation(
+                        requestID: UUID().uuidString.lowercased(),
+                        conversationStreamID: conversationStreamID
+                    ))
+                }
+            } selectConversation: { conversationStreamID in
+                try coordinator.startProjection(
+                    conversationStreamID: conversationStreamID
                 )
             }
         } catch {
@@ -178,6 +260,13 @@ struct AppContainer {
     func makeAppShellViewModel() -> AppShellViewModel {
         AppShellViewModel(
             activeAgent: activeAgentProfile.map {
+                ActiveAgentRevisionSelection(
+                    profileId: $0.profileId,
+                    profileRevisionId: $0.profileRevisionId,
+                    displayName: $0.displayName
+                )
+            },
+            availableAgents: availableAgentProfiles.map {
                 ActiveAgentRevisionSelection(
                     profileId: $0.profileId,
                     profileRevisionId: $0.profileRevisionId,

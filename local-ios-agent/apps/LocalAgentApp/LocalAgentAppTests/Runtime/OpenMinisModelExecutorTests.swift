@@ -2,10 +2,72 @@ import Foundation
 import LocalAgentBridge
 import LocalAgentLLMCloud
 import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import XCTest
 @testable import LocalAgentApp
 
 final class OpenMinisModelExecutorTests: XCTestCase {
+    func testRegistryRestoresFrozenRunPlanAndRouteAfterRelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appending(path: "provider-run-plans.json")
+        let frozenPlan = plan("cloud-a", "cloud-b")
+        let snapshots = Dictionary(
+            uniqueKeysWithValues: frozenPlan.orderedCandidates.map {
+                ($0.id, routeSnapshot(candidateID: $0.id))
+            }
+        )
+        let first = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        )
+        try await first.bind(
+            runID: "run-recovered",
+            plan: frozenPlan,
+            routes: Dictionary(
+                uniqueKeysWithValues: frozenPlan.orderedCandidates.map {
+                    ($0.id, RecordingRestoredRoute() as any ProviderCandidateModelRoute)
+                }
+            ),
+            routeSnapshots: snapshots
+        )
+
+        let restoration = RouteRestorationRecorder()
+        let relaunched = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        ) { runID, snapshot in
+            await restoration.record(runID: runID, candidateID: snapshot.candidateID)
+            return RecordingRestoredRoute()
+        }
+
+        let relaunchedPlan = try await relaunched.plan(for: "run-recovered")
+        XCTAssertEqual(relaunchedPlan, frozenPlan)
+        try await relaunched.generate(
+            request(runID: "run-recovered"),
+            candidate: frozenPlan.orderedCandidates[0]
+        ) { _ in }
+        let restoredPairs = await restoration.restoredPairs()
+        XCTAssertEqual(
+            restoredPairs,
+            [.init(runID: "run-recovered", candidateID: "cloud-a")]
+        )
+
+        await relaunched.finish(runID: "run-recovered")
+        let afterFinish = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        )
+        do {
+            _ = try await afterFinish.plan(for: "run-recovered")
+            XCTFail("finished run plan must not be restored")
+        } catch {}
+    }
+
     func testPlanIsFrozenForTheWholeRunAndReleasedOnFinish() async throws {
         let source = MutableProviderRunPlanSource(plan: plan("cloud-a"))
         let runtime = RecordingProviderCandidateRuntime(
@@ -70,6 +132,72 @@ final class OpenMinisModelExecutorTests: XCTestCase {
             ["primary", "fallback"]
         )
         XCTAssertEqual(events, [.textDelta("fallback output")])
+    }
+
+    func testFallbackCandidateRemainsPinnedForLaterReactRounds() async throws {
+        let source = MutableProviderRunPlanSource(
+            plan: plan("primary", "fallback")
+        )
+        let runtime = RecordingProviderCandidateRuntime(
+            behavior: [
+                "primary": [
+                    .events([.toolCallDelta(
+                        callID: "primary-call",
+                        toolName: "shell",
+                        argumentsFragment: "{}"
+                    )]),
+                    .failBeforeContent,
+                ],
+                "fallback": [
+                    .events([.toolCallDelta(
+                        callID: "fallback-call",
+                        toolName: "shell",
+                        argumentsFragment: "{}"
+                    )]),
+                    .events([.textDelta("done")]),
+                ],
+            ]
+        )
+        let executor = OpenMinisModelExecutor(
+            plans: source,
+            runtime: runtime
+        )
+
+        try await executor.generate(request(runID: "run-pinned")) { _ in }
+        try await executor.generate(request(runID: "run-pinned")) { _ in }
+        try await executor.generate(request(runID: "run-pinned")) { _ in }
+
+        let candidateIDs = await runtime.candidateIDs()
+        XCTAssertEqual(
+            candidateIDs,
+            ["primary", "primary", "fallback", "fallback"]
+        )
+    }
+
+    func testFailedCandidateRouteIsClosedBeforeFallbackStarts() async throws {
+        let frozenPlan = plan("primary", "fallback")
+        let primary = ScriptedProviderRoute(outcomes: [.failure])
+        let fallback = ScriptedProviderRoute(outcomes: [.success])
+        let registry = OpenMinisModelExecutionRegistry()
+        try await registry.bind(
+            runID: "run-close-failed",
+            plan: frozenPlan,
+            routes: [
+                "primary": primary,
+                "fallback": fallback,
+            ]
+        )
+        let executor = OpenMinisModelExecutor(
+            plans: registry,
+            runtime: registry
+        )
+
+        try await executor.generate(request(runID: "run-close-failed")) { _ in }
+
+        let primaryFinishCount = await primary.finishCount()
+        let fallbackGenerateCount = await fallback.generateCount()
+        XCTAssertEqual(primaryFinishCount, 1)
+        XCTAssertEqual(fallbackGenerateCount, 1)
     }
 
     func testFailureAfterContentNeverStartsAnotherCandidate() async {
@@ -247,6 +375,100 @@ private func request(runID: String) -> HostModelRequest {
         attachmentReferences: [],
         orderedToolDefinitions: []
     )
+}
+
+private func routeSnapshot(candidateID: String) -> ProviderRunRouteSnapshot {
+    let target = LLMTargetRevision(
+        targetID: LLMTargetID(rawValue: "target-\(candidateID)"),
+        revision: 1,
+        kind: .cloud(providerProfileID: "provider-\(candidateID)", providerProfileRevision: 1),
+        modelID: "model-\(candidateID)",
+        defaultParameters: GenerationConfiguration()
+    )
+    return ProviderRunRouteSnapshot(
+        candidateID: candidateID,
+        configuration: AgentHostConfiguration(
+            bindingID: "binding-\(candidateID)",
+            revision: 1,
+            agentProfileID: "profile",
+            agentProfileRevision: 1,
+            llmSlotID: "primary",
+            requirementsHash: "requirements",
+            llmTargetID: target.targetID,
+            llmTargetRevision: target.revision,
+            parameterOverrides: GenerationConfiguration()
+        ),
+        target: target
+    )
+}
+
+private actor RouteRestorationRecorder {
+    struct Pair: Equatable {
+        let runID: String
+        let candidateID: String
+    }
+
+    private var pairs: [Pair] = []
+
+    func record(runID: String, candidateID: String) {
+        pairs.append(.init(runID: runID, candidateID: candidateID))
+    }
+
+    func restoredPairs() -> [Pair] { pairs }
+}
+
+private actor RecordingRestoredRoute: ProviderCandidateModelRoute {
+    func generate(
+        _: HostModelRequest,
+        emit: @escaping @Sendable (HostModelEvent) async throws -> Void
+    ) async throws {
+        try await emit(.textDelta("restored"))
+    }
+
+    func cancel(runID _: String) async {}
+    func finish(runID _: String) async {}
+}
+
+private actor ScriptedProviderRoute: ProviderCandidateModelRoute {
+    enum Outcome {
+        case success
+        case failure
+    }
+
+    private var outcomes: [Outcome]
+    private var generations = 0
+    private var finishes = 0
+
+    init(outcomes: [Outcome]) {
+        self.outcomes = outcomes
+    }
+
+    func generate(
+        _: HostModelRequest,
+        emit: @escaping @Sendable (HostModelEvent) async throws -> Void
+    ) async throws {
+        generations += 1
+        switch outcomes.removeFirst() {
+        case .success:
+            try await emit(.textDelta("done"))
+        case .failure:
+            throw TestModelFailure()
+        }
+    }
+
+    func cancel(runID _: String) async {}
+
+    func finish(runID _: String) async {
+        finishes += 1
+    }
+
+    func generateCount() -> Int {
+        generations
+    }
+
+    func finishCount() -> Int {
+        finishes
+    }
 }
 
 private actor MutableProviderRunPlanSource: ProviderRunPlanProviding {

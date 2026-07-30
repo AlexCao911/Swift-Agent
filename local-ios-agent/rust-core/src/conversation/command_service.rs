@@ -128,6 +128,7 @@ impl<S: ConversationEventStore> ConversationCommandService<S> {
                 .validate()
                 .map_err(|error| TranscriptCommandError::new(error.code(), error.to_string()))?;
         }
+        let branch_target = validate_command_target(&*store, &command)?;
 
         let next_sequence = store
             .last_event(&SessionId(stream_id.clone()))
@@ -184,9 +185,30 @@ impl<S: ConversationEventStore> ConversationCommandService<S> {
             &StoredTranscriptCommandOutcome::Accepted(result.clone()),
         )?;
 
-        match store.commit_command(&stream_id, next_sequence, vec![event], receipt) {
+        let commit = if let Some((target_stream_id, target_events)) = branch_target {
+            store.commit_branch_command(
+                &stream_id,
+                next_sequence,
+                vec![event],
+                receipt,
+                &target_stream_id,
+                1,
+                target_events,
+            )
+        } else {
+            store.commit_command(&stream_id, next_sequence, vec![event], receipt)
+        };
+        match commit {
             Ok(_) => {
                 self.projection_subscriptions.notify(&stream_id);
+                if let TranscriptCommand::CreateBranch {
+                    new_conversation_stream_id,
+                    ..
+                } = &command
+                {
+                    self.projection_subscriptions
+                        .notify(new_conversation_stream_id);
+                }
                 Ok(result)
             }
             Err(error) => {
@@ -217,6 +239,88 @@ impl<S: ConversationEventStore> ConversationCommandService<S> {
     pub(crate) fn store_handle(&self) -> Arc<Mutex<S>> {
         self.store.clone()
     }
+}
+
+fn validate_command_target(
+    store: &impl ConversationEventStore,
+    command: &TranscriptCommand,
+) -> Result<Option<(String, Vec<RuntimeEvent>)>, TranscriptCommandError> {
+    let stream_id = SessionId(command.conversation_stream_id().to_string());
+    let target_id = match command {
+        TranscriptCommand::RetryFrom {
+            anchor_event_id, ..
+        }
+        | TranscriptCommand::CreateBranch {
+            anchor_event_id, ..
+        } => Some(anchor_event_id.as_str()),
+        TranscriptCommand::EditMessage {
+            target_event_id, ..
+        }
+        | TranscriptCommand::DeleteMessage {
+            target_event_id, ..
+        } => Some(target_event_id.as_str()),
+        _ => None,
+    };
+
+    let Some(target_id) = target_id else {
+        return Ok(None);
+    };
+    let target_id = EntryId(target_id.to_string());
+    let target = store.get(&stream_id, &target_id).map_err(|_| {
+        TranscriptCommandError::new(
+            "conversation.target_not_found",
+            format!(
+                "event {} does not exist in conversation {}",
+                target_id.0, stream_id.0
+            ),
+        )
+    })?;
+    if matches!(command, TranscriptCommand::RetryFrom { .. })
+        && target.kind != EventKind::UserMessage
+    {
+        return Err(TranscriptCommandError::new(
+            "conversation.retry_anchor_not_user",
+            "retry must anchor the user message whose answer is being regenerated",
+        ));
+    }
+
+    let TranscriptCommand::CreateBranch {
+        new_conversation_stream_id,
+        ..
+    } = command
+    else {
+        return Ok(None);
+    };
+    if new_conversation_stream_id == &stream_id.0 {
+        return Err(TranscriptCommandError::new(
+            "conversation.branch_target_invalid",
+            "branch target must differ from source conversation",
+        ));
+    }
+    if store
+        .last_event(&SessionId(new_conversation_stream_id.clone()))
+        .map_err(storage_error)?
+        .is_some()
+    {
+        return Err(TranscriptCommandError::new(
+            "conversation.branch_target_exists",
+            format!("conversation {new_conversation_stream_id} already exists"),
+        ));
+    }
+
+    let target_stream_id = SessionId(new_conversation_stream_id.clone());
+    let target_events = store
+        .active_branch(&stream_id, &target_id)
+        .map_err(storage_error)?
+        .into_iter()
+        .map(|mut event| {
+            event.session_id = target_stream_id.clone();
+            event.run_id = None;
+            event.sequence = 0;
+            event
+        })
+        .collect();
+    Ok(Some((new_conversation_stream_id.clone(), target_events)))
 }
 
 fn event_kind(command: &TranscriptCommand) -> EventKind {

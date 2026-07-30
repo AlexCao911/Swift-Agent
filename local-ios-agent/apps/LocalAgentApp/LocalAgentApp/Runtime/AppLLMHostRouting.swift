@@ -31,14 +31,14 @@ actor AppLLMHostSelectionRegistry {
         let revision: UInt64
     }
 
-    private var selections: [Key: AppLLMHostSelection] = [:]
+    private var selections: [Key: [AppLLMHostSelection]] = [:]
 
     var count: Int {
         selections.count
     }
 
     var only: AppLLMHostSelection? {
-        selections.count == 1 ? selections.values.first : nil
+        selections.count == 1 ? selections.values.first?.first : nil
     }
 
     func hydrate(
@@ -46,7 +46,7 @@ actor AppLLMHostSelectionRegistry {
         targets: [LLMTargetRevision],
         available: [AgentLLMTargetOption]
     ) -> [String] {
-        var next: [Key: AppLLMHostSelection] = [:]
+        var next: [Key: [AppLLMHostSelection]] = [:]
         var issues: [String] = []
         for active in bindings {
             let configuration = active.configuration
@@ -61,10 +61,8 @@ actor AppLLMHostSelectionRegistry {
                   }),
                   let option = available.first(where: {
                       $0.target == target
-                  }),
-                  next[key] == nil
+                  })
             else {
-                next.removeValue(forKey: key)
                 issues.append("execution.host_binding_not_configured")
                 continue
             }
@@ -76,27 +74,64 @@ actor AppLLMHostSelectionRegistry {
                 issues.append("execution.host_binding_not_configured")
                 continue
             }
+            let selection: AppLLMHostSelection
             switch target.kind {
             case .local:
-                next[key] = .local(
+                selection = .local(
                     configuration: configuration,
                     target: target,
                     binding: active.binding
                 )
             case .cloud:
-                next[key] = .cloud(
+                selection = .cloud(
                     configuration: configuration,
                     target: target,
                     binding: active.binding
                 )
             }
+            if let first = next[key]?.first,
+               first.configuration.llmSlotID != configuration.llmSlotID
+                || first.configuration.requirementsHash
+                    != configuration.requirementsHash {
+                issues.append("execution.host_binding_not_configured")
+                continue
+            }
+            if next[key]?.contains(where: {
+                $0.binding.bindingID == active.binding.bindingID
+            }) == true {
+                issues.append("execution.host_binding_not_configured")
+                continue
+            }
+            next[key, default: []].append(selection)
         }
-        selections = next
+        selections = next.mapValues {
+            $0.sorted {
+                ($0.configuration.llmSlotID, $0.binding.bindingID, $0.binding.bindingRevision)
+                    < ($1.configuration.llmSlotID, $1.binding.bindingID, $1.binding.bindingRevision)
+            }
+        }
         return Array(Set(issues)).sorted()
     }
 
     func selection(profileID: String, revision: UInt64) -> AppLLMHostSelection? {
+        selections[Key(profileID: profileID, revision: revision)]?.first
+    }
+
+    func selectionGroup(
+        profileID: String,
+        revision: UInt64
+    ) -> [AppLLMHostSelection]? {
         selections[Key(profileID: profileID, revision: revision)]
+    }
+}
+
+private extension AppLLMHostSelection {
+    var configuration: AgentHostConfiguration {
+        switch self {
+        case let .local(configuration, _, _),
+             let .cloud(configuration, _, _):
+            configuration
+        }
     }
 }
 
@@ -185,29 +220,44 @@ final class AppRustAgentModelRunPreparer: RustAgentModelRunPreparing {
     private let local: LocalLLMSubsystem
     private let cloud: CloudLLMSubsystem
     private let registry: OpenMinisModelExecutionRegistry
+    private let attachmentResolver: any RustReActAttachmentResolving
 
     init(
         selections: AppLLMHostSelectionRegistry,
         local: LocalLLMSubsystem,
         cloud: CloudLLMSubsystem,
-        registry: OpenMinisModelExecutionRegistry
+        registry: OpenMinisModelExecutionRegistry,
+        attachmentResolver: any RustReActAttachmentResolving =
+            EmptyRustReActAttachmentResolver()
     ) {
         self.selections = selections
         self.local = local
         self.cloud = cloud
         self.registry = registry
+        self.attachmentResolver = attachmentResolver
     }
 
     func modelContextWindow(
         agentProfileID: String,
         agentProfileRevisionID: UInt64
     ) async throws -> ModelContextWindowDTO {
-        let selection = try await requireSelection(
+        let group = try await requireSelectionGroup(
             profileID: agentProfileID,
             revision: agentProfileRevisionID
         )
-        let contextTokens = try await contextWindow(for: selection)
-        let maxOutputTokens = try configuredMaxOutputTokens(for: selection)
+        var contextWindows: [UInt64] = []
+        var outputBudgets: [UInt64] = []
+        for selection in group {
+            contextWindows.append(try await contextWindow(for: selection))
+            outputBudgets.append(try configuredMaxOutputTokens(for: selection))
+        }
+        guard let contextTokens = contextWindows.min() else {
+            throw routingFailure(
+                "execution.host_binding_not_configured",
+                "the active agent revision has no model candidates"
+            )
+        }
+        let maxOutputTokens = outputBudgets.max() ?? 0
         guard maxOutputTokens < contextTokens else {
             throw routingFailure(
                 "model.output_budget_invalid",
@@ -225,7 +275,7 @@ final class AppRustAgentModelRunPreparer: RustAgentModelRunPreparing {
         agentProfileID: String,
         agentProfileRevisionID: UInt64
     ) async throws {
-        let selection = try await requireSelection(
+        let group = try await requireSelectionGroup(
             profileID: agentProfileID,
             revision: agentProfileRevisionID
         )
@@ -234,20 +284,84 @@ final class AppRustAgentModelRunPreparer: RustAgentModelRunPreparing {
             agentProfileRevisionID: agentProfileRevisionID
         )
 
-        let candidate: ProviderRunCandidate
-        let route: RustReActModelRoute
+        var candidates: [ProviderRunCandidate] = []
+        var routes: [String: any ProviderCandidateModelRoute] = [:]
+        var routeSnapshots: [String: ProviderRunRouteSnapshot] = [:]
+        for selection in group {
+            let prepared = try await candidateRoute(
+                runID: runID,
+                selection: selection
+            )
+            candidates.append(prepared.candidate)
+            routes[prepared.candidate.id] = prepared.route
+            routeSnapshots[prepared.candidate.id] = prepared.snapshot
+        }
+        guard let primary = candidates.first else {
+            throw routingFailure(
+                "model_executor.no_candidate",
+                "the active model group has no executable candidates"
+            )
+        }
+        try await registry.bind(
+            runID: runID,
+            plan: ProviderRunPlan(
+                logicalModelID: primary.modelID,
+                orderedCandidates: candidates,
+                modelContextWindow: window
+            ),
+            routes: routes,
+            routeSnapshots: routeSnapshots
+        )
+    }
+
+    func finishModelRun(runID: String) async {
+        await registry.finish(runID: runID)
+    }
+
+    private func requireSelectionGroup(
+        profileID: String,
+        revision: UInt64
+    ) async throws -> [AppLLMHostSelection] {
+        guard let selection = await selections.selectionGroup(
+            profileID: profileID,
+            revision: revision
+        ), !selection.isEmpty else {
+            throw routingFailure(
+                "execution.host_binding_not_configured",
+                "the active agent revision has no exact model binding"
+            )
+        }
+        return selection
+    }
+
+    private func candidateRoute(
+        runID: String,
+        selection: AppLLMHostSelection
+    ) async throws -> (
+        candidate: ProviderRunCandidate,
+        route: any ProviderCandidateModelRoute,
+        snapshot: ProviderRunRouteSnapshot
+    ) {
         switch selection {
         case let .local(configuration, target, _):
-            candidate = ProviderRunCandidate(
-                id: "local:\(target.targetID.rawValue):\(target.revision)",
-                kind: .local,
-                modelID: target.modelID
-            )
-            route = RustReActModelRoute(
-                runID: runID,
-                local: local,
-                configuration: configuration,
-                target: target
+            return (
+                ProviderRunCandidate(
+                    id: "local:\(target.targetID.rawValue):\(target.revision)",
+                    kind: .local,
+                    modelID: target.modelID
+                ),
+                RustReActModelRoute(
+                    runID: runID,
+                    local: local,
+                    configuration: configuration,
+                    target: target,
+                    attachmentResolver: attachmentResolver
+                ),
+                ProviderRunRouteSnapshot(
+                    candidateID: "local:\(target.targetID.rawValue):\(target.revision)",
+                    configuration: configuration,
+                    target: target
+                )
             )
         case let .cloud(configuration, target, _):
             guard case let .cloud(profileID, profileRevision) = target.kind,
@@ -260,51 +374,31 @@ final class AppRustAgentModelRunPreparer: RustAgentModelRunPreparing {
                     "the frozen cloud provider revision is unavailable"
                 )
             }
-            candidate = ProviderRunCandidate(
-                id: "cloud:\(profileID):\(profileRevision):\(target.modelID)",
-                kind: .cloud,
-                providerConfigurationID: "\(profileID):\(profileRevision)",
-                providerType: provider.presetID.rawValue,
-                modelID: target.modelID,
-                baseURL: provider.baseURL,
-                presetID: provider.presetID
-            )
-            route = RustReActModelRoute(
-                runID: runID,
-                cloud: cloud,
-                configuration: configuration,
-                target: target
-            )
-        }
-        try await registry.bind(
-            runID: runID,
-            plan: ProviderRunPlan(
-                logicalModelID: candidate.modelID,
-                orderedCandidates: [candidate],
-                modelContextWindow: window
-            ),
-            routes: [candidate.id: route]
-        )
-    }
-
-    func finishModelRun(runID: String) async {
-        await registry.finish(runID: runID)
-    }
-
-    private func requireSelection(
-        profileID: String,
-        revision: UInt64
-    ) async throws -> AppLLMHostSelection {
-        guard let selection = await selections.selection(
-            profileID: profileID,
-            revision: revision
-        ) else {
-            throw routingFailure(
-                "execution.host_binding_not_configured",
-                "the active agent revision has no exact model binding"
+            return (
+                ProviderRunCandidate(
+                    id: "cloud:\(profileID):\(profileRevision):\(target.modelID)",
+                    kind: .cloud,
+                    providerConfigurationID: "\(profileID):\(profileRevision)",
+                    providerType: provider.presetID.rawValue,
+                    modelID: target.modelID,
+                    baseURL: provider.baseURL,
+                    presetID: provider.presetID
+                ),
+                RustReActModelRoute(
+                    runID: runID,
+                    cloud: cloud,
+                    configuration: configuration,
+                    target: target,
+                    attachmentResolver: attachmentResolver
+                ),
+                ProviderRunRouteSnapshot(
+                    candidateID:
+                        "cloud:\(profileID):\(profileRevision):\(target.modelID)",
+                    configuration: configuration,
+                    target: target
+                )
             )
         }
-        return selection
     }
 
     private func contextWindow(
