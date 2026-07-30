@@ -273,6 +273,7 @@ final class RustAgentCoordinator: ObservableObject {
             cancellationRequestedRunIDs.remove(predictedRunID)
         }
         reportRunID(predictedRunID)
+        var acceptedByRust = false
         do {
             try checkCancellation(runID: predictedRunID)
             try await models.prepareModelRun(
@@ -286,26 +287,27 @@ final class RustAgentCoordinator: ObservableObject {
             )
             try checkCancellation(runID: predictedRunID)
             let result = try await conversation.submitTranscriptCommand(command)
+            acceptedByRust = true
             guard result.runID == predictedRunID else {
                 throw RustAgentCoordinatorError(
                     message: "Rust returned an unexpected run identity"
                 )
             }
-            if Task.isCancelled
-                || cancellationRequestedRunIDs.contains(predictedRunID) {
+            try checkCancellation(runID: predictedRunID)
+            return result
+        } catch {
+            if acceptedByRust {
                 if let cancellation {
                     _ = try? await cancellation.cancelRun(
                         runId: predictedRunID
                     )
                 }
-                throw CancellationError()
+            } else {
+                await models.finishModelRun(runID: predictedRunID)
+                await projections.markRunFinished(
+                    conversationStreamID: command.conversationStreamID
+                )
             }
-            return result
-        } catch {
-            await models.finishModelRun(runID: predictedRunID)
-            await projections.markRunFinished(
-                conversationStreamID: command.conversationStreamID
-            )
             throw error
         }
     }

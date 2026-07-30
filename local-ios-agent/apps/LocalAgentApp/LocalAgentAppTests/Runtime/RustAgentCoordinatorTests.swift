@@ -247,6 +247,55 @@ final class RustAgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(models.finishedRunIDs.count, 1)
     }
 
+    func testCancellationAfterRustAcceptanceLeavesCleanupToCloseSession() async throws {
+        let conversation = RecordingTranscriptClient()
+        conversation.submitDelayNanoseconds = 5_000_000_000
+        let feeds = ProjectionFeedController(
+            client: conversation,
+            applier: ChatStoreProjectionApplier(
+                store: ChatStore(),
+                persistence: try TranscriptProjectionStore(fileURL: nil)
+            )
+        )
+        let models = RecordingModelPreparation()
+        let cancellation = RecordingRunCancellation()
+        let coordinator = RustAgentCoordinator(
+            conversation: conversation,
+            snapshots: StaticSnapshotProvider(),
+            models: models,
+            projections: feeds,
+            cancellation: cancellation
+        )
+        let submission = Task {
+            try await coordinator.send(
+                requestID: "request-cancelled-after-acceptance",
+                conversationStreamID: "conversation-a",
+                clientMessageID: "message-a",
+                text: "hello",
+                attachments: [],
+                agentProfileID: "profile-a",
+                agentProfileRevisionID: 1
+            )
+        }
+        while conversation.currentSubmittedCommand() == nil {
+            await Task.yield()
+        }
+        let runID = try XCTUnwrap(
+            conversation.currentSubmittedCommand()?.predictedRunID()
+        )
+
+        submission.cancel()
+        do {
+            _ = try await submission.value
+            XCTFail("expected submission cancellation")
+        } catch is CancellationError {}
+
+        XCTAssertEqual(cancellation.cancelledRunIDs, [runID])
+        XCTAssertTrue(models.finishedRunIDs.isEmpty)
+        XCTAssertEqual(feeds.observedConversationIDs, ["conversation-a"])
+        await feeds.stopAll()
+    }
+
     func testTemporaryFeedClosesWhenProjectionArrivedBeforeTargetWasRegistered() async throws {
         let conversation = RecordingTranscriptClient()
         let feeds = ProjectionFeedController(
@@ -327,6 +376,26 @@ private final class RecordingModelPreparation: RustAgentModelRunPreparing {
     }
 }
 
+@MainActor
+private final class RecordingRunCancellation: RustAgentRunCancelling {
+    private(set) var cancelledRunIDs: [String] = []
+
+    func cancelRun(runId: String) async throws -> RuntimeEventDTO {
+        cancelledRunIDs.append(runId)
+        return RuntimeEventDTO(
+            id: "cancel-\(runId)",
+            sessionId: "conversation-a",
+            parentId: nil,
+            runId: runId,
+            sequence: 1,
+            depth: 0,
+            kind: .runCancelled,
+            payload: "",
+            blobRefs: []
+        )
+    }
+}
+
 private final class RecordingTranscriptClient:
     ConversationBridgeClient,
     @unchecked Sendable
@@ -342,6 +411,7 @@ private final class RecordingTranscriptClient:
     private(set) var submittedCommand: TranscriptCommandDTO?
     private(set) var feedWasInstalledBeforeSubmit = false
     var submitError: Error?
+    var submitDelayNanoseconds: UInt64?
     var sessions: [ConversationSummaryDTO] = []
     private(set) var cancelledFeedCount = 0
 
@@ -354,6 +424,9 @@ private final class RecordingTranscriptClient:
         lock.withLock {
             submittedCommand = command
             feedWasInstalledBeforeSubmit = feedCount > 0
+        }
+        if let submitDelayNanoseconds {
+            try? await Task.sleep(nanoseconds: submitDelayNanoseconds)
         }
         return TranscriptCommandResultDTO(
             conversationStreamID: command.conversationStreamID,
@@ -390,6 +463,10 @@ private final class RecordingTranscriptClient:
         lock.withLock {
             continuations[event.conversationStreamID]
         }?.yield(event)
+    }
+
+    func currentSubmittedCommand() -> TranscriptCommandDTO? {
+        lock.withLock { submittedCommand }
     }
 
     func listSessions() async throws -> [ConversationSummaryDTO] { sessions }
