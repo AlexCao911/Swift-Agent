@@ -54,6 +54,7 @@ final class AgentBuilderViewModel {
         self.permissionClient = permissionClient
         self.toolCatalogClient = toolCatalogClient
         self.readiness = readiness
+        self.llmSelection = legacyFallbackSelection()
     }
 
     init(

@@ -109,15 +109,31 @@ struct ToolFileResolver: Sendable {
     }
 
     private func requireContained(_ candidate: URL, within root: URL) throws {
-        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        let canonicalCandidate = candidate.standardizedFileURL.resolvingSymlinksInPath()
-        let rootPath = canonicalRoot.path.hasSuffix("/")
-            ? String(canonicalRoot.path.dropLast())
-            : canonicalRoot.path
-        guard canonicalCandidate.path == rootPath
-                || canonicalCandidate.path.hasPrefix(rootPath + "/") else {
+        let standardizedRoot = root.standardizedFileURL
+        let standardizedCandidate = candidate.standardizedFileURL
+        guard isContained(standardizedCandidate, within: standardizedRoot) else {
             throw ToolFileResolverError(code: "tool_file.symlink_escape")
         }
+
+        var existingAncestor = standardizedCandidate
+        while existingAncestor.path != standardizedRoot.path,
+              FileManager.default.fileExists(atPath: existingAncestor.path) == false {
+            existingAncestor.deleteLastPathComponent()
+        }
+
+        let canonicalRoot = standardizedRoot.resolvingSymlinksInPath()
+        let canonicalAncestor = existingAncestor.resolvingSymlinksInPath()
+        guard isContained(canonicalAncestor, within: canonicalRoot) else {
+            throw ToolFileResolverError(code: "tool_file.symlink_escape")
+        }
+    }
+
+    private func isContained(_ candidate: URL, within root: URL) -> Bool {
+        let rootPath = root.path.hasSuffix("/")
+            ? String(root.path.dropLast())
+            : root.path
+        return candidate.path == rootPath
+            || candidate.path.hasPrefix(rootPath + "/")
     }
 }
 
