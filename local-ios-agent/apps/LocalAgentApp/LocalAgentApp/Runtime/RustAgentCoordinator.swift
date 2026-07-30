@@ -12,6 +12,13 @@ protocol RustAgentSnapshotProviding {
 extension RustAgentInputSnapshotProvider: RustAgentSnapshotProviding {}
 
 @MainActor
+protocol RustAgentRunCancelling {
+    func cancelRun(runId: String) async throws -> RuntimeEventDTO
+}
+
+extension RustExecutionBridgeClient: RustAgentRunCancelling {}
+
+@MainActor
 protocol RustAgentModelRunPreparing {
     func modelContextWindow(
         agentProfileID: String,
@@ -33,17 +40,20 @@ final class RustAgentCoordinator: ObservableObject {
     private let snapshots: any RustAgentSnapshotProviding
     private let models: any RustAgentModelRunPreparing
     private let projections: ProjectionFeedController
+    private let cancellation: (any RustAgentRunCancelling)?
 
     init(
         conversation: any ConversationBridgeClient,
         snapshots: any RustAgentSnapshotProviding,
         models: any RustAgentModelRunPreparing,
-        projections: ProjectionFeedController
+        projections: ProjectionFeedController,
+        cancellation: (any RustAgentRunCancelling)? = nil
     ) {
         self.conversation = conversation
         self.snapshots = snapshots
         self.models = models
         self.projections = projections
+        self.cancellation = cancellation
     }
 
     @discardableResult
@@ -168,6 +178,19 @@ final class RustAgentCoordinator: ObservableObject {
         )
     }
 
+    func restoreSessions() async throws {
+        projections.restoreSessions(try await conversation.listSessions())
+    }
+
+    func cancel(runID: String) async throws {
+        guard let cancellation else {
+            throw RustAgentCoordinatorError(
+                message: "Rust Agent cancellation is unavailable"
+            )
+        }
+        _ = try await cancellation.cancelRun(runId: runID)
+    }
+
     func selectConversation(
         conversationStreamID: String
     ) async throws {
@@ -219,15 +242,15 @@ final class RustAgentCoordinator: ObservableObject {
         guard let predictedRunID = try command.predictedRunID() else {
             preconditionFailure("run command did not produce a run ID")
         }
-        try projections.markRunStarted(
-            conversationStreamID: command.conversationStreamID
-        )
-        try await models.prepareModelRun(
-            runID: predictedRunID,
-            agentProfileID: agentProfileID,
-            agentProfileRevisionID: agentProfileRevisionID
-        )
         do {
+            try await models.prepareModelRun(
+                runID: predictedRunID,
+                agentProfileID: agentProfileID,
+                agentProfileRevisionID: agentProfileRevisionID
+            )
+            try projections.markRunStarted(
+                conversationStreamID: command.conversationStreamID
+            )
             let result = try await conversation.submitTranscriptCommand(command)
             guard result.runID == predictedRunID else {
                 throw RustAgentCoordinatorError(

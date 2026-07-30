@@ -64,6 +64,7 @@ struct AppShellView: View {
         }
         .task {
             synchronizeChatRoute()
+            await openMinisChatViewModel.restore()
         }
         .onChange(of: viewModel.route) {
             synchronizeChatRoute()

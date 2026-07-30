@@ -83,6 +83,42 @@ struct OpenMinisToolBatchExecutorTests {
     }
 
     @Test
+    func cancellationPreventsTheNextChunkFromStarting() async throws {
+        let dispatcher = BatchDispatcherProbe(delayNanoseconds: 2_000_000_000)
+        let executor = try makeExecutor(dispatcher: dispatcher)
+        let calls = (0..<11).map { index in
+            HostToolCall(
+                callID: "call-\(index)",
+                toolName: "shell_execute",
+                argumentsJSON: #"{"command":"echo \#(index)"}"#
+            )
+        }
+        let execution = Task {
+            await executor.execute(
+                HostToolBatch(
+                    batchID: "batch-cancel",
+                    runID: "run-cancel",
+                    orderedCalls: calls
+                )
+            )
+        }
+        while await dispatcher.startedCallIDs.count < 10 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        await executor.cancel(batchID: "batch-cancel")
+        let completion = await execution.value
+
+        #expect(await dispatcher.startedCallIDs.count == 10)
+        #expect(
+            await dispatcher.startedCallIDs
+                .contains("batch-cancel:call-10") == false
+        )
+        #expect(completion.orderedResults.count == 11)
+        #expect(completion.orderedResults[10].isError)
+    }
+
+    @Test
     func detectorHistoryIsScopedToRunAndRemovedAtRunEnd() async throws {
         let executor = try makeExecutor(dispatcher: BatchDispatcherProbe())
 

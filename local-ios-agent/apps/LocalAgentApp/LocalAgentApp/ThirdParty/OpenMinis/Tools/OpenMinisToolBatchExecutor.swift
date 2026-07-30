@@ -57,6 +57,12 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
             to: batch.orderedCalls.count,
             by: Self.maximumConcurrentTools
         ) {
+            if await cancellationRegistry.isCancelled(batchID: batch.batchID) {
+                orderedResults.append(contentsOf: batch.orderedCalls[start...].map {
+                    cancelledResult($0)
+                })
+                break
+            }
             let end = min(
                 start + Self.maximumConcurrentTools,
                 batch.orderedCalls.count
@@ -178,8 +184,16 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
             toolName: call.toolName,
             argumentsJSON: repairedJSON
         )
-        let task = Task { [dispatcher, cancellationRegistry] in
-            await dispatcher.execute(
+        let dispatchGate = ToolDispatchGate()
+        let task = Task { [self, dispatcher, cancellationRegistry] in
+            await dispatchGate.wait()
+            let batchCancelled = await cancellationRegistry.isCancelled(
+                batchID: batch.batchID
+            )
+            guard !Task.isCancelled, !batchCancelled else {
+                return self.cancelledResult(call)
+            }
+            return await dispatcher.execute(
                 repairedCall,
                 context: OpenMinisToolExecutionContext(
                     batchID: batch.batchID,
@@ -201,7 +215,12 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
         ) {
             task.cancel()
         }
+        await dispatchGate.release()
         return await task.value
+    }
+
+    private func cancelledResult(_ call: HostToolCall) -> HostToolResult {
+        errorResult(call, message: "Tool execution was cancelled.")
     }
 
     private func recordDetectorHistoryInInputOrder(
@@ -255,6 +274,25 @@ final class OpenMinisToolBatchExecutor: ToolBatchExecuting, @unchecked Sendable 
             dataClasses: [EgressDataClass.unknownData.rawValue],
             highestSensitivity: DataSensitivity.unknown.rawValue
         )
+    }
+}
+
+private actor ToolDispatchGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let current = waiters
+        waiters.removeAll()
+        current.forEach { $0.resume() }
     }
 }
 

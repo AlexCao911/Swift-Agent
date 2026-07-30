@@ -81,6 +81,13 @@ enum AppBootstrapper {
                 )
             }
         }
+        let conversation = RustConversationBridgeClient(
+            gateway: rust,
+            legacyClient: rust
+        )
+        try await modelExecutionRegistry.reconcile(
+            keeping: try await activeReactRunIDs(in: conversation)
+        )
         let modelExecutor = OpenMinisModelExecutor(
             plans: modelExecutionRegistry,
             runtime: modelExecutionRegistry
@@ -141,6 +148,46 @@ enum AppBootstrapper {
             activeAgentProfile: activeAgentProfile,
             availableAgentProfiles: profiles
         )
+    }
+
+    private static func activeReactRunIDs(
+        in conversation: any ConversationBridgeClient
+    ) async throws -> Set<String> {
+        var active = Set<String>()
+        for session in try await conversation.listSessions() {
+            let events = try await conversation.activeBranch(
+                sessionId: session.sessionId,
+                leafId: session.activeLeafId
+            )
+            let grouped = Dictionary(
+                grouping: events.compactMap { event in
+                    event.runId.map { ($0, event) }
+                },
+                by: { $0.0 }
+            )
+            for (runID, pairs) in grouped {
+                let runEvents = pairs.map(\.1)
+                let hasRunCommand = runEvents.contains {
+                    [
+                        "user_message",
+                        "transcript_retry_requested",
+                        "message_edited",
+                    ].contains($0.kind.rawValue)
+                }
+                let terminal = runEvents.contains {
+                    $0.kind == .runFailed
+                        || $0.kind == .runCancelled
+                        || (
+                            $0.kind == .assistantMessageCompleted
+                                && $0.id.hasSuffix("-final")
+                        )
+                }
+                if hasRunCommand && !terminal {
+                    active.insert(runID)
+                }
+            }
+        }
+        return active
     }
 
     static func bootstrapLLMHost(

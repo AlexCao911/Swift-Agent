@@ -105,6 +105,80 @@ final class OpenMinisModelExecutorTests: XCTestCase {
         XCTAssertEqual(finishedRunIDs, ["run-1"])
     }
 
+    func testStartupReconciliationRemovesOnlyOrphanedPlans() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appending(path: "provider-run-plans.json")
+        let registry = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        )
+        for runID in ["run-active", "run-orphaned"] {
+            let runPlan = plan("cloud-a")
+            try await registry.bind(
+                runID: runID,
+                plan: runPlan,
+                routes: [
+                    "cloud-a": RecordingRestoredRoute(),
+                ],
+                routeSnapshots: [
+                    "cloud-a": routeSnapshot(candidateID: "cloud-a"),
+                ]
+            )
+        }
+
+        try await registry.reconcile(keeping: Set(["run-active"]))
+
+        let relaunched = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        )
+        let storedRunIDs = await relaunched.storedRunIDs
+        XCTAssertEqual(storedRunIDs, Set(["run-active"]))
+    }
+
+    func testFinishRetainsPlanAndReportsPersistenceFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appending(path: "provider-run-plans.json")
+        let registry = OpenMinisModelExecutionRegistry(
+            persistenceURL: storeURL
+        )
+        let runPlan = plan("cloud-a")
+        try await registry.bind(
+            runID: "run-cleanup",
+            plan: runPlan,
+            routes: ["cloud-a": RecordingRestoredRoute()],
+            routeSnapshots: [
+                "cloud-a": routeSnapshot(candidateID: "cloud-a"),
+            ]
+        )
+        try FileManager.default.removeItem(at: storeURL)
+        try FileManager.default.createDirectory(
+            at: storeURL,
+            withIntermediateDirectories: true
+        )
+
+        await registry.finish(runID: "run-cleanup")
+
+        let storedRunIDs = await registry.storedRunIDs
+        let persistenceError = await registry.lastPersistenceError
+        XCTAssertEqual(storedRunIDs, Set(["run-cleanup"]))
+        XCTAssertNotNil(persistenceError)
+    }
+
     func testFallbackOccursOnlyBeforeModelContent() async throws {
         let source = MutableProviderRunPlanSource(
             plan: plan("primary", "fallback")

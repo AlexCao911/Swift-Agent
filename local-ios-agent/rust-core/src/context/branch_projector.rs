@@ -14,7 +14,7 @@ impl BranchProjector {
     }
 
     pub fn project(&self, branch: Vec<RuntimeEvent>) -> Vec<PromptMessage> {
-        let branch = apply_transcript_mutations(branch);
+        let branch = effective_transcript_branch(branch);
         if let Some(checkpoint) = branch.iter().rev().find_map(|event| {
             (event.kind == EventKind::BranchSummaryCreated)
                 .then(|| serde_json::from_str::<ContextCompactionCheckpoint>(&event.payload).ok())
@@ -52,7 +52,7 @@ impl BranchProjector {
     }
 }
 
-fn apply_transcript_mutations(branch: Vec<RuntimeEvent>) -> Vec<RuntimeEvent> {
+pub(crate) fn effective_transcript_branch(branch: Vec<RuntimeEvent>) -> Vec<RuntimeEvent> {
     let mut effective = Vec::with_capacity(branch.len());
 
     for mut event in branch {

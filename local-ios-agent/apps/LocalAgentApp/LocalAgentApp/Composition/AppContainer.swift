@@ -139,14 +139,18 @@ struct AppContainer {
                     nativeToolkit: nativeToolkitClient
                 ),
                 models: modelPreparer,
-                projections: projections
+                projections: projections,
+                cancellation: RustExecutionBridgeClient(
+                    gateway: rustRuntimeClient,
+                    legacyClient: rustRuntimeClient
+                )
             )
             try coordinator.startProjection(
                 conversationStreamID: conversationStreamID
             )
             return AIChatViewModel(
-                conversationStreamID: conversationStreamID
-            ) { submission in
+                conversationStreamID: conversationStreamID,
+                submit: { submission in
                 guard let agent = shellViewModel.activeAgent else {
                     throw RustAgentCoordinatorError(
                         message: "Choose an agent and model before sending"
@@ -161,7 +165,7 @@ struct AppContainer {
                         submission.attachments,
                         modelContextWindow: modelWindow
                     )
-                _ = try await coordinator.send(
+                let result = try await coordinator.send(
                     requestID: UUID().uuidString.lowercased(),
                     conversationStreamID: submission.conversationStreamID,
                     clientMessageID: UUID().uuidString.lowercased(),
@@ -170,7 +174,14 @@ struct AppContainer {
                     agentProfileID: agent.profileId,
                     agentProfileRevisionID: agent.profileRevisionId
                 )
-            } performTranscriptAction: { conversationStreamID, action in
+                if let runID = result.runID {
+                    chatStore.markRunAccepted(
+                        conversationStreamID: submission.conversationStreamID,
+                        runID: runID
+                    )
+                }
+                },
+                performTranscriptAction: { conversationStreamID, action in
                 switch action {
                 case let .retry(anchorEventID):
                     guard let agent = shellViewModel.activeAgent else {
@@ -178,13 +189,19 @@ struct AppContainer {
                             message: "Choose an agent and model before retrying"
                         )
                     }
-                    _ = try await coordinator.retry(
+                    let result = try await coordinator.retry(
                         requestID: UUID().uuidString.lowercased(),
                         conversationStreamID: conversationStreamID,
                         anchorEventID: anchorEventID,
                         agentProfileID: agent.profileId,
                         agentProfileRevisionID: agent.profileRevisionId
                     )
+                    if let runID = result.runID {
+                        chatStore.markRunAccepted(
+                            conversationStreamID: conversationStreamID,
+                            runID: runID
+                        )
+                    }
                 case let .edit(
                     targetEventID,
                     replacementText,
@@ -204,7 +221,7 @@ struct AppContainer {
                             replacementAttachments,
                             modelContextWindow: modelWindow
                         )
-                    _ = try await coordinator.edit(
+                    let result = try await coordinator.edit(
                         requestID: UUID().uuidString.lowercased(),
                         conversationStreamID: conversationStreamID,
                         targetEventID: targetEventID,
@@ -213,6 +230,12 @@ struct AppContainer {
                         agentProfileID: agent.profileId,
                         agentProfileRevisionID: agent.profileRevisionId
                     )
+                    if let runID = result.runID {
+                        chatStore.markRunAccepted(
+                            conversationStreamID: conversationStreamID,
+                            runID: runID
+                        )
+                    }
                 case let .delete(targetEventID):
                     _ = try await coordinator.submit(.deleteMessage(
                         requestID: UUID().uuidString.lowercased(),
@@ -237,11 +260,20 @@ struct AppContainer {
                         conversationStreamID: conversationStreamID
                     ))
                 }
-            } selectConversation: { conversationStreamID in
+                },
+                selectConversation: { conversationStreamID in
                 try coordinator.startProjection(
                     conversationStreamID: conversationStreamID
                 )
-            }
+                },
+                restoreProductState: {
+                    try await coordinator.restoreSessions()
+                },
+                chatStore: chatStore,
+                stopRun: { runID in
+                    try await coordinator.cancel(runID: runID)
+                }
+            )
         } catch {
             return AIChatViewModel(
                 conversationStreamID: conversationStreamID

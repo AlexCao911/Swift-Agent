@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -51,8 +51,13 @@ pub struct ProjectionSubscriptionRegistry {
 
 struct Subscription {
     conversation_stream_id: String,
-    sender: Sender<()>,
+    sender: Sender<ProjectionSignal>,
     cancelled: Arc<AtomicBool>,
+}
+
+enum ProjectionSignal {
+    Wake,
+    Live(TranscriptProjectionEvent),
 }
 
 impl ProjectionSubscriptionRegistry {
@@ -105,7 +110,21 @@ impl ProjectionSubscriptionRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for subscription in subscriptions.values() {
             if subscription.conversation_stream_id == conversation_stream_id {
-                let _ = subscription.sender.send(());
+                let _ = subscription.sender.send(ProjectionSignal::Wake);
+            }
+        }
+    }
+
+    pub fn publish_live(&self, event: TranscriptProjectionEvent) {
+        let subscriptions = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for subscription in subscriptions.values() {
+            if subscription.conversation_stream_id == event.conversation_stream_id {
+                let _ = subscription
+                    .sender
+                    .send(ProjectionSignal::Live(event.clone()));
             }
         }
     }
@@ -118,7 +137,7 @@ impl ProjectionSubscriptionRegistry {
             .remove(subscription_id);
         if let Some(subscription) = subscription {
             subscription.cancelled.store(true, Ordering::Release);
-            let _ = subscription.sender.send(());
+            let _ = subscription.sender.send(ProjectionSignal::Wake);
         }
     }
 
@@ -137,7 +156,7 @@ pub struct TranscriptProjectionFeed<S: ConversationEventStore + Send + 'static> 
     conversation_stream_id: String,
     cursor: u64,
     pending: VecDeque<TranscriptProjectionEvent>,
-    receiver: Receiver<()>,
+    receiver: Receiver<ProjectionSignal>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -152,6 +171,16 @@ impl<S: ConversationEventStore + Send + 'static> TranscriptProjectionFeed<S> {
             }
             if self.cancelled.load(Ordering::Acquire) {
                 return Ok(None);
+            }
+            match self.receiver.try_recv() {
+                Ok(ProjectionSignal::Live(event)) => return Ok(Some(event)),
+                Ok(ProjectionSignal::Wake) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    return Err(TranscriptProjectionError::new(
+                        "projection.subscription_closed",
+                        "projection wake channel closed",
+                    ));
+                }
             }
 
             let events = self
@@ -180,11 +209,15 @@ impl<S: ConversationEventStore + Send + 'static> TranscriptProjectionFeed<S> {
                 continue;
             }
 
-            if self.receiver.recv().is_err() {
-                return Err(TranscriptProjectionError::new(
-                    "projection.subscription_closed",
-                    "projection wake channel closed",
-                ));
+            match self.receiver.recv() {
+                Ok(ProjectionSignal::Live(event)) => return Ok(Some(event)),
+                Ok(ProjectionSignal::Wake) => {}
+                Err(_) => {
+                    return Err(TranscriptProjectionError::new(
+                        "projection.subscription_closed",
+                        "projection wake channel closed",
+                    ));
+                }
             }
         }
     }

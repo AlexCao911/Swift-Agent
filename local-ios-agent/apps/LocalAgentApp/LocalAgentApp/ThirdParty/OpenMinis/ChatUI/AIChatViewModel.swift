@@ -1,9 +1,11 @@
 import CryptoKit
+import Combine
 import Foundation
 import LocalAgentBridge
 import LocalAgentLLMContracts
 import LocalAgentLLMHost
 import SwiftUI
+import UniformTypeIdentifiers
 
 typealias InputAttachment = AttachmentDraftViewState
 typealias ChatMessage = AgentMessageViewState
@@ -38,6 +40,8 @@ final class AIChatViewModel: ObservableObject {
     typealias SelectConversation = @MainActor @Sendable (
         _ conversationStreamID: String
     ) throws -> Void
+    typealias RestoreProductState = @MainActor @Sendable () async throws -> Void
+    typealias StopRun = @MainActor @Sendable (_ runID: String) async throws -> Void
 
     @Published private(set) var messages: [ChatMessage] = []
     @Published var draft = ""
@@ -49,17 +53,44 @@ final class AIChatViewModel: ObservableObject {
     private let submit: Submit
     private let performTranscriptAction: PerformTranscriptAction?
     private let selectConversation: SelectConversation
+    private let restoreProductState: RestoreProductState?
+    private let stopRun: StopRun?
+    private weak var chatStore: ChatStore?
+    private var subscriptions: Set<AnyCancellable> = []
+    private var isSubmitting = false
 
     init(
         conversationStreamID: String,
         submit: @escaping Submit,
         performTranscriptAction: PerformTranscriptAction? = nil,
-        selectConversation: @escaping SelectConversation = { _ in }
+        selectConversation: @escaping SelectConversation = { _ in },
+        restoreProductState: RestoreProductState? = nil,
+        chatStore: ChatStore? = nil,
+        stopRun: StopRun? = nil
     ) {
         self.conversationStreamID = conversationStreamID
         self.submit = submit
         self.performTranscriptAction = performTranscriptAction
         self.selectConversation = selectConversation
+        self.restoreProductState = restoreProductState
+        self.chatStore = chatStore
+        self.stopRun = stopRun
+        chatStore?.$activeRunIDByConversation
+            .sink { [weak self] activeRuns in
+                guard let self else { return }
+                self.isRunning = self.isSubmitting
+                    || activeRuns[self.conversationStreamID] != nil
+            }
+            .store(in: &subscriptions)
+    }
+
+    func restore() async {
+        guard let restoreProductState else { return }
+        do {
+            try await restoreProductState()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func switchConversation(to conversationStreamID: String) {
@@ -70,6 +101,7 @@ final class AIChatViewModel: ObservableObject {
             try selectConversation(conversationStreamID)
             self.conversationStreamID = conversationStreamID
             errorMessage = nil
+            refreshRunningState()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -77,6 +109,68 @@ final class AIChatViewModel: ObservableObject {
 
     func prefill(_ text: String) {
         draft = text
+    }
+
+    func addFileAttachment(from sourceURL: URL) throws {
+        let accessGranted = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessGranted {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey])
+        let byteCount = values.fileSize ?? 0
+        guard byteCount <= OpenMinisAttachmentPolicy.productDefault
+            .maximumSingleAttachmentBytes else {
+            throw AttachmentInputError.tooLarge(sourceURL.lastPathComponent)
+        }
+        let destination = try cacheInputAttachment(
+            sourceURL: sourceURL,
+            preferredName: sourceURL.lastPathComponent
+        )
+        let type = UTType(filenameExtension: sourceURL.pathExtension)
+        inputAttachments.append(AttachmentDraftViewState(
+            id: UUID().uuidString.lowercased(),
+            kind: type?.conforms(to: .image) == true ? .image : .file,
+            displayName: sourceURL.lastPathComponent,
+            localPath: destination.path,
+            mimeType: type?.preferredMIMEType ?? "application/octet-stream",
+            byteCount: byteCount
+        ))
+    }
+
+    func addPhotoAttachment(
+        data: Data,
+        preferredFilename: String = "photo.jpg",
+        mediaType: String = "image/jpeg"
+    ) throws {
+        guard data.count <= OpenMinisAttachmentPolicy.productDefault
+            .maximumSingleAttachmentBytes else {
+            throw AttachmentInputError.tooLarge(preferredFilename)
+        }
+        let destination = inputAttachmentCacheDirectory()
+            .appending(path: "\(UUID().uuidString.lowercased())-\(preferredFilename)")
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: destination, options: .atomic)
+        inputAttachments.append(AttachmentDraftViewState(
+            id: UUID().uuidString.lowercased(),
+            kind: .image,
+            displayName: preferredFilename,
+            localPath: destination.path,
+            mimeType: mediaType,
+            byteCount: data.count
+        ))
+    }
+
+    func removeInputAttachment(id: String) {
+        inputAttachments.removeAll { $0.id == id }
+    }
+
+    func reportAttachmentError(_ error: Error) {
+        errorMessage = error.localizedDescription
     }
 
     func send() async {
@@ -95,9 +189,13 @@ final class AIChatViewModel: ObservableObject {
             attachments: inputAttachments
         )
 
-        isRunning = true
+        isSubmitting = true
+        refreshRunningState()
         errorMessage = nil
-        defer { isRunning = false }
+        defer {
+            isSubmitting = false
+            refreshRunningState()
+        }
 
         do {
             try await submit(submission)
@@ -146,18 +244,75 @@ final class AIChatViewModel: ObservableObject {
         await perform(.archive)
     }
 
+    func stop() async {
+        guard let runID = chatStore?.activeRunID(
+            conversationStreamID: conversationStreamID
+        ), let stopRun else {
+            return
+        }
+        do {
+            try await stopRun(runID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func perform(_ action: TranscriptAction) async {
         guard !isRunning, let performTranscriptAction else {
             return
         }
 
-        isRunning = true
+        isSubmitting = true
+        refreshRunningState()
         errorMessage = nil
-        defer { isRunning = false }
+        defer {
+            isSubmitting = false
+            refreshRunningState()
+        }
         do {
             try await performTranscriptAction(conversationStreamID, action)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshRunningState() {
+        isRunning = isSubmitting
+            || chatStore?.activeRunID(
+                conversationStreamID: conversationStreamID
+            ) != nil
+    }
+
+    private func cacheInputAttachment(
+        sourceURL: URL,
+        preferredName: String
+    ) throws -> URL {
+        let destination = inputAttachmentCacheDirectory().appending(
+            path: "\(UUID().uuidString.lowercased())-\(preferredName)"
+        )
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
+    private func inputAttachmentCacheDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appending(
+            path: "LocalAgentInputAttachments",
+            directoryHint: .isDirectory
+        )
+    }
+}
+
+private enum AttachmentInputError: LocalizedError {
+    case tooLarge(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .tooLarge(name):
+            "Attachment \(name) exceeds the configured size limit"
         }
     }
 }

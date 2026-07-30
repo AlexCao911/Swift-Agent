@@ -304,6 +304,70 @@ fn retry_rejects_an_assistant_anchor_instead_of_replaying_the_old_answer() {
 }
 
 #[test]
+fn retry_accepts_the_effective_user_turn_created_by_edit() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    store
+        .lock()
+        .unwrap()
+        .append_transaction(
+            "conversation-a",
+            1,
+            vec![
+                transcript_event(
+                    "conversation-a",
+                    "user-1",
+                    None,
+                    0,
+                    EventKind::UserMessage,
+                    "question",
+                ),
+                transcript_event(
+                    "conversation-a",
+                    "assistant-1",
+                    Some("user-1"),
+                    1,
+                    EventKind::AssistantMessageCompleted,
+                    "old answer",
+                ),
+            ],
+        )
+        .unwrap();
+    let service = ConversationCommandService::new(store.clone());
+    let edit = service
+        .submit(TranscriptCommand::EditMessage {
+            request_id: "edit".into(),
+            conversation_stream_id: "conversation-a".into(),
+            target_event_id: "user-1".into(),
+            replacement_text: "edited question".into(),
+            replacement_attachments: Vec::new(),
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+    service
+        .complete_run("conversation-a", edit.run_id.as_deref().unwrap())
+        .unwrap();
+    let edit_event_id = store
+        .lock()
+        .unwrap()
+        .last_event(&SessionId("conversation-a".into()))
+        .unwrap()
+        .unwrap()
+        .id
+        .0;
+
+    let retry = service
+        .submit(TranscriptCommand::RetryFrom {
+            request_id: "retry-edited".into(),
+            conversation_stream_id: "conversation-a".into(),
+            anchor_event_id: edit_event_id,
+            run_start_snapshot: snapshot(),
+        })
+        .unwrap();
+
+    assert!(retry.run_id.is_some());
+}
+
+#[test]
 fn create_branch_materializes_source_history_through_the_anchor() {
     let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
     store

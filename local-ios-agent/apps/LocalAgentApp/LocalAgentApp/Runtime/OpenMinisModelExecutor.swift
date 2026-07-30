@@ -125,6 +125,7 @@ actor OpenMinisModelExecutionRegistry:
     private var routesByRun: [
         String: [String: any ProviderCandidateModelRoute]
     ] = [:]
+    private(set) var lastPersistenceError: String?
 
     init(
         persistenceURL: URL? = nil,
@@ -256,10 +257,51 @@ actor OpenMinisModelExecutionRegistry:
     }
 
     func finish(runID: String) async {
-        plansByRun.removeValue(forKey: runID)
-        routeSnapshotsByRun.removeValue(forKey: runID)
-        routesByRun.removeValue(forKey: runID)
-        try? persist()
+        let plan = plansByRun.removeValue(forKey: runID)
+        let snapshots = routeSnapshotsByRun.removeValue(forKey: runID)
+        let routes = routesByRun.removeValue(forKey: runID)
+        do {
+            try persist()
+            lastPersistenceError = nil
+        } catch {
+            plansByRun[runID] = plan
+            routeSnapshotsByRun[runID] = snapshots
+            routesByRun[runID] = routes
+            lastPersistenceError = error.localizedDescription
+            NSLog(
+                "LocalAgent provider plan cleanup failed for %@: %@",
+                runID,
+                error.localizedDescription
+            )
+        }
+    }
+
+    func reconcile(keeping activeRunIDs: Set<String>) throws {
+        let oldPlans = plansByRun
+        let oldSnapshots = routeSnapshotsByRun
+        let oldRoutes = routesByRun
+        plansByRun = plansByRun.filter { activeRunIDs.contains($0.key) }
+        routeSnapshotsByRun = routeSnapshotsByRun.filter {
+            activeRunIDs.contains($0.key)
+        }
+        routesByRun = routesByRun.filter { activeRunIDs.contains($0.key) }
+        do {
+            try persist()
+            lastPersistenceError = nil
+        } catch {
+            plansByRun = oldPlans
+            routeSnapshotsByRun = oldSnapshots
+            routesByRun = oldRoutes
+            lastPersistenceError = error.localizedDescription
+            throw failure(
+                "model_executor.run_plan_reconciliation_failed",
+                "orphaned provider plans could not be reconciled"
+            )
+        }
+    }
+
+    var storedRunIDs: Set<String> {
+        Set(plansByRun.keys)
     }
 
     private func route(

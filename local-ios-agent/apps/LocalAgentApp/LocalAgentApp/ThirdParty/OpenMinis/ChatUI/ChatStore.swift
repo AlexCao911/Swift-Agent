@@ -7,6 +7,7 @@ import LocalAgentLLMContracts
 final class ChatStore: ObservableObject {
     @Published private(set) var sessions: [ChatSession]
     @Published private(set) var messagesByConversation: [String: [ChatMessage]]
+    @Published private(set) var activeRunIDByConversation: [String: String] = [:]
 
     init(
         sessions: [ChatSession] = [],
@@ -18,6 +19,17 @@ final class ChatStore: ObservableObject {
 
     func projectedMessages(conversationStreamID: String) -> [ChatMessage] {
         messagesByConversation[conversationStreamID, default: []]
+    }
+
+    func activeRunID(conversationStreamID: String) -> String? {
+        activeRunIDByConversation[conversationStreamID]
+    }
+
+    func markRunAccepted(
+        conversationStreamID: String,
+        runID: String
+    ) {
+        activeRunIDByConversation[conversationStreamID] = runID
     }
 
     func retryAnchorEventID(
@@ -37,6 +49,27 @@ final class ChatStore: ObservableObject {
 
     func resetProjection(conversationStreamID: String) {
         messagesByConversation[conversationStreamID] = []
+        activeRunIDByConversation.removeValue(forKey: conversationStreamID)
+    }
+
+    func restoreSessions(_ summaries: [ConversationSummaryDTO]) {
+        var restored = Dictionary(uniqueKeysWithValues: sessions.map {
+            ($0.sessionId, $0)
+        })
+        for summary in summaries {
+            restored[summary.sessionId] = ConversationSummaryViewState(
+                sessionId: summary.sessionId,
+                title: summary.title,
+                activeLeafId: summary.activeLeafId,
+                lastEventId: summary.lastEventId,
+                lastUpdatedSequence: summary.lastUpdatedSequence,
+                lastMessageDate: summary.lastUpdatedAtMillis.map {
+                    Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+                },
+                searchText: summary.searchText ?? ""
+            )
+        }
+        sessions = Array(restored.values)
     }
 
     func applyProjection(_ event: TranscriptProjectionEventDTO) {
@@ -44,16 +77,34 @@ final class ChatStore: ObservableObject {
         ensureSession(streamID)
         switch event.kind {
         case .userMessage:
+            let attachments = projectionAttachments(
+                event.payload,
+                key: "attachments"
+            )
             upsertMessage(
                 ChatMessage(
                     id: event.eventID,
                     sessionId: streamID,
                     role: .user,
-                    parts: textParts(projectionCommand(event.payload, key: "text"))
+                    parts: textParts(projectionCommand(event.payload, key: "text")),
+                    attachments: attachments
                 ),
                 in: streamID
             )
+        case .assistantMessageStarted:
+            guard let runID = event.runID else { break }
+            activeRunIDByConversation[streamID] = runID
+            upsertMessage(streamingMessage(runID: runID, streamID: streamID), in: streamID)
+        case .assistantTextDelta:
+            guard let runID = event.runID else { break }
+            activeRunIDByConversation[streamID] = runID
+            appendStreamingText(
+                projectionText(event.payload),
+                runID: runID,
+                streamID: streamID
+            )
         case .assistantMessageCompleted:
+            removeStreamingMessage(runID: event.runID, streamID: streamID)
             upsertMessage(
                 ChatMessage(
                     id: event.eventID,
@@ -63,6 +114,9 @@ final class ChatStore: ObservableObject {
                 ),
                 in: streamID
             )
+            if event.eventID.hasSuffix("-final") {
+                activeRunIDByConversation.removeValue(forKey: streamID)
+            }
         case .toolCallRequested, .toolResultMessage:
             upsertMessage(
                 ChatMessage(
@@ -88,7 +142,11 @@ final class ChatStore: ObservableObject {
                     id: event.eventID,
                     sessionId: streamID,
                     role: .user,
-                    parts: textParts(replacement)
+                    parts: textParts(replacement),
+                    attachments: projectionAttachments(
+                        event.payload,
+                        key: "replacement_attachments"
+                    )
                 ),
                 in: streamID
             )
@@ -99,11 +157,13 @@ final class ChatStore: ObservableObject {
             )
         case .conversationCleared:
             messagesByConversation[streamID] = []
+            activeRunIDByConversation.removeValue(forKey: streamID)
         case .conversationArchived:
             sessions.removeAll { $0.sessionId == streamID }
         case .conversationDeleted:
             sessions.removeAll { $0.sessionId == streamID }
             messagesByConversation.removeValue(forKey: streamID)
+            activeRunIDByConversation.removeValue(forKey: streamID)
         case .branchCreated:
             let branch = projectionCommand(
                 event.payload,
@@ -117,16 +177,80 @@ final class ChatStore: ObservableObject {
                 after: projectionCommand(event.payload, key: "anchor_event_id"),
                 in: streamID
             )
+        case .runCancelled:
+            finishStreamingRun(event, state: .cancelled)
+        case .runFailed:
+            finishStreamingRun(
+                event,
+                state: .failed(projectionFailureCode(event.payload))
+            )
         case .sessionCreated, .providerChanged, .toolRegistered,
-             .assistantMessageStarted,
-             .assistantTextDelta, .toolCallApproved, .toolCallRejected,
+             .toolCallApproved, .toolCallRejected,
              .toolExecutionStarted, .toolExecutionUpdate,
              .toolExecutionCompleted, .toolExecutionFailed,
              .runSuspended, .runResumed, .compactionCreated,
-             .branchSummaryCreated, .runCancelled, .runFailed:
+             .branchSummaryCreated:
             break
         }
-        touchSession(streamID, sequence: event.sequence, eventID: event.eventID)
+        if event.sequence > 0 {
+            touchSession(
+                streamID,
+                sequence: event.sequence,
+                eventID: event.eventID
+            )
+        }
+    }
+
+    private func streamingMessage(runID: String, streamID: String) -> ChatMessage {
+        ChatMessage(
+            id: streamingMessageID(runID),
+            sessionId: streamID,
+            role: .assistant,
+            parts: [],
+            streaming: .streaming
+        )
+    }
+
+    private func appendStreamingText(
+        _ text: String,
+        runID: String,
+        streamID: String
+    ) {
+        let id = streamingMessageID(runID)
+        var messages = messagesByConversation[streamID, default: []]
+        if let index = messages.firstIndex(where: { $0.id == id }) {
+            messages[index].text += text
+            messages[index].streaming = .streaming
+        } else {
+            var message = streamingMessage(runID: runID, streamID: streamID)
+            message.text = text
+            messages.append(message)
+        }
+        messagesByConversation[streamID] = messages
+    }
+
+    private func removeStreamingMessage(runID: String?, streamID: String) {
+        guard let runID else { return }
+        messagesByConversation[streamID]?.removeAll {
+            $0.id == streamingMessageID(runID)
+        }
+    }
+
+    private func finishStreamingRun(
+        _ event: TranscriptProjectionEventDTO,
+        state: MessageStreamingState
+    ) {
+        guard let runID = event.runID else { return }
+        let id = streamingMessageID(runID)
+        if let index = messagesByConversation[event.conversationStreamID]?
+            .firstIndex(where: { $0.id == id }) {
+            messagesByConversation[event.conversationStreamID]?[index].streaming = state
+        }
+        if activeRunIDByConversation[event.conversationStreamID] == runID {
+            activeRunIDByConversation.removeValue(
+                forKey: event.conversationStreamID
+            )
+        }
     }
 
     private func ensureSession(_ streamID: String) {
@@ -201,6 +325,10 @@ final class ChatStore: ObservableObject {
     }
 }
 
+private func streamingMessageID(_ runID: String) -> String {
+    "streaming-\(runID)"
+}
+
 private func textParts(_ text: String) -> [MessagePartViewState] {
     text.isEmpty ? [] : [.text(TextPartViewState(id: "text_0", text: text))]
 }
@@ -221,4 +349,37 @@ private func projectionCommand(
           case let .string(value)? = command.objectValue(forKey: key)
     else { return "" }
     return value
+}
+
+private func projectionAttachments(
+    _ payload: CanonicalJSONValue,
+    key: String
+) -> [AttachmentViewState] {
+    guard let command = payload.objectValue(forKey: "command"),
+          case let .array(values)? = command.objectValue(forKey: key)
+    else { return [] }
+    return values.compactMap { value in
+        guard case let .string(id)? = value.objectValue(forKey: "attachment_id"),
+              case let .string(name)? = value.objectValue(forKey: "display_name"),
+              case let .string(mediaType)? = value.objectValue(forKey: "media_type"),
+              case let .string(modality)? = value.objectValue(forKey: "modality")
+        else { return nil }
+        return AttachmentViewState(
+            id: id,
+            kind: AttachmentKindViewState(rawValue: modality)
+                ?? (mediaType.hasPrefix("image/") ? .image : .file),
+            displayName: name,
+            localPath: nil,
+            urlString: nil,
+            mimeType: mediaType,
+            byteCount: nil
+        )
+    }
+}
+
+private func projectionFailureCode(_ payload: CanonicalJSONValue) -> String {
+    guard case let .string(code)? = payload.objectValue(forKey: "code") else {
+        return "Agent run failed"
+    }
+    return code
 }

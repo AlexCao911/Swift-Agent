@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::canonical_digest::CanonicalDigestV1;
+use crate::context::branch_projector::effective_transcript_branch;
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionId};
 use crate::storage::{ConversationEventStore, StoredTranscriptCommandReceipt};
 
@@ -266,7 +267,7 @@ fn validate_command_target(
         return Ok(None);
     };
     let target_id = EntryId(target_id.to_string());
-    let target = store.get(&stream_id, &target_id).map_err(|_| {
+    store.get(&stream_id, &target_id).map_err(|_| {
         TranscriptCommandError::new(
             "conversation.target_not_found",
             format!(
@@ -275,13 +276,30 @@ fn validate_command_target(
             ),
         )
     })?;
-    if matches!(command, TranscriptCommand::RetryFrom { .. })
-        && target.kind != EventKind::UserMessage
-    {
-        return Err(TranscriptCommandError::new(
-            "conversation.retry_anchor_not_user",
-            "retry must anchor the user message whose answer is being regenerated",
-        ));
+    if matches!(command, TranscriptCommand::RetryFrom { .. }) {
+        let last_event = store
+            .last_event(&stream_id)
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                TranscriptCommandError::new(
+                    "conversation.target_not_found",
+                    "retry conversation is empty",
+                )
+            })?;
+        let effective = effective_transcript_branch(
+            store
+                .active_branch(&stream_id, &last_event.id)
+                .map_err(storage_error)?,
+        );
+        if !effective
+            .iter()
+            .any(|event| event.id == target_id && event.kind == EventKind::UserMessage)
+        {
+            return Err(TranscriptCommandError::new(
+                "conversation.retry_anchor_not_user",
+                "retry must anchor an effective user message whose answer is being regenerated",
+            ));
+        }
     }
 
     let TranscriptCommand::CreateBranch {

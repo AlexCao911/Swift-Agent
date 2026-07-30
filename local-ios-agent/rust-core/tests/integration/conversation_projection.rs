@@ -5,7 +5,7 @@ use local_ios_agent_runtime::context::ModelContextWindow;
 use local_ios_agent_runtime::conversation::{
     ConversationCommandService, ObserveTranscriptProjectionsRequest, PromptDocumentSnapshot,
     RunStartSnapshot, SkillDescriptor, ToolDefinitionSnapshot, TranscriptCommand,
-    TranscriptProjectionKind,
+    TranscriptProjectionEvent, TranscriptProjectionKind,
 };
 use local_ios_agent_runtime::storage::InMemoryConversationStore;
 use serde_json::json;
@@ -103,6 +103,41 @@ fn non_run_terminal_commands_are_delivered_through_the_same_feed() {
     assert_eq!(event.sequence, 1);
     assert_eq!(event.kind, TranscriptProjectionKind::ConversationArchived);
     assert!(event.run_id.is_none());
+}
+
+#[test]
+fn live_text_delta_does_not_advance_the_canonical_projection_cursor() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    let service = ConversationCommandService::new(store.clone());
+    let registry = service.projection_registry();
+    let mut feed = registry
+        .observe(
+            store,
+            ObserveTranscriptProjectionsRequest {
+                subscription_id: "live-delta".into(),
+                conversation_stream_id: "conversation-a".into(),
+                after_sequence: 0,
+            },
+        )
+        .unwrap();
+
+    registry.publish_live(TranscriptProjectionEvent {
+        conversation_stream_id: "conversation-a".into(),
+        sequence: 0,
+        event_id: "delta-1".into(),
+        run_id: Some("run-1".into()),
+        kind: TranscriptProjectionKind::AssistantTextDelta,
+        payload: json!("partial"),
+    });
+
+    let delta = feed.next().unwrap().unwrap();
+    assert_eq!(delta.sequence, 0);
+    assert_eq!(delta.kind, TranscriptProjectionKind::AssistantTextDelta);
+
+    service.submit(send("conversation-a", "one")).unwrap();
+    let canonical = feed.next().unwrap().unwrap();
+    assert_eq!(canonical.sequence, 1);
+    assert_eq!(canonical.kind, TranscriptProjectionKind::UserMessage);
 }
 
 #[test]

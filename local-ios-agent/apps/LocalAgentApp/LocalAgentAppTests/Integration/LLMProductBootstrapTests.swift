@@ -32,8 +32,8 @@ struct LLMProductBootstrapTests {
         ) != nil)
     }
 
-    @Test("hydration preserves the ordered fallback bindings for one model slot")
-    func hydratesOrderedFallbackBindings() async throws {
+    @Test("hydration rejects implicit fallback order for multiple active bindings")
+    func rejectsAmbiguousFallbackBindings() async throws {
         let primaryTarget = fixtureTarget()
         let fallbackTarget = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "target.fallback"),
@@ -60,15 +60,12 @@ struct LLMProductBootstrapTests {
             }
         )
 
-        #expect(issues.isEmpty)
+        #expect(issues == ["execution.host_binding_ambiguous"])
         let group = await registry.selectionGroup(
             profileID: primary.configuration.agentProfileID,
             revision: primary.configuration.agentProfileRevision
         )
-        #expect(group?.map(\.binding.bindingID) == [
-            "binding.bootstrap",
-            "binding.fallback",
-        ])
+        #expect(group == nil)
     }
 
     @Test("hydration never substitutes a missing target")

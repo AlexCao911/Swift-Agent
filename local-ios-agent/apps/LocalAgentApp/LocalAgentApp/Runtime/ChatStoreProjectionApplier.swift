@@ -258,6 +258,10 @@ final class ChatStoreProjectionApplier {
         }
     }
 
+    func restoreSessions(_ summaries: [ConversationSummaryDTO]) {
+        store.restoreSessions(summaries)
+    }
+
     func apply(
         _ event: TranscriptProjectionEventDTO
     ) throws -> TranscriptProjectionApplyResult {
@@ -266,6 +270,10 @@ final class ChatStoreProjectionApplier {
             store.applyProjection(event)
         }
         return result
+    }
+
+    func applyTransient(_ event: TranscriptProjectionEventDTO) {
+        store.applyProjection(event)
     }
 }
 

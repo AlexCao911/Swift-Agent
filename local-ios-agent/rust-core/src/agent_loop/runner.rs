@@ -9,7 +9,10 @@ use crate::context::{
     CompactionCandidate, ContextCompactionCheckpoint, ContextWindowPolicy, ModelInputRole,
     PromptMessage,
 };
-use crate::conversation::{ActiveRunRegistry, ProjectionSubscriptionRegistry, TranscriptCommand};
+use crate::conversation::{
+    ActiveRunRegistry, ProjectionSubscriptionRegistry, TranscriptCommand,
+    TranscriptProjectionEvent, TranscriptProjectionKind,
+};
 use crate::core::{EntryId, EventKind, RunId, RuntimeEvent, SessionId};
 use crate::memory::{CompletedTurnMemoryInput, MemoryProvider};
 use crate::storage::ConversationEventStore;
@@ -327,7 +330,15 @@ where
                     );
                 }
             }
-            let turn = self.model.generate(generation_request, sink)?;
+            let mut live_sink = LiveProjectionModelEventSink {
+                downstream: sink,
+                projections: &self.projections,
+                conversation_stream_id: &request.conversation_stream_id,
+                run_id: &request.run_id,
+                model_turn,
+                delta_index: 0,
+            };
+            let turn = self.model.generate(generation_request, &mut live_sink)?;
             pending_tool_results.clear();
             cancellation.check()?;
 
@@ -565,6 +576,35 @@ where
             assistant_text: turn.text.clone(),
             tool_results,
         });
+    }
+}
+
+struct LiveProjectionModelEventSink<'a> {
+    downstream: &'a mut dyn ModelEventSink,
+    projections: &'a ProjectionSubscriptionRegistry,
+    conversation_stream_id: &'a str,
+    run_id: &'a str,
+    model_turn: usize,
+    delta_index: usize,
+}
+
+impl ModelEventSink for LiveProjectionModelEventSink<'_> {
+    fn emit(&mut self, event: super::ModelEvent) -> Result<(), AgentLoopError> {
+        if let super::ModelEvent::TextDelta { text } = &event {
+            self.projections.publish_live(TranscriptProjectionEvent {
+                conversation_stream_id: self.conversation_stream_id.to_string(),
+                sequence: 0,
+                event_id: format!(
+                    "agent-{}-turn-{}-delta-{}",
+                    self.run_id, self.model_turn, self.delta_index
+                ),
+                run_id: Some(self.run_id.to_string()),
+                kind: TranscriptProjectionKind::AssistantTextDelta,
+                payload: Value::String(text.clone()),
+            });
+            self.delta_index += 1;
+        }
+        self.downstream.emit(event)
     }
 }
 

@@ -60,6 +60,28 @@ struct OpenMinisChatFacadeTests {
         #expect(recorder.selectedConversationIDs == ["conversation-2"])
     }
 
+    @Test("running state follows projections and stop targets the active Rust run")
+    func runningStateAndStopFollowTheActiveRun() async {
+        let store = ChatStore()
+        let recorder = StopRecorder()
+        let viewModel = AIChatViewModel(
+            conversationStreamID: "conversation-1",
+            submit: { _ in },
+            chatStore: store,
+            stopRun: { runID in recorder.runIDs.append(runID) }
+        )
+
+        store.markRunAccepted(
+            conversationStreamID: "conversation-1",
+            runID: "run-1"
+        )
+        #expect(viewModel.isRunning)
+
+        await viewModel.stop()
+
+        #expect(recorder.runIDs == ["run-1"])
+    }
+
     @Test("attachment drafts become stable Rust transcript references")
     func attachmentDraftBecomesTranscriptReference() throws {
         let attachment = AttachmentDraftViewState(
@@ -82,6 +104,27 @@ struct OpenMinisChatFacadeTests {
                 == "2cf24dba5fb0a30e26e83b2ac5b9e29e"
                 + "1b161e5c1fa7425e73043362938b9824"
         )
+    }
+
+    @Test("file picker input populates the shipping attachment draft")
+    func filePickerInputPopulatesAttachmentDraft() throws {
+        let source = FileManager.default.temporaryDirectory.appending(
+            path: "picked-\(UUID().uuidString).txt"
+        )
+        try Data("hello".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let viewModel = AIChatViewModel(
+            conversationStreamID: "conversation-1",
+            submit: { _ in }
+        )
+
+        try viewModel.addFileAttachment(from: source)
+
+        let attachment = try #require(viewModel.inputAttachments.first)
+        #expect(attachment.displayName == source.lastPathComponent)
+        #expect(attachment.mimeType == "text/plain")
+        #expect(attachment.byteCount == 5)
+        #expect(attachment.localPath != nil)
     }
 
     @Test("attachment bytes survive repository relaunch and are digest checked")
@@ -276,6 +319,11 @@ private final class SubmissionRecorder {
     ) {
         actions.append(.init(streamID: streamID, action: action))
     }
+}
+
+@MainActor
+private final class StopRecorder {
+    var runIDs: [String] = []
 }
 
 private struct TranscriptActionRecord: Equatable {

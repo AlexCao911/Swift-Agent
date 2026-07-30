@@ -47,6 +47,7 @@ actor AppLLMHostSelectionRegistry {
         available: [AgentLLMTargetOption]
     ) -> [String] {
         var next: [Key: [AppLLMHostSelection]] = [:]
+        var ambiguousKeys: Set<Key> = []
         var issues: [String] = []
         for active in bindings {
             let configuration = active.configuration
@@ -89,6 +90,9 @@ actor AppLLMHostSelectionRegistry {
                     binding: active.binding
                 )
             }
+            if ambiguousKeys.contains(key) {
+                continue
+            }
             if let first = next[key]?.first,
                first.configuration.llmSlotID != configuration.llmSlotID
                 || first.configuration.requirementsHash
@@ -96,20 +100,15 @@ actor AppLLMHostSelectionRegistry {
                 issues.append("execution.host_binding_not_configured")
                 continue
             }
-            if next[key]?.contains(where: {
-                $0.binding.bindingID == active.binding.bindingID
-            }) == true {
-                issues.append("execution.host_binding_not_configured")
+            if next[key] != nil {
+                next.removeValue(forKey: key)
+                ambiguousKeys.insert(key)
+                issues.append("execution.host_binding_ambiguous")
                 continue
             }
-            next[key, default: []].append(selection)
+            next[key] = [selection]
         }
-        selections = next.mapValues {
-            $0.sorted {
-                ($0.configuration.llmSlotID, $0.binding.bindingID, $0.binding.bindingRevision)
-                    < ($1.configuration.llmSlotID, $1.binding.bindingID, $1.binding.bindingRevision)
-            }
-        }
+        selections = next
         return Array(Set(issues)).sorted()
     }
 

@@ -28,6 +28,10 @@ final class ProjectionFeedController {
         Set(feeds.keys)
     }
 
+    func restoreSessions(_ summaries: [ConversationSummaryDTO]) {
+        applier.restoreSessions(summaries)
+    }
+
     func selectCurrentConversation(
         _ conversationStreamID: String
     ) async throws {
@@ -135,6 +139,7 @@ final class ProjectionFeedController {
         persistent: Bool,
         temporaryThroughSequence: UInt64?
     ) throws {
+        try applier.replay(conversationStreamID: conversationStreamID)
         let cursor = try applier.cursor(for: conversationStreamID)
         let subscriptionID = "projection-\(UUID().uuidString.lowercased())"
         let stream = client.observeTranscriptProjections(
@@ -146,6 +151,10 @@ final class ProjectionFeedController {
             do {
                 for try await event in stream {
                     guard let self else { return }
+                    if event.kind == .assistantTextDelta {
+                        self.applier.applyTransient(event)
+                        continue
+                    }
                     let result = try self.applier.apply(event)
                     switch result {
                     case .applied, .duplicate:

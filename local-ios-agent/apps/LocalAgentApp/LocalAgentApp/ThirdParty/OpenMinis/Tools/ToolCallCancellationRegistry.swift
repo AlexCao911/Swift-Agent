@@ -70,6 +70,10 @@ actor ToolCallCancellationRegistry {
         }
     }
 
+    func isCancelled(batchID: String) -> Bool {
+        cancelledBatchIDs.contains(batchID)
+    }
+
     func finishBatch(batchID: String) {
         entriesByBatch.removeValue(forKey: batchID)
         runIDByBatch.removeValue(forKey: batchID)

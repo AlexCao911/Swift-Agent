@@ -142,6 +142,105 @@ final class ChatStoreProjectionApplierTests: XCTestCase {
             ["first", "first answer"]
         )
     }
+
+    func testStreamingDeltaIsTransientAndRunStateEndsWithFinalMessage() throws {
+        let store = ChatStore()
+        let applier = ChatStoreProjectionApplier(
+            store: store,
+            persistence: try TranscriptProjectionStore(fileURL: nil)
+        )
+        _ = try applier.apply(TranscriptProjectionEventDTO(
+            conversationStreamID: "conversation-1",
+            sequence: 1,
+            eventID: "agent-run-1-started",
+            runID: "run-1",
+            kind: .assistantMessageStarted,
+            payload: .string("")
+        ))
+        applier.applyTransient(TranscriptProjectionEventDTO(
+            conversationStreamID: "conversation-1",
+            sequence: 0,
+            eventID: "agent-run-1-delta-0",
+            runID: "run-1",
+            kind: .assistantTextDelta,
+            payload: .string("hello")
+        ))
+
+        XCTAssertEqual(store.activeRunID(conversationStreamID: "conversation-1"), "run-1")
+        XCTAssertEqual(
+            store.projectedMessages(conversationStreamID: "conversation-1").map(\.text),
+            ["hello"]
+        )
+        XCTAssertEqual(try applier.cursor(for: "conversation-1"), 1)
+
+        _ = try applier.apply(TranscriptProjectionEventDTO(
+            conversationStreamID: "conversation-1",
+            sequence: 2,
+            eventID: "agent-run-1-turn-0-final",
+            runID: "run-1",
+            kind: .assistantMessageCompleted,
+            payload: .string("hello")
+        ))
+
+        XCTAssertNil(store.activeRunID(conversationStreamID: "conversation-1"))
+        XCTAssertEqual(
+            store.projectedMessages(conversationStreamID: "conversation-1").map(\.id),
+            ["agent-run-1-turn-0-final"]
+        )
+    }
+
+    func testUserProjectionRestoresAttachmentDisplayMetadata() throws {
+        let store = ChatStore()
+        let applier = ChatStoreProjectionApplier(
+            store: store,
+            persistence: try TranscriptProjectionStore(fileURL: nil)
+        )
+        _ = try applier.apply(TranscriptProjectionEventDTO(
+            conversationStreamID: "conversation-1",
+            sequence: 1,
+            eventID: "user-attachment",
+            runID: "run-1",
+            kind: .userMessage,
+            payload: try .object(entries: [
+                .init(
+                    name: "command",
+                    value: try .object(entries: [
+                        .init(name: "text", value: .string("see attachment")),
+                        .init(name: "attachments", value: .array([
+                            try .object(entries: [
+                                .init(
+                                    name: "attachment_id",
+                                    value: .string("attachment-1")
+                                ),
+                                .init(
+                                    name: "display_name",
+                                    value: .string("diagram.png")
+                                ),
+                                .init(
+                                    name: "media_type",
+                                    value: .string("image/png")
+                                ),
+                                .init(name: "modality", value: .string("image")),
+                                .init(
+                                    name: "content_digest",
+                                    value: .string(String(repeating: "a", count: 64))
+                                ),
+                            ]),
+                        ])),
+                    ])
+                ),
+            ])
+        ))
+
+        let attachment = try XCTUnwrap(
+            store.projectedMessages(conversationStreamID: "conversation-1")
+                .first?.attachments.first
+        )
+        XCTAssertEqual(attachment.id, "attachment-1")
+        XCTAssertEqual(attachment.kind, .image)
+        XCTAssertEqual(attachment.displayName, "diagram.png")
+        XCTAssertEqual(attachment.mimeType, "image/png")
+    }
 }
 
 @MainActor

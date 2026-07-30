@@ -1,5 +1,7 @@
 import Foundation
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Adapted from OpenMinis' chat palette and message composition. The LocalAgent
 // data flow remains owned by the injected facade and Rust-facing runtime.
@@ -23,6 +25,8 @@ struct OpenMinisProductShellView: View {
     @State private var showsClearConfirmation = false
     @State private var editingMessageID: String?
     @State private var editDraft = ""
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var showsFileImporter = false
 
     @Bindable var shellViewModel: AppShellViewModel
     @ObservedObject var viewModel: AIChatViewModel
@@ -93,6 +97,42 @@ struct OpenMinisProductShellView: View {
         ) {
             Button("Clear conversation", role: .destructive) {
                 Task { await viewModel.clear() }
+            }
+        }
+        .fileImporter(
+            isPresented: $showsFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            do {
+                for url in try result.get() {
+                    try viewModel.addFileAttachment(from: url)
+                }
+            } catch {
+                viewModel.reportAttachmentError(error)
+            }
+        }
+        .onChange(of: selectedPhotoItems) { _, items in
+            guard !items.isEmpty else { return }
+            selectedPhotoItems = []
+            Task {
+                for (index, item) in items.enumerated() {
+                    do {
+                        guard let data = try await item.loadTransferable(
+                            type: Data.self
+                        ) else { continue }
+                        let type = item.supportedContentTypes.first {
+                            $0.conforms(to: .image)
+                        }
+                        try viewModel.addPhotoAttachment(
+                            data: data,
+                            preferredFilename: "photo-\(index + 1).\(type?.preferredFilenameExtension ?? "jpg")",
+                            mediaType: type?.preferredMIMEType ?? "image/jpeg"
+                        )
+                    } catch {
+                        viewModel.reportAttachmentError(error)
+                    }
+                }
             }
         }
     }
@@ -265,7 +305,23 @@ struct OpenMinisProductShellView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(viewModel.inputAttachments) { attachment in
-                            Label(attachment.displayName, systemImage: "doc")
+                            HStack(spacing: 4) {
+                                Label(
+                                    attachment.displayName,
+                                    systemImage: attachment.kind == .image
+                                        ? "photo"
+                                        : "doc"
+                                )
+                                Button {
+                                    viewModel.removeInputAttachment(id: attachment.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(
+                                    "Remove \(attachment.displayName)"
+                                )
+                            }
                                 .font(.caption)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
@@ -277,6 +333,24 @@ struct OpenMinisProductShellView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
+                PhotosPicker(
+                    selection: $selectedPhotoItems,
+                    maxSelectionCount: 10,
+                    matching: .images
+                ) {
+                    Image(systemName: "photo")
+                        .frame(width: 28, height: 36)
+                }
+                .accessibilityLabel("Choose photos")
+
+                Button {
+                    showsFileImporter = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .frame(width: 28, height: 36)
+                }
+                .accessibilityLabel("Choose files")
+
                 TextField(
                     "Message Local Agent",
                     text: $viewModel.draft,
@@ -297,9 +371,15 @@ struct OpenMinisProductShellView: View {
                 }
 
                 Button {
-                    Task { await viewModel.send() }
+                    Task {
+                        if viewModel.isRunning {
+                            await viewModel.stop()
+                        } else {
+                            await viewModel.send()
+                        }
+                    }
                 } label: {
-                    Image(systemName: viewModel.isRunning ? "hourglass" : "arrow.up")
+                    Image(systemName: viewModel.isRunning ? "stop.fill" : "arrow.up")
                         .font(.system(size: 16, weight: .semibold))
                         .frame(width: 36, height: 36)
                         .foregroundStyle(Color(uiColor: .systemBackground))
@@ -307,15 +387,17 @@ struct OpenMinisProductShellView: View {
                         .clipShape(Circle())
                 }
                 .disabled(
-                    viewModel.isRunning
-                        || (
+                    !viewModel.isRunning
+                        && (
                             viewModel.draft.trimmingCharacters(
                                 in: .whitespacesAndNewlines
                             ).isEmpty
                             && viewModel.inputAttachments.isEmpty
                         )
                 )
-                .accessibilityLabel("Send message")
+                .accessibilityLabel(
+                    viewModel.isRunning ? "Stop response" : "Send message"
+                )
             }
 
             if let errorMessage = viewModel.errorMessage {
@@ -399,6 +481,10 @@ private struct OpenMinisMessageRow: View {
                         .font(.caption)
                         .foregroundStyle(OpenMinisChatColors.secondaryText)
                 }
+            }
+            if message.streaming.isStreaming && message.parts.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

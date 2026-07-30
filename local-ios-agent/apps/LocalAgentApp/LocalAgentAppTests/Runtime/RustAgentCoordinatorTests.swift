@@ -97,6 +97,86 @@ final class RustAgentCoordinatorTests: XCTestCase {
         await feeds.stopAll()
     }
 
+    func testStartingFeedReplaysPersistedProjectionBeforeSubscribing() async throws {
+        let fileURL = FileManager.default.temporaryDirectory.appending(
+            path: "projection-feed-\(UUID().uuidString).sqlite"
+        )
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let persistence = try TranscriptProjectionStore(fileURL: fileURL)
+        let first = ChatStoreProjectionApplier(
+            store: ChatStore(),
+            persistence: persistence
+        )
+        _ = try first.apply(TranscriptProjectionEventDTO(
+            conversationStreamID: "conversation-restored",
+            sequence: 1,
+            eventID: "user-restored",
+            runID: "run-restored",
+            kind: .userMessage,
+            payload: try .object(entries: [
+                .init(
+                    name: "command",
+                    value: try .object(entries: [
+                        .init(name: "text", value: .string("restored text")),
+                    ])
+                ),
+            ])
+        ))
+        let chatStore = ChatStore()
+        let feeds = ProjectionFeedController(
+            client: RecordingTranscriptClient(),
+            applier: ChatStoreProjectionApplier(
+                store: chatStore,
+                persistence: try TranscriptProjectionStore(fileURL: fileURL)
+            )
+        )
+
+        try feeds.selectCurrentConversationSynchronously(
+            "conversation-restored"
+        )
+
+        XCTAssertEqual(
+            chatStore.projectedMessages(
+                conversationStreamID: "conversation-restored"
+            ).map(\.text),
+            ["restored text"]
+        )
+        await feeds.stopAll()
+    }
+
+    func testRestoreSessionsInitializesConversationListFromRust() async throws {
+        let conversation = RecordingTranscriptClient()
+        conversation.sessions = [
+            ConversationSummaryDTO(
+                sessionId: "conversation-dormant",
+                title: "Restored",
+                activeLeafId: "leaf",
+                lastEventId: "event",
+                lastUpdatedSequence: 9,
+                lastUpdatedAtMillis: 1_000,
+                searchText: "restored"
+            ),
+        ]
+        let chatStore = ChatStore()
+        let coordinator = RustAgentCoordinator(
+            conversation: conversation,
+            snapshots: StaticSnapshotProvider(),
+            models: RecordingModelPreparation(),
+            projections: ProjectionFeedController(
+                client: conversation,
+                applier: ChatStoreProjectionApplier(
+                    store: chatStore,
+                    persistence: try TranscriptProjectionStore(fileURL: nil)
+                )
+            )
+        )
+
+        try await coordinator.restoreSessions()
+
+        XCTAssertEqual(chatStore.sessions.map(\.sessionId), ["conversation-dormant"])
+        XCTAssertEqual(chatStore.sessions.first?.title, "Restored")
+    }
+
     func testFailedBranchClosesItsPreinstalledTargetFeed() async throws {
         let conversation = RecordingTranscriptClient()
         conversation.submitError = TestCoordinatorFailure()
@@ -129,6 +209,42 @@ final class RustAgentCoordinatorTests: XCTestCase {
         )
         XCTAssertTrue(feeds.observedConversationIDs.isEmpty)
         await feeds.stopAll()
+    }
+
+    func testModelPreparationFailureDoesNotLeaveConversationRunning() async throws {
+        let conversation = RecordingTranscriptClient()
+        let feeds = ProjectionFeedController(
+            client: conversation,
+            applier: ChatStoreProjectionApplier(
+                store: ChatStore(),
+                persistence: try TranscriptProjectionStore(fileURL: nil)
+            )
+        )
+        let models = RecordingModelPreparation()
+        models.prepareError = TestCoordinatorFailure()
+        let coordinator = RustAgentCoordinator(
+            conversation: conversation,
+            snapshots: StaticSnapshotProvider(),
+            models: models,
+            projections: feeds
+        )
+
+        do {
+            _ = try await coordinator.send(
+                requestID: "request-fails-before-submit",
+                conversationStreamID: "conversation-a",
+                clientMessageID: "message-a",
+                text: "hello",
+                attachments: [],
+                agentProfileID: "profile-a",
+                agentProfileRevisionID: 1
+            )
+            XCTFail("expected model preparation to fail")
+        } catch {}
+
+        XCTAssertNil(conversation.submittedCommand)
+        XCTAssertTrue(feeds.observedConversationIDs.isEmpty)
+        XCTAssertEqual(models.finishedRunIDs.count, 1)
     }
 
     func testTemporaryFeedClosesWhenProjectionArrivedBeforeTargetWasRegistered() async throws {
@@ -182,6 +298,8 @@ private struct StaticSnapshotProvider: RustAgentSnapshotProviding {
 @MainActor
 private final class RecordingModelPreparation: RustAgentModelRunPreparing {
     private(set) var preparedRunIDs: [String] = []
+    private(set) var finishedRunIDs: [String] = []
+    var prepareError: Error?
 
     func modelContextWindow(
         agentProfileID _: String,
@@ -199,9 +317,14 @@ private final class RecordingModelPreparation: RustAgentModelRunPreparing {
         agentProfileRevisionID _: UInt64
     ) async throws {
         preparedRunIDs.append(runID)
+        if let prepareError {
+            throw prepareError
+        }
     }
 
-    func finishModelRun(runID _: String) async {}
+    func finishModelRun(runID: String) async {
+        finishedRunIDs.append(runID)
+    }
 }
 
 private final class RecordingTranscriptClient:
@@ -219,6 +342,7 @@ private final class RecordingTranscriptClient:
     private(set) var submittedCommand: TranscriptCommandDTO?
     private(set) var feedWasInstalledBeforeSubmit = false
     var submitError: Error?
+    var sessions: [ConversationSummaryDTO] = []
     private(set) var cancelledFeedCount = 0
 
     func submitTranscriptCommand(
@@ -268,7 +392,7 @@ private final class RecordingTranscriptClient:
         }?.yield(event)
     }
 
-    func listSessions() async throws -> [ConversationSummaryDTO] { [] }
+    func listSessions() async throws -> [ConversationSummaryDTO] { sessions }
 
     func prepareUserTurn(
         _ request: PrepareUserTurnRequestDTO
