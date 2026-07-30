@@ -1,5 +1,7 @@
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use local_ios_agent_runtime::context::ModelContextWindow;
 use local_ios_agent_runtime::conversation::{
@@ -138,6 +140,80 @@ fn live_text_delta_does_not_advance_the_canonical_projection_cursor() {
     let canonical = feed.next().unwrap().unwrap();
     assert_eq!(canonical.sequence, 1);
     assert_eq!(canonical.kind, TranscriptProjectionKind::UserMessage);
+}
+
+#[test]
+fn adjacent_live_text_deltas_are_coalesced_before_delivery() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    let service = ConversationCommandService::new(store.clone());
+    let registry = service.projection_registry();
+    let mut feed = registry
+        .observe(
+            store,
+            ObserveTranscriptProjectionsRequest {
+                subscription_id: "coalesced-delta".into(),
+                conversation_stream_id: "conversation-a".into(),
+                after_sequence: 0,
+            },
+        )
+        .unwrap();
+
+    for (event_id, payload) in [("delta-1", "hello "), ("delta-2", "world")] {
+        registry.publish_live(TranscriptProjectionEvent {
+            conversation_stream_id: "conversation-a".into(),
+            sequence: 0,
+            event_id: event_id.into(),
+            run_id: Some("run-1".into()),
+            kind: TranscriptProjectionKind::AssistantTextDelta,
+            payload: json!(payload),
+        });
+    }
+
+    let delta = feed.next().unwrap().unwrap();
+
+    assert_eq!(delta.payload, json!("hello world"));
+}
+
+#[test]
+fn live_projection_publisher_applies_backpressure_at_capacity() {
+    let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
+    let service = ConversationCommandService::new(store.clone());
+    let registry = service.projection_registry();
+    let mut feed = registry
+        .observe(
+            store,
+            ObserveTranscriptProjectionsRequest {
+                subscription_id: "bounded-live".into(),
+                conversation_stream_id: "conversation-a".into(),
+                after_sequence: 0,
+            },
+        )
+        .unwrap();
+    let publisher = registry.clone();
+    let (completed_sender, completed_receiver) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        for index in 0..65 {
+            publisher.publish_live(TranscriptProjectionEvent {
+                conversation_stream_id: "conversation-a".into(),
+                sequence: 0,
+                event_id: format!("delta-{index}"),
+                run_id: Some(format!("run-{index}")),
+                kind: TranscriptProjectionKind::AssistantTextDelta,
+                payload: json!("x"),
+            });
+        }
+        completed_sender.send(()).unwrap();
+    });
+
+    assert!(completed_receiver
+        .recv_timeout(Duration::from_millis(50))
+        .is_err());
+    assert!(feed.next().unwrap().is_some());
+    completed_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
 }
 
 #[test]

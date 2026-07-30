@@ -9,6 +9,8 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
     public let requirementsHash: String
     public let llmTargetID: LLMTargetID
     public let llmTargetRevision: UInt64
+    public let fallbackGroupID: String?
+    public let fallbackPriority: UInt64?
     public let parameterOverrides: GenerationConfiguration
 
     public init(
@@ -20,6 +22,8 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
         requirementsHash: String,
         llmTargetID: LLMTargetID,
         llmTargetRevision: UInt64,
+        fallbackGroupID: String? = nil,
+        fallbackPriority: UInt64? = nil,
         parameterOverrides: GenerationConfiguration
     ) {
         self.bindingID = bindingID
@@ -30,6 +34,8 @@ public struct AgentHostConfiguration: Codable, Equatable, Sendable {
         self.requirementsHash = requirementsHash
         self.llmTargetID = llmTargetID
         self.llmTargetRevision = llmTargetRevision
+        self.fallbackGroupID = fallbackGroupID
+        self.fallbackPriority = fallbackPriority
         self.parameterOverrides = parameterOverrides
     }
 

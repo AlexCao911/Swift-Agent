@@ -8,6 +8,8 @@ mod context_compaction;
 mod context_projection;
 #[path = "unit/context_prompt.rs"]
 mod context_prompt;
+#[path = "unit/conversation_summary.rs"]
+mod conversation_summary;
 #[path = "unit/core_types.rs"]
 mod core_types;
 #[path = "unit/run_state.rs"]

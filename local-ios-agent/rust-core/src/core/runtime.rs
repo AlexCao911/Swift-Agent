@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::context::branch_projector::effective_transcript_branch;
 use crate::conversation::ConversationRunFrameRef;
 use crate::core::{AgentError, EntryId, EventKind, RunId, RuntimeEvent, SessionCursor, SessionId};
 use crate::execution::{ExecutionToolObservation, ExecutionToolOutcome};
@@ -226,18 +227,34 @@ impl<S: ConversationEventStore> AgentRuntime<S> {
                 continue;
             };
             let branch = self.store.active_branch(&session_id, leaf_id)?;
-            let search_text = conversation_search_text(&branch);
-            let Some(first_user_event) = branch
+            if branch.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    EventKind::ConversationArchived | EventKind::ConversationDeleted
+                )
+            }) {
+                continue;
+            }
+            let cleared = branch
+                .iter()
+                .any(|event| event.kind == EventKind::ConversationCleared);
+            let effective_branch = effective_transcript_branch(branch);
+            let search_text = conversation_search_text(&effective_branch);
+            let Some(first_user_event) = effective_branch
                 .iter()
                 .find(|event| event.kind == EventKind::UserMessage)
             else {
                 continue;
             };
-            let title = self
-                .store
-                .session_title_override(&session_id)?
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| first_line_title(&first_user_event.payload));
+            let generated_title = || first_line_title(&visible_user_text(first_user_event));
+            let title = if cleared {
+                generated_title()
+            } else {
+                self.store
+                    .session_title_override(&session_id)?
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(generated_title)
+            };
             let last_updated_sequence = last_event
                 .as_ref()
                 .and_then(|event| numeric_suffix(&event.id.0))
@@ -529,7 +546,26 @@ fn conversation_search_text(events: &[RuntimeEvent]) -> String {
                     | EventKind::BranchSummaryCreated
             )
         })
-        .map(|event| event.payload.as_str())
+        .map(|event| {
+            if event.kind == EventKind::UserMessage {
+                visible_user_text(event)
+            } else {
+                event.payload.clone()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn visible_user_text(event: &RuntimeEvent) -> String {
+    serde_json::from_str::<serde_json::Value>(&event.payload)
+        .ok()
+        .and_then(|value| value.get("command").cloned())
+        .and_then(|command| {
+            command
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| event.payload.clone())
 }

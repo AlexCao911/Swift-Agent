@@ -11,7 +11,7 @@ struct OpenMinisChatFacadeTests {
         let recorder = SubmissionRecorder()
         let viewModel = AIChatViewModel(
             conversationStreamID: "conversation-1",
-            submit: { submission in
+            submit: { submission, _ in
                 recorder.append(submission)
             }
         )
@@ -31,10 +31,10 @@ struct OpenMinisChatFacadeTests {
         let recorder = SubmissionRecorder()
         let viewModel = AIChatViewModel(
             conversationStreamID: "conversation-1",
-            submit: { submission in
+            submit: { submission, _ in
                 recorder.append(submission)
             },
-            performTranscriptAction: { streamID, action in
+            performTranscriptAction: { streamID, action, _ in
                 recorder.append(streamID: streamID, action: action)
             },
             selectConversation: { streamID in
@@ -66,7 +66,7 @@ struct OpenMinisChatFacadeTests {
         let recorder = StopRecorder()
         let viewModel = AIChatViewModel(
             conversationStreamID: "conversation-1",
-            submit: { _ in },
+            submit: { _, _ in },
             chatStore: store,
             stopRun: { runID in recorder.runIDs.append(runID) }
         )
@@ -80,6 +80,62 @@ struct OpenMinisChatFacadeTests {
         await viewModel.stop()
 
         #expect(recorder.runIDs == ["run-1"])
+    }
+
+    @Test("stop cancels a submission before Rust returns the active run")
+    func stopCancelsPendingSubmission() async {
+        let recorder = SubmissionCancellationRecorder()
+        let viewModel = AIChatViewModel(
+            conversationStreamID: "conversation-1",
+            submit: { _, _ in
+                recorder.started = true
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                } catch is CancellationError {
+                    recorder.cancelled = true
+                    throw CancellationError()
+                }
+            }
+        )
+        viewModel.draft = "Start a long request"
+        let sendTask = Task { await viewModel.send() }
+        while !recorder.started {
+            await Task.yield()
+        }
+
+        await viewModel.stop()
+        let cancelledByStop = recorder.cancelled
+        sendTask.cancel()
+        await sendTask.value
+
+        #expect(cancelledByStop)
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    @Test("stop targets the predicted run while command submission is pending")
+    func stopTargetsPredictedRunDuringSubmission() async {
+        let recorder = SubmissionCancellationRecorder()
+        let stops = StopRecorder()
+        let viewModel = AIChatViewModel(
+            conversationStreamID: "conversation-1",
+            submit: { _, reportRunID in
+                reportRunID("run-predicted")
+                recorder.started = true
+                try await Task.sleep(for: .seconds(10))
+            },
+            stopRun: { runID in stops.runIDs.append(runID) }
+        )
+        viewModel.draft = "Start a long request"
+        let sendTask = Task { await viewModel.send() }
+        while !recorder.started {
+            await Task.yield()
+        }
+
+        await viewModel.stop()
+        await sendTask.value
+
+        #expect(stops.runIDs == ["run-predicted"])
+        #expect(viewModel.errorMessage == nil)
     }
 
     @Test("attachment drafts become stable Rust transcript references")
@@ -115,7 +171,7 @@ struct OpenMinisChatFacadeTests {
         defer { try? FileManager.default.removeItem(at: source) }
         let viewModel = AIChatViewModel(
             conversationStreamID: "conversation-1",
-            submit: { _ in }
+            submit: { _, _ in }
         )
 
         try viewModel.addFileAttachment(from: source)
@@ -125,6 +181,66 @@ struct OpenMinisChatFacadeTests {
         #expect(attachment.mimeType == "text/plain")
         #expect(attachment.byteCount == 5)
         #expect(attachment.localPath != nil)
+    }
+
+    @Test("photo transfer rejects an oversized file before copying it")
+    func photoTransferChecksFileSizeBeforeCopying() throws {
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        let source = root.appending(path: "oversized.raw")
+        let cache = root.appending(path: "cache", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: source.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.truncate(
+            atOffset: UInt64(
+                OpenMinisAttachmentPolicy.productDefault
+                    .maximumSingleAttachmentBytes + 1
+            )
+        )
+        try handle.close()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(throws: Error.self) {
+            try OpenMinisPickedPhoto.importing(
+                fileURL: source,
+                cacheDirectory: cache
+            )
+        }
+        #expect(!FileManager.default.fileExists(atPath: cache.path))
+    }
+
+    @Test("photo transfer copies an accepted file without loading Data")
+    func photoTransferCopiesAcceptedFile() throws {
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        let source = root.appending(path: "photo.jpg")
+        let cache = root.appending(path: "cache", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        try Data("image".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let photo = try OpenMinisPickedPhoto.importing(
+            fileURL: source,
+            cacheDirectory: cache
+        )
+
+        #expect(photo.byteCount == 5)
+        #expect(photo.displayName == "photo.jpg")
+        #expect(
+            try photo.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                == 5
+        )
     }
 
     @Test("attachment bytes survive repository relaunch and are digest checked")
@@ -324,6 +440,12 @@ private final class SubmissionRecorder {
 @MainActor
 private final class StopRecorder {
     var runIDs: [String] = []
+}
+
+@MainActor
+private final class SubmissionCancellationRecorder {
+    var started = false
+    var cancelled = false
 }
 
 private struct TranscriptActionRecord: Equatable {

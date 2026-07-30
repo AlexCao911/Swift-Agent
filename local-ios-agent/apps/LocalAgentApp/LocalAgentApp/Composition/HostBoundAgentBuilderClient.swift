@@ -143,6 +143,9 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
             requirementsHash: pending.requirementsHash,
             llmTargetID: option.target.targetID,
             llmTargetRevision: option.target.revision,
+            fallbackGroupID:
+                "providers.\(pending.profileId).\(pending.profileRevisionId)",
+            fallbackPriority: 0,
             parameterOverrides: overrides
         )
         let receipt = try await bindingSaga.stageHostBinding(HostBindingStageRequest(

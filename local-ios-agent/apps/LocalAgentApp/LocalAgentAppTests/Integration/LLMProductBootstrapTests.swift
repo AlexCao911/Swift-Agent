@@ -32,8 +32,8 @@ struct LLMProductBootstrapTests {
         ) != nil)
     }
 
-    @Test("hydration rejects implicit fallback order for multiple active bindings")
-    func rejectsAmbiguousFallbackBindings() async throws {
+    @Test("hydration uses the explicit fallback group and priority")
+    func hydratesExplicitFallbackOrder() async throws {
         let primaryTarget = fixtureTarget()
         let fallbackTarget = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "target.fallback"),
@@ -42,10 +42,16 @@ struct LLMProductBootstrapTests {
             modelID: "model.fallback",
             defaultParameters: GenerationConfiguration()
         )
-        let primary = fixtureBinding(target: primaryTarget)
+        let primary = fixtureBinding(
+            target: primaryTarget,
+            fallbackGroupID: "group.bootstrap",
+            fallbackPriority: 0
+        )
         let fallback = fixtureBinding(
             target: fallbackTarget,
-            bindingID: "binding.fallback"
+            bindingID: "binding.fallback",
+            fallbackGroupID: "group.bootstrap",
+            fallbackPriority: 1
         )
         let registry = AppLLMHostSelectionRegistry()
 
@@ -60,12 +66,51 @@ struct LLMProductBootstrapTests {
             }
         )
 
-        #expect(issues == ["execution.host_binding_ambiguous"])
+        #expect(issues.isEmpty)
         let group = await registry.selectionGroup(
             profileID: primary.configuration.agentProfileID,
             revision: primary.configuration.agentProfileRevision
         )
-        #expect(group == nil)
+        #expect(group?.map(\.targetID) == [
+            primaryTarget.targetID,
+            fallbackTarget.targetID,
+        ])
+    }
+
+    @Test("hydration rejects multiple bindings without an explicit order")
+    func rejectsUnorderedFallbackBindings() async throws {
+        let primaryTarget = fixtureTarget()
+        let fallbackTarget = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.fallback"),
+            revision: 1,
+            kind: .local(installationID: "installation.fallback"),
+            modelID: "model.fallback",
+            defaultParameters: GenerationConfiguration()
+        )
+        let registry = AppLLMHostSelectionRegistry()
+
+        let issues = await registry.hydrate(
+            bindings: [
+                fixtureBinding(target: primaryTarget),
+                fixtureBinding(
+                    target: fallbackTarget,
+                    bindingID: "binding.fallback"
+                ),
+            ],
+            targets: [primaryTarget, fallbackTarget],
+            available: [primaryTarget, fallbackTarget].map {
+                AgentLLMTargetOption(
+                    target: $0,
+                    parameterSchema: LLMParameterSchema(definitions: [])
+                )
+            }
+        )
+
+        #expect(issues == ["execution.host_fallback_order_not_configured"])
+        #expect(await registry.selectionGroup(
+            profileID: "profile.bootstrap",
+            revision: 7
+        ) == nil)
     }
 
     @Test("hydration never substitutes a missing target")
@@ -205,7 +250,9 @@ private func fixtureTarget() -> LLMTargetRevision {
 
 private func fixtureBinding(
     target: LLMTargetRevision,
-    bindingID: String = "binding.bootstrap"
+    bindingID: String = "binding.bootstrap",
+    fallbackGroupID: String? = nil,
+    fallbackPriority: UInt64? = nil
 ) -> ActiveAgentHostBinding {
     ActiveAgentHostBinding(
         configuration: AgentHostConfiguration(
@@ -217,6 +264,8 @@ private func fixtureBinding(
             requirementsHash: "requirements.bootstrap",
             llmTargetID: target.targetID,
             llmTargetRevision: target.revision,
+            fallbackGroupID: fallbackGroupID,
+            fallbackPriority: fallbackPriority,
             parameterOverrides: GenerationConfiguration()
         ),
         binding: HostBindingTuple(
@@ -225,4 +274,13 @@ private func fixtureBinding(
             bindingHash: "binding-hash.bootstrap"
         )
     )
+}
+
+private extension AppLLMHostSelection {
+    var targetID: LLMTargetID {
+        switch self {
+        case let .local(_, target, _), let .cloud(_, target, _):
+            target.targetID
+        }
+    }
 }

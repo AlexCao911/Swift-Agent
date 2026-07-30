@@ -1,7 +1,84 @@
+import CoreTransferable
 import Foundation
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+
+struct OpenMinisPickedPhoto: Transferable, Sendable {
+    let fileURL: URL
+    let displayName: String
+    let mediaType: String
+    let byteCount: Int
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .image) { received in
+            try importing(fileURL: received.file)
+        }
+    }
+
+    static func importing(
+        fileURL: URL,
+        cacheDirectory: URL = FileManager.default.temporaryDirectory.appending(
+            path: "LocalAgentPhotoImports",
+            directoryHint: .isDirectory
+        )
+    ) throws -> Self {
+        let values = try fileURL.resourceValues(forKeys: [.fileSizeKey])
+        let displayName = fileURL.lastPathComponent.isEmpty
+            ? "photo.jpg"
+            : fileURL.lastPathComponent
+        guard let byteCount = values.fileSize else {
+            throw OpenMinisPickedPhotoError.sizeUnavailable(displayName)
+        }
+        guard byteCount <= OpenMinisAttachmentPolicy.productDefault
+            .maximumSingleAttachmentBytes
+        else {
+            throw OpenMinisPickedPhotoError.tooLarge(displayName)
+        }
+
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let destination = cacheDirectory.appending(
+            path: "\(UUID().uuidString.lowercased())-\(displayName)"
+        )
+        try FileManager.default.copyItem(at: fileURL, to: destination)
+        guard let copiedByteCount = try destination.resourceValues(
+            forKeys: [.fileSizeKey]
+        ).fileSize else {
+            try? FileManager.default.removeItem(at: destination)
+            throw OpenMinisPickedPhotoError.sizeUnavailable(displayName)
+        }
+        guard copiedByteCount <= OpenMinisAttachmentPolicy.productDefault
+            .maximumSingleAttachmentBytes
+        else {
+            try? FileManager.default.removeItem(at: destination)
+            throw OpenMinisPickedPhotoError.tooLarge(displayName)
+        }
+        let type = UTType(filenameExtension: fileURL.pathExtension)
+        return Self(
+            fileURL: destination,
+            displayName: displayName,
+            mediaType: type?.preferredMIMEType ?? "image/jpeg",
+            byteCount: copiedByteCount
+        )
+    }
+}
+
+private enum OpenMinisPickedPhotoError: LocalizedError {
+    case sizeUnavailable(String)
+    case tooLarge(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .sizeUnavailable(name):
+            "Attachment size is unavailable for \(name)"
+        case let .tooLarge(name):
+            "Attachment \(name) exceeds the configured size limit"
+        }
+    }
+}
 
 // Adapted from OpenMinis' chat palette and message composition. The LocalAgent
 // data flow remains owned by the injected facade and Rust-facing runtime.
@@ -116,19 +193,12 @@ struct OpenMinisProductShellView: View {
             guard !items.isEmpty else { return }
             selectedPhotoItems = []
             Task {
-                for (index, item) in items.enumerated() {
+                for item in items {
                     do {
-                        guard let data = try await item.loadTransferable(
-                            type: Data.self
+                        guard let photo = try await item.loadTransferable(
+                            type: OpenMinisPickedPhoto.self
                         ) else { continue }
-                        let type = item.supportedContentTypes.first {
-                            $0.conforms(to: .image)
-                        }
-                        try viewModel.addPhotoAttachment(
-                            data: data,
-                            preferredFilename: "photo-\(index + 1).\(type?.preferredFilenameExtension ?? "jpg")",
-                            mediaType: type?.preferredMIMEType ?? "image/jpeg"
-                        )
+                        viewModel.addPhotoAttachment(photo)
                     } catch {
                         viewModel.reportAttachmentError(error)
                     }

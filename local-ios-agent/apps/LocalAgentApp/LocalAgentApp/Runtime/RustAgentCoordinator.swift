@@ -36,11 +36,15 @@ protocol RustAgentModelRunPreparing {
 
 @MainActor
 final class RustAgentCoordinator: ObservableObject {
+    typealias ReportRunID = @MainActor @Sendable (_ runID: String) -> Void
+
     private let conversation: any ConversationBridgeClient
     private let snapshots: any RustAgentSnapshotProviding
     private let models: any RustAgentModelRunPreparing
     private let projections: ProjectionFeedController
     private let cancellation: (any RustAgentRunCancelling)?
+    private var pendingRunIDs: Set<String> = []
+    private var cancellationRequestedRunIDs: Set<String> = []
 
     init(
         conversation: any ConversationBridgeClient,
@@ -64,16 +68,20 @@ final class RustAgentCoordinator: ObservableObject {
         text: String,
         attachments: [TranscriptAttachmentReferenceDTO],
         agentProfileID: String,
-        agentProfileRevisionID: UInt64
+        agentProfileRevisionID: UInt64,
+        reportRunID: @escaping ReportRunID = { _ in }
     ) async throws -> TranscriptCommandResultDTO {
+        try Task.checkCancellation()
         let window = try await models.modelContextWindow(
             agentProfileID: agentProfileID,
             agentProfileRevisionID: agentProfileRevisionID
         )
+        try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
             modelContextWindow: window
         )
+        try Task.checkCancellation()
         return try await submitRunCommand(
             .send(
                 requestID: requestID,
@@ -84,7 +92,8 @@ final class RustAgentCoordinator: ObservableObject {
                 runStartSnapshot: snapshot
             ),
             agentProfileID: agentProfileID,
-            agentProfileRevisionID: agentProfileRevisionID
+            agentProfileRevisionID: agentProfileRevisionID,
+            reportRunID: reportRunID
         )
     }
 
@@ -94,16 +103,20 @@ final class RustAgentCoordinator: ObservableObject {
         conversationStreamID: String,
         anchorEventID: String,
         agentProfileID: String,
-        agentProfileRevisionID: UInt64
+        agentProfileRevisionID: UInt64,
+        reportRunID: @escaping ReportRunID = { _ in }
     ) async throws -> TranscriptCommandResultDTO {
+        try Task.checkCancellation()
         let window = try await models.modelContextWindow(
             agentProfileID: agentProfileID,
             agentProfileRevisionID: agentProfileRevisionID
         )
+        try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
             modelContextWindow: window
         )
+        try Task.checkCancellation()
         return try await submitRunCommand(
             .retryFrom(
                 requestID: requestID,
@@ -112,7 +125,8 @@ final class RustAgentCoordinator: ObservableObject {
                 runStartSnapshot: snapshot
             ),
             agentProfileID: agentProfileID,
-            agentProfileRevisionID: agentProfileRevisionID
+            agentProfileRevisionID: agentProfileRevisionID,
+            reportRunID: reportRunID
         )
     }
 
@@ -124,16 +138,20 @@ final class RustAgentCoordinator: ObservableObject {
         replacementText: String,
         replacementAttachments: [TranscriptAttachmentReferenceDTO],
         agentProfileID: String,
-        agentProfileRevisionID: UInt64
+        agentProfileRevisionID: UInt64,
+        reportRunID: @escaping ReportRunID = { _ in }
     ) async throws -> TranscriptCommandResultDTO {
+        try Task.checkCancellation()
         let window = try await models.modelContextWindow(
             agentProfileID: agentProfileID,
             agentProfileRevisionID: agentProfileRevisionID
         )
+        try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
             modelContextWindow: window
         )
+        try Task.checkCancellation()
         return try await submitRunCommand(
             .editMessage(
                 requestID: requestID,
@@ -144,7 +162,8 @@ final class RustAgentCoordinator: ObservableObject {
                 runStartSnapshot: snapshot
             ),
             agentProfileID: agentProfileID,
-            agentProfileRevisionID: agentProfileRevisionID
+            agentProfileRevisionID: agentProfileRevisionID,
+            reportRunID: reportRunID
         )
     }
 
@@ -183,12 +202,17 @@ final class RustAgentCoordinator: ObservableObject {
     }
 
     func cancel(runID: String) async throws {
+        cancellationRequestedRunIDs.insert(runID)
         guard let cancellation else {
             throw RustAgentCoordinatorError(
                 message: "Rust Agent cancellation is unavailable"
             )
         }
-        _ = try await cancellation.cancelRun(runId: runID)
+        do {
+            _ = try await cancellation.cancelRun(runId: runID)
+        } catch {
+            guard pendingRunIDs.contains(runID) else { throw error }
+        }
     }
 
     func selectConversation(
@@ -237,25 +261,44 @@ final class RustAgentCoordinator: ObservableObject {
     private func submitRunCommand(
         _ command: TranscriptCommandDTO,
         agentProfileID: String,
-        agentProfileRevisionID: UInt64
+        agentProfileRevisionID: UInt64,
+        reportRunID: @escaping ReportRunID
     ) async throws -> TranscriptCommandResultDTO {
         guard let predictedRunID = try command.predictedRunID() else {
             preconditionFailure("run command did not produce a run ID")
         }
+        pendingRunIDs.insert(predictedRunID)
+        defer {
+            pendingRunIDs.remove(predictedRunID)
+            cancellationRequestedRunIDs.remove(predictedRunID)
+        }
+        reportRunID(predictedRunID)
         do {
+            try checkCancellation(runID: predictedRunID)
             try await models.prepareModelRun(
                 runID: predictedRunID,
                 agentProfileID: agentProfileID,
                 agentProfileRevisionID: agentProfileRevisionID
             )
+            try checkCancellation(runID: predictedRunID)
             try projections.markRunStarted(
                 conversationStreamID: command.conversationStreamID
             )
+            try checkCancellation(runID: predictedRunID)
             let result = try await conversation.submitTranscriptCommand(command)
             guard result.runID == predictedRunID else {
                 throw RustAgentCoordinatorError(
                     message: "Rust returned an unexpected run identity"
                 )
+            }
+            if Task.isCancelled
+                || cancellationRequestedRunIDs.contains(predictedRunID) {
+                if let cancellation {
+                    _ = try? await cancellation.cancelRun(
+                        runId: predictedRunID
+                    )
+                }
+                throw CancellationError()
             }
             return result
         } catch {
@@ -264,6 +307,12 @@ final class RustAgentCoordinator: ObservableObject {
                 conversationStreamID: command.conversationStreamID
             )
             throw error
+        }
+    }
+
+    private func checkCancellation(runID: String) throws {
+        if Task.isCancelled || cancellationRequestedRunIDs.contains(runID) {
+            throw CancellationError()
         }
     }
 }

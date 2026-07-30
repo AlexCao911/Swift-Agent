@@ -132,6 +132,9 @@ actor LegacyLLMMigrationCoordinator: LegacyLLMMigrationPresenting {
             requirementsHash: successor.requirementsHash,
             llmTargetID: option.target.targetID,
             llmTargetRevision: option.target.revision,
+            fallbackGroupID:
+                "providers.\(successor.profileId).\(successor.profileRevision)",
+            fallbackPriority: 0,
             parameterOverrides: resolved
         )
         let receipt = try await bindingSaga.stageHostBinding(HostBindingStageRequest(

@@ -32,10 +32,15 @@ final class AIChatViewModel: ObservableObject {
         case archive
     }
 
-    typealias Submit = @MainActor @Sendable (Submission) async throws -> Void
+    typealias ReportRunID = @MainActor @Sendable (_ runID: String) -> Void
+    typealias Submit = @MainActor @Sendable (
+        _ submission: Submission,
+        _ reportRunID: @escaping ReportRunID
+    ) async throws -> Void
     typealias PerformTranscriptAction = @MainActor @Sendable (
         _ conversationStreamID: String,
-        _ action: TranscriptAction
+        _ action: TranscriptAction,
+        _ reportRunID: @escaping ReportRunID
     ) async throws -> Void
     typealias SelectConversation = @MainActor @Sendable (
         _ conversationStreamID: String
@@ -58,6 +63,8 @@ final class AIChatViewModel: ObservableObject {
     private weak var chatStore: ChatStore?
     private var subscriptions: Set<AnyCancellable> = []
     private var isSubmitting = false
+    private var pendingOperation: Task<Void, Error>?
+    private var pendingRunID: String?
 
     init(
         conversationStreamID: String,
@@ -139,29 +146,14 @@ final class AIChatViewModel: ObservableObject {
         ))
     }
 
-    func addPhotoAttachment(
-        data: Data,
-        preferredFilename: String = "photo.jpg",
-        mediaType: String = "image/jpeg"
-    ) throws {
-        guard data.count <= OpenMinisAttachmentPolicy.productDefault
-            .maximumSingleAttachmentBytes else {
-            throw AttachmentInputError.tooLarge(preferredFilename)
-        }
-        let destination = inputAttachmentCacheDirectory()
-            .appending(path: "\(UUID().uuidString.lowercased())-\(preferredFilename)")
-        try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try data.write(to: destination, options: .atomic)
+    func addPhotoAttachment(_ photo: OpenMinisPickedPhoto) {
         inputAttachments.append(AttachmentDraftViewState(
             id: UUID().uuidString.lowercased(),
             kind: .image,
-            displayName: preferredFilename,
-            localPath: destination.path,
-            mimeType: mediaType,
-            byteCount: data.count
+            displayName: photo.displayName,
+            localPath: photo.fileURL.path,
+            mimeType: photo.mediaType,
+            byteCount: photo.byteCount
         ))
     }
 
@@ -194,13 +186,22 @@ final class AIChatViewModel: ObservableObject {
         errorMessage = nil
         defer {
             isSubmitting = false
+            pendingOperation = nil
+            pendingRunID = nil
             refreshRunningState()
         }
 
+        let operation = Task { @MainActor [submit] in
+            try await submit(submission) { [weak self] runID in
+                self?.pendingRunID = runID
+            }
+        }
+        pendingOperation = operation
         do {
-            try await submit(submission)
+            try await operation.value
             draft = ""
             inputAttachments = []
+        } catch is CancellationError {
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -245,15 +246,21 @@ final class AIChatViewModel: ObservableObject {
     }
 
     func stop() async {
-        guard let runID = chatStore?.activeRunID(
+        let operation = pendingOperation
+        operation?.cancel()
+        let runID = pendingRunID ?? chatStore?.activeRunID(
             conversationStreamID: conversationStreamID
-        ), let stopRun else {
-            return
+        )
+        if let runID, let stopRun {
+            do {
+                try await stopRun(runID)
+            } catch is CancellationError {
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
-        do {
-            try await stopRun(runID)
-        } catch {
-            errorMessage = error.localizedDescription
+        if let operation {
+            _ = await operation.result
         }
     }
 
@@ -267,10 +274,22 @@ final class AIChatViewModel: ObservableObject {
         errorMessage = nil
         defer {
             isSubmitting = false
+            pendingOperation = nil
+            pendingRunID = nil
             refreshRunningState()
         }
+        let operation = Task { @MainActor [performTranscriptAction] in
+            try await performTranscriptAction(
+                conversationStreamID,
+                action
+            ) { [weak self] runID in
+                self?.pendingRunID = runID
+            }
+        }
+        pendingOperation = operation
         do {
-            try await performTranscriptAction(conversationStreamID, action)
+            try await operation.value
+        } catch is CancellationError {
         } catch {
             errorMessage = error.localizedDescription
         }

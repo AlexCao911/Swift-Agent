@@ -104,7 +104,7 @@ struct AppContainer {
         else {
             return AIChatViewModel(
                 conversationStreamID: conversationStreamID
-            ) { _ in
+            ) { _, _ in
                 throw RustAgentCoordinatorError(
                     message: "Rust Agent runtime is unavailable"
                 )
@@ -150,7 +150,7 @@ struct AppContainer {
             )
             return AIChatViewModel(
                 conversationStreamID: conversationStreamID,
-                submit: { submission in
+                submit: { submission, reportRunID in
                 guard let agent = shellViewModel.activeAgent else {
                     throw RustAgentCoordinatorError(
                         message: "Choose an agent and model before sending"
@@ -172,7 +172,8 @@ struct AppContainer {
                     text: submission.text,
                     attachments: attachmentReferences,
                     agentProfileID: agent.profileId,
-                    agentProfileRevisionID: agent.profileRevisionId
+                    agentProfileRevisionID: agent.profileRevisionId,
+                    reportRunID: reportRunID
                 )
                 if let runID = result.runID {
                     chatStore.markRunAccepted(
@@ -181,7 +182,10 @@ struct AppContainer {
                     )
                 }
                 },
-                performTranscriptAction: { conversationStreamID, action in
+                performTranscriptAction: {
+                    conversationStreamID,
+                    action,
+                    reportRunID in
                 switch action {
                 case let .retry(anchorEventID):
                     guard let agent = shellViewModel.activeAgent else {
@@ -194,7 +198,8 @@ struct AppContainer {
                         conversationStreamID: conversationStreamID,
                         anchorEventID: anchorEventID,
                         agentProfileID: agent.profileId,
-                        agentProfileRevisionID: agent.profileRevisionId
+                        agentProfileRevisionID: agent.profileRevisionId,
+                        reportRunID: reportRunID
                     )
                     if let runID = result.runID {
                         chatStore.markRunAccepted(
@@ -228,7 +233,8 @@ struct AppContainer {
                         replacementText: replacementText,
                         replacementAttachments: attachmentReferences,
                         agentProfileID: agent.profileId,
-                        agentProfileRevisionID: agent.profileRevisionId
+                        agentProfileRevisionID: agent.profileRevisionId,
+                        reportRunID: reportRunID
                     )
                     if let runID = result.runID {
                         chatStore.markRunAccepted(
@@ -277,7 +283,7 @@ struct AppContainer {
         } catch {
             return AIChatViewModel(
                 conversationStreamID: conversationStreamID
-            ) { _ in
+            ) { _, _ in
                 throw error
             }
         }

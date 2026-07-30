@@ -195,7 +195,7 @@ func agentHostConfigurationDigest(_ configuration: AgentHostConfiguration) throw
     let parameters = try CanonicalJSONValue.object(entries: configuration.parameterOverrides.parameters.map {
         CanonicalJSONObjectEntry(name: $0.key, value: parameterValue($0.value))
     })
-    let document = try CanonicalJSONValue.object(entries: [
+    var entries: [CanonicalJSONObjectEntry] = [
         .init(name: "agent_profile_id", value: .string(configuration.agentProfileID)),
         .init(name: "agent_profile_revision", value: .string(String(configuration.agentProfileRevision))),
         .init(name: "binding_id", value: .string(configuration.bindingID)),
@@ -205,7 +205,21 @@ func agentHostConfigurationDigest(_ configuration: AgentHostConfiguration) throw
         .init(name: "llm_target_id", value: .string(configuration.llmTargetID.rawValue)),
         .init(name: "llm_target_revision", value: .string(String(configuration.llmTargetRevision))),
         .init(name: "parameter_overrides", value: parameters),
-    ])
+    ]
+    if let fallbackGroupID = configuration.fallbackGroupID {
+        entries.append(
+            .init(name: "fallback_group_id", value: .string(fallbackGroupID))
+        )
+    }
+    if let fallbackPriority = configuration.fallbackPriority {
+        entries.append(
+            .init(
+                name: "fallback_priority",
+                value: .string(String(fallbackPriority))
+            )
+        )
+    }
+    let document = try CanonicalJSONValue.object(entries: entries)
     return try CanonicalDigestV1.digest(domain: "agent-host-binding:v1", document: document).hex
 }
 

@@ -44,6 +44,44 @@ struct AgentHostConfigurationTests {
     }
 
     @Test
+    func explicitFallbackOrderRoundTripsAndIsDigestBound() throws {
+        let configuration = AgentHostConfiguration(
+            bindingID: "binding.fallback",
+            revision: 1,
+            agentProfileID: "profile.writer",
+            agentProfileRevision: 11,
+            llmSlotID: "slot.model.primary",
+            requirementsHash: "requirements-digest",
+            llmTargetID: LLMTargetID(rawValue: "target.cloud.fallback"),
+            llmTargetRevision: 2,
+            fallbackGroupID: "providers.writer",
+            fallbackPriority: 3,
+            parameterOverrides: GenerationConfiguration()
+        )
+
+        let copy = try roundTrip(configuration)
+
+        #expect(copy.fallbackGroupID == "providers.writer")
+        #expect(copy.fallbackPriority == 3)
+        #expect(
+            try agentHostConfigurationDigest(copy)
+                != agentHostConfigurationDigest(
+                    AgentHostConfiguration(
+                        bindingID: copy.bindingID,
+                        revision: copy.revision,
+                        agentProfileID: copy.agentProfileID,
+                        agentProfileRevision: copy.agentProfileRevision,
+                        llmSlotID: copy.llmSlotID,
+                        requirementsHash: copy.requirementsHash,
+                        llmTargetID: copy.llmTargetID,
+                        llmTargetRevision: copy.llmTargetRevision,
+                        parameterOverrides: copy.parameterOverrides
+                    )
+                )
+        )
+    }
+
+    @Test
     func targetKindUsesVersionedIdentityPayloadAndRejectsUnknownVersions() throws {
         let target = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "target.cloud.primary"),

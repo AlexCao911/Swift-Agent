@@ -1,3 +1,4 @@
+import Foundation
 import LocalAgentBridge
 import LocalAgentLLMCloud
 import LocalAgentLLMContracts
@@ -47,7 +48,7 @@ actor AppLLMHostSelectionRegistry {
         available: [AgentLLMTargetOption]
     ) -> [String] {
         var next: [Key: [AppLLMHostSelection]] = [:]
-        var ambiguousKeys: Set<Key> = []
+        var invalidKeys: Set<Key> = []
         var issues: [String] = []
         for active in bindings {
             let configuration = active.configuration
@@ -90,23 +91,48 @@ actor AppLLMHostSelectionRegistry {
                     binding: active.binding
                 )
             }
-            if ambiguousKeys.contains(key) {
+            if invalidKeys.contains(key) {
                 continue
             }
             if let first = next[key]?.first,
                first.configuration.llmSlotID != configuration.llmSlotID
                 || first.configuration.requirementsHash
                     != configuration.requirementsHash {
+                next.removeValue(forKey: key)
+                invalidKeys.insert(key)
                 issues.append("execution.host_binding_not_configured")
                 continue
             }
-            if next[key] != nil {
+            next[key, default: []].append(selection)
+        }
+        for (key, group) in Array(next) where group.count > 1 {
+            let normalizedGroupIDs = group.compactMap {
+                $0.configuration.fallbackGroupID?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+            }
+            let groupIDs = Set(normalizedGroupIDs)
+            let priorities = group.compactMap {
+                $0.configuration.fallbackPriority
+            }
+            guard normalizedGroupIDs.count == group.count,
+                  groupIDs.count == 1,
+                  groupIDs.first?.isEmpty == false,
+                  priorities.count == group.count,
+                  Set(priorities).count == group.count
+            else {
                 next.removeValue(forKey: key)
-                ambiguousKeys.insert(key)
-                issues.append("execution.host_binding_ambiguous")
+                issues.append("execution.host_fallback_order_not_configured")
                 continue
             }
-            next[key] = [selection]
+            next[key] = group.sorted { left, right in
+                guard let leftPriority = left.configuration.fallbackPriority,
+                      let rightPriority = right.configuration.fallbackPriority
+                else {
+                    return false
+                }
+                return leftPriority < rightPriority
+            }
         }
         selections = next
         return Array(Set(issues)).sorted()
