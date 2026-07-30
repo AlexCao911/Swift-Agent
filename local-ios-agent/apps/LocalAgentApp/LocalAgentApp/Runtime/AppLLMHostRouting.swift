@@ -148,6 +148,35 @@ actor AppLLMHostSelectionRegistry {
     ) -> [AppLLMHostSelection]? {
         selections[Key(profileID: profileID, revision: revision)]
     }
+
+    func installGroup(
+        bindings: [ActiveAgentHostBinding],
+        targets: [LLMTargetRevision],
+        available: [AgentLLMTargetOption]
+    ) -> [String] {
+        guard let configuration = bindings.first?.configuration else {
+            return ["execution.host_binding_not_configured"]
+        }
+        let key = Key(
+            profileID: configuration.agentProfileID,
+            revision: configuration.agentProfileRevision
+        )
+        let previous = selections
+        let issues = hydrate(
+            bindings: bindings,
+            targets: targets,
+            available: available
+        )
+        let installed = selections[key]
+        selections = previous
+        if issues.isEmpty, let installed {
+            selections[key] = installed
+            return []
+        }
+        return issues.isEmpty
+            ? ["execution.host_binding_not_configured"]
+            : issues
+    }
 }
 
 private extension AppLLMHostSelection {

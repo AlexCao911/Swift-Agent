@@ -150,7 +150,68 @@ final class AgentBuilderViewModel {
         guard llmTargets.contains(where: { $0.target.reference == reference }) else {
             return
         }
-        llmSelection = selection(for: reference)
+        let fallbacks = llmSelection?.fallbackCandidates.filter {
+            $0.target != reference
+        } ?? []
+        llmSelection = selection(
+            for: reference,
+            fallbackCandidates: fallbacks
+        )
+        markEdited()
+    }
+
+    func addFallbackTarget(_ reference: LLMTargetReference) {
+        guard let selection = llmSelection,
+              reference != selection.target,
+              llmTargets.contains(where: { $0.target.reference == reference }),
+              !selection.fallbackCandidates.contains(where: {
+                  $0.target == reference
+              })
+        else {
+            return
+        }
+        llmSelection = replacingFallbacks(
+            in: selection,
+            with: selection.fallbackCandidates + [
+                AgentLLMCandidateDraft(
+                    target: reference,
+                    parameterOverrides: GenerationConfiguration()
+                ),
+            ]
+        )
+        markEdited()
+    }
+
+    func removeFallbackTarget(_ reference: LLMTargetReference) {
+        guard let selection = llmSelection else { return }
+        let candidates = selection.fallbackCandidates.filter {
+            $0.target != reference
+        }
+        guard candidates.count != selection.fallbackCandidates.count else {
+            return
+        }
+        llmSelection = replacingFallbacks(in: selection, with: candidates)
+        markEdited()
+    }
+
+    func moveFallbackTarget(
+        _ reference: LLMTargetReference,
+        direction: Int
+    ) {
+        guard let selection = llmSelection,
+              let current = selection.fallbackCandidates.firstIndex(where: {
+                  $0.target == reference
+              })
+        else {
+            return
+        }
+        let destination = current + direction
+        guard selection.fallbackCandidates.indices.contains(destination) else {
+            return
+        }
+        var candidates = selection.fallbackCandidates
+        candidates.swapAt(current, destination)
+        llmSelection = replacingFallbacks(in: selection, with: candidates)
         markEdited()
     }
 
@@ -160,7 +221,8 @@ final class AgentBuilderViewModel {
             operationID: selection.operationID,
             target: selection.target,
             requirements: selection.requirements,
-            parameterOverrides: selection.parameterOverrides.setting(id, to: value)
+            parameterOverrides: selection.parameterOverrides.setting(id, to: value),
+            fallbackCandidates: selection.fallbackCandidates
         )
         markEdited()
     }
@@ -215,7 +277,8 @@ final class AgentBuilderViewModel {
                 operationID: "\(requiresHostTarget ? "agent-builder" : "legacy").\(profileId).\(draftVersion)",
                 target: selection.target,
                 requirements: selection.requirements,
-                parameterOverrides: selection.parameterOverrides
+                parameterOverrides: selection.parameterOverrides,
+                fallbackCandidates: selection.fallbackCandidates
             )
         }
         publishedAgentSelection = nil
@@ -305,7 +368,10 @@ final class AgentBuilderViewModel {
             ?? AgentBuilderDraftDTO(profileId: profileId, templateId: templateId)
     }
 
-    private func selection(for reference: LLMTargetReference) -> AgentLLMSelectionDraft {
+    private func selection(
+        for reference: LLMTargetReference,
+        fallbackCandidates: [AgentLLMCandidateDraft] = []
+    ) -> AgentLLMSelectionDraft {
         AgentLLMSelectionDraft(
             operationID: "agent-builder.\(profileId).\(draftVersion)",
             target: reference,
@@ -317,7 +383,21 @@ final class AgentBuilderViewModel {
                 streamingRequired: true,
                 toolCallingMode: draft?.selectedToolIds.isEmpty == false ? "allowed" : "disabled"
             ),
-            parameterOverrides: GenerationConfiguration()
+            parameterOverrides: GenerationConfiguration(),
+            fallbackCandidates: fallbackCandidates
+        )
+    }
+
+    private func replacingFallbacks(
+        in selection: AgentLLMSelectionDraft,
+        with candidates: [AgentLLMCandidateDraft]
+    ) -> AgentLLMSelectionDraft {
+        AgentLLMSelectionDraft(
+            operationID: selection.operationID,
+            target: selection.target,
+            requirements: selection.requirements,
+            parameterOverrides: selection.parameterOverrides,
+            fallbackCandidates: candidates
         )
     }
 

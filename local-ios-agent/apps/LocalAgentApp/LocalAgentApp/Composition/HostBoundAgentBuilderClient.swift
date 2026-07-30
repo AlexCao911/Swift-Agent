@@ -7,11 +7,40 @@ struct AgentLLMTargetOption: Equatable, Sendable {
     let parameterSchema: LLMParameterSchema
 }
 
+struct AgentLLMCandidateDraft: Equatable, Sendable {
+    let target: LLMTargetReference
+    let parameterOverrides: GenerationConfiguration
+}
+
 struct AgentLLMSelectionDraft: Equatable, Sendable {
     let operationID: String
     let target: LLMTargetReference
     let requirements: AgentLLMRequirementsDTO
     let parameterOverrides: GenerationConfiguration
+    let fallbackCandidates: [AgentLLMCandidateDraft]
+
+    init(
+        operationID: String,
+        target: LLMTargetReference,
+        requirements: AgentLLMRequirementsDTO,
+        parameterOverrides: GenerationConfiguration,
+        fallbackCandidates: [AgentLLMCandidateDraft] = []
+    ) {
+        self.operationID = operationID
+        self.target = target
+        self.requirements = requirements
+        self.parameterOverrides = parameterOverrides
+        self.fallbackCandidates = fallbackCandidates
+    }
+
+    var orderedCandidates: [AgentLLMCandidateDraft] {
+        [
+            AgentLLMCandidateDraft(
+                target: target,
+                parameterOverrides: parameterOverrides
+            ),
+        ] + fallbackCandidates
+    }
 }
 
 protocol AgentLLMTargetCatalog: Sendable {
@@ -82,16 +111,21 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
     private let portable: any PortableAgentBuilderClient
     private let targets: any AgentLLMTargetCatalog
     private let bindingSaga: AgentHostBindingSaga
-    private var activeConfigurations: [String: (AgentHostConfiguration, LLMTargetRevision)] = [:]
+    private let selectionRegistry: AppLLMHostSelectionRegistry?
+    private var activeConfigurations: [
+        String: [(AgentHostConfiguration, LLMTargetRevision)]
+    ] = [:]
 
     init(
         portable: any PortableAgentBuilderClient,
         targets: any AgentLLMTargetCatalog,
-        bindingSaga: AgentHostBindingSaga
+        bindingSaga: AgentHostBindingSaga,
+        selectionRegistry: AppLLMHostSelectionRegistry? = nil
     ) {
         self.portable = portable
         self.targets = targets
         self.bindingSaga = bindingSaga
+        self.selectionRegistry = selectionRegistry
     }
 
     func availableTargets() async throws -> [AgentLLMTargetOption] {
@@ -116,12 +150,27 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
         draft: AgentBuilderDraftDTO,
         llm: AgentLLMSelectionDraft
     ) async throws -> PublishedAgentSelection {
-        let option = try await exactTarget(llm.target)
-        let overrides = try LLMParameterSystem.resolve(
-            targetDefaults: option.target.defaultParameters,
-            hostOverrides: llm.parameterOverrides,
-            schema: option.parameterSchema
-        )
+        let candidates = llm.orderedCandidates
+        guard Set(candidates.map {
+            "\($0.target.targetID.rawValue)#\($0.target.revision)"
+        }).count == candidates.count else {
+            throw AgentBuilderPublishError(
+                code: "agent_builder.fallback_target_duplicate",
+                message: "each fallback target revision must appear only once"
+            )
+        }
+        var resolvedCandidates: [
+            (option: AgentLLMTargetOption, overrides: GenerationConfiguration)
+        ] = []
+        for candidate in candidates {
+            let option = try await exactTarget(candidate.target)
+            let overrides = try LLMParameterSystem.resolve(
+                targetDefaults: option.target.defaultParameters,
+                hostOverrides: candidate.parameterOverrides,
+                schema: option.parameterSchema
+            )
+            resolvedCandidates.append((option, overrides))
+        }
         let pending = try await portable.buildPendingProfile(BuildAgentV2RequestDTO(
             operationId: llm.operationID,
             draft: draft,
@@ -134,68 +183,123 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
             llmSlotId: pending.llmSlotId,
             requirementsHash: pending.requirementsHash
         ))
-        let configuration = AgentHostConfiguration(
-            bindingID: "binding.\(pending.profileId).\(pending.profileRevisionId)",
-            revision: 1,
-            agentProfileID: pending.profileId,
-            agentProfileRevision: pending.profileRevisionId,
-            llmSlotID: pending.llmSlotId,
-            requirementsHash: pending.requirementsHash,
-            llmTargetID: option.target.targetID,
-            llmTargetRevision: option.target.revision,
-            fallbackGroupID:
-                "providers.\(pending.profileId).\(pending.profileRevisionId)",
-            fallbackPriority: 0,
-            parameterOverrides: overrides
-        )
-        let receipt = try await bindingSaga.stageHostBinding(HostBindingStageRequest(
-            operationToken: operation.token,
-            tokenDigest: operation.tokenDigest,
-            llmSlotID: operation.llmSlotId,
-            requirementsHash: operation.requirementsHash,
-            configuration: configuration
-        ))
-        let binding = HostBindingTupleDTO(
-            bindingId: receipt.binding.bindingID,
-            bindingRevision: receipt.binding.bindingRevision,
-            bindingHash: receipt.binding.bindingHash
+        let groupID = "providers.\(pending.profileId).\(pending.profileRevisionId)"
+        var staged: [(
+            operationToken: String,
+            configuration: AgentHostConfiguration,
+            target: LLMTargetRevision,
+            receipt: HostBindingStagingReceipt
+        )] = []
+        for (index, candidate) in resolvedCandidates.enumerated() {
+            let priority = UInt64(index)
+            let operationToken = index == 0
+                ? operation.token
+                : "\(operation.token).fallback.\(priority)"
+            let tokenDigest = index == 0
+                ? operation.tokenDigest
+                : try fallbackTokenDigest(
+                    primaryTokenDigest: operation.tokenDigest,
+                    priority: priority
+                )
+            let configuration = AgentHostConfiguration(
+                bindingID: index == 0
+                    ? "binding.\(pending.profileId).\(pending.profileRevisionId)"
+                    : "binding.\(pending.profileId).\(pending.profileRevisionId).fallback.\(priority)",
+                revision: 1,
+                agentProfileID: pending.profileId,
+                agentProfileRevision: pending.profileRevisionId,
+                llmSlotID: pending.llmSlotId,
+                requirementsHash: pending.requirementsHash,
+                llmTargetID: candidate.option.target.targetID,
+                llmTargetRevision: candidate.option.target.revision,
+                fallbackGroupID: groupID,
+                fallbackPriority: priority,
+                parameterOverrides: candidate.overrides
+            )
+            let receipt = try await bindingSaga.stageHostBinding(
+                HostBindingStageRequest(
+                    operationToken: operationToken,
+                    tokenDigest: tokenDigest,
+                    llmSlotID: operation.llmSlotId,
+                    requirementsHash: operation.requirementsHash,
+                    configuration: configuration
+                )
+            )
+            staged.append((
+                operationToken,
+                configuration,
+                candidate.option.target,
+                receipt
+            ))
+        }
+        guard let primary = staged.first else {
+            throw AgentBuilderPublishError(
+                code: "agent_builder.target_missing",
+                message: "select at least one immutable LLM target revision"
+            )
+        }
+        let primaryBinding = HostBindingTupleDTO(
+            bindingId: primary.receipt.binding.bindingID,
+            bindingRevision: primary.receipt.binding.bindingRevision,
+            bindingHash: primary.receipt.binding.bindingHash
         )
         let receiptDTO = HostBindingStagingReceiptDTO(
-            tokenDigest: receipt.tokenDigest,
-            llmSlotId: receipt.llmSlotID,
-            requirementsHash: receipt.requirementsHash,
-            binding: binding,
-            receiptDigest: receipt.receiptDigest
+            tokenDigest: primary.receipt.tokenDigest,
+            llmSlotId: primary.receipt.llmSlotID,
+            requirementsHash: primary.receipt.requirementsHash,
+            binding: primaryBinding,
+            receiptDigest: primary.receipt.receiptDigest
         )
         let crossLink = try await portable.commitProfilePublish(HostBindingCommitDTO(
             token: operation.token,
-            binding: binding,
+            binding: primaryBinding,
             receipt: receiptDTO
         ))
-        try await bindingSaga.activateHostBinding(
-            operationToken: operation.token,
-            binding: receipt.binding
-        )
+        for candidate in staged {
+            try await bindingSaga.activateHostBinding(
+                operationToken: candidate.operationToken,
+                binding: candidate.receipt.binding
+            )
+        }
         let active = try await portable.confirmHostBindingActivation(
             HostBindingActivationConfirmationDTO(
                 agentProfileId: pending.profileId,
                 agentProfileRevision: pending.profileRevisionId,
                 llmSlotId: pending.llmSlotId,
                 requirementsHash: pending.requirementsHash,
-                binding: binding,
+                binding: primaryBinding,
                 stagingReceiptDigest: crossLink.stagingReceiptDigest
             )
         )
-        guard active.state == "active", active.binding == binding else {
+        guard active.state == "active", active.binding == primaryBinding else {
             throw AgentBuilderPublishError(
                 code: "agent_builder.binding_not_active",
                 message: "host binding did not reach the exact active state"
             )
         }
+        let activeBindings = staged.map {
+            ActiveAgentHostBinding(
+                configuration: $0.configuration,
+                binding: $0.receipt.binding
+            )
+        }
+        if let selectionRegistry {
+            let issues = await selectionRegistry.installGroup(
+                bindings: activeBindings,
+                targets: staged.map(\.target),
+                available: resolvedCandidates.map(\.option)
+            )
+            guard issues.isEmpty else {
+                throw AgentBuilderPublishError(
+                    code: "agent_builder.fallback_group_not_executable",
+                    message: "published fallback group is not executable: \(issues.joined(separator: ", "))"
+                )
+            }
+        }
         activeConfigurations[configurationKey(
             profileID: pending.profileId,
             revision: pending.profileRevisionId
-        )] = (configuration, option.target)
+        )] = staged.map { ($0.configuration, $0.target) }
         return PublishedAgentSelection(
             profileId: pending.profileId,
             profileRevisionId: pending.profileRevisionId,
@@ -209,7 +313,7 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
     ) async throws -> HostBindingTuple? {
         guard let (configuration, target) = activeConfigurations[
             configurationKey(profileID: profileID, revision: profileRevision)
-        ] else {
+        ]?.first else {
             return nil
         }
         return try await bindingSaga.requireActive(
@@ -234,5 +338,24 @@ actor HostBoundAgentBuilderClient: AgentBuilderPublishing {
 
     private func configurationKey(profileID: String, revision: UInt64) -> String {
         "\(profileID):\(revision)"
+    }
+
+    private func fallbackTokenDigest(
+        primaryTokenDigest: String,
+        priority: UInt64
+    ) throws -> String {
+        try CanonicalDigestV1.digest(
+            domain: "saga-token:v1",
+            document: .object(entries: [
+                .init(
+                    name: "primary_token_digest",
+                    value: .string(primaryTokenDigest)
+                ),
+                .init(
+                    name: "fallback_priority",
+                    value: .string(String(priority))
+                ),
+            ])
+        ).hex
     }
 }

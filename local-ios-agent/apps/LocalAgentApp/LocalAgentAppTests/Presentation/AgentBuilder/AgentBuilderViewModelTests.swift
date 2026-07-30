@@ -1,5 +1,7 @@
 import Foundation
 import LocalAgentBridge
+import LocalAgentLLMContracts
+import LocalAgentLLMCore
 import Testing
 @testable import LocalAgentApp
 
@@ -308,6 +310,76 @@ struct AgentBuilderViewModelTests {
 
         #expect(viewModel.lifecycle == .dirty)
         #expect(viewModel.publishedAgentSelection == nil)
+    }
+
+    @Test("builder publishes the fallback order selected in the product UI")
+    func builderPublishesSelectedFallbackOrder() async throws {
+        let publisher = RecordingTargetGroupBuilderClient()
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            publisher: publisher,
+            permissionClient: MockPermissionClient(issues: [])
+        )
+
+        await viewModel.load()
+        let fallback = try #require(viewModel.llmTargets.last?.target.reference)
+        viewModel.addFallbackTarget(fallback)
+        await viewModel.validateCurrentDraft()
+        await viewModel.publishCurrentDraft()
+
+        #expect(await publisher.publishedSelection?.orderedCandidates.map(\.target) == [
+            viewModel.llmTargets[0].target.reference,
+            fallback,
+        ])
+    }
+}
+
+private actor RecordingTargetGroupBuilderClient: AgentBuilderPublishing {
+    private(set) var publishedSelection: AgentLLMSelectionDraft?
+
+    func loadTemplate(_ id: String) async throws -> AgentBuilderUIModel {
+        AgentBuilderUIModel(
+            profileId: id,
+            displayName: "Assistant",
+            readiness: PermissionReadinessUIModel()
+        )
+    }
+
+    func validateDraft(_ draft: AgentBuilderDraftDTO) async throws -> ReadinessUIModel {
+        ReadinessUIModel(issues: [])
+    }
+
+    func previewContext(
+        _ request: BuilderContextPreviewRequestDTO
+    ) async throws -> BuilderContextPreviewResponseDTO {
+        throw AgentBuilderTestError.publishFailed
+    }
+
+    func availableTargets() async throws -> [AgentLLMTargetOption] {
+        ["primary", "fallback"].map { id in
+            AgentLLMTargetOption(
+                target: LLMTargetRevision(
+                    targetID: LLMTargetID(rawValue: "target.\(id)"),
+                    revision: 1,
+                    kind: .local(installationID: "installation.\(id)"),
+                    modelID: id,
+                    defaultParameters: GenerationConfiguration()
+                ),
+                parameterSchema: LLMParameterSchema(definitions: [])
+            )
+        }
+    }
+
+    func publish(
+        draft: AgentBuilderDraftDTO,
+        llm: AgentLLMSelectionDraft
+    ) async throws -> PublishedAgentSelection {
+        publishedSelection = llm
+        return PublishedAgentSelection(
+            profileId: draft.profileId,
+            profileRevisionId: 1,
+            displayName: draft.displayName ?? "Assistant"
+        )
     }
 }
 

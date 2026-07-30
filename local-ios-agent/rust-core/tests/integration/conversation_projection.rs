@@ -175,7 +175,7 @@ fn adjacent_live_text_deltas_are_coalesced_before_delivery() {
 }
 
 #[test]
-fn live_projection_publisher_applies_backpressure_at_capacity() {
+fn live_projection_publisher_never_blocks_at_capacity() {
     let store = Arc::new(Mutex::new(InMemoryConversationStore::new()));
     let service = ConversationCommandService::new(store.clone());
     let registry = service.projection_registry();
@@ -206,14 +206,18 @@ fn live_projection_publisher_applies_backpressure_at_capacity() {
         completed_sender.send(()).unwrap();
     });
 
-    assert!(completed_receiver
-        .recv_timeout(Duration::from_millis(50))
-        .is_err());
-    assert!(feed.next().unwrap().is_some());
-    completed_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap();
+    let completed = completed_receiver.recv_timeout(Duration::from_millis(100));
+    if completed.is_err() {
+        registry.cancel("bounded-live");
+    }
     worker.join().unwrap();
+    assert!(
+        completed.is_ok(),
+        "a stalled UI projection feed must not block the Rust agent loop"
+    );
+    let first_retained = feed.next().unwrap().unwrap();
+    assert_eq!(first_retained.event_id, "delta-1");
+    drop(feed);
 }
 
 #[test]

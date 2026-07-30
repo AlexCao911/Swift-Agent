@@ -134,7 +134,8 @@ enum AppBootstrapper {
         let agentBuilderPublishing = HostBoundAgentBuilderClient(
             portable: RustPortableAgentBuilderClient(gateway: rust),
             targets: modelCenterClient,
-            bindingSaga: AgentHostBindingSaga(store: llmStore)
+            bindingSaga: AgentHostBindingSaga(store: llmStore),
+            selectionRegistry: container.llmHostSelections
         )
         return container.attaching(
             localLLMSubsystem: local,

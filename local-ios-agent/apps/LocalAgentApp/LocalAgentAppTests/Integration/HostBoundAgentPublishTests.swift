@@ -67,6 +67,83 @@ struct HostBoundAgentPublishTests {
         let buildRequestCount = await rust.buildRequests.count
         #expect(buildRequestCount == 1)
     }
+
+    @Test("publication persists the complete ordered fallback group")
+    func publishPersistsOrderedFallbackGroup() async throws {
+        let primary = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.primary"),
+            revision: 1,
+            kind: .local(installationID: "installation.primary"),
+            modelID: "primary-model",
+            defaultParameters: GenerationConfiguration()
+        )
+        let fallback = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.fallback"),
+            revision: 1,
+            kind: .cloud(
+                providerProfileID: "provider.fallback",
+                providerProfileRevision: 1
+            ),
+            modelID: "fallback-model",
+            defaultParameters: GenerationConfiguration()
+        )
+        let schema = LLMParameterSchema(definitions: [])
+        let store = LLMStore.inMemory()
+        try await store.publishTarget(primary)
+        try await store.publishTarget(fallback)
+        let selectionRegistry = AppLLMHostSelectionRegistry()
+        let client = HostBoundAgentBuilderClient(
+            portable: RecordingPortableAgentBuilderClient(),
+            targets: StaticAgentLLMTargetCatalog(options: [
+                AgentLLMTargetOption(target: primary, parameterSchema: schema),
+                AgentLLMTargetOption(target: fallback, parameterSchema: schema),
+            ]),
+            bindingSaga: AgentHostBindingSaga(store: store),
+            selectionRegistry: selectionRegistry
+        )
+        let selection = AgentLLMSelectionDraft(
+            operationID: "publish.profile-a.group",
+            target: primary.reference,
+            requirements: AgentLLMRequirementsDTO(
+                slotId: "slot.model.primary",
+                contextBudget: "16384",
+                streamingRequired: true,
+                toolCallingMode: "allowed"
+            ),
+            parameterOverrides: GenerationConfiguration(),
+            fallbackCandidates: [
+                AgentLLMCandidateDraft(
+                    target: fallback.reference,
+                    parameterOverrides: GenerationConfiguration()
+                ),
+            ]
+        )
+
+        _ = try await client.publish(
+            draft: AgentBuilderDraftDTO(
+                profileId: "profile-a",
+                templateId: "template.assistant.default",
+                displayName: "Agent A"
+            ),
+            llm: selection
+        )
+
+        let active = try await store.activeHostBindings().sorted {
+            ($0.configuration.fallbackPriority ?? .max)
+                < ($1.configuration.fallbackPriority ?? .max)
+        }
+        #expect(active.map(\.configuration.selectedTarget) == [
+            primary.reference,
+            fallback.reference,
+        ])
+        #expect(active.map(\.configuration.fallbackPriority) == [0, 1])
+        #expect(Set(active.compactMap(\.configuration.fallbackGroupID)).count == 1)
+        let executable = await selectionRegistry.selectionGroup(
+            profileID: "profile-a",
+            revision: 1
+        )
+        #expect(executable?.count == 2)
+    }
 }
 
 private actor RecordingPortableAgentBuilderClient: PortableAgentBuilderClient {

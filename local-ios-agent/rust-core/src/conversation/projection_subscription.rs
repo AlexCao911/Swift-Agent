@@ -70,7 +70,6 @@ struct ProjectionMailbox {
 struct ProjectionMailboxInner {
     state: Mutex<ProjectionMailboxState>,
     available: Condvar,
-    space: Condvar,
 }
 
 struct ProjectionMailboxState {
@@ -93,7 +92,6 @@ impl ProjectionMailbox {
                     closed: false,
                 }),
                 available: Condvar::new(),
-                space: Condvar::new(),
             }),
         }
     }
@@ -109,9 +107,18 @@ impl ProjectionMailbox {
                 .queue
                 .iter()
                 .any(|signal| matches!(signal, ProjectionSignal::Wake))
-            || state.queue.len() >= PROJECTION_MAILBOX_CAPACITY
         {
             return;
+        }
+        if state.queue.len() >= PROJECTION_MAILBOX_CAPACITY {
+            let Some(index) = state
+                .queue
+                .iter()
+                .position(|signal| matches!(signal, ProjectionSignal::Live(_)))
+            else {
+                return;
+            };
+            state.queue.remove(index);
         }
         state.queue.push_back(ProjectionSignal::Wake);
         self.inner.available.notify_one();
@@ -153,26 +160,27 @@ impl ProjectionMailbox {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        loop {
-            if state.closed {
-                return false;
-            }
-            if let ProjectionSignal::Live(event) = &signal {
-                if coalesce_adjacent_text_delta(&mut state.queue, event) {
-                    return true;
-                }
-            }
-            if state.queue.len() < PROJECTION_MAILBOX_CAPACITY {
-                state.queue.push_back(signal);
-                self.inner.available.notify_one();
+        if state.closed {
+            return false;
+        }
+        if let ProjectionSignal::Live(event) = &signal {
+            if coalesce_adjacent_text_delta(&mut state.queue, event) {
                 return true;
             }
-            state = self
-                .inner
-                .space
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
+        if state.queue.len() >= PROJECTION_MAILBOX_CAPACITY {
+            let Some(index) = state
+                .queue
+                .iter()
+                .position(|queued| matches!(queued, ProjectionSignal::Live(_)))
+            else {
+                return false;
+            };
+            state.queue.remove(index);
+        }
+        state.queue.push_back(signal);
+        self.inner.available.notify_one();
+        true
     }
 
     fn try_recv(&self) -> ProjectionMailboxRead {
@@ -182,7 +190,6 @@ impl ProjectionMailbox {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(signal) = state.queue.pop_front() {
-            self.inner.space.notify_one();
             ProjectionMailboxRead::Signal(signal)
         } else if state.closed {
             ProjectionMailboxRead::Closed
@@ -199,7 +206,6 @@ impl ProjectionMailbox {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         loop {
             if let Some(signal) = state.queue.pop_front() {
-                self.inner.space.notify_one();
                 return Some(signal);
             }
             if state.closed {
@@ -221,7 +227,6 @@ impl ProjectionMailbox {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.closed = true;
         self.inner.available.notify_all();
-        self.inner.space.notify_all();
     }
 }
 

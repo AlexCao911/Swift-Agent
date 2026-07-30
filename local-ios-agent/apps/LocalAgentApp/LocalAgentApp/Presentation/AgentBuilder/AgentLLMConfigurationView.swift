@@ -22,6 +22,8 @@ struct AgentLLMConfigurationView: View {
                 }
                 .pickerStyle(.menu)
 
+                fallbackConfiguration
+
                 if let selected = selectedOption {
                     ForEach(
                         selected.parameterSchema.definitions.values
@@ -31,6 +33,68 @@ struct AgentLLMConfigurationView: View {
                     ) { definition in
                         parameterControl(definition)
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fallbackConfiguration: some View {
+        if let selection = viewModel.llmSelection {
+            ForEach(
+                Array(selection.fallbackCandidates.enumerated()),
+                id: \.element.target.targetID.rawValue
+            ) { index, candidate in
+                HStack {
+                    Text("\(index + 1). \(targetName(candidate.target))")
+                    Spacer()
+                    Button {
+                        viewModel.moveFallbackTarget(
+                            candidate.target,
+                            direction: -1
+                        )
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .disabled(index == 0)
+                    Button {
+                        viewModel.moveFallbackTarget(
+                            candidate.target,
+                            direction: 1
+                        )
+                    } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .disabled(index == selection.fallbackCandidates.count - 1)
+                    Button(role: .destructive) {
+                        viewModel.removeFallbackTarget(candidate.target)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+
+            let availableFallbacks = viewModel.llmTargets.filter { option in
+                option.target.reference != selection.target
+                    && !selection.fallbackCandidates.contains(where: {
+                        $0.target == option.target.reference
+                    })
+            }
+            if !availableFallbacks.isEmpty {
+                Menu {
+                    ForEach(
+                        availableFallbacks,
+                        id: \.target.targetID.rawValue
+                    ) { option in
+                        Button(option.target.modelID) {
+                            viewModel.addFallbackTarget(
+                                option.target.reference
+                            )
+                        }
+                    }
+                } label: {
+                    Label("Add Fallback", systemImage: "plus.circle")
                 }
             }
         }
@@ -62,6 +126,12 @@ struct AgentLLMConfigurationView: View {
 
     private func targetKey(_ reference: LLMTargetReference) -> String {
         "\(reference.targetID.rawValue)#\(reference.revision)"
+    }
+
+    private func targetName(_ reference: LLMTargetReference) -> String {
+        viewModel.llmTargets.first {
+            $0.target.reference == reference
+        }?.target.modelID ?? reference.targetID.rawValue
     }
 
     @ViewBuilder
