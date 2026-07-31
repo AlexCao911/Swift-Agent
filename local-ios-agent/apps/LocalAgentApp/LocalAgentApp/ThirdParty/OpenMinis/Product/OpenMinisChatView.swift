@@ -80,8 +80,8 @@ private enum OpenMinisPickedPhotoError: LocalizedError {
     }
 }
 
-// Adapted from OpenMinis' chat palette and message composition. The LocalAgent
-// data flow remains owned by the injected facade and Rust-facing runtime.
+// Adapted from OpenMinis' AIChatView presentation. Conversation mutations still
+// leave this view through the injected Rust-facing facade.
 private enum OpenMinisChatColors {
     static let background = Color(uiColor: .systemBackground)
     static let secondaryBackground = Color(uiColor: .secondarySystemBackground)
@@ -94,7 +94,7 @@ private enum OpenMinisChatColors {
 }
 
 @MainActor
-struct OpenMinisProductShellView: View {
+struct OpenMinisChatView: View {
     @AppStorage("localagent.ish.raw-networking-disclosure.seen")
     private var hasSeenLinuxNetworkDisclosure = false
     @State private var showsLinuxNetworkDisclosure = false
@@ -109,18 +109,52 @@ struct OpenMinisProductShellView: View {
     @ObservedObject var viewModel: AIChatViewModel
     @ObservedObject var chatStore: ChatStore
     var onOpenBuilder: () -> Void
+    var onOpenModels: () -> Void
     var onOpenConversation: (String) -> Void
     var onShowConversations: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            productHeader
-            Divider()
             messageList
             composer
         }
         .background(OpenMinisChatColors.background)
+        .navigationTitle(currentSessionTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button(action: onOpenModels) {
+                    VStack(spacing: 1) {
+                        Text(currentSessionTitle)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 3) {
+                            Text(
+                                shellViewModel.activeModel?.displayName
+                                    ?? "Choose a model"
+                            )
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose local or cloud model")
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showsConversationSkills = true
+                } label: {
+                    Label("Conversation Skills", systemImage: "puzzlepiece.extension")
+                }
+
+                conversationMenu
+            }
+        }
         .task {
             KaTeXRenderer.shared.warmUp()
             if !hasSeenLinuxNetworkDisclosure {
@@ -207,71 +241,48 @@ struct OpenMinisProductShellView: View {
         }
     }
 
-    private var productHeader: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(shellViewModel.activeAgent?.displayName ?? "Local Agent")
-                    .font(.headline)
-                    .foregroundStyle(OpenMinisChatColors.primaryText)
-                Text(shellViewModel.activeModel?.displayName ?? "Choose a model")
-                    .font(.caption)
-                    .foregroundStyle(OpenMinisChatColors.secondaryText)
+    private var currentSessionTitle: String {
+        chatStore.sessions.first {
+            $0.sessionId == viewModel.conversationStreamID
+        }?.title ?? shellViewModel.activeAgent?.displayName ?? "Minis"
+    }
+
+    private var conversationMenu: some View {
+        Menu {
+            Button(action: onShowConversations) {
+                Label("Conversations", systemImage: "list.bullet")
             }
-
-            Spacer()
-
             Button {
-                showsConversationSkills = true
+                onOpenConversation(
+                    "conversation-\(UUID().uuidString.lowercased())"
+                )
             } label: {
-                Label("Skills", systemImage: "puzzlepiece.extension")
-                    .labelStyle(.iconOnly)
+                Label("New conversation", systemImage: "square.and.pencil")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Conversation Skills")
-
             Button(action: onOpenBuilder) {
-                Label("Agent", systemImage: "slider.horizontal.3")
-                    .labelStyle(.iconOnly)
+                Label("Configure Agent", systemImage: "slider.horizontal.3")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Configure agent")
-
-            Menu {
-                Button(action: onShowConversations) {
-                    Label("Conversations", systemImage: "list.bullet")
-                }
-                Button {
-                    onOpenConversation(
-                        "conversation-\(UUID().uuidString.lowercased())"
-                    )
-                } label: {
-                    Label("New conversation", systemImage: "square.and.pencil")
-                }
-                Divider()
-                Button(role: .destructive) {
-                    showsClearConfirmation = true
-                } label: {
-                    Label("Clear conversation", systemImage: "eraser")
-                }
-                Button(role: .destructive) {
-                    Task {
-                        await viewModel.archive()
-                        if viewModel.errorMessage == nil {
-                            onOpenConversation(
-                                "conversation-\(UUID().uuidString.lowercased())"
-                            )
-                        }
+            Divider()
+            Button(role: .destructive) {
+                showsClearConfirmation = true
+            } label: {
+                Label("Clear conversation", systemImage: "eraser")
+            }
+            Button(role: .destructive) {
+                Task {
+                    await viewModel.archive()
+                    if viewModel.errorMessage == nil {
+                        onOpenConversation(
+                            "conversation-\(UUID().uuidString.lowercased())"
+                        )
                     }
-                } label: {
-                    Label("Archive conversation", systemImage: "archivebox")
                 }
             } label: {
-                Label("Conversation actions", systemImage: "ellipsis.circle")
-                    .labelStyle(.iconOnly)
+                Label("Archive conversation", systemImage: "archivebox")
             }
+        } label: {
+            Label("Conversation actions", systemImage: "ellipsis")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
     private var messageList: some View {
@@ -361,12 +372,19 @@ struct OpenMinisProductShellView: View {
     }
 
     private var emptyConversation: some View {
-        ContentUnavailableView {
-            Label("Start a conversation", systemImage: "sparkles")
-        } description: {
-            Text("Local and cloud models share the same Rust Agent Core.")
+        VStack(spacing: 12) {
+            Spacer(minLength: 100)
+            Image(systemName: "sparkles")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(shellViewModel.activeAgent?.displayName ?? "Minis")
+                .font(.title3.weight(.semibold))
+            Text("What can I help you with?")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 100)
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
+        .frame(maxWidth: .infinity, minHeight: 420)
     }
 
     private var composer: some View {
@@ -403,26 +421,31 @@ struct OpenMinisProductShellView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                PhotosPicker(
-                    selection: $selectedPhotoItems,
-                    maxSelectionCount: 10,
-                    matching: .images
-                ) {
-                    Image(systemName: "photo")
-                        .frame(width: 28, height: 36)
-                }
-                .accessibilityLabel("Choose photos")
+                Menu {
+                    PhotosPicker(
+                        selection: $selectedPhotoItems,
+                        maxSelectionCount: 10,
+                        matching: .images
+                    ) {
+                        Label("Photo Library", systemImage: "photo")
+                    }
 
-                Button {
-                    showsFileImporter = true
+                    Button {
+                        showsFileImporter = true
+                    } label: {
+                        Label("Choose Files", systemImage: "doc")
+                    }
                 } label: {
-                    Image(systemName: "paperclip")
-                        .frame(width: 28, height: 36)
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .medium))
+                        .frame(width: 36, height: 36)
+                        .background(OpenMinisChatColors.secondaryBackground)
+                        .clipShape(Circle())
                 }
-                .accessibilityLabel("Choose files")
+                .accessibilityLabel("Add attachment")
 
                 TextField(
-                    "Message Local Agent",
+                    "Message \(shellViewModel.activeAgent?.displayName ?? "Minis")",
                     text: $viewModel.draft,
                     axis: .vertical
                 )
@@ -479,7 +502,7 @@ struct OpenMinisProductShellView: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background(.bar)
+        .background(.ultraThinMaterial)
     }
 }
 

@@ -55,6 +55,7 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
         _ request: AuthorizedCloudHTTPRequest
     ) async throws -> AsyncThrowingStream<SSEEvent, Error> {
         try validateLimits()
+        try validateOAuthOrigin(request)
         let lease = try await validateBeforeTask(request)
         try await policy.preflight(baseURL: request.baseURL, expectedOrigin: request.origin)
         return try await withCredential(request: request, lease: lease) { urlRequest in
@@ -78,6 +79,7 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
 
     package func json(_ request: AuthorizedCloudHTTPRequest) async throws -> Data {
         try validateLimits()
+        try validateOAuthOrigin(request)
         let lease = try await validateBeforeTask(request)
         try await policy.preflight(baseURL: request.baseURL, expectedOrigin: request.origin)
         let stream = try await withCredential(request: request, lease: lease) { urlRequest in
@@ -112,6 +114,22 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
             throw transportFailure("cloud_transport.response_invalid", "cloud JSON response was empty")
         }
         return value
+    }
+
+    private func validateOAuthOrigin(
+        _ request: AuthorizedCloudHTTPRequest
+    ) throws {
+        guard request.credentialMode != .oauth
+                || ProviderOAuthRuntimePolicy.accepts(
+                    request.baseURL,
+                    for: request.presetID
+                )
+        else {
+            throw transportFailure(
+                "provider_oauth.origin_mismatch",
+                "OAuth credentials are bound to the registered provider origin"
+            )
+        }
     }
 
     package func oauth(
@@ -358,20 +376,78 @@ package final class URLSessionCloudHTTPTransport: CloudHTTPTransport, @unchecked
         }
         var secretData = secret.dataCopyForVault()
         defer { zero(&secretData) }
-        guard let value = String(data: secretData, encoding: .utf8),
+        let value: String
+        let oauthCredential: OAuthTokenCredential?
+        switch request.credentialMode {
+        case .apiKey:
+            guard let apiKey = String(data: secretData, encoding: .utf8) else {
+                throw transportFailure(
+                    "credential.invalid_format",
+                    "API key credential is not valid UTF-8"
+                )
+            }
+            value = apiKey
+            oauthCredential = nil
+        case .oauth:
+            let credential = try OAuthTokenCredential.decode(from: secret)
+            value = try credential.executableAccessToken()
+            oauthCredential = credential
+        }
+        guard
               !value.isEmpty,
               !value.contains("\r"),
               !value.contains("\n")
         else {
             throw transportFailure("credential.invalid_format", "credential is not a valid header value")
         }
-        switch request.authentication {
-        case .bearerAuthorization:
+        if request.credentialMode == .oauth {
             urlRequest.setValue("Bearer \(value)", forHTTPHeaderField: "Authorization")
-        case .xAPIKeyHeader:
-            urlRequest.setValue(value, forHTTPHeaderField: "x-api-key")
-        case .googleAPIKeyHeader:
-            urlRequest.setValue(value, forHTTPHeaderField: "x-goog-api-key")
+            if request.presetID == .anthropic {
+                urlRequest.setValue(
+                    "2023-06-01",
+                    forHTTPHeaderField: "anthropic-version"
+                )
+                urlRequest.setValue(
+                    "oauth-2025-04-20",
+                    forHTTPHeaderField: "anthropic-beta"
+                )
+            }
+            if request.presetID == .openAI {
+                urlRequest.setValue(
+                    "0.144.1",
+                    forHTTPHeaderField: "Version"
+                )
+                urlRequest.setValue(
+                    "responses=experimental",
+                    forHTTPHeaderField: "Openai-Beta"
+                )
+                urlRequest.setValue(
+                    "codex_cli_rs",
+                    forHTTPHeaderField: "Originator"
+                )
+                urlRequest.setValue(
+                    "codex_cli_rs/0.144.1 (iOS; arm64)",
+                    forHTTPHeaderField: "User-Agent"
+                )
+                if let accountID = oauthCredential?.accountID {
+                    urlRequest.setValue(
+                        accountID,
+                        forHTTPHeaderField: "Chatgpt-Account-Id"
+                    )
+                }
+            }
+        } else {
+            switch request.authentication {
+            case .bearerAuthorization:
+                urlRequest.setValue(
+                    "Bearer \(value)",
+                    forHTTPHeaderField: "Authorization"
+                )
+            case .xAPIKeyHeader:
+                urlRequest.setValue(value, forHTTPHeaderField: "x-api-key")
+            case .googleAPIKeyHeader:
+                urlRequest.setValue(value, forHTTPHeaderField: "x-goog-api-key")
+            }
         }
         return urlRequest
     }

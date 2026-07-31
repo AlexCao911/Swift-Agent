@@ -35,7 +35,8 @@
 		0F1000010000000000000002 /* OpenMinisChatFacadeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */; };
 		0F1000010000000000000003 /* AIChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000103 /* AIChatViewModel.swift */; };
 		0F1000010000000000000004 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000104 /* ChatStore.swift */; };
-		0F1000010000000000000005 /* OpenMinisProductShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000105 /* OpenMinisProductShellView.swift */; };
+		0F1000010000000000000005 /* OpenMinisChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000105 /* OpenMinisChatView.swift */; };
+		0F1000020000000000000001 /* OpenMinisContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000020000000000000101 /* OpenMinisContentView.swift */; };
 		0F1000010000000000000006 /* MinisMarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000106 /* MinisMarkdownParser.swift */; };
 		0F1000010000000000000007 /* SwiftMathRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000107 /* SwiftMathRenderer.swift */; };
 		0F1000010000000000000008 /* KaTeXRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1000010000000000000108 /* KaTeXRenderer.swift */; };
@@ -94,6 +95,7 @@
 		0F5000010000000000000002 /* UnifiedModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000102 /* UnifiedModelPicker.swift */; };
 		0F5000010000000000000003 /* OpenMinisProviderConfigurationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000103 /* OpenMinisProviderConfigurationAdapterTests.swift */; };
 		0F5000010000000000000004 /* UnifiedModelPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000010000000000000104 /* UnifiedModelPickerTests.swift */; };
+		0F5000020000000000000001 /* OpenMinisProviderInstancesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000020000000000000101 /* OpenMinisProviderInstancesView.swift */; };
 		0F6000010000000000000001 /* OpenMinisModelExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6000010000000000000101 /* OpenMinisModelExecutor.swift */; };
 		0F6000010000000000000002 /* OpenMinisModelExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */; };
 		0F7000010000000000000001 /* RustAgentCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7000010000000000000101 /* RustAgentCoordinator.swift */; };
@@ -208,7 +210,8 @@
 		0F1000010000000000000102 /* OpenMinisChatFacadeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisChatFacadeTests.swift; sourceTree = "<group>"; };
 		0F1000010000000000000103 /* AIChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIChatViewModel.swift; sourceTree = "<group>"; };
 		0F1000010000000000000104 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
-		0F1000010000000000000105 /* OpenMinisProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProductShellView.swift; sourceTree = "<group>"; };
+		0F1000010000000000000105 /* OpenMinisChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisChatView.swift; sourceTree = "<group>"; };
+		0F1000020000000000000101 /* OpenMinisContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisContentView.swift; sourceTree = "<group>"; };
 		0F1000010000000000000106 /* MinisMarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinisMarkdownParser.swift; sourceTree = "<group>"; };
 		0F1000010000000000000107 /* SwiftMathRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftMathRenderer.swift; sourceTree = "<group>"; };
 		0F1000010000000000000108 /* KaTeXRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaTeXRenderer.swift; sourceTree = "<group>"; };
@@ -268,6 +271,7 @@
 		0F5000010000000000000102 /* UnifiedModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedModelPicker.swift; sourceTree = "<group>"; };
 		0F5000010000000000000103 /* OpenMinisProviderConfigurationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProviderConfigurationAdapterTests.swift; sourceTree = "<group>"; };
 		0F5000010000000000000104 /* UnifiedModelPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedModelPickerTests.swift; sourceTree = "<group>"; };
+		0F5000020000000000000101 /* OpenMinisProviderInstancesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisProviderInstancesView.swift; sourceTree = "<group>"; };
 		0F6000010000000000000101 /* OpenMinisModelExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisModelExecutor.swift; sourceTree = "<group>"; };
 		0F6000010000000000000102 /* OpenMinisModelExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenMinisModelExecutorTests.swift; sourceTree = "<group>"; };
 		0F7000010000000000000101 /* RustAgentCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustAgentCoordinator.swift; sourceTree = "<group>"; };
@@ -446,6 +450,7 @@
 			children = (
 				0F5000010000000000000101 /* OpenMinisProviderConfigurationAdapter.swift */,
 				0F5000010000000000000102 /* UnifiedModelPicker.swift */,
+				0F5000020000000000000101 /* OpenMinisProviderInstancesView.swift */,
 			);
 			path = Providers;
 			sourceTree = "<group>";
@@ -557,7 +562,8 @@
 		0F1000010000000000000505 /* Product */ = {
 			isa = PBXGroup;
 			children = (
-				0F1000010000000000000105 /* OpenMinisProductShellView.swift */,
+				0F1000020000000000000101 /* OpenMinisContentView.swift */,
+				0F1000010000000000000105 /* OpenMinisChatView.swift */,
 			);
 			path = Product;
 			sourceTree = "<group>";
@@ -1137,7 +1143,8 @@
 			files = (
 				0F1000010000000000000003 /* AIChatViewModel.swift in Sources */,
 				0F1000010000000000000004 /* ChatStore.swift in Sources */,
-				0F1000010000000000000005 /* OpenMinisProductShellView.swift in Sources */,
+				0F1000020000000000000001 /* OpenMinisContentView.swift in Sources */,
+				0F1000010000000000000005 /* OpenMinisChatView.swift in Sources */,
 				0F1000010000000000000006 /* MinisMarkdownParser.swift in Sources */,
 				0F1000010000000000000007 /* SwiftMathRenderer.swift in Sources */,
 				0F1000010000000000000008 /* KaTeXRenderer.swift in Sources */,
@@ -1224,6 +1231,7 @@
 				0F4000010000000000000005 /* RustAgentInputSnapshotProvider.swift in Sources */,
 				0F5000010000000000000001 /* OpenMinisProviderConfigurationAdapter.swift in Sources */,
 				0F5000010000000000000002 /* UnifiedModelPicker.swift in Sources */,
+				0F5000020000000000000001 /* OpenMinisProviderInstancesView.swift in Sources */,
 				0F6000010000000000000001 /* OpenMinisModelExecutor.swift in Sources */,
 				0F7000010000000000000001 /* RustAgentCoordinator.swift in Sources */,
 				0F7000010000000000000002 /* ProjectionFeedController.swift in Sources */,

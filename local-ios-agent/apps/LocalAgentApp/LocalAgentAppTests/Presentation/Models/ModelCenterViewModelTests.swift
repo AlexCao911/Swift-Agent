@@ -15,11 +15,27 @@ struct ModelCenterViewModelTests {
         let client = ModelCenterClientSpy(snapshot: .fixture)
         let viewModel = ModelCenterViewModel(client: client)
         await viewModel.reload()
+        let agent = ActiveAgentRevisionSelection(
+            profileId: "agent-profile",
+            profileRevisionId: 4,
+            displayName: "Agent"
+        )
 
-        try await viewModel.createTarget(modelID: "local:official-1:1")
+        try await viewModel.activateModel(
+            id: "local:official-1:1",
+            for: agent
+        )
 
         let published = await client.publishedTargets
+        let activated = await client.activatedTargets
         #expect(published.count == 1)
+        #expect(activated == [
+            ActivatedModelTarget(
+                agentProfileID: "agent-profile",
+                agentProfileRevision: 4,
+                target: try #require(published.first)
+            ),
+        ])
         #expect(viewModel.selectedTarget == published.first?.reference)
         #expect(published.first?.kind == .local(installationID: "installation-1"))
     }
@@ -91,6 +107,58 @@ struct ModelCenterViewModelTests {
         #expect(viewModel.migrationTargets.isEmpty)
         #expect(await client.publishedTargets.isEmpty)
     }
+
+    @Test
+    func activeModelLabelIsRestoredFromDurablePrimaryBinding() async throws {
+        let current = ModelCenterSnapshot.fixture
+        let target = try #require(current.targets.first)
+        let configuration = AgentHostConfiguration(
+            bindingID: "binding.primary",
+            revision: 2,
+            agentProfileID: "agent-profile",
+            agentProfileRevision: 4,
+            llmSlotID: "primary",
+            requirementsHash: "requirements",
+            llmTargetID: target.targetID,
+            llmTargetRevision: target.revision,
+            fallbackGroupID: "group",
+            fallbackPriority: 0,
+            parameterOverrides: GenerationConfiguration()
+        )
+        let snapshot = ModelCenterSnapshot(
+            localModels: current.localModels,
+            cloudProviders: current.cloudProviders,
+            cloudModels: current.cloudModels,
+            targets: current.targets,
+            activeBindings: [
+                ActiveAgentHostBinding(
+                    configuration: configuration,
+                    binding: HostBindingTuple(
+                        bindingID: configuration.bindingID,
+                        bindingRevision: configuration.revision,
+                        bindingHash: "binding-hash"
+                    )
+                ),
+            ],
+            disk: current.disk
+        )
+        let viewModel = ModelCenterViewModel(
+            client: ModelCenterClientSpy(snapshot: snapshot)
+        )
+
+        await viewModel.reload()
+        let restored = viewModel.syncActiveModel(for: ActiveAgentRevisionSelection(
+            profileId: "agent-profile",
+            profileRevisionId: 4,
+            displayName: "Agent"
+        ))
+
+        #expect(restored?.displayName == "Official One")
+        #expect(restored?.route == .localCpp(engineId: "installation-1"))
+        #expect(restored?.readiness == .ready)
+        #expect(viewModel.selectedTarget == target.reference)
+        #expect(viewModel.selectedModelID == "local:official-1:1")
+    }
 }
 
 private actor LegacyMigrationPresentingSpy: LegacyLLMMigrationPresenting {
@@ -128,6 +196,7 @@ actor ModelCenterClientSpy: ModelCenterClient {
 
     private let storedSnapshot: ModelCenterSnapshot
     private(set) var publishedTargets: [LLMTargetRevision] = []
+    private(set) var activatedTargets: [ActivatedModelTarget] = []
     private(set) var localActions: [String] = []
 
     init(snapshot: ModelCenterSnapshot) {
@@ -160,6 +229,22 @@ actor ModelCenterClientSpy: ModelCenterClient {
 
     func publishProviderProfile(_ draft: ProviderProfileProductDraft) async throws {}
 
+    func authenticateProviderOAuth(
+        presetID: ProviderPresetID
+    ) async throws -> SecretBytes {
+        SecretBytes(utf8: "oauth-test-credential")
+    }
+
+    func refreshProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {}
+
+    func logoutProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {}
+
     func rotateProviderCredential(
         profileID: String,
         profileRevision: UInt64,
@@ -173,6 +258,24 @@ actor ModelCenterClientSpy: ModelCenterClient {
     func publishTarget(_ target: LLMTargetRevision) async throws {
         publishedTargets.append(target)
     }
+
+    func activateTarget(
+        _ target: LLMTargetRevision,
+        forAgentProfileID profileID: String,
+        revision: UInt64
+    ) async throws {
+        activatedTargets.append(ActivatedModelTarget(
+            agentProfileID: profileID,
+            agentProfileRevision: revision,
+            target: target
+        ))
+    }
+}
+
+struct ActivatedModelTarget: Equatable, Sendable {
+    let agentProfileID: String
+    let agentProfileRevision: UInt64
+    let target: LLMTargetRevision
 }
 
 extension ModelCenterSnapshot {
@@ -205,6 +308,7 @@ extension ModelCenterSnapshot {
             cloudProviders: [],
             cloudModels: [],
             targets: current.targets,
+            activeBindings: current.activeBindings,
             disk: current.disk
         )
     }
@@ -284,6 +388,7 @@ extension ModelCenterSnapshot {
                     defaultParameters: GenerationConfiguration()
                 ),
             ],
+            activeBindings: [],
             disk: LocalDiskProductState(
                 availableImportantUsageBytes: 10_000,
                 reservedBytes: 0,

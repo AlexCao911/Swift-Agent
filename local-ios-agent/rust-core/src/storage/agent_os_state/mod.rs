@@ -123,6 +123,14 @@ pub trait AgentOSStateRepository:
         &mut self,
         request: HostBindingCommit,
     ) -> Result<HostBindingCrossLink, HostBindingError>;
+    fn prepare_profile_rebind(
+        &mut self,
+        request: ProfilePublishPreparation,
+    ) -> Result<HostBindingOperation, HostBindingError>;
+    fn commit_profile_rebind(
+        &mut self,
+        request: HostBindingCommit,
+    ) -> Result<HostBindingCrossLink, HostBindingError>;
     fn begin_package_binding(
         &mut self,
         request: PackageBindingPreparation,

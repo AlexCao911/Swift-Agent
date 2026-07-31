@@ -7,6 +7,247 @@ import Testing
 @Suite("Cloud product path integration", .serialized)
 struct CloudProductPathIntegrationTests {
     @Test
+    func presetOrCredentialModeTransitionRequiresANewCredential() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cloud-credential-transition-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let subsystem = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: directory,
+            hostProcessEpoch: try HostProcessEpoch.generate(),
+            bundledCatalog: catalogFixture.envelope,
+            trustedKeyRing: catalogFixture.keyRing,
+            remoteCatalog: nil,
+            vault: RuntimeCredentialVault(),
+            approvalPrompt: RuntimeApprovalPrompt(),
+            transportFactory: { _ in SubsystemFixtureTransport(toolLoop: false) },
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            originValidator: RuntimeOriginValidator()
+        )
+        _ = try await subsystem.publishProviderProfileRevision(
+            profileID: "profile",
+            replacingRevision: nil,
+            presetID: .openAI,
+            displayName: "Provider",
+            baseURL: URL(string: "https://chatgpt.com/backend-api/codex")!,
+            retentionMode: .statelessRequired,
+            credentialMode: .apiKey,
+            initialSecret: SecretBytes(utf8: "openai-key")
+        )
+
+        for (presetID, mode, baseURL) in [
+            (
+                ProviderPresetID.anthropic,
+                ProviderCredentialMode.apiKey,
+                URL(string: "https://proxy.example/v1")!
+            ),
+            (
+                ProviderPresetID.openAI,
+                ProviderCredentialMode.oauth,
+                URL(string: "https://chatgpt.com/backend-api/codex")!
+            ),
+        ] {
+            await #expect(throws: CredentialFailure.self) {
+                _ = try await subsystem.publishProviderProfileRevision(
+                    profileID: "profile",
+                    replacingRevision: 1,
+                    presetID: presetID,
+                    displayName: "Provider",
+                    baseURL: baseURL,
+                    retentionMode: .statelessRequired,
+                    credentialMode: mode,
+                    initialSecret: nil
+                )
+            }
+        }
+
+        _ = try await subsystem.publishProviderProfileRevision(
+            profileID: "oauth-profile",
+            replacingRevision: nil,
+            presetID: .anthropic,
+            displayName: "OAuth Provider",
+            baseURL: URL(string: "https://api.anthropic.com/v1")!,
+            retentionMode: .statelessRequired,
+            credentialMode: .oauth,
+            initialSecret: try OAuthTokenCredential(
+                accessToken: "anthropic-access",
+                refreshToken: "anthropic-refresh",
+                expiresAt: Date.distantFuture
+            ).secureSecret()
+        )
+        await #expect(throws: CredentialFailure.self) {
+            _ = try await subsystem.publishProviderProfileRevision(
+                profileID: "oauth-profile",
+                replacingRevision: 1,
+                presetID: .anthropic,
+                displayName: "OAuth Provider",
+                baseURL: URL(string: "https://proxy.example/v1")!,
+                retentionMode: .statelessRequired,
+                credentialMode: .apiKey,
+                initialSecret: nil
+            )
+        }
+    }
+
+    @Test
+    func oauthProfilePublicationRejectsASubstitutedProviderOrigin() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cloud-oauth-origin-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let subsystem = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: directory,
+            hostProcessEpoch: try HostProcessEpoch.generate(),
+            bundledCatalog: catalogFixture.envelope,
+            trustedKeyRing: catalogFixture.keyRing,
+            remoteCatalog: nil,
+            vault: RuntimeCredentialVault(),
+            approvalPrompt: RuntimeApprovalPrompt(),
+            transportFactory: { _ in SubsystemFixtureTransport(toolLoop: false) },
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            originValidator: RuntimeOriginValidator()
+        )
+
+        do {
+            _ = try await subsystem.publishProviderProfileRevision(
+                profileID: "oauth-profile",
+                replacingRevision: nil,
+                presetID: .anthropic,
+                displayName: "OAuth provider",
+                baseURL: URL(string: "https://attacker.example/v1")!,
+                retentionMode: .statelessRequired,
+                credentialMode: .oauth,
+                initialSecret: try OAuthTokenCredential(
+                    accessToken: "access",
+                    refreshToken: "refresh",
+                    expiresAt: Date.distantFuture
+                ).secureSecret()
+            )
+            Issue.record("substituted OAuth origin was published")
+        } catch let failure as ProviderProfileFailure {
+            #expect(failure.code == "provider_oauth.origin_mismatch")
+        }
+    }
+
+    @Test
+    func validationAutomaticallyRefreshesOAuthBeforeSealingItsCredentialLease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cloud-oauth-auto-refresh-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let transport = SubsystemFixtureTransport(
+            toolLoop: false,
+            oauthResponse: OAuthHTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data(
+                    #"{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":7200}"#
+                        .utf8
+                )
+            )
+        )
+        let subsystem = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: directory,
+            hostProcessEpoch: try HostProcessEpoch.generate(),
+            bundledCatalog: catalogFixture.envelope,
+            trustedKeyRing: catalogFixture.keyRing,
+            remoteCatalog: nil,
+            vault: RuntimeCredentialVault(),
+            approvalPrompt: RuntimeApprovalPrompt(),
+            transportFactory: { _ in transport },
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            originValidator: RuntimeOriginValidator()
+        )
+        let published = try await subsystem.publishProviderProfileRevision(
+            profileID: "oauth-profile",
+            replacingRevision: nil,
+            presetID: .openAI,
+            displayName: "OAuth provider",
+            baseURL: URL(string: "https://chatgpt.com/backend-api/codex")!,
+            retentionMode: .statelessRequired,
+            credentialMode: .oauth,
+            initialSecret: try OAuthTokenCredential(
+                accessToken: "stale-access",
+                refreshToken: "stale-refresh",
+                expiresAt: Date().addingTimeInterval(30)
+            ).secureSecret()
+        )
+
+        let validation = try await subsystem.validation.validate(
+            profileID: "oauth-profile",
+            profileRevision: 1,
+            modelID: "fixture-model",
+            adapterVersion: "1"
+        )
+
+        #expect(await transport.oauthRequestCount == 1)
+        #expect(validation.subject.credentialGeneration == 2)
+        #expect(
+            try await subsystem.credentials.slot(
+                published.revision.credentialRef
+            )?.currentGeneration == 2
+        )
+    }
+
+    @Test
+    func oauthLogoutDisconnectsSecretWithoutArchivingProviderConfiguration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cloud-oauth-disconnect-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogFixture = try signedCloudCatalog(revision: 1)
+        let subsystem = try await CloudLLMSubsystem.bootstrap(
+            appSupportRoot: directory,
+            hostProcessEpoch: try HostProcessEpoch.generate(),
+            bundledCatalog: catalogFixture.envelope,
+            trustedKeyRing: catalogFixture.keyRing,
+            remoteCatalog: nil,
+            vault: RuntimeCredentialVault(),
+            approvalPrompt: RuntimeApprovalPrompt(),
+            transportFactory: { _ in SubsystemFixtureTransport(toolLoop: false) },
+            localUnloader: RuntimeLocalUnloader(order: RuntimeRouteOrder()),
+            originValidator: RuntimeOriginValidator()
+        )
+        _ = try await subsystem.publishProviderProfileRevision(
+            profileID: "oauth-profile",
+            replacingRevision: nil,
+            presetID: .openAI,
+            displayName: "OAuth provider",
+            baseURL: URL(string: "https://chatgpt.com/backend-api/codex")!,
+            retentionMode: .statelessRequired,
+            credentialMode: .oauth,
+            initialSecret: try OAuthTokenCredential(
+                accessToken: "access",
+                refreshToken: "refresh",
+                expiresAt: Date.distantFuture
+            ).secureSecret()
+        )
+
+        try await subsystem.disconnectProviderOAuthCredential(
+            profileID: "oauth-profile",
+            profileRevision: 1
+        )
+
+        let inventory = try await subsystem.providerInventory()
+        #expect(inventory.count == 1)
+        #expect(inventory[0].profileID == "oauth-profile")
+        #expect(!inventory[0].hasStoredCredential)
+        #expect(
+            await subsystem.profiles.profile(
+                profileID: "oauth-profile",
+                revision: 1
+            )?.lifecycle == .active
+        )
+    }
+
+    @Test
     func manualModelCompletesRoutineTextPath() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "cloud-manual-product-path-\(UUID().uuidString)",
@@ -315,11 +556,27 @@ struct CloudProductPathIntegrationTests {
 
 private actor SubsystemFixtureTransport: CloudHTTPTransport {
     private let toolLoop: Bool
+    private let oauthResponse: OAuthHTTPResponse?
     private(set) var validationRequestCount = 0
     private(set) var generationRequestCount = 0
+    private(set) var oauthRequestCount = 0
 
-    init(toolLoop: Bool = true) {
+    init(
+        toolLoop: Bool = true,
+        oauthResponse: OAuthHTTPResponse? = nil
+    ) {
         self.toolLoop = toolLoop
+        self.oauthResponse = oauthResponse
+    }
+
+    func oauth(
+        _ request: OAuthHTTPRequest
+    ) async throws -> OAuthHTTPResponse {
+        oauthRequestCount += 1
+        guard let oauthResponse else {
+            throw OAuthHTTPFailure(code: "oauth.transport_unavailable")
+        }
+        return oauthResponse
     }
 
     func json(_ request: AuthorizedCloudHTTPRequest) async throws -> Data {

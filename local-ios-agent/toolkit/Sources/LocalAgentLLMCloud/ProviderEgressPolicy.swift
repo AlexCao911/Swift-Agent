@@ -112,6 +112,7 @@ package struct AuthorizedCloudHTTPRequest: Equatable, Sendable {
     package let baseURL: URL
     package let presetID: ProviderPresetID
     package let authentication: ProviderAuthentication
+    package let credentialMode: ProviderCredentialMode
     package let semanticAdapterID: String
     package let credentialRef: String
     package let credentialUseLeaseID: String
@@ -129,6 +130,7 @@ package struct AuthorizedCloudHTTPRequest: Equatable, Sendable {
         origin: EgressOrigin,
         baseURL: URL,
         preset: ProviderPreset,
+        credentialMode: ProviderCredentialMode,
         credentialRef: String,
         credentialUseLeaseID: String,
         credentialUseLeaseDigest: String,
@@ -145,6 +147,7 @@ package struct AuthorizedCloudHTTPRequest: Equatable, Sendable {
         self.baseURL = baseURL
         presetID = preset.id
         authentication = preset.authentication
+        self.credentialMode = credentialMode
         semanticAdapterID = preset.semanticAdapterID
         self.credentialRef = credentialRef
         self.credentialUseLeaseID = credentialUseLeaseID
@@ -425,6 +428,7 @@ public actor ProviderEgressPolicy {
             origin: authorizedTurn.origin,
             baseURL: route.profile.revision.baseURL,
             preset: preset,
+            credentialMode: route.profile.revision.credentialMode ?? .apiKey,
             credentialRef: authorizedTurn.credentialRef,
             credentialUseLeaseID: authorizedTurn.credentialUseLeaseID,
             credentialUseLeaseDigest: authorizedTurn.credentialUseLeaseDigest,
@@ -489,6 +493,7 @@ public actor ProviderEgressPolicy {
             origin: profile.origin,
             baseURL: profile.revision.baseURL,
             preset: preset,
+            credentialMode: profile.revision.credentialMode ?? .apiKey,
             credentialRef: lease.credentialRef,
             credentialUseLeaseID: lease.leaseID,
             credentialUseLeaseDigest: try credentialUseLeaseDigest(lease).hex,

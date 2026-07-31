@@ -17,6 +17,8 @@ public enum RustAgentOSOperation: String, Hashable, Sendable {
     case previewContext = "preview_context"
     case prepareProfilePublish = "prepare_profile_publish"
     case commitProfilePublish = "commit_profile_publish"
+    case prepareProfileRebind = "prepare_profile_rebind"
+    case commitProfileRebind = "commit_profile_rebind"
     case beginPackageBinding = "begin_package_binding"
     case attachHostBinding = "attach_host_binding"
     case confirmHostBindingActivation = "confirm_host_binding_activation"

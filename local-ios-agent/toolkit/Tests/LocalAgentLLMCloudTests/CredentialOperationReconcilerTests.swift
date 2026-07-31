@@ -391,4 +391,55 @@ struct CredentialOperationReconcilerTests {
             #expect(try await harness.store.lifecycleOperation("delete")?.phase == .complete)
         }
     }
+
+    @Test(arguments: [
+        CredentialLifecycleCheckpoint.deletionSlotLocked,
+        .deletionKeyTombstoned,
+        .deletionKeyDeleted,
+    ])
+    func retainedProfileDisconnectRecoversAcrossEveryDeletionCheckpoint(
+        checkpoint: CredentialLifecycleCheckpoint
+    ) async throws {
+        let directory = temporaryLifecycleDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("llm-state.sqlite")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try SQLiteConnection(path: url.path)
+        try LLMStoreSchema.migrateToCurrent(database)
+        let vault = LifecycleCredentialVault()
+        let faults = LifecycleFaultInjector()
+        let credentials = try ProviderCredentialStore(
+            database: database,
+            vault: vault,
+            faultInjector: faults.hit
+        )
+        let profiles = try ProviderProfileStore(
+            fileURL: url,
+            originValidator: LifecycleOriginValidator()
+        )
+        try await credentials.createSlot(
+            credentialRef: "shared",
+            initialSecret: SecretBytes(utf8: "original"),
+            operationID: "create"
+        )
+        _ = try await profiles.publish(lifecycleProfile(profileID: "retained"))
+        faults.arm(checkpoint)
+
+        await expectLifecycleFailure("credential.injected_crash") {
+            try await credentials.beginCredentialDisconnect(
+                credentialRef: "shared",
+                expectedGeneration: 1,
+                operationID: "disconnect-crash"
+            )
+        }
+
+        _ = try await CredentialOperationReconciler(
+            credentialStore: credentials
+        ).reconcileStartup()
+
+        #expect(try await credentials.slot("shared")?.lifecycle == .disconnected)
+        #expect(!(await vault.hasFinal(credentialRef: "shared", generation: 1)))
+        #expect(try await credentials.lifecycleOperation("disconnect-crash")?.phase == .complete)
+        #expect(await profiles.profile(profileID: "retained", revision: 1)?.lifecycle == .active)
+    }
 }

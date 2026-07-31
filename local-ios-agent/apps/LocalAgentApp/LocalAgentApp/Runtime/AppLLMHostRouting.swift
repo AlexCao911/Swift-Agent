@@ -177,15 +177,350 @@ actor AppLLMHostSelectionRegistry {
             ? ["execution.host_binding_not_configured"]
             : issues
     }
+
+    func validateGroup(
+        bindings: [ActiveAgentHostBinding],
+        targets: [LLMTargetRevision],
+        available: [AgentLLMTargetOption]
+    ) -> [String] {
+        let previous = selections
+        let issues = hydrate(
+            bindings: bindings,
+            targets: targets,
+            available: available
+        )
+        selections = previous
+        return issues
+    }
 }
 
-private extension AppLLMHostSelection {
+extension AppLLMHostSelection {
     var configuration: AgentHostConfiguration {
         switch self {
         case let .local(configuration, _, _),
              let .cloud(configuration, _, _):
             configuration
         }
+    }
+
+    var target: LLMTargetRevision {
+        switch self {
+        case let .local(_, target, _), let .cloud(_, target, _):
+            target
+        }
+    }
+}
+
+protocol ActiveProfileBindingRebinding: Sendable {
+    func prepare(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO
+    func commit(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO
+    func confirm(
+        _ request: HostBindingActivationConfirmationDTO
+    ) async throws -> HostBindingCrossLinkDTO
+}
+
+struct PortableActiveProfileBindingRebinder:
+    ActiveProfileBindingRebinding,
+    Sendable
+{
+    let client: any PortableAgentBuilderClient
+
+    func prepare(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO {
+        try await client.prepareProfileRebind(request)
+    }
+
+    func commit(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        try await client.commitProfileRebind(request)
+    }
+
+    func confirm(
+        _ request: HostBindingActivationConfirmationDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        try await client.confirmHostBindingActivation(request)
+    }
+}
+
+actor ActiveAgentModelSelectionService {
+    private let store: LLMStore
+    private let registry: AppLLMHostSelectionRegistry
+    private let rust: any ActiveProfileBindingRebinding
+
+    init(
+        store: LLMStore,
+        registry: AppLLMHostSelectionRegistry,
+        rust: any ActiveProfileBindingRebinding
+    ) {
+        self.store = store
+        self.registry = registry
+        self.rust = rust
+    }
+
+    func activate(
+        target: LLMTargetRevision,
+        profileID: String,
+        profileRevision: UInt64,
+        available: [AgentLLMTargetOption]
+    ) async throws {
+        guard let selectedOption = available.first(where: {
+            $0.target == target
+        }) else {
+            throw routingFailure(
+                "execution.target_unavailable",
+                "the selected immutable target is not executable"
+            )
+        }
+        guard let current = await registry.selectionGroup(
+            profileID: profileID,
+            revision: profileRevision
+        ), let primary = current.first else {
+            throw routingFailure(
+                "execution.host_binding_not_configured",
+                "the active Agent has no exact model binding to override"
+            )
+        }
+        let orderedOptions = [
+            selectedOption,
+        ] + current.compactMap { selection in
+            guard selection.target.reference != target.reference else {
+                return nil
+            }
+            return available.first { $0.target == selection.target }
+        }
+        let groupID = "session.\(profileID).\(profileRevision).\(UUID().uuidString.lowercased())"
+        let operation = try await rust.prepare(ProfilePublishPreparationDTO(
+            idempotencyKey: groupID,
+            agentProfileId: profileID,
+            agentProfileRevision: profileRevision,
+            llmSlotId: primary.configuration.llmSlotID,
+            requirementsHash: primary.configuration.requirementsHash
+        ))
+        let saga = AgentHostBindingSaga(store: store)
+        var replacements: [ActiveAgentHostBinding] = []
+        var primaryStagingReceipt: HostBindingStagingReceipt?
+        for (index, option) in orderedOptions.enumerated() {
+            let operationToken = index == 0
+                ? operation.token
+                : "\(operation.token).fallback.\(index)"
+            let tokenDigest = index == 0
+                ? operation.tokenDigest
+                : try fallbackTokenDigest(
+                    primaryTokenDigest: operation.tokenDigest,
+                    priority: UInt64(index)
+                )
+            let configuration = AgentHostConfiguration(
+                bindingID: "binding.\(groupID).\(index)",
+                revision: 1,
+                agentProfileID: profileID,
+                agentProfileRevision: profileRevision,
+                llmSlotID: primary.configuration.llmSlotID,
+                requirementsHash: primary.configuration.requirementsHash,
+                llmTargetID: option.target.targetID,
+                llmTargetRevision: option.target.revision,
+                fallbackGroupID: groupID,
+                fallbackPriority: UInt64(index),
+                parameterOverrides: current.first {
+                    $0.target.reference == option.target.reference
+                }?.configuration.parameterOverrides ?? GenerationConfiguration()
+            )
+            let receipt = try await saga.stageHostBinding(
+                HostBindingStageRequest(
+                    operationToken: operationToken,
+                    tokenDigest: tokenDigest,
+                    llmSlotID: configuration.llmSlotID,
+                    requirementsHash: configuration.requirementsHash,
+                    configuration: configuration
+                )
+            )
+            if index == 0 {
+                primaryStagingReceipt = receipt
+            }
+            replacements.append(ActiveAgentHostBinding(
+                configuration: configuration,
+                binding: receipt.binding
+            ))
+        }
+        let issues = await registry.validateGroup(
+            bindings: replacements,
+            targets: orderedOptions.map(\.target),
+            available: orderedOptions
+        )
+        guard issues.isEmpty else {
+            throw routingFailure(
+                "execution.host_binding_not_configured",
+                issues.joined(separator: ", ")
+            )
+        }
+        guard let primaryReplacement = replacements.first,
+              let primaryReceipt = primaryStagingReceipt
+        else {
+            throw routingFailure(
+                "execution.host_binding_not_configured",
+                "the replacement binding group is empty"
+            )
+        }
+        let primaryBinding = HostBindingTupleDTO(
+            bindingId: primaryReplacement.binding.bindingID,
+            bindingRevision: primaryReplacement.binding.bindingRevision,
+            bindingHash: primaryReplacement.binding.bindingHash
+        )
+        let expectedActive = current.map {
+            ActiveAgentHostBinding(
+                configuration: $0.configuration,
+                binding: $0.binding
+            )
+        }
+        let durable = ModelRebindOperation(
+            operationID: groupID,
+            profileID: profileID,
+            profileRevision: profileRevision,
+            llmSlotID: primary.configuration.llmSlotID,
+            requirementsHash: primary.configuration.requirementsHash,
+            primaryBinding: primaryReplacement.binding,
+            stagingReceiptDigest: primaryReceipt.receiptDigest,
+            expectedActive: expectedActive,
+            replacements: replacements
+        )
+        try await store.beginModelRebindOperation(durable)
+        do {
+            _ = try await rust.commit(HostBindingCommitDTO(
+                token: operation.token,
+                binding: primaryBinding,
+                receipt: HostBindingStagingReceiptDTO(
+                    tokenDigest: primaryReceipt.tokenDigest,
+                    llmSlotId: primaryReceipt.llmSlotID,
+                    requirementsHash: primaryReceipt.requirementsHash,
+                    binding: primaryBinding,
+                    receiptDigest: primaryReceipt.receiptDigest
+                )
+            ))
+        } catch {
+            try? await store.discardPreparedModelRebindOperation(operationID: groupID)
+            throw error
+        }
+        try await resume(durable, available: available)
+    }
+
+    /// Replays from a persisted receipt after a process interruption.  Confirmation
+    /// is idempotent in Rust, so a crash after commit but before the phase write is
+    /// safe to resume without retaining the bearer token that authorized commit.
+    func reconcilePending(available: [AgentLLMTargetOption]) async throws {
+        for operation in await store.pendingModelRebindOperations() {
+            try await resume(operation, available: available)
+        }
+    }
+
+    private func resume(
+        _ initial: ModelRebindOperation,
+        available: [AgentLLMTargetOption]
+    ) async throws {
+        var operation = initial
+        let primary = HostBindingTupleDTO(
+            bindingId: operation.primaryBinding.bindingID,
+            bindingRevision: operation.primaryBinding.bindingRevision,
+            bindingHash: operation.primaryBinding.bindingHash
+        )
+        if operation.phase == .prepared {
+            let confirmed = try await rust.confirm(
+                HostBindingActivationConfirmationDTO(
+                    agentProfileId: operation.profileID,
+                    agentProfileRevision: operation.profileRevision,
+                    llmSlotId: operation.llmSlotID,
+                    requirementsHash: operation.requirementsHash,
+                    binding: primary,
+                    stagingReceiptDigest: operation.stagingReceiptDigest
+                )
+            )
+            guard confirmed.state == "active",
+                  confirmed.kind == "profile_rebind",
+                  confirmed.binding == primary
+            else {
+                throw routingFailure(
+                    "execution.host_binding_not_configured",
+                    "Rust did not confirm the exact replacement binding"
+                )
+            }
+            try await store.advanceModelRebindOperation(
+                operationID: operation.operationID,
+                from: .prepared,
+                to: .rustConfirmed
+            )
+            operation.phase = .rustConfirmed
+        }
+        if operation.phase == .rustConfirmed {
+            let active = try await store.activeHostBindings().filter {
+                $0.configuration.agentProfileID == operation.profileID
+                    && $0.configuration.agentProfileRevision == operation.profileRevision
+            }
+            let activeIDs = active.map(\.binding.bindingID).sorted()
+            let replacementIDs = operation.replacements.map(\.binding.bindingID).sorted()
+            if activeIDs != replacementIDs {
+                try await store.swapActiveHostBindingGroup(
+                    expectedActive: operation.expectedActive,
+                    replacements: operation.replacements
+                )
+            }
+            try await store.advanceModelRebindOperation(
+                operationID: operation.operationID,
+                from: .rustConfirmed,
+                to: .swiftSwapped
+            )
+            operation.phase = .swiftSwapped
+        }
+        if operation.phase == .swiftSwapped {
+            let targets = await store.targets()
+            let targetGroup = operation.replacements.compactMap { binding in
+                targets.first { $0.reference == binding.targetReference }
+            }
+            guard targetGroup.count == operation.replacements.count else {
+                throw routingFailure(
+                    "execution.host_binding_not_configured",
+                    "a rebound target is no longer available"
+                )
+            }
+            let issues = await registry.installGroup(
+                bindings: operation.replacements,
+                targets: targetGroup,
+                available: available
+            )
+            guard issues.isEmpty else {
+                throw routingFailure(
+                    "execution.host_binding_not_configured",
+                    issues.joined(separator: ", ")
+                )
+            }
+            try await store.advanceModelRebindOperation(
+                operationID: operation.operationID,
+                from: .swiftSwapped,
+                to: .completed
+            )
+        }
+    }
+
+    private func fallbackTokenDigest(
+        primaryTokenDigest: String,
+        priority: UInt64
+    ) throws -> String {
+        try CanonicalDigestV1.digest(
+            domain: "saga-token:v1",
+            document: .object(entries: [
+                .init(
+                    name: "primary_token_digest",
+                    value: .string(primaryTokenDigest)
+                ),
+                .init(
+                    name: "fallback_priority",
+                    value: .string(String(priority))
+                ),
+            ])
+        ).hex
     }
 }
 

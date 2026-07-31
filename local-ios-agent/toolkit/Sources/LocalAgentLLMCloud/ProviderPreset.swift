@@ -191,6 +191,67 @@ public struct ProviderPreset: Codable, Equatable, Sendable {
     }
 }
 
+public enum ProviderOAuthRuntimePolicy {
+    public static func requiredBaseURL(
+        for presetID: ProviderPresetID
+    ) -> URL? {
+        switch presetID {
+        case .openAI:
+            URL(string: "https://chatgpt.com/backend-api/codex")
+        case .anthropic:
+            URL(string: "https://api.anthropic.com/v1")
+        case .gemini:
+            URL(string: "https://cloudcode-pa.googleapis.com/v1internal")
+        case .xAI:
+            URL(string: "https://api.x.ai/v1")
+        case .kimiCode:
+            URL(string: "https://api.kimi.com/coding/v1")
+        case .antigravity:
+            URL(
+                string:
+                    "https://daily-cloudcode-pa.sandbox.googleapis.com"
+            )
+        default:
+            nil
+        }
+    }
+
+    public static func accepts(
+        _ baseURL: URL,
+        for presetID: ProviderPresetID
+    ) -> Bool {
+        guard let required = requiredBaseURL(for: presetID),
+              let actualComponents = URLComponents(
+                  url: baseURL,
+                  resolvingAgainstBaseURL: false
+              ),
+              let requiredComponents = URLComponents(
+                  url: required,
+                  resolvingAgainstBaseURL: false
+              )
+        else { return false }
+        return actualComponents.scheme?.lowercased()
+                == requiredComponents.scheme?.lowercased()
+            && actualComponents.host?.lowercased()
+                == requiredComponents.host?.lowercased()
+            && (actualComponents.port ?? 443)
+                == (requiredComponents.port ?? 443)
+            && normalizedPath(actualComponents.path)
+                == normalizedPath(requiredComponents.path)
+            && actualComponents.user == nil
+            && actualComponents.password == nil
+            && actualComponents.query == nil
+            && actualComponents.fragment == nil
+    }
+
+    private static func normalizedPath(_ value: String) -> String {
+        guard value.count > 1, value.hasSuffix("/") else {
+            return value
+        }
+        return String(value.dropLast())
+    }
+}
+
 private func decodeKnownRawValue<Value: RawRepresentable>(
     _ type: Value.Type,
     from decoder: Decoder,

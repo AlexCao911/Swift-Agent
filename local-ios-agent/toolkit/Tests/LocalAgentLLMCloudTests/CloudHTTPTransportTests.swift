@@ -5,6 +5,154 @@ import Testing
 
 @Suite("Authorized exact-origin cloud transport", .serialized)
 struct CloudHTTPTransportTests {
+    @Test
+    func providerAndCredentialModeSelectExecutableAuthenticationHeaders() async throws {
+        let oauthPresets: [ProviderPresetID] = [
+            .openAI,
+            .anthropic,
+            .gemini,
+            .xAI,
+            .kimiCode,
+            .antigravity,
+        ]
+        for presetID in oauthPresets {
+            let fixture = try await makeAuthorizedTransportFixture(
+                presetID: presetID,
+                credentialMode: .oauth
+            )
+            defer { fixture.cleanup() }
+            CloudURLProtocolStub.install { request in
+                #expect(
+                    request.value(forHTTPHeaderField: "Authorization")
+                        == "Bearer oauth-access"
+                )
+                #expect(request.value(forHTTPHeaderField: "x-api-key") == nil)
+                #expect(
+                    request.value(forHTTPHeaderField: "x-goog-api-key") == nil
+                )
+                if presetID == .anthropic {
+                    #expect(
+                        request.value(forHTTPHeaderField: "anthropic-version")
+                            == "2023-06-01"
+                    )
+                    #expect(
+                        request.value(forHTTPHeaderField: "anthropic-beta")
+                            == "oauth-2025-04-20"
+                    )
+                }
+                return .response(
+                    status: 200,
+                    headers: ["content-type": "application/json"],
+                    chunks: [Data("{}".utf8)]
+                )
+            }
+            _ = try await makeStubTransport(fixture).json(fixture.request)
+            CloudURLProtocolStub.reset()
+        }
+
+        for (presetID, header) in [
+            (ProviderPresetID.anthropic, "x-api-key"),
+            (.gemini, "x-goog-api-key"),
+        ] {
+            let fixture = try await makeAuthorizedTransportFixture(
+                presetID: presetID,
+                credentialMode: .apiKey
+            )
+            defer { fixture.cleanup() }
+            CloudURLProtocolStub.install { request in
+                #expect(
+                    request.value(forHTTPHeaderField: header)
+                        == "test-only-key"
+                )
+                #expect(
+                    request.value(forHTTPHeaderField: "Authorization") == nil
+                )
+                return .response(
+                    status: 200,
+                    headers: ["content-type": "application/json"],
+                    chunks: [Data("{}".utf8)]
+                )
+            }
+            _ = try await makeStubTransport(fixture).json(fixture.request)
+            CloudURLProtocolStub.reset()
+        }
+    }
+
+    @Test
+    func openAICodexOAuthUsesItsResponsesRouteAndIdentityHeaders() async throws {
+        let credential = try OAuthTokenCredential(
+            accessToken: "codex-access",
+            refreshToken: "codex-refresh",
+            expiresAt: Date.distantFuture,
+            idToken: "id-token",
+            accountID: "account-123",
+            planType: "plus"
+        )
+        let fixture = try await makeAuthorizedTransportFixture(
+            presetID: .openAI,
+            credentialMode: .oauth,
+            oauthCredential: credential
+        )
+        defer { fixture.cleanup(); CloudURLProtocolStub.reset() }
+        CloudURLProtocolStub.install { request in
+            #expect(
+                request.url?.absoluteString
+                    == "https://chatgpt.com/backend-api/codex/responses?mode=stream"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "Authorization")
+                    == "Bearer codex-access"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "Version") == "0.144.1"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "Openai-Beta")
+                    == "responses=experimental"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "Originator")
+                    == "codex_cli_rs"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "User-Agent")
+                    == "codex_cli_rs/0.144.1 (iOS; arm64)"
+            )
+            #expect(
+                request.value(forHTTPHeaderField: "Chatgpt-Account-Id")
+                    == "account-123"
+            )
+            return .response(
+                status: 200,
+                headers: ["content-type": "application/json"],
+                chunks: [Data("{}".utf8)]
+            )
+        }
+
+        _ = try await makeStubTransport(fixture).json(fixture.request)
+    }
+
+    @Test
+    func substitutedOAuthOriginFailsBeforeCredentialInjection() async throws {
+        let fixture = try await makeAuthorizedTransportFixture(
+            presetID: .anthropic,
+            credentialMode: .oauth,
+            baseURLOverride: URL(string: "https://attacker.example/v1")!
+        )
+        defer { fixture.cleanup(); CloudURLProtocolStub.reset() }
+        CloudURLProtocolStub.install { _ in
+            Issue.record("substituted OAuth origin reached URLSession")
+            return .response(status: 200, headers: [:], chunks: [Data()])
+        }
+
+        await expectTransportFailure("provider_oauth.origin_mismatch") {
+            try await makeStubTransport(fixture).json(fixture.request)
+        }
+
+        #expect(await fixture.credentialLoadCount() == 0)
+        #expect(CloudURLProtocolStub.startedCount == 0)
+    }
+
     @Test(arguments: [
         CloudIPAddress.ipv4("0.0.0.0"),
         .ipv4("10.20.30.40"),

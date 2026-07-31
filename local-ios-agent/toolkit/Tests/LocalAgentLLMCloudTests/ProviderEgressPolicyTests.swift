@@ -590,7 +590,11 @@ private struct EgressHarness: Sendable {
     let session: CloudEgressSessionContext
 
     static func make(
-        retentionMode: ProviderRetentionMode = .statelessRequired
+        retentionMode: ProviderRetentionMode = .statelessRequired,
+        presetID: ProviderPresetID = .openAI,
+        credentialMode: ProviderCredentialMode = .apiKey,
+        oauthCredential: OAuthTokenCredential? = nil,
+        baseURLOverride: URL? = nil
     ) async throws -> Self {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "provider-egress-policy-\(UUID().uuidString)",
@@ -603,19 +607,52 @@ private struct EgressHarness: Sendable {
         )
         let vault = EgressCountingVault()
         let credentials = try ProviderCredentialStore(fileURL: url, vault: vault)
+        let initialSecret = if credentialMode == .oauth {
+            try (oauthCredential ?? OAuthTokenCredential(
+                accessToken: "oauth-access",
+                refreshToken: "oauth-refresh",
+                expiresAt: Date.distantFuture
+            )).secureSecret()
+        } else {
+            SecretBytes(utf8: "test-only-key")
+        }
         try await credentials.createSlot(
             credentialRef: "credential-main",
-            initialSecret: SecretBytes(utf8: "test-only-key"),
+            initialSecret: initialSecret,
             operationID: "create"
         )
+        let oauthBaseURL: URL = switch presetID {
+        case .openAI:
+            URL(string: "https://chatgpt.com/backend-api/codex")!
+        case .anthropic:
+            URL(string: "https://api.anthropic.com/v1")!
+        case .gemini:
+            URL(string: "https://cloudcode-pa.googleapis.com/v1internal")!
+        case .xAI:
+            URL(string: "https://api.x.ai/v1")!
+        case .kimiCode:
+            URL(string: "https://api.kimi.com/coding/v1")!
+        case .antigravity:
+            URL(string: "https://daily-cloudcode-pa.sandbox.googleapis.com")!
+        default:
+            URL(string: "https://api.example.com/v1")!
+        }
         let published = try await profiles.publish(ProviderProfileRevision(
             profileID: "profile-main",
             revision: 1,
-            presetID: .openAI,
+            presetID: presetID,
             displayName: "Main Provider",
-            baseURL: URL(string: "https://api.example.com/v1")!,
+            baseURL: baseURLOverride ?? (
+                credentialMode == .oauth
+                    ? oauthBaseURL
+                    : URL(string: "https://api.example.com/v1")!
+            ),
             credentialRef: "credential-main",
-            retentionMode: retentionMode
+            retentionMode: retentionMode,
+            credentialMode: credentialMode,
+            providerProjectID: presetID == .antigravity
+                ? "test-project"
+                : nil
         ))
         let target = LLMTargetRevision(
             targetID: LLMTargetID(rawValue: "target-main"),
@@ -706,15 +743,25 @@ struct AuthorizedTransportFixture: Sendable {
 
 func makeAuthorizedTransportFixture(
     retentionMode: ProviderRetentionMode = .statelessRequired,
+    presetID: ProviderPresetID = .openAI,
+    credentialMode: ProviderCredentialMode = .apiKey,
     modelID: String = "model-main",
     providerHistory: CanonicalJSONValue = .array([]),
     parameters: GenerationConfiguration = GenerationConfiguration(),
     systemText: String? = nil,
     includeToolResult: Bool = false,
     toolResults: [NormalizedToolResult]? = nil,
-    canonicalToolSchema: CanonicalJSONValue? = nil
+    canonicalToolSchema: CanonicalJSONValue? = nil,
+    oauthCredential: OAuthTokenCredential? = nil,
+    baseURLOverride: URL? = nil
 ) async throws -> AuthorizedTransportFixture {
-    let harness = try await EgressHarness.make(retentionMode: retentionMode)
+    let harness = try await EgressHarness.make(
+        retentionMode: retentionMode,
+        presetID: presetID,
+        credentialMode: credentialMode,
+        oauthCredential: oauthCredential,
+        baseURLOverride: baseURLOverride
+    )
     if retentionMode == .providerStateApproved {
         _ = try await harness.retentionPolicy.approveProviderState(
             profileID: harness.session.profileID,

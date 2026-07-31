@@ -1,3 +1,4 @@
+import LocalAgentBridge
 import LocalAgentLLMContracts
 import LocalAgentLLMCloud
 import LocalAgentLLMCore
@@ -7,6 +8,217 @@ import Testing
 
 @Suite("LLM product bootstrap")
 struct LLMProductBootstrapTests {
+    @Test("real Rust profile rebind replaces the active binding group across relaunch")
+    func realRustProfileRebindReplacesActiveBindingGroupAcrossRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let epoch = try HostProcessEpoch.generate()
+        let rustStore = directory.appendingPathComponent("agent-runtime.sqlite")
+        let llmStore = directory.appendingPathComponent("llm-state.sqlite")
+        let originalPrimary = fixtureTarget()
+        let fallback = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.fallback"),
+            revision: 1,
+            kind: .local(installationID: "installation.fallback"),
+            modelID: "model.fallback",
+            defaultParameters: GenerationConfiguration()
+        )
+        let override = LLMTargetRevision(
+            targetID: LLMTargetID(rawValue: "target.override"),
+            revision: 1,
+            kind: .local(installationID: "installation.override"),
+            modelID: "model.override",
+            defaultParameters: GenerationConfiguration()
+        )
+        let store = try LLMStore(fileURL: llmStore)
+        for target in [originalPrimary, fallback, override] {
+            try await store.publishTarget(target)
+        }
+        let registry = AppLLMHostSelectionRegistry()
+        let options = [originalPrimary, fallback, override].map {
+            AgentLLMTargetOption(
+                target: $0,
+                parameterSchema: LLMParameterSchema(definitions: [])
+            )
+        }
+        var rust: RustRuntimeClient? = try RustRuntimeClient(
+            configuration: RustRuntimeConfiguration(
+                hostProcessEpoch: epoch,
+                store: .sqlite(path: rustStore.path)
+            )
+        )
+        let portable = RustPortableAgentBuilderClient(gateway: try #require(rust))
+        let publisher = HostBoundAgentBuilderClient(
+            portable: portable,
+            targets: StaticAgentLLMTargetCatalog(options: options),
+            bindingSaga: AgentHostBindingSaga(store: store),
+            selectionRegistry: registry
+        )
+        let published = try await publisher.publish(
+            draft: AgentBuilderDraftDTO(
+                profileId: "profile.bootstrap",
+                templateId: "template.assistant.default",
+                displayName: "Bootstrap"
+            ),
+            llm: AgentLLMSelectionDraft(
+                operationID: "publish.profile.bootstrap",
+                target: originalPrimary.reference,
+                requirements: AgentLLMRequirementsDTO(
+                    slotId: "slot.model.primary",
+                    contextBudget: "16384",
+                    streamingRequired: true,
+                    toolCallingMode: "allowed"
+                ),
+                parameterOverrides: GenerationConfiguration(),
+                fallbackCandidates: [
+                    AgentLLMCandidateDraft(
+                        target: fallback.reference,
+                        parameterOverrides: GenerationConfiguration()
+                    ),
+                ]
+            )
+        )
+        let originalBindingIDs = try await store.activeHostBindings().map(\.binding.bindingID)
+        let service = ActiveAgentModelSelectionService(
+            store: store,
+            registry: registry,
+            rust: PortableActiveProfileBindingRebinder(client: portable)
+        )
+
+        try await service.activate(
+            target: override,
+            profileID: published.profileId,
+            profileRevision: published.profileRevisionId,
+            available: options
+        )
+
+        let active = try await store.activeHostBindings()
+            .filter {
+                $0.configuration.agentProfileID == published.profileId
+                    && $0.configuration.agentProfileRevision == published.profileRevisionId
+            }
+            .sorted {
+                ($0.configuration.fallbackPriority ?? .max)
+                    < ($1.configuration.fallbackPriority ?? .max)
+            }
+        #expect(active.map(\.configuration.selectedTarget) == [
+            override.reference,
+            originalPrimary.reference,
+            fallback.reference,
+        ])
+        #expect(Set(active.map(\.binding.bindingID)).isDisjoint(with: originalBindingIDs))
+        let executable = await registry.selectionGroup(
+            profileID: published.profileId,
+            revision: published.profileRevisionId
+        )
+        #expect(executable?.map(\.targetID) == [
+            override.targetID,
+            originalPrimary.targetID,
+            fallback.targetID,
+        ])
+
+        rust = nil
+        let reopenedRust = try RustRuntimeClient(
+            configuration: RustRuntimeConfiguration(
+                hostProcessEpoch: epoch,
+                store: .sqlite(path: rustStore.path)
+            )
+        )
+        let reopenedStore = try LLMStore(fileURL: llmStore)
+        let reopenedRegistry = AppLLMHostSelectionRegistry()
+        let reopenedService = ActiveAgentModelSelectionService(
+            store: reopenedStore,
+            registry: reopenedRegistry,
+            rust: PortableActiveProfileBindingRebinder(
+                client: RustPortableAgentBuilderClient(gateway: reopenedRust)
+            )
+        )
+        try await reopenedService.reconcilePending(available: options)
+        let issues = await reopenedRegistry.hydrate(
+            bindings: try await reopenedStore.activeHostBindings(),
+            targets: await reopenedStore.targets(),
+            available: options
+        )
+        #expect(issues.isEmpty)
+        #expect(await reopenedRegistry.selectionGroup(
+            profileID: published.profileId,
+            revision: published.profileRevisionId
+        )?.map(\.targetID) == [
+            override.targetID,
+            originalPrimary.targetID,
+            fallback.targetID,
+        ])
+    }
+
+    @Test("Rust-confirmed rebind resumes the Swift swap after relaunch")
+    func rustConfirmedRebindResumesAfterRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("llm.sqlite")
+        let target = fixtureTarget()
+        let first = try LLMStore(fileURL: url)
+        try await first.publishTarget(target)
+        let oldConfiguration = fixtureBinding(target: target).configuration
+        let replacementConfiguration = AgentHostConfiguration(
+            bindingID: "binding.rebound",
+            revision: 1,
+            agentProfileID: oldConfiguration.agentProfileID,
+            agentProfileRevision: oldConfiguration.agentProfileRevision,
+            llmSlotID: oldConfiguration.llmSlotID,
+            requirementsHash: oldConfiguration.requirementsHash,
+            llmTargetID: target.targetID,
+            llmTargetRevision: target.revision,
+            parameterOverrides: .init()
+        )
+        let saga = AgentHostBindingSaga(store: first)
+        let oldReceipt = try await saga.stageHostBinding(.init(
+            operationToken: "old", tokenDigest: "old", llmSlotID: oldConfiguration.llmSlotID,
+            requirementsHash: oldConfiguration.requirementsHash, configuration: oldConfiguration
+        ))
+        try await saga.activateHostBinding(operationToken: "old", binding: oldReceipt.binding)
+        let replacementReceipt = try await saga.stageHostBinding(.init(
+            operationToken: "new", tokenDigest: "new", llmSlotID: replacementConfiguration.llmSlotID,
+            requirementsHash: replacementConfiguration.requirementsHash, configuration: replacementConfiguration
+        ))
+        let pending = ModelRebindOperation(
+            operationID: "relaunch-rebind",
+            profileID: oldConfiguration.agentProfileID,
+            profileRevision: oldConfiguration.agentProfileRevision,
+            llmSlotID: oldConfiguration.llmSlotID,
+            requirementsHash: oldConfiguration.requirementsHash,
+            primaryBinding: replacementReceipt.binding,
+            stagingReceiptDigest: replacementReceipt.receiptDigest,
+            expectedActive: [.init(configuration: oldConfiguration, binding: oldReceipt.binding)],
+            replacements: [.init(configuration: replacementConfiguration, binding: replacementReceipt.binding)]
+        )
+        try await first.beginModelRebindOperation(pending)
+        try await first.advanceModelRebindOperation(
+            operationID: pending.operationID, from: .prepared, to: .rustConfirmed
+        )
+
+        let reopened = try LLMStore(fileURL: url)
+        let registry = AppLLMHostSelectionRegistry()
+        let service = ActiveAgentModelSelectionService(
+            store: reopened, registry: registry, rust: RecordingActiveProfileRebinder()
+        )
+        try await service.reconcilePending(available: [.init(
+            target: target, parameterSchema: .init(definitions: [])
+        )])
+
+        #expect(try await reopened.activeHostBindings() == [
+            .init(configuration: replacementConfiguration, binding: replacementReceipt.binding),
+        ])
+        #expect(await reopened.pendingModelRebindOperations().isEmpty)
+        #expect(await registry.selection(
+            profileID: oldConfiguration.agentProfileID,
+            revision: oldConfiguration.agentProfileRevision
+        ) != nil)
+    }
+
     @Test("hydration installs only an exact available target")
     func hydratesExactActiveBinding() async throws {
         let target = fixtureTarget()
@@ -231,10 +443,65 @@ struct LLMProductBootstrapTests {
                 ),
             ],
             targets: [localTarget, cloudTarget],
+            activeBindings: [],
             disk: nil
         )
 
         #expect(AppModelCenterClient.availableTargetOptions(in: state).isEmpty)
+    }
+}
+
+private actor RecordingActiveProfileRebinder:
+    ActiveProfileBindingRebinding
+{
+    private(set) var confirmedBinding: HostBindingTupleDTO?
+
+    func prepare(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO {
+        HostBindingOperationDTO(
+            kind: "profile_rebind",
+            idempotencyKey: request.idempotencyKey,
+            token: "rust-rebind-token",
+            tokenDigest: "rust-rebind-token-digest",
+            subjectId: request.agentProfileId,
+            agentProfileId: request.agentProfileId,
+            agentProfileRevision: request.agentProfileRevision,
+            llmSlotId: request.llmSlotId,
+            requirementsHash: request.requirementsHash,
+            state: "pending"
+        )
+    }
+
+    func commit(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        HostBindingCrossLinkDTO(
+            operationToken: request.receipt.tokenDigest,
+            tokenDigest: request.receipt.tokenDigest,
+            kind: "profile_rebind",
+            llmSlotId: request.receipt.llmSlotId,
+            requirementsHash: request.receipt.requirementsHash,
+            binding: request.binding,
+            stagingReceiptDigest: request.receipt.receiptDigest,
+            state: "host_unbound"
+        )
+    }
+
+    func confirm(
+        _ request: HostBindingActivationConfirmationDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        confirmedBinding = request.binding
+        return HostBindingCrossLinkDTO(
+            operationToken: "rust-rebind-token-digest",
+            tokenDigest: "rust-rebind-token-digest",
+            kind: "profile_rebind",
+            llmSlotId: request.llmSlotId,
+            requirementsHash: request.requirementsHash,
+            binding: request.binding,
+            stagingReceiptDigest: request.stagingReceiptDigest,
+            state: "active"
+        )
     }
 }
 

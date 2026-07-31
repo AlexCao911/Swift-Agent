@@ -213,6 +213,18 @@ private actor RecordingPortableAgentBuilderClient: PortableAgentBuilderClient {
         )
     }
 
+    func prepareProfileRebind(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO {
+        throw PublishTestError.unimplemented
+    }
+
+    func commitProfileRebind(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        throw PublishTestError.unimplemented
+    }
+
     func confirmHostBindingActivation(
         _ request: HostBindingActivationConfirmationDTO
     ) async throws -> HostBindingCrossLinkDTO {

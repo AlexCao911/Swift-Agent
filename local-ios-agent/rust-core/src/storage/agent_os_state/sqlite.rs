@@ -352,6 +352,32 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
     ) -> Result<HostBindingCrossLink, HostBindingError> {
         self.commit_operation(HostBindingKind::ProfilePublish, request)
     }
+    fn prepare_profile_rebind(
+        &mut self,
+        request: ProfilePublishPreparation,
+    ) -> Result<HostBindingOperation, HostBindingError> {
+        let token = crate::llm_contracts::BearerTokenIssuer::system()
+            .issue("saga-token:v1")
+            .map_err(|error| HostBindingError::new("host_binding.token_failed", error.to_string()))?
+            .raw()
+            .to_string();
+        self.prepare_operation(
+            HostBindingKind::ProfileRebind,
+            request.idempotency_key(),
+            request.agent_profile_id(),
+            request.agent_profile_id(),
+            request.agent_profile_revision(),
+            request.llm_slot_id(),
+            request.requirements_hash(),
+            token,
+        )
+    }
+    fn commit_profile_rebind(
+        &mut self,
+        request: HostBindingCommit,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        self.commit_operation(HostBindingKind::ProfileRebind, request)
+    }
     fn begin_package_binding(
         &mut self,
         request: PackageBindingPreparation,
@@ -445,23 +471,50 @@ impl AgentOSStateRepository for SqliteAgentOSStateStore {
                 "activation confirmation staging receipt differs from the cross-link",
             ));
         }
-        if existing.state() == HostBindingOperationState::Active {
-            return Ok(existing);
-        }
-        let changed = self
-            .conn
-            .execute(
-                "update host_binding_cross_links set state = 'active'
-             where operation_token = ?1 and state = 'host_unbound'",
-                params![existing.operation_token()],
-            )
-            .map_err(sqlite_error)?;
-        if changed != 1 {
+        if !matches!(
+            existing.state(),
+            HostBindingOperationState::HostUnbound | HostBindingOperationState::Active
+        ) {
             return Err(HostBindingError::new(
                 "host_binding.activation_state_stale",
                 "host binding is not awaiting activation",
             ));
         }
+        let tx = self.conn.transaction().map_err(sqlite_error)?;
+        if existing.kind() == HostBindingKind::ProfileRebind {
+            tx.execute(
+                "update host_binding_cross_links set state = 'superseded'
+                 where state = 'active' and operation_token != ?1
+                   and operation_token in (
+                     select operation_token from host_binding_operations
+                     where agent_profile_id = ?2 and agent_profile_revision = ?3
+                       and llm_slot_id = ?4
+                   )",
+                params![
+                    existing.operation_token(),
+                    confirmation.agent_profile_id(),
+                    confirmation.agent_profile_revision().to_string(),
+                    confirmation.llm_slot_id(),
+                ],
+            )
+            .map_err(sqlite_error)?;
+        }
+        if existing.state() == HostBindingOperationState::HostUnbound {
+            let changed = tx
+                .execute(
+                    "update host_binding_cross_links set state = 'active'
+                     where operation_token = ?1 and state = 'host_unbound'",
+                    params![existing.operation_token()],
+                )
+                .map_err(sqlite_error)?;
+            if changed != 1 {
+                return Err(HostBindingError::new(
+                    "host_binding.activation_state_stale",
+                    "host binding is not awaiting activation",
+                ));
+            }
+        }
+        tx.commit().map_err(sqlite_error)?;
         load_cross_link(&self.conn, existing.operation_token())?.ok_or_else(not_found)
     }
 }
@@ -1399,11 +1452,13 @@ fn load_cross_link(
             let state = HostBindingOperationState::from_str(&state).map_err(conversion_error)?;
             if !matches!(
                 state,
-                HostBindingOperationState::HostUnbound | HostBindingOperationState::Active
+                HostBindingOperationState::HostUnbound
+                    | HostBindingOperationState::Active
+                    | HostBindingOperationState::Superseded
             ) {
                 return Err(conversion_error(HostBindingError::new(
                     "host_binding.invalid_persisted_state",
-                    "cross-link must be host_unbound or active",
+                    "cross-link must be host_unbound, active, or superseded",
                 )));
             }
             Ok(HostBindingCrossLink::new(&operation, &commit).with_state(state))

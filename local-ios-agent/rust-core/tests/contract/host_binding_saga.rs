@@ -146,7 +146,7 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
             1,
             requirements.slot_id(),
             &requirements_hash,
-            binding,
+            binding.clone(),
             link.staging_receipt_digest(),
         ))
         .unwrap();
@@ -164,4 +164,70 @@ fn semantic_profile_saga_binds_actual_revision_before_activation() {
         .list_agent_profiles()
         .iter()
         .any(|profile| profile.id().as_str() == "profile_v2"));
+
+    let rebind = service
+        .prepare_profile_rebind(ProfilePublishPreparation::new(
+            "rebind-profile-v2",
+            "profile_v2",
+            1,
+            requirements.slot_id(),
+            &requirements_hash,
+        ))
+        .unwrap();
+    let replacement =
+        HostBindingTuple::new("binding-v2-replacement", 1, "binding-hash-v2-replacement");
+    let replacement_receipt = HostBindingStagingReceipt::new(
+        rebind.token_digest(),
+        rebind.llm_slot_id(),
+        rebind.requirements_hash(),
+        replacement.clone(),
+        "staging-receipt-v2-replacement",
+    );
+    let replacement_link = service
+        .commit_profile_rebind(HostBindingCommit::new(
+            rebind.token(),
+            replacement.clone(),
+            replacement_receipt,
+        ))
+        .unwrap();
+    assert_eq!(
+        replacement_link.state(),
+        HostBindingOperationState::HostUnbound
+    );
+    assert_eq!(
+        profiles
+            .agent_profile_exact(profile_ref.profile_id(), AgentProfileVersion::new(1))
+            .unwrap()
+            .unwrap()
+            .host_binding_state(),
+        AgentProfileHostBindingState::Active
+    );
+    let replacement_active = service
+        .confirm_activation(HostBindingActivationConfirmation::new(
+            "profile_v2",
+            1,
+            requirements.slot_id(),
+            &requirements_hash,
+            replacement,
+            replacement_link.staging_receipt_digest(),
+        ))
+        .unwrap();
+    assert_eq!(
+        replacement_active.state(),
+        HostBindingOperationState::Active
+    );
+    assert_eq!(
+        service
+            .confirm_activation(HostBindingActivationConfirmation::new(
+                "profile_v2",
+                1,
+                requirements.slot_id(),
+                &requirements_hash,
+                binding,
+                link.staging_receipt_digest(),
+            ))
+            .unwrap_err()
+            .code(),
+        "host_binding.activation_state_stale"
+    );
 }

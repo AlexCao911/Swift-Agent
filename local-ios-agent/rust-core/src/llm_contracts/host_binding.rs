@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum HostBindingKind {
     ProfilePublish,
+    ProfileRebind,
     PackageBinding,
 }
 
@@ -13,6 +14,7 @@ impl HostBindingKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ProfilePublish => "profile_publish",
+            Self::ProfileRebind => "profile_rebind",
             Self::PackageBinding => "package_binding",
         }
     }
@@ -21,6 +23,7 @@ impl HostBindingKind {
     pub fn from_str(value: &str) -> Result<Self, HostBindingError> {
         match value {
             "profile_publish" => Ok(Self::ProfilePublish),
+            "profile_rebind" => Ok(Self::ProfileRebind),
             "package_binding" => Ok(Self::PackageBinding),
             _ => Err(HostBindingError::new(
                 "host_binding.invalid_persisted_state",
@@ -36,6 +39,7 @@ pub enum HostBindingOperationState {
     Pending,
     HostUnbound,
     Active,
+    Superseded,
 }
 
 impl HostBindingOperationState {
@@ -44,6 +48,7 @@ impl HostBindingOperationState {
             Self::Pending => "pending",
             Self::HostUnbound => "host_unbound",
             Self::Active => "active",
+            Self::Superseded => "superseded",
         }
     }
 
@@ -53,6 +58,7 @@ impl HostBindingOperationState {
             "pending" => Ok(Self::Pending),
             "host_unbound" => Ok(Self::HostUnbound),
             "active" => Ok(Self::Active),
+            "superseded" => Ok(Self::Superseded),
             _ => Err(HostBindingError::new(
                 "host_binding.invalid_persisted_state",
                 format!("unknown host-binding operation state: {value}"),

@@ -10,6 +10,7 @@ final class ModelCenterViewModel {
     private(set) var snapshot: ModelCenterSnapshot = .empty
     private(set) var selectedTarget: LLMTargetReference?
     private(set) var selectedModelID: String?
+    private(set) var activeModel: ActiveModelSummary?
     var targetDefaults = GenerationConfiguration()
     private(set) var parameterNotice: String?
     private(set) var pendingMigrations: [LegacyLLMMigrationItem] = []
@@ -42,6 +43,66 @@ final class ModelCenterViewModel {
         }
     }
 
+    @discardableResult
+    func syncActiveModel(
+        for agent: ActiveAgentRevisionSelection
+    ) -> ActiveModelSummary? {
+        guard let binding = snapshot.activeBindings
+            .filter({
+                $0.configuration.agentProfileID == agent.profileId
+                    && $0.configuration.agentProfileRevision
+                        == agent.profileRevisionId
+            })
+            .sorted(by: {
+                ($0.configuration.fallbackPriority ?? .max)
+                    < ($1.configuration.fallbackPriority ?? .max)
+            })
+            .first,
+              let target = snapshot.targets.first(where: {
+                  $0.reference == binding.targetReference
+              })
+        else {
+            activeModel = nil
+            selectedTarget = nil
+            selectedModelID = nil
+            return nil
+        }
+        selectedTarget = target.reference
+        switch target.kind {
+        case let .local(installationID):
+            let model = snapshot.localModels.first {
+                $0.installation?.installationID == installationID
+            }
+            selectedModelID = model?.id
+            activeModel = ActiveModelSummary(
+                providerId: "local",
+                modelId: target.modelID,
+                displayName: model?.displayName ?? target.modelID,
+                route: .localCpp(engineId: installationID),
+                readiness: model?.installation?.state == .installed
+                    ? .ready
+                    : .unavailable(reason: "Model is not installed.")
+            )
+        case let .cloud(profileID, revision):
+            let model = snapshot.cloudModels.first {
+                $0.profileID == profileID
+                    && $0.profileRevision == revision
+                    && $0.modelID == target.modelID
+            }
+            selectedModelID = model.map(cloudModelID)
+            activeModel = ActiveModelSummary(
+                providerId: profileID,
+                modelId: target.modelID,
+                displayName: target.modelID,
+                route: .cloud(providerId: profileID),
+                readiness: model?.validation.isCurrent == true
+                    ? .ready
+                    : .unavailable(reason: "Provider validation is stale.")
+            )
+        }
+        return activeModel
+    }
+
     func observeUpdates() async {
         guard let client else { return }
         for await _ in client.updates {
@@ -66,6 +127,13 @@ final class ModelCenterViewModel {
 
     func createTarget(modelID: String) async throws {
         guard let client else { return }
+        let target = try makeTarget(modelID: modelID)
+        try await client.publishTarget(target)
+        selectedTarget = target.reference
+        await reload()
+    }
+
+    private func makeTarget(modelID: String) throws -> LLMTargetRevision {
         selectModel(id: modelID)
         let target: LLMTargetRevision
         if let local = snapshot.localModels.first(where: { $0.id == modelID }),
@@ -102,8 +170,22 @@ final class ModelCenterViewModel {
         } else {
             throw ModelCenterFailure("The selected model is not ready.")
         }
-        try await client.publishTarget(target)
-        selectedTarget = target.reference
+        return target
+    }
+
+    func activateModel(
+        id modelID: String,
+        for agent: ActiveAgentRevisionSelection
+    ) async throws {
+        guard let client else { return }
+        let revision = try makeTarget(modelID: modelID)
+        try await client.publishTarget(revision)
+        try await client.activateTarget(
+            revision,
+            forAgentProfileID: agent.profileId,
+            revision: agent.profileRevisionId
+        )
+        selectedTarget = revision.reference
         await reload()
     }
 

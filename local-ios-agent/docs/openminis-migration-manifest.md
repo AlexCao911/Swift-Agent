@@ -13,19 +13,21 @@ respective third parties.
 
 | OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
 | --- | --- | --- | --- | --- |
-| `src/ios/Views/Chat/AIChatView.swift`, `ChatInputBar.swift`, `ChatMessageViews.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisProductShellView.swift` | `LocalAgentApp` Sources | GPLv3 | Product layout and interaction patterns adapted to the LocalAgent shell and injected facade |
+| `src/ios/Views/ContentView.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisContentView.swift` | `LocalAgentApp` Sources | GPLv3 | Direct port of the split/stack navigation, session grouping, centered sidebar toolbar, movable new-chat/search FAB, tool sheets and Settings section styling; persistence/sync calls are replaced by Rust projections |
+| `src/ios/Views/Chat/AIChatView.swift`, `ChatInputBar.swift`, `ChatMessageViews.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisChatView.swift` | `LocalAgentApp` Sources | GPLv3 | Full-screen chat presentation, navigation actions, composer, attachments and message interactions adapted to the injected Rust-backed facade |
 | `src/ios/Agent/Markdown/MinisMarkdownParser.swift` | `LocalAgentApp/ThirdParty/OpenMinis/ChatUI/Markdown/MinisMarkdownParser.swift` | `LocalAgentApp` Sources | GPLv3; swift-cmark BSD-2-Clause | Copied; parser remains the product Markdown AST |
 | `src/ios/Agent/Markdown/SwiftMathRenderer.swift` | `LocalAgentApp/ThirdParty/OpenMinis/ChatUI/Markdown/SwiftMathRenderer.swift` | `LocalAgentApp` Sources | GPLv3; SwiftMath MIT | Copied and adapted to LocalAgent logging and Swift 6 actor isolation |
 | `src/ios/Agent/Markdown/KaTeXRenderer.swift` | `LocalAgentApp/ThirdParty/OpenMinis/ChatUI/Markdown/KaTeXRenderer.swift` | `LocalAgentApp` Sources | GPLv3; KaTeX MIT | Copied and adapted to LocalAgent logging and Swift 6 actor isolation |
 | `src/ios/Resources/KaTeX` | `LocalAgentApp/ThirdParty/OpenMinis/Resources/KaTeX` | `LocalAgentApp` Copy Bundle Resources | KaTeX MIT | Copied as a folder resource |
 | OpenMinis chat ViewModel/store surface | `LocalAgentApp/ThirdParty/OpenMinis/ChatUI/AIChatViewModel.swift`, `ChatStore.swift` | `LocalAgentApp` Sources | LocalAgent implementation; interface adapted from GPLv3 donor | Replaced with a presentation-only submit facade and read-only projection store |
+| `src/ios/Views/Providers/UnifiedModelPicker.swift`, `SessionModelPicker.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/UnifiedModelPicker.swift` | `LocalAgentApp` Sources | GPLv3 | Direct presentation port of searchable/collapsible provider sections and active selection; option data includes LocalAgent cloud providers plus C++ on-device models |
+| `src/ios/Views/Providers/ProviderInstancesView.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/OpenMinisProviderInstancesView.swift` | `LocalAgentApp` Sources | GPLv3 | Direct presentation port of the Provider list, credential status, add/edit flow and row actions; LocalAgent product records and its single secure HTTP stack replace donor stores and clients |
 | OpenMinis Markdown presentation behavior | `LocalAgentApp/ThirdParty/OpenMinis/ChatUI/Markdown/OpenMinisMarkdownView.swift` | `LocalAgentApp` Sources | LocalAgent implementation; behavior adapted from GPLv3 donor | Renders the migrated AST and invokes both migrated math backends |
 
-The donor's `Agent/MessageList` implementation is intentionally not copied in
-this slice: the current product path uses `LazyVStack`, and importing the
-UIKit/TextKit message-list subsystem before it has a caller would add several
-thousand lines of unreachable code. It remains available as a later,
-performance-driven migration if profiling demonstrates a need.
+The donor's UIKit/TextKit `Agent/MessageList` rendering engine is intentionally
+not copied: the migrated OpenMinis chat presentation currently uses SwiftUI
+`LazyVStack`. That engine remains a performance-driven replacement if product
+profiling demonstrates a need.
 
 ## License records
 
@@ -102,6 +104,7 @@ other production memory backend ships in this slice.
 | OpenMinis source | LocalAgent target | Xcode target/resource/build phase | License | Migration |
 | --- | --- | --- | --- | --- |
 | `src/ios/Providers/ProviderTypes.swift`, `ProviderInstance.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/OpenMinisProviderConfigurationAdapter.swift`, `LocalAgentLLMCloud/ProviderProductMapping.swift` | `LocalAgentApp` Sources and `LocalAgentLLMCloud` Swift package target | Product model adapted from GPLv3 donor; LocalAgent transport implementation | Preserves provider type, credential mode, label, Base URL and `/v1` behavior; unknown types round-trip and fail before network |
+| `src/ios/Views/Providers/ProviderInstancesView.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/OpenMinisProviderInstancesView.swift` | `LocalAgentApp` Sources | GPLv3 | Preserves the donor Provider navigation and row interaction while binding it to `ModelCenterViewModel`, secure credential state and LocalAgent archive/edit operations |
 | `src/ios/Views/Providers/UnifiedModelPicker.swift` | `LocalAgentApp/ThirdParty/OpenMinis/Providers/UnifiedModelPicker.swift`, existing `ModelCenterView` | `LocalAgentApp` Sources | Product interaction adapted from GPLv3 donor | One picker projects both validated cloud models and installed compatible C++ local models; selection publishes a reusable target and does not start generation |
 | Provider OAuth manager HTTP semantics | `LocalAgentLLMCloud/OAuthHTTPClient.swift`, existing `ProviderCredentialStore` | `LocalAgentLLMCloud` Swift package target | LocalAgent implementation informed by GPLv3 donor flows | OAuth endpoint profiles use the same exact-origin/SSRF transport boundary as model traffic; tokens stay in the existing secure credential vault and cancellation never triggers fallback |
 | OpenAI-compatible provider product records | `ProviderPreset.swift`, `OpenAICompatibleAdapter.swift` | `LocalAgentLLMCloud` Swift package target | LocalAgent implementation | OpenAI Chat Completions, OpenRouter and Kimi share one codec implementation; Antigravity remains visible-but-disabled until its distinct Cloud Code envelope has a dedicated codec |

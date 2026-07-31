@@ -17,7 +17,7 @@ struct LLMStoreSchemaV3Tests {
             originValidator: FixtureOriginValidator()
         )
 
-        #expect(await store.schemaVersionForTesting() == 3)
+        #expect(await store.schemaVersionForTesting() == 4)
         #expect(Set(await store.tableNamesForTesting()) == expectedVersionTwoTables)
         #expect(Set(await store.indexNamesForTesting()) == expectedVersionTwoIndexes)
     }
@@ -51,7 +51,7 @@ struct LLMStoreSchemaV3Tests {
         _ = try ProviderProfileStore(fileURL: url, originValidator: FixtureOriginValidator())
         let reopened = try LLMStore(fileURL: url)
 
-        #expect(await reopened.schemaVersionForTesting() == 3)
+        #expect(await reopened.schemaVersionForTesting() == 4)
         #expect(await reopened.bindingState(token: request.tokenDigest) == .staged)
     }
 
@@ -92,7 +92,7 @@ struct LLMStoreSchemaV3Tests {
 
         try LLMStoreSchema.migrateToCurrent(connection)
 
-        #expect(try userVersion(connection) == 3)
+        #expect(try userVersion(connection) == 4)
         #expect(try connection.queryRows(
             "SELECT record_schema_version FROM provider_profile_revisions ORDER BY revision"
         ).map { $0.integer("record_schema_version") } == [3, 3])
@@ -137,7 +137,7 @@ struct LLMStoreSchemaV3Tests {
         let futureURL = futureDirectory.appendingPathComponent("llm-state.sqlite")
         let future = try SQLiteConnection(path: futureURL.path)
         try LLMStoreSchema.ensureBaseSchema(future)
-        try future.execute("PRAGMA user_version = 4")
+        try future.execute("PRAGMA user_version = 5")
         #expect(throws: ProviderProfileFailure.self) {
             _ = try ProviderProfileStore(
                 fileURL: futureURL,
@@ -205,7 +205,7 @@ struct LLMStoreSchemaV3Tests {
             try connection.execute(fixture.sql, bindings: fixture.bindings)
         }
 
-        #expect(try userVersion(connection) == 3)
+        #expect(try userVersion(connection) == 4)
         #expect(Set(try tableNames(connection)) == expectedVersionTwoTables)
     }
 }
@@ -222,6 +222,7 @@ private let expectedVersionTwoTables = expectedVersionOneTables.union([
     "egress_scope_grants", "egress_generation_authorizations", "egress_audit_records",
     "cloud_catalog_state", "cloud_capability_observations", "provider_validation_records",
     "prepared_cloud_sessions", "cloud_session_tombstones", "sanitized_llm_snapshots",
+    "model_rebind_operations",
 ])
 
 private let expectedVersionTwoIndexes: Set<String> = [
@@ -236,7 +237,7 @@ private let expectedVersionTwoIndexes: Set<String> = [
     "cloud_catalog_state_revision_idx", "cloud_capability_observations_subject_idx",
     "provider_validation_records_subject_idx", "prepared_cloud_sessions_preparation_idx",
     "prepared_cloud_sessions_epoch_idx", "cloud_session_tombstones_revision_idx",
-    "sanitized_llm_snapshots_run_idx",
+    "sanitized_llm_snapshots_run_idx", "model_rebind_operations_phase_idx",
 ]
 
 private struct LaterTaskRowFixture {

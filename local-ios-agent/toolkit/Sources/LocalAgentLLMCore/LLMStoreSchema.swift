@@ -11,13 +11,14 @@ package struct LLMStoreSchemaError: Error, Equatable, Sendable {
 }
 
 package enum LLMStoreSchema {
-    package static let currentVersion = 3
+    package static let currentVersion = 4
 
     package static var versionTwoMigrationStatementCount: Int {
         versionTwoStatements.count
     }
 
     package static let versionThreeMigrationStatementCount = 8
+    package static let versionFourMigrationStatementCount = 4
 
     package static func migrateToCurrent(
         _ database: SQLiteConnection,
@@ -36,6 +37,9 @@ package enum LLMStoreSchema {
                 database,
                 failAfterStatement: failVersionThreeAfterStatement
             )
+        }
+        if try userVersion(database) == 3 {
+            try migrateToVersionFour(database)
         }
     }
 
@@ -193,6 +197,33 @@ package enum LLMStoreSchema {
             try completedStatement()
             try database.execute("PRAGMA user_version = 3")
             try completedStatement()
+        }
+    }
+
+    private static func migrateToVersionFour(_ database: SQLiteConnection) throws {
+        let version = try userVersion(database)
+        guard version <= currentVersion else {
+            throw LLMStoreSchemaError(
+                code: "llm_store.future_schema",
+                message: "LLM store schema version \(version) is newer than supported version \(currentVersion)"
+            )
+        }
+        guard version < 4 else { return }
+        guard version == 3 else {
+            throw LLMStoreSchemaError(
+                code: "llm_store.unsupported_migration",
+                message: "LLM store must be at schema version 3 before migrating to version 4"
+            )
+        }
+        try database.transaction {
+            try database.execute(
+                "CREATE TABLE model_rebind_operations(operation_id TEXT PRIMARY KEY, phase TEXT NOT NULL, record_json TEXT NOT NULL)"
+            )
+            try database.execute(
+                "CREATE INDEX model_rebind_operations_phase_idx ON model_rebind_operations(phase)"
+            )
+            try database.execute("UPDATE llm_store_meta SET schema_version = 4")
+            try database.execute("PRAGMA user_version = 4")
         }
     }
 

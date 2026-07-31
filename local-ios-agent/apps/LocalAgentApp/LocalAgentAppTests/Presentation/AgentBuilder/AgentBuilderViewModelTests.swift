@@ -332,6 +332,32 @@ struct AgentBuilderViewModelTests {
             fallback,
         ])
     }
+
+    @Test("validated runtime parameter overrides reach the agent selection")
+    func validatedRuntimeParameterOverridesReachAgentSelection() async throws {
+        let viewModel = AgentBuilderViewModel(
+            profileId: "profile_1",
+            publisher: RecordingTargetGroupBuilderClient(),
+            permissionClient: MockPermissionClient(issues: [])
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.setParameter(.samplingTemperature, .decimal(0.7)))
+        #expect(viewModel.setParameter(.samplingTopK, .integer(42)))
+        #expect(viewModel.setParameter(
+            .generationStopSequences,
+            .textList([" END ", "", "STOP"])
+        ))
+        #expect(!viewModel.setParameter(.samplingTemperature, .decimal(9)))
+        #expect(viewModel.llmSelection?.parameterOverrides == GenerationConfiguration(
+            parameters: [
+                "sampling.temperature": .decimal(0.7),
+                "sampling.top_k": .integer(42),
+                "generation.stop_sequences": .textList(["END", "STOP"]),
+            ]
+        ))
+    }
 }
 
 private actor RecordingTargetGroupBuilderClient: AgentBuilderPublishing {
@@ -365,7 +391,15 @@ private actor RecordingTargetGroupBuilderClient: AgentBuilderPublishing {
                     modelID: id,
                     defaultParameters: GenerationConfiguration()
                 ),
-                parameterSchema: LLMParameterSchema(definitions: [])
+                parameterSchema: LLMParameterSchema(definitions: [
+                    .decimal(.samplingTemperature, support: .supported, minimum: 0, maximum: 1),
+                    .integer(.samplingTopK, support: .supported, minimum: 1, maximum: 100),
+                    LLMParameterDefinition(
+                        id: .generationStopSequences,
+                        valueType: .textList,
+                        support: .supported
+                    ),
+                ])
             )
         }
     }

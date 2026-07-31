@@ -113,6 +113,91 @@ fn exact_activation_is_durable_and_idempotent() {
 }
 
 #[test]
+fn profile_rebind_atomically_supersedes_the_previous_active_link_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent-os.sqlite");
+    let mut store = SqliteAgentOSStateStore::open(&path).unwrap();
+    let original = store
+        .prepare_profile_publish(profile_request("original-profile"))
+        .unwrap();
+    let original_binding = HostBindingTuple::new("original", 1, "original-hash");
+    let original_link = store
+        .commit_profile_publish(HostBindingCommit::new(
+            original.token(),
+            original_binding.clone(),
+            HostBindingStagingReceipt::new(
+                original.token_digest(),
+                original.llm_slot_id(),
+                original.requirements_hash(),
+                original_binding.clone(),
+                "original-receipt",
+            ),
+        ))
+        .unwrap();
+    store
+        .activate_matching_cross_link(&HostBindingActivationConfirmation::new(
+            original_link.agent_profile_id(),
+            original_link.agent_profile_revision(),
+            original_link.llm_slot_id(),
+            original_link.requirements_hash(),
+            original_binding,
+            original_link.staging_receipt_digest(),
+        ))
+        .unwrap();
+
+    let rebind = store
+        .prepare_profile_rebind(profile_request("replacement-profile"))
+        .unwrap();
+    let replacement_binding = HostBindingTuple::new("replacement", 1, "replacement-hash");
+    let replacement_link = store
+        .commit_profile_rebind(HostBindingCommit::new(
+            rebind.token(),
+            replacement_binding.clone(),
+            HostBindingStagingReceipt::new(
+                rebind.token_digest(),
+                rebind.llm_slot_id(),
+                rebind.requirements_hash(),
+                replacement_binding.clone(),
+                "replacement-receipt",
+            ),
+        ))
+        .unwrap();
+    store
+        .activate_matching_cross_link(&HostBindingActivationConfirmation::new(
+            replacement_link.agent_profile_id(),
+            replacement_link.agent_profile_revision(),
+            replacement_link.llm_slot_id(),
+            replacement_link.requirements_hash(),
+            replacement_binding,
+            replacement_link.staging_receipt_digest(),
+        ))
+        .unwrap();
+    assert_eq!(
+        store.cross_link(original.token()).unwrap().unwrap().state(),
+        HostBindingOperationState::Superseded
+    );
+    drop(store);
+
+    let reopened = SqliteAgentOSStateStore::open(&path).unwrap();
+    assert_eq!(
+        reopened
+            .cross_link(original.token())
+            .unwrap()
+            .unwrap()
+            .state(),
+        HostBindingOperationState::Superseded
+    );
+    assert_eq!(
+        reopened
+            .cross_link(rebind.token())
+            .unwrap()
+            .unwrap()
+            .state(),
+        HostBindingOperationState::Active
+    );
+}
+
+#[test]
 fn commit_rejects_any_binding_or_receipt_mismatch() {
     let mut store = SqliteAgentOSStateStore::open_in_memory().unwrap();
     let pending = store

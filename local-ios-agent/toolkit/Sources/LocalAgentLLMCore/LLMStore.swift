@@ -10,7 +10,7 @@ public struct LLMStoreError: Error, Equatable, Sendable {
     }
 }
 
-public struct ActiveAgentHostBinding: Equatable, Sendable {
+public struct ActiveAgentHostBinding: Codable, Equatable, Sendable {
     public let configuration: AgentHostConfiguration
     public let binding: HostBindingTuple
 
@@ -24,6 +24,52 @@ public struct ActiveAgentHostBinding: Equatable, Sendable {
 
     public var targetReference: LLMTargetReference {
         configuration.selectedTarget
+    }
+}
+
+public enum ModelRebindOperationPhase: String, Codable, Equatable, Sendable {
+    case prepared
+    case rustConfirmed = "rust_confirmed"
+    case swiftSwapped = "swift_swapped"
+    case completed
+}
+
+/// Durable cross-store handoff.  It intentionally stores only binding digests and
+/// receipts: Rust bearer tokens are never persisted on the Swift side.
+public struct ModelRebindOperation: Codable, Equatable, Sendable {
+    public let operationID: String
+    public let profileID: String
+    public let profileRevision: UInt64
+    public let llmSlotID: String
+    public let requirementsHash: String
+    public let primaryBinding: HostBindingTuple
+    public let stagingReceiptDigest: String
+    public let expectedActive: [ActiveAgentHostBinding]
+    public let replacements: [ActiveAgentHostBinding]
+    public var phase: ModelRebindOperationPhase
+
+    public init(
+        operationID: String,
+        profileID: String,
+        profileRevision: UInt64,
+        llmSlotID: String,
+        requirementsHash: String,
+        primaryBinding: HostBindingTuple,
+        stagingReceiptDigest: String,
+        expectedActive: [ActiveAgentHostBinding],
+        replacements: [ActiveAgentHostBinding],
+        phase: ModelRebindOperationPhase = .prepared
+    ) {
+        self.operationID = operationID
+        self.profileID = profileID
+        self.profileRevision = profileRevision
+        self.llmSlotID = llmSlotID
+        self.requirementsHash = requirementsHash
+        self.primaryBinding = primaryBinding
+        self.stagingReceiptDigest = stagingReceiptDigest
+        self.expectedActive = expectedActive
+        self.replacements = replacements
+        self.phase = phase
     }
 }
 
@@ -63,6 +109,7 @@ package struct PersistedTargetRevision: Codable, Sendable {
 public enum StoredHostBindingState: String, Codable, Equatable, Sendable {
     case staged
     case active
+    case superseded
 }
 
 struct StoredHostBindingRecord: Codable, Equatable, Sendable {
@@ -89,8 +136,9 @@ private struct LLMStoreDocument: Codable, Equatable, Sendable {
     var schemaVersion: UInt64 = 1
     var hostBindings: [String: StoredHostBindingRecord] = [:]
     var preparedSessions: [String: StoredPreparedSessionRecord] = [:]
+    var modelRebindOperations: [String: ModelRebindOperation] = [:]
 
-    enum CodingKeys: String, CodingKey { case schemaVersion, hostBindings, preparedSessions }
+    enum CodingKeys: String, CodingKey { case schemaVersion, hostBindings, preparedSessions, modelRebindOperations }
 
     init() {}
 
@@ -99,6 +147,7 @@ private struct LLMStoreDocument: Codable, Equatable, Sendable {
         schemaVersion = try container.decodeIfPresent(UInt64.self, forKey: .schemaVersion) ?? 1
         hostBindings = try container.decodeIfPresent([String: StoredHostBindingRecord].self, forKey: .hostBindings) ?? [:]
         preparedSessions = try container.decodeIfPresent([String: StoredPreparedSessionRecord].self, forKey: .preparedSessions) ?? [:]
+        modelRebindOperations = try container.decodeIfPresent([String: ModelRebindOperation].self, forKey: .modelRebindOperations) ?? [:]
     }
 }
 
@@ -325,6 +374,196 @@ public actor LLMStore {
         hostBindingKey(token).flatMap { document.hostBindings[$0]?.state }
     }
 
+    public func supersedeActiveBindings(
+        agentProfileID: String,
+        agentProfileRevision: UInt64
+    ) throws {
+        let matching = document.hostBindings.keys.filter { key in
+            guard let record = document.hostBindings[key] else {
+                return false
+            }
+            return record.state == .active
+                && record.request.configuration.agentProfileID
+                    == agentProfileID
+                && record.request.configuration.agentProfileRevision
+                    == agentProfileRevision
+        }
+        for key in matching {
+            guard var record = document.hostBindings[key] else {
+                continue
+            }
+            let previous = record
+            record.state = .superseded
+            document.hostBindings[key] = record
+            do {
+                try updateHostBinding(record, expectedState: .active)
+            } catch {
+                document.hostBindings[key] = previous
+                throw error
+            }
+        }
+    }
+
+    public func swapActiveHostBindingGroup(
+        expectedActive: [ActiveAgentHostBinding],
+        replacements: [ActiveAgentHostBinding]
+    ) throws {
+        guard let identity = expectedActive.first?.configuration,
+              !expectedActive.isEmpty,
+              !replacements.isEmpty,
+              expectedActive.allSatisfy({
+                  $0.configuration.agentProfileID == identity.agentProfileID
+                      && $0.configuration.agentProfileRevision
+                          == identity.agentProfileRevision
+              }),
+              replacements.allSatisfy({
+                  $0.configuration.agentProfileID == identity.agentProfileID
+                      && $0.configuration.agentProfileRevision
+                          == identity.agentProfileRevision
+              })
+        else {
+            throw HostBindingSagaError(
+                code: "host_binding.group_invalid",
+                message: "host binding group identity is inconsistent"
+            )
+        }
+        let current = try activeHostBindings().filter {
+            $0.configuration.agentProfileID == identity.agentProfileID
+                && $0.configuration.agentProfileRevision
+                    == identity.agentProfileRevision
+        }
+        guard sortedBindings(current) == sortedBindings(expectedActive) else {
+            throw HostBindingSagaError(
+                code: "host_binding.group_stale",
+                message: "active host binding group changed"
+            )
+        }
+        let oldKeys = try expectedActive.map {
+            try requireHostBindingKey($0, state: .active)
+        }
+        let replacementKeys = try replacements.map {
+            try requireHostBindingKey($0, state: .staged)
+        }
+        guard Set(oldKeys).count == oldKeys.count,
+              Set(replacementKeys).count == replacementKeys.count,
+              Set(oldKeys).isDisjoint(with: replacementKeys)
+        else {
+            throw HostBindingSagaError(
+                code: "host_binding.group_invalid",
+                message: "host binding group contains duplicate records"
+            )
+        }
+
+        var next = document
+        for key in oldKeys {
+            next.hostBindings[key]?.state = .superseded
+        }
+        for key in replacementKeys {
+            next.hostBindings[key]?.state = .active
+        }
+        try database.transaction {
+            try consumeInjectedFailure()
+            for key in oldKeys {
+                guard let record = next.hostBindings[key] else {
+                    throw staleCAS()
+                }
+                try updateHostBindingInCurrentTransaction(
+                    record,
+                    expectedState: .active
+                )
+            }
+            for key in replacementKeys {
+                guard let record = next.hostBindings[key] else {
+                    throw staleCAS()
+                }
+                try updateHostBindingInCurrentTransaction(
+                    record,
+                    expectedState: .staged
+                )
+            }
+        }
+        document = next
+    }
+
+    public func beginModelRebindOperation(_ operation: ModelRebindOperation) throws {
+        guard operation.phase == .prepared,
+              !operation.operationID.isEmpty,
+              !operation.expectedActive.isEmpty,
+              !operation.replacements.isEmpty
+        else {
+            throw HostBindingSagaError(
+                code: "host_binding.rebind_operation_invalid",
+                message: "model rebind operation is incomplete"
+            )
+        }
+        if let existing = document.modelRebindOperations[operation.operationID] {
+            guard existing == operation else {
+                throw HostBindingSagaError(
+                    code: "host_binding.rebind_operation_conflict",
+                    message: "model rebind operation id was replayed with different input"
+                )
+            }
+            return
+        }
+        try database.transaction {
+            try consumeInjectedFailure()
+            try database.execute(
+                "INSERT INTO model_rebind_operations(operation_id, phase, record_json) VALUES (?1, ?2, ?3)",
+                bindings: [.text(operation.operationID), .text(operation.phase.rawValue), .text(try Self.encode(operation))]
+            )
+        }
+        document.modelRebindOperations[operation.operationID] = operation
+    }
+
+    public func pendingModelRebindOperations() -> [ModelRebindOperation] {
+        document.modelRebindOperations.values
+            .filter { $0.phase != .completed }
+            .sorted { $0.operationID < $1.operationID }
+    }
+
+    public func advanceModelRebindOperation(
+        operationID: String,
+        from expectedPhase: ModelRebindOperationPhase,
+        to nextPhase: ModelRebindOperationPhase
+    ) throws {
+        guard var operation = document.modelRebindOperations[operationID],
+              operation.phase == expectedPhase
+        else {
+            throw HostBindingSagaError(
+                code: "host_binding.rebind_operation_stale",
+                message: "model rebind operation phase changed"
+            )
+        }
+        operation.phase = nextPhase
+        try database.transaction {
+            try consumeInjectedFailure()
+            let changed = try database.executeChanges(
+                "UPDATE model_rebind_operations SET phase = ?1, record_json = ?2 WHERE operation_id = ?3 AND phase = ?4",
+                bindings: [.text(nextPhase.rawValue), .text(try Self.encode(operation)), .text(operationID), .text(expectedPhase.rawValue)]
+            )
+            guard changed == 1 else { throw staleCAS() }
+        }
+        document.modelRebindOperations[operationID] = operation
+    }
+
+    public func discardPreparedModelRebindOperation(operationID: String) throws {
+        guard document.modelRebindOperations[operationID]?.phase == .prepared else {
+            throw HostBindingSagaError(
+                code: "host_binding.rebind_operation_stale",
+                message: "only an uncommitted model rebind can be discarded"
+            )
+        }
+        try database.transaction {
+            try consumeInjectedFailure()
+            let changed = try database.executeChanges(
+                "DELETE FROM model_rebind_operations WHERE operation_id = ?1 AND phase = 'prepared'",
+                bindings: [.text(operationID)]
+            )
+            guard changed == 1 else { throw staleCAS() }
+        }
+        document.modelRebindOperations.removeValue(forKey: operationID)
+    }
+
     func activeBinding(
         configuration: AgentHostConfiguration,
         bindingHash: String
@@ -470,7 +709,10 @@ public actor LLMStore {
         let sessionRows = (try? database.query(
             "SELECT preparation_id, state, registration_digest, cleanup_command_id, record_json FROM prepared_sessions"
         )) ?? []
-        return (hostRows + sessionRows).flatMap { row in
+        let rebindRows = (try? database.query(
+            "SELECT operation_id, phase, record_json FROM model_rebind_operations"
+        )) ?? []
+        return (hostRows + sessionRows + rebindRows).flatMap { row in
             row.values.compactMap { $0 }
         }
     }
@@ -521,6 +763,30 @@ public actor LLMStore {
             )
             guard changed == 1 else { throw staleCAS() }
         }
+    }
+
+    private func updateHostBindingInCurrentTransaction(
+        _ record: StoredHostBindingRecord,
+        expectedState: StoredHostBindingState
+    ) throws {
+        let persisted = Self.persistedHostBinding(record)
+        let changed = try database.executeChanges(
+            """
+            UPDATE host_bindings SET state = ?1, record_json = ?2
+            WHERE operation_token = ?3 AND state = ?4
+              AND binding_id = ?5 AND binding_revision = ?6 AND binding_hash = ?7
+            """,
+            bindings: [
+                .text(record.state.rawValue),
+                .text(try Self.encode(persisted)),
+                .text(record.request.tokenDigest),
+                .text(expectedState.rawValue),
+                .text(record.receipt.binding.bindingID),
+                .text(String(record.receipt.binding.bindingRevision)),
+                .text(record.receipt.binding.bindingHash),
+            ]
+        )
+        guard changed == 1 else { throw staleCAS() }
     }
 
     private func insertPreparedSession(_ record: StoredPreparedSessionRecord) throws {
@@ -596,6 +862,15 @@ public actor LLMStore {
             else { continue }
             document.preparedSessions[id] = try JSONDecoder().decode(
                 StoredPreparedSessionRecord.self,
+                from: Data(json.utf8)
+            )
+        }
+        for row in try database.query("SELECT operation_id, record_json FROM model_rebind_operations") {
+            guard let id = row["operation_id"] ?? nil,
+                  let json = row["record_json"] ?? nil
+            else { continue }
+            document.modelRebindOperations[id] = try JSONDecoder().decode(
+                ModelRebindOperation.self,
                 from: Data(json.utf8)
             )
         }
@@ -692,6 +967,12 @@ public actor LLMStore {
                     ]
                 )
             }
+            for operation in document.modelRebindOperations.values {
+                try database.execute(
+                    "INSERT INTO model_rebind_operations(operation_id, phase, record_json) VALUES (?1, ?2, ?3)",
+                    bindings: [.text(operation.operationID), .text(operation.phase.rawValue), .text(try encode(operation))]
+                )
+            }
         }
     }
 
@@ -707,6 +988,42 @@ public actor LLMStore {
             $0.value.request.operationToken == tokenOrDigest
                 || $0.value.request.tokenDigest == tokenOrDigest
         })?.key
+    }
+
+    private func requireHostBindingKey(
+        _ value: ActiveAgentHostBinding,
+        state: StoredHostBindingState
+    ) throws -> String {
+        let matches = document.hostBindings.compactMap { key, record in
+            record.state == state
+                && record.request.configuration == value.configuration
+                && record.receipt.binding == value.binding
+                ? key
+                : nil
+        }
+        guard matches.count == 1, let key = matches.first else {
+            throw HostBindingSagaError(
+                code: "host_binding.group_stale",
+                message: "host binding group record is unavailable"
+            )
+        }
+        return key
+    }
+
+    private func sortedBindings(
+        _ values: [ActiveAgentHostBinding]
+    ) -> [ActiveAgentHostBinding] {
+        values.sorted {
+            (
+                $0.binding.bindingID,
+                $0.binding.bindingRevision,
+                $0.binding.bindingHash
+            ) < (
+                $1.binding.bindingID,
+                $1.binding.bindingRevision,
+                $1.binding.bindingHash
+            )
+        }
     }
 
     private func sameHostBindingIdentity(

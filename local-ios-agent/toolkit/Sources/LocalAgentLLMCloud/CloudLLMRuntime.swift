@@ -216,6 +216,7 @@ public actor CloudLLMRuntime {
     private let profileStore: ProviderProfileStore
     private let catalogStore: CloudCapabilityCatalogStore
     private let credentialStore: ProviderCredentialStore
+    private let oauthRefresher: OAuthCredentialRefreshCoordinator?
     private let validationService: ProviderValidationService
     private let egressPolicy: ProviderEgressPolicy
     private let sessionStore: PreparedCloudSessionStore
@@ -234,6 +235,7 @@ public actor CloudLLMRuntime {
         profileStore: ProviderProfileStore,
         catalogStore: CloudCapabilityCatalogStore,
         credentialStore: ProviderCredentialStore,
+        oauthRefresher: OAuthCredentialRefreshCoordinator? = nil,
         validationService: ProviderValidationService,
         egressPolicy: ProviderEgressPolicy,
         sessionStore: PreparedCloudSessionStore,
@@ -248,6 +250,7 @@ public actor CloudLLMRuntime {
         self.profileStore = profileStore
         self.catalogStore = catalogStore
         self.credentialStore = credentialStore
+        self.oauthRefresher = oauthRefresher
         self.validationService = validationService
         self.egressPolicy = egressPolicy
         self.sessionStore = sessionStore
@@ -297,6 +300,21 @@ public actor CloudLLMRuntime {
                 target: target
             )
             let route = try await requireRoute(target: target)
+            if route.profile.revision.credentialMode == .oauth,
+               let oauthProfile = ProviderOAuthProfile.shipped.first(where: {
+                   $0.presetID == route.profile.revision.presetID
+               }),
+               try await oauthRefresher?.refreshIfNeeded(
+                   credentialRef: route.profile.revision.credentialRef,
+                   profile: oauthProfile
+               ) == true {
+                _ = try await validationService.validate(
+                    profileID: route.profile.revision.profileID,
+                    profileRevision: route.profile.revision.revision,
+                    modelID: target.modelID,
+                    adapterVersion: route.adapter.adapterVersion
+                )
+            }
             let validation = try await validationService.currentValidation(
                 profileID: route.profile.revision.profileID,
                 profileRevision: route.profile.revision.revision,

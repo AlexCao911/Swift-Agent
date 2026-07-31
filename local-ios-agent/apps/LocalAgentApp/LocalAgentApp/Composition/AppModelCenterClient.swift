@@ -25,6 +25,7 @@ struct ModelCenterSnapshot: Equatable, Sendable {
     let cloudProviders: [ModelCenterCloudProviderState]
     let cloudModels: [ModelCenterCloudModelState]
     let targets: [LLMTargetRevision]
+    let activeBindings: [ActiveAgentHostBinding]
     let disk: LocalDiskProductState?
 
     static let empty = Self(
@@ -32,6 +33,7 @@ struct ModelCenterSnapshot: Equatable, Sendable {
         cloudProviders: [],
         cloudModels: [],
         targets: [],
+        activeBindings: [],
         disk: nil
     )
 }
@@ -85,6 +87,17 @@ protocol ModelCenterClient: Sendable {
     func cancelLocalModel(installationID: String) async throws
     func deleteLocalModel(installationID: String) async throws
     func publishProviderProfile(_ draft: ProviderProfileProductDraft) async throws
+    func authenticateProviderOAuth(
+        presetID: ProviderPresetID
+    ) async throws -> SecretBytes
+    func refreshProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws
+    func logoutProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws
     func rotateProviderCredential(
         profileID: String,
         profileRevision: UInt64,
@@ -93,6 +106,11 @@ protocol ModelCenterClient: Sendable {
     func archiveProviderProfile(profileID: String) async throws
     func validateProviderModel(_ selection: CloudModelSelection) async throws
     func publishTarget(_ target: LLMTargetRevision) async throws
+    func activateTarget(
+        _ target: LLMTargetRevision,
+        forAgentProfileID profileID: String,
+        revision: UInt64
+    ) async throws
 }
 
 actor AppModelCenterClient: ModelCenterClient {
@@ -101,9 +119,16 @@ actor AppModelCenterClient: ModelCenterClient {
     private let local: LocalLLMSubsystem
     private let cloud: CloudLLMSubsystem
     private let store: LLMStore
+    private let modelSelection: ActiveAgentModelSelectionService?
     private let updateContinuation: AsyncStream<Void>.Continuation
 
-    init(local: LocalLLMSubsystem, cloud: CloudLLMSubsystem, store: LLMStore) {
+    init(
+        local: LocalLLMSubsystem,
+        cloud: CloudLLMSubsystem,
+        store: LLMStore,
+        selectionRegistry: AppLLMHostSelectionRegistry? = nil,
+        activeProfileRebinder: (any ActiveProfileBindingRebinding)? = nil
+    ) {
         var continuation: AsyncStream<Void>.Continuation!
         updates = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
             continuation = $0
@@ -112,6 +137,15 @@ actor AppModelCenterClient: ModelCenterClient {
         self.local = local
         self.cloud = cloud
         self.store = store
+        if let selectionRegistry, let activeProfileRebinder {
+            modelSelection = ActiveAgentModelSelectionService(
+                store: store,
+                registry: selectionRegistry,
+                rust: activeProfileRebinder
+            )
+        } else {
+            modelSelection = nil
+        }
         Task {
             for await _ in local.downloadStateChanges {
                 continuation.yield()
@@ -170,6 +204,7 @@ actor AppModelCenterClient: ModelCenterClient {
             cloudProviders: providers,
             cloudModels: cloudModels.sorted { $0.id < $1.id },
             targets: await store.targets(),
+            activeBindings: try await store.activeHostBindings(),
             disk: try await local.diskState()
         )
     }
@@ -214,6 +249,44 @@ actor AppModelCenterClient: ModelCenterClient {
         updateContinuation.yield()
     }
 
+    func authenticateProviderOAuth(
+        presetID: ProviderPresetID
+    ) async throws -> SecretBytes {
+        guard let profile = ProviderOAuthProfile.shipped.first(where: {
+            $0.presetID == presetID
+        }) else {
+            throw ModelCenterClientFailure(
+                "This provider does not declare a supported OAuth flow."
+            )
+        }
+        return try await ProviderOAuthBrowserSession.authenticate(
+            profile: profile,
+            client: cloud.oauth
+        )
+    }
+
+    func refreshProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {
+        try await cloud.refreshProviderOAuthCredential(
+            profileID: profileID,
+            profileRevision: profileRevision
+        )
+        updateContinuation.yield()
+    }
+
+    func logoutProviderOAuth(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {
+        try await cloud.disconnectProviderOAuthCredential(
+            profileID: profileID,
+            profileRevision: profileRevision
+        )
+        updateContinuation.yield()
+    }
+
     func rotateProviderCredential(
         profileID: String,
         profileRevision: UInt64,
@@ -245,6 +318,40 @@ actor AppModelCenterClient: ModelCenterClient {
     func publishTarget(_ target: LLMTargetRevision) async throws {
         try await store.publishTarget(target)
         updateContinuation.yield()
+    }
+
+    func activateTarget(
+        _ target: LLMTargetRevision,
+        forAgentProfileID profileID: String,
+        revision: UInt64
+    ) async throws {
+        guard let modelSelection else {
+            throw ModelCenterClientFailure(
+                "The active Agent model binding is unavailable."
+            )
+        }
+        try await modelSelection.activate(
+            target: target,
+            profileID: profileID,
+            profileRevision: revision,
+            available: Self.availableTargetOptions(in: try await snapshot())
+        )
+        updateContinuation.yield()
+    }
+
+    func reconcilePendingModelRebinds() async throws {
+        guard let modelSelection else { return }
+        try await modelSelection.reconcilePending(
+            available: try await targetOptions()
+        )
+    }
+}
+
+private struct ModelCenterClientFailure: LocalizedError {
+    let errorDescription: String?
+
+    init(_ message: String) {
+        errorDescription = message
     }
 }
 

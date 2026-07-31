@@ -169,6 +169,48 @@ struct LLMStoreTests {
     }
 
     @Test
+    func pendingModelRebindSurvivesReopenAndAdvancesOnlyInOrder() async throws {
+        let (directory, url) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LLMStore(fileURL: url)
+        let configuration = fixtureConfiguration()
+        let binding = HostBindingTuple(
+            bindingID: configuration.bindingID,
+            bindingRevision: configuration.revision,
+            bindingHash: try agentHostConfigurationDigest(configuration)
+        )
+        let operation = ModelRebindOperation(
+            operationID: "rebind-1",
+            profileID: configuration.agentProfileID,
+            profileRevision: configuration.agentProfileRevision,
+            llmSlotID: configuration.llmSlotID,
+            requirementsHash: configuration.requirementsHash,
+            primaryBinding: binding,
+            stagingReceiptDigest: "receipt-digest",
+            expectedActive: [ActiveAgentHostBinding(configuration: configuration, binding: binding)],
+            replacements: [ActiveAgentHostBinding(configuration: configuration, binding: binding)]
+        )
+
+        try await store.beginModelRebindOperation(operation)
+        await #expect(throws: HostBindingSagaError.self) {
+            try await store.advanceModelRebindOperation(
+                operationID: operation.operationID,
+                from: .rustConfirmed,
+                to: .swiftSwapped
+            )
+        }
+
+        let reopened = try LLMStore(fileURL: url)
+        #expect(await reopened.pendingModelRebindOperations() == [operation])
+        try await reopened.advanceModelRebindOperation(
+            operationID: operation.operationID,
+            from: .prepared,
+            to: .rustConfirmed
+        )
+        #expect(await reopened.pendingModelRebindOperations().first?.phase == .rustConfirmed)
+    }
+
+    @Test
     func legacyJSONImportsOnceAndCorruptInputIsNotMutated() async throws {
         let (directory, url) = try temporaryDatabase()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -236,6 +278,87 @@ struct LLMStoreTests {
                 binding: receipt.binding
             )
         }
+    }
+
+    @Test
+    func activeBindingGroupSwapIsOneDurableTransaction() async throws {
+        let (directory, url) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LLMStore(fileURL: url)
+        let saga = AgentHostBindingSaga(store: store)
+        let oldConfiguration = fixtureConfiguration()
+        let oldRequest = HostBindingStageRequest(
+            operationToken: "old-operation",
+            tokenDigest: "old-digest",
+            llmSlotID: oldConfiguration.llmSlotID,
+            requirementsHash: oldConfiguration.requirementsHash,
+            configuration: oldConfiguration
+        )
+        let oldReceipt = try await saga.stageHostBinding(oldRequest)
+        try await saga.activateHostBinding(
+            operationToken: oldRequest.operationToken,
+            binding: oldReceipt.binding
+        )
+        let replacementConfiguration = AgentHostConfiguration(
+            bindingID: "binding-replacement",
+            revision: 1,
+            agentProfileID: oldConfiguration.agentProfileID,
+            agentProfileRevision: oldConfiguration.agentProfileRevision,
+            llmSlotID: oldConfiguration.llmSlotID,
+            requirementsHash: oldConfiguration.requirementsHash,
+            llmTargetID: LLMTargetID(rawValue: "target-replacement"),
+            llmTargetRevision: 1,
+            parameterOverrides: GenerationConfiguration()
+        )
+        let replacementRequest = HostBindingStageRequest(
+            operationToken: "replacement-operation",
+            tokenDigest: "replacement-digest",
+            llmSlotID: replacementConfiguration.llmSlotID,
+            requirementsHash: replacementConfiguration.requirementsHash,
+            configuration: replacementConfiguration
+        )
+        let replacementReceipt = try await saga.stageHostBinding(
+            replacementRequest
+        )
+        let old = ActiveAgentHostBinding(
+            configuration: oldConfiguration,
+            binding: oldReceipt.binding
+        )
+        let replacement = ActiveAgentHostBinding(
+            configuration: replacementConfiguration,
+            binding: replacementReceipt.binding
+        )
+
+        await store.failNextPersistenceForTesting()
+        await #expect(throws: HostBindingSagaError.self) {
+            try await store.swapActiveHostBindingGroup(
+                expectedActive: [old],
+                replacements: [replacement]
+            )
+        }
+        #expect(try await store.activeHostBindings() == [old])
+        #expect(
+            try await LLMStore(fileURL: url).activeHostBindings() == [old]
+        )
+
+        try await store.swapActiveHostBindingGroup(
+            expectedActive: [old],
+            replacements: [replacement]
+        )
+
+        #expect(try await store.activeHostBindings() == [replacement])
+        #expect(
+            try await LLMStore(fileURL: url).activeHostBindings()
+                == [replacement]
+        )
+        #expect(
+            await store.bindingState(token: replacementRequest.operationToken)
+                == .active
+        )
+        #expect(
+            await store.bindingState(token: oldRequest.operationToken)
+                == .superseded
+        )
     }
 }
 

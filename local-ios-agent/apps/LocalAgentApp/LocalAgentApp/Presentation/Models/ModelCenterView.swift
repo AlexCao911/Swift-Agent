@@ -4,6 +4,8 @@ import SwiftUI
 
 struct ModelCenterView: View {
     @Bindable var viewModel: ModelCenterViewModel
+    let activeAgent: ActiveAgentRevisionSelection?
+    var onActiveModelChanged: (ActiveModelSummary?) -> Void = { _ in }
     @State private var editor: ProviderEditorPresentation?
     @State private var manualModelIDs: [String: String] = [:]
     @State private var showsUnifiedModelPicker = false
@@ -36,7 +38,12 @@ struct ModelCenterView: View {
                 Label("Add Provider", systemImage: "plus")
             }
         }
-        .task { await viewModel.reload() }
+        .task {
+            await viewModel.reload()
+            onActiveModelChanged(
+                activeAgent.flatMap(viewModel.syncActiveModel(for:))
+            )
+        }
         .task { await viewModel.observeUpdates() }
         .sheet(item: $editor) { presentation in
             if let editorViewModel = viewModel.makeProviderEditor() {
@@ -50,9 +57,25 @@ struct ModelCenterView: View {
             }
         }
         .sheet(isPresented: $showsUnifiedModelPicker) {
-            UnifiedModelPicker(options: viewModel.unifiedModelOptions) { option in
+            UnifiedModelPicker(
+                options: viewModel.unifiedModelOptions,
+                selectedOptionID: viewModel.unifiedModelOptions.first {
+                    $0.modelCenterID == viewModel.selectedModelID
+                }?.id
+            ) { option in
                 perform {
-                    try await viewModel.createTarget(modelID: option.modelCenterID)
+                    guard let activeAgent else {
+                        throw ModelCenterViewFailure(
+                            "Choose an active Agent before selecting its model."
+                        )
+                    }
+                    try await viewModel.activateModel(
+                        id: option.modelCenterID,
+                        for: activeAgent
+                    )
+                    onActiveModelChanged(
+                        viewModel.syncActiveModel(for: activeAgent)
+                    )
                 }
             }
         }
@@ -393,7 +416,15 @@ struct ModelCenterView: View {
     }
 }
 
-private struct ProviderEditorPresentation: Identifiable {
+private struct ModelCenterViewFailure: LocalizedError {
+    let errorDescription: String?
+
+    init(_ message: String) {
+        errorDescription = message
+    }
+}
+
+struct ProviderEditorPresentation: Identifiable {
     let id = UUID()
     let provider: ModelCenterCloudProviderState?
 }

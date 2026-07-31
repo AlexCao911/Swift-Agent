@@ -37,6 +37,12 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
             decoding: try JSONEncoder().encode(snapshot),
             as: UTF8.self
         )
+        let decoded = try JSONDecoder().decode(
+            RunStartSnapshotDTO.self,
+            from: Data(encoded.utf8)
+        )
+        let rawAPIKey = "sk-live-must-never-cross-rust-snapshot"
+        let rawOAuthToken = "oauth-live-must-never-cross-rust-snapshot"
 
         XCTAssertEqual(
             snapshot.orderedPromptDocuments.map(\.markdown),
@@ -49,7 +55,11 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
         )
         XCTAssertFalse(encoded.contains("SECRET_SKILL_BODY"))
         XCTAssertFalse(encoded.contains(fixture.root.path))
+        XCTAssertFalse(encoded.contains(rawAPIKey))
+        XCTAssertFalse(encoded.contains(rawOAuthToken))
+        XCTAssertEqual(decoded.snapshotDigest, snapshot.snapshotDigest)
         try snapshot.validate()
+        try decoded.validate()
     }
 
     func testRunSnapshotIsImmutableAfterStoresChange() async throws {

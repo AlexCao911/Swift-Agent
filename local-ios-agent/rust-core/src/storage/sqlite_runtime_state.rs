@@ -1853,6 +1853,26 @@ impl AgentOSStateRepository for SqliteRuntimeAgentOSView {
             .commit_profile_publish(request)
     }
 
+    fn prepare_profile_rebind(
+        &mut self,
+        request: ProfilePublishPreparation,
+    ) -> Result<HostBindingOperation, HostBindingError> {
+        self.inner
+            .lock()
+            .map_err(|_| host_binding_poisoned())?
+            .prepare_profile_rebind(request)
+    }
+
+    fn commit_profile_rebind(
+        &mut self,
+        request: HostBindingCommit,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        self.inner
+            .lock()
+            .map_err(|_| host_binding_poisoned())?
+            .commit_profile_rebind(request)
+    }
+
     fn begin_package_binding(
         &mut self,
         request: PackageBindingPreparation,

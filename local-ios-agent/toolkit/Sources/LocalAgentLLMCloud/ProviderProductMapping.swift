@@ -83,7 +83,7 @@ public enum ProviderProductCompatibility {
                 type,
                 presetID: .openAIChatCompletions,
                 codec: .openAIChatCompletions,
-                modes: [.apiKey, .oauth]
+                modes: [.apiKey]
             )
         case .openAIResponses:
             mapping(
@@ -111,7 +111,7 @@ public enum ProviderProductCompatibility {
                 type,
                 presetID: .openRouter,
                 codec: .openAIChatCompletions,
-                modes: [.apiKey, .oauth]
+                modes: [.apiKey]
             )
         case .xAI:
             mapping(

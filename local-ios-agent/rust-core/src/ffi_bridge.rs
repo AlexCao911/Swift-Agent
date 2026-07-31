@@ -486,6 +486,24 @@ impl<S: ConversationEventStore + Send + 'static> BridgeRuntime<S> {
         to_json(&cross_link)
     }
 
+    fn prepare_profile_rebind_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: ProfilePublishPreparation = from_json(request_json)?;
+        let operation = self
+            .host_binding
+            .prepare_profile_rebind(request)
+            .map_err(host_binding_agent_error)?;
+        to_json(&operation)
+    }
+
+    fn commit_profile_rebind_json(&self, request_json: &str) -> Result<String, AgentError> {
+        let request: HostBindingCommit = from_json(request_json)?;
+        let cross_link = self
+            .host_binding
+            .commit_profile_rebind(request)
+            .map_err(host_binding_agent_error)?;
+        to_json(&cross_link)
+    }
+
     fn begin_package_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
         let request: PackageBindingPreparation = from_json(request_json)?;
         let operation = self
@@ -1523,6 +1541,18 @@ impl RuntimeJsonBridge {
             Self::Sqlite(runtime) => runtime.commit_profile_publish_json(request_json),
         }
     }
+    pub fn prepare_profile_rebind_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.prepare_profile_rebind_json(request_json),
+            Self::Sqlite(runtime) => runtime.prepare_profile_rebind_json(request_json),
+        }
+    }
+    pub fn commit_profile_rebind_json(&self, request_json: &str) -> Result<String, AgentError> {
+        match self {
+            Self::InMemory(runtime) => runtime.commit_profile_rebind_json(request_json),
+            Self::Sqlite(runtime) => runtime.commit_profile_rebind_json(request_json),
+        }
+    }
     pub fn begin_package_binding_json(&self, request_json: &str) -> Result<String, AgentError> {
         match self {
             Self::InMemory(runtime) => runtime.begin_package_binding_json(request_json),
@@ -2028,6 +2058,14 @@ json_bridge_function!(
 json_bridge_function!(
     local_agent_runtime_bridge_commit_profile_publish,
     commit_profile_publish_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_prepare_profile_rebind,
+    prepare_profile_rebind_json
+);
+json_bridge_function!(
+    local_agent_runtime_bridge_commit_profile_rebind,
+    commit_profile_rebind_json
 );
 json_bridge_function!(
     local_agent_runtime_bridge_begin_package_binding,

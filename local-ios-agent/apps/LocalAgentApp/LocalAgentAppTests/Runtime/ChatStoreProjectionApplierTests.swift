@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class ChatStoreProjectionApplierTests: XCTestCase {
+    func testRestoreSessionsTreatsLegacyZeroTimestampAsUnknown() {
+        let store = ChatStore()
+
+        store.restoreSessions([
+            ConversationSummaryDTO(
+                sessionId: "legacy",
+                title: "Legacy",
+                activeLeafId: nil,
+                lastEventId: nil,
+                lastUpdatedSequence: 1,
+                lastUpdatedAtMillis: 0
+            ),
+        ])
+
+        XCTAssertNil(store.sessions.first?.lastMessageDate)
+    }
+
     func testAppliesOnlyContiguousEventsAndReplaysAfterRelaunch() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appending(path: "projection-\(UUID().uuidString).sqlite")

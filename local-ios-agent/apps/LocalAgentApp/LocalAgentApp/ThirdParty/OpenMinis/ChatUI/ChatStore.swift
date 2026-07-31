@@ -63,8 +63,10 @@ final class ChatStore: ObservableObject {
                 activeLeafId: summary.activeLeafId,
                 lastEventId: summary.lastEventId,
                 lastUpdatedSequence: summary.lastUpdatedSequence,
-                lastMessageDate: summary.lastUpdatedAtMillis.map {
-                    Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+                lastMessageDate: summary.lastUpdatedAtMillis.flatMap {
+                    $0 == 0 ? nil : Date(
+                        timeIntervalSince1970: TimeInterval($0) / 1_000
+                    )
                 },
                 searchText: summary.searchText ?? ""
             )

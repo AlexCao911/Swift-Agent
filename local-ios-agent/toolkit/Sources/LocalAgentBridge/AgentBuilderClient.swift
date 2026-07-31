@@ -5,6 +5,8 @@ public protocol PortableAgentBuilderClient: Sendable {
     func previewContext(_ request: BuilderContextPreviewRequestDTO) async throws -> BuilderContextPreviewResponseDTO
     func prepareProfilePublish(_ request: ProfilePublishPreparationDTO) async throws -> HostBindingOperationDTO
     func commitProfilePublish(_ request: HostBindingCommitDTO) async throws -> HostBindingCrossLinkDTO
+    func prepareProfileRebind(_ request: ProfilePublishPreparationDTO) async throws -> HostBindingOperationDTO
+    func commitProfileRebind(_ request: HostBindingCommitDTO) async throws -> HostBindingCrossLinkDTO
     func confirmHostBindingActivation(
         _ request: HostBindingActivationConfirmationDTO
     ) async throws -> HostBindingCrossLinkDTO
@@ -72,6 +74,26 @@ public struct RustPortableAgentBuilderClient: PortableAgentBuilderClient {
     ) async throws -> HostBindingCrossLinkDTO {
         try await gateway.request(
             .commitProfilePublish,
+            request,
+            as: HostBindingCrossLinkDTO.self
+        )
+    }
+
+    public func prepareProfileRebind(
+        _ request: ProfilePublishPreparationDTO
+    ) async throws -> HostBindingOperationDTO {
+        try await gateway.request(
+            .prepareProfileRebind,
+            request,
+            as: HostBindingOperationDTO.self
+        )
+    }
+
+    public func commitProfileRebind(
+        _ request: HostBindingCommitDTO
+    ) async throws -> HostBindingCrossLinkDTO {
+        try await gateway.request(
+            .commitProfileRebind,
             request,
             as: HostBindingCrossLinkDTO.self
         )

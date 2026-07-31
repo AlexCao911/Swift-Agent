@@ -611,7 +611,13 @@ fn runtime_execution_module_sources() -> Vec<(String, &'static str)> {
     ["src/runtime", "src/execution"]
         .into_iter()
         .flat_map(|relative_dir| {
-            rust_sources_under(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_dir))
+            let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_dir);
+            let sources = if directory.exists() {
+                rust_sources_under(directory)
+            } else {
+                Vec::new()
+            };
+            sources
                 .into_iter()
                 .map(move |(file, source)| (format!("{relative_dir}/{file}"), source))
         })

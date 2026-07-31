@@ -17,6 +17,7 @@ public struct CloudLLMSubsystem: Sendable {
     public let validation: ProviderValidationService
     public let runtime: CloudLLMRuntime
     public let oauth: OAuthHTTPClient
+    package let oauthRefresher: OAuthCredentialRefreshCoordinator
     package let catalog: CloudCapabilityCatalogStore
     package let sessions: PreparedCloudSessionStore
     package let bindingStore: LLMStore
@@ -30,6 +31,7 @@ public struct CloudLLMSubsystem: Sendable {
         validation: ProviderValidationService,
         runtime: CloudLLMRuntime,
         oauth: OAuthHTTPClient,
+        oauthRefresher: OAuthCredentialRefreshCoordinator,
         catalog: CloudCapabilityCatalogStore,
         sessions: PreparedCloudSessionStore,
         bindingStore: LLMStore
@@ -42,6 +44,7 @@ public struct CloudLLMSubsystem: Sendable {
         self.validation = validation
         self.runtime = runtime
         self.oauth = oauth
+        self.oauthRefresher = oauthRefresher
         self.catalog = catalog
         self.sessions = sessions
         self.bindingStore = bindingStore
@@ -126,6 +129,18 @@ public struct CloudLLMSubsystem: Sendable {
         proposedOperationID: String = UUID().uuidString.lowercased()
     ) async throws -> PublishedProviderProfileRevision {
         defer { initialSecret?.erase() }
+        if credentialMode == .oauth,
+           !ProviderOAuthRuntimePolicy.accepts(
+               baseURL,
+               for: presetID
+           )
+        {
+            throw ProviderProfileFailure(
+                code: "provider_oauth.origin_mismatch",
+                message:
+                    "OAuth credentials are bound to the registered provider origin"
+            )
+        }
         let profileID = proposedProfileID ?? UUID().uuidString.lowercased()
         let previous: PublishedProviderProfileRevision?
         if let replacingRevision {
@@ -141,6 +156,20 @@ public struct CloudLLMSubsystem: Sendable {
             }
         } else {
             previous = nil
+        }
+        if let previous,
+           initialSecret == nil,
+           (
+               previous.revision.presetID != presetID
+                   || (previous.revision.credentialMode ?? .apiKey)
+                       != credentialMode
+           )
+        {
+            throw CredentialFailure(
+                code: "credential.secret_required",
+                message:
+                    "changing provider or credential mode requires a new credential"
+            )
         }
         let credentialRef: String
         if initialSecret != nil {
@@ -284,6 +313,71 @@ public struct CloudLLMSubsystem: Sendable {
             expectedGeneration: slot.currentGeneration,
             replacement: replacement,
             operationID: operationID
+        )
+    }
+
+    public func refreshProviderOAuthCredential(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {
+        guard let published = await profiles.profile(
+            profileID: profileID,
+            revision: profileRevision
+        ), published.lifecycle == .active,
+            published.revision.credentialMode == .oauth,
+            let oauthProfile = ProviderOAuthProfile.shipped.first(where: {
+                $0.presetID == published.revision.presetID
+            })
+        else {
+            throw OAuthHTTPFailure(code: "oauth.profile_unavailable")
+        }
+        let lease = try await credentials.acquireUseLease(
+            credentialRef: published.revision.credentialRef,
+            purpose: .validation,
+            preparationID: nil,
+            hostProcessEpoch: hostProcessEpoch
+        )
+        let current: OAuthTokenCredential
+        do {
+            current = try await credentials.withCredential(
+                for: lease.leaseID
+            ) {
+                try OAuthTokenCredential.decode(from: $0)
+            }
+            try await credentials.releaseValidationLease(lease.leaseID)
+        } catch {
+            try? await credentials.releaseValidationLease(lease.leaseID)
+            throw error
+        }
+        let refreshed = try await oauth.refresh(
+            current,
+            profile: oauthProfile
+        )
+        try await rotateProviderCredential(
+            profileID: profileID,
+            profileRevision: profileRevision,
+            replacement: try refreshed.secureSecret()
+        )
+    }
+
+    public func disconnectProviderOAuthCredential(
+        profileID: String,
+        profileRevision: UInt64
+    ) async throws {
+        guard let profile = await profiles.profile(
+            profileID: profileID,
+            revision: profileRevision
+        ), profile.lifecycle == .active,
+            profile.revision.credentialMode == .oauth,
+            let slot = try await credentials.slot(
+                profile.revision.credentialRef
+            )
+        else {
+            throw OAuthHTTPFailure(code: "oauth.profile_unavailable")
+        }
+        try await credentials.disconnectCredential(
+            credentialRef: profile.revision.credentialRef,
+            expectedGeneration: slot.currentGeneration
         )
     }
 
@@ -439,6 +533,12 @@ public struct CloudLLMSubsystem: Sendable {
             prompt: approvalPrompt
         )
         let transport = try transportFactory(credentials)
+        let oauth = OAuthHTTPClient(transport: transport)
+        let oauthRefresher = OAuthCredentialRefreshCoordinator(
+            credentialStore: credentials,
+            oauth: oauth,
+            hostProcessEpoch: hostProcessEpoch
+        )
         let validation = try ProviderValidationService(
             fileURL: databaseURL,
             profileStore: profiles,
@@ -446,13 +546,15 @@ public struct CloudLLMSubsystem: Sendable {
             credentialStore: credentials,
             egressPolicy: egress,
             transport: transport,
-            hostProcessEpoch: hostProcessEpoch
+            hostProcessEpoch: hostProcessEpoch,
+            oauthRefresher: oauthRefresher
         )
         let bindingStore = try llmStore ?? LLMStore(fileURL: databaseURL)
         let runtime = CloudLLMRuntime(
             profileStore: profiles,
             catalogStore: catalog,
             credentialStore: credentials,
+            oauthRefresher: oauthRefresher,
             validationService: validation,
             egressPolicy: egress,
             sessionStore: sessions,
@@ -471,7 +573,8 @@ public struct CloudLLMSubsystem: Sendable {
             egress: egress,
             validation: validation,
             runtime: runtime,
-            oauth: OAuthHTTPClient(transport: transport),
+            oauth: oauth,
+            oauthRefresher: oauthRefresher,
             catalog: catalog,
             sessions: sessions,
             bindingStore: bindingStore

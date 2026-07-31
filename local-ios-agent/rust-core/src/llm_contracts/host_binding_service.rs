@@ -82,6 +82,39 @@ impl AgentHostBindingService {
         Ok(link)
     }
 
+    pub fn prepare_profile_rebind(
+        &self,
+        request: ProfilePublishPreparation,
+    ) -> Result<HostBindingOperation, HostBindingError> {
+        let profile =
+            self.exact_profile(request.agent_profile_id(), request.agent_profile_revision())?;
+        validate_profile_subject(&profile, request.llm_slot_id(), request.requirements_hash())?;
+        if profile.host_binding_state() != AgentProfileHostBindingState::Active {
+            return Err(error(
+                "host_binding.profile_state_invalid",
+                "profile revision is not active",
+            ));
+        }
+        self.state
+            .with_host_binding_mut(|store| store.prepare_profile_rebind(request))
+    }
+
+    pub fn commit_profile_rebind(
+        &self,
+        request: HostBindingCommit,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        let link = self
+            .state
+            .with_host_binding_mut(|store| store.commit_profile_rebind(request))?;
+        if link.kind() != HostBindingKind::ProfileRebind {
+            return Err(error(
+                "host_binding.operation_kind_mismatch",
+                "profile rebind commit produced the wrong cross-link kind",
+            ));
+        }
+        Ok(link)
+    }
+
     pub fn begin_package_binding(
         &self,
         request: PackageBindingPreparation,

@@ -23,6 +23,7 @@ public enum CredentialLifecycleCheckpoint: String, Equatable, Sendable {
 public enum CredentialLifecycleOperationKind: String, Equatable, Sendable {
     case rotation
     case deletion
+    case disconnect
 }
 
 extension CredentialLifecycleOperationKind: Codable {
@@ -290,6 +291,30 @@ extension ProviderCredentialStore {
         try await finishDeletion(operation)
     }
 
+    public func beginCredentialDisconnect(
+        credentialRef: String,
+        expectedGeneration: UInt64,
+        operationID: String
+    ) async throws {
+        guard !credentialRef.isEmpty, !operationID.isEmpty else {
+            throw credentialStoreFailure("credential.invalid_identity", "credential identity is empty")
+        }
+        let operation = try beginDeletion(
+            credentialRef: credentialRef,
+            expectedGeneration: expectedGeneration,
+            operationID: operationID,
+            kind: .disconnect
+        )
+        if operation.phase == .complete { return }
+        if operation.phase == .rolledBack {
+            throw credentialStoreFailure("credential.operation_rolled_back", "credential disconnect was rolled back")
+        }
+        if operation.phase == .deletionSlotLocked {
+            try faultInjector?(.deletionSlotLocked)
+        }
+        try await finishDeletion(operation)
+    }
+
     func reconcilePendingCredentialOperations(
         currentHostProcessEpoch: HostProcessEpoch?
     ) async throws -> CredentialReconciliationReport {
@@ -341,11 +366,16 @@ extension ProviderCredentialStore {
                 default:
                     throw corruptCredentialRecord("rotation operation phase")
                 }
-            case .deletion:
+            case .deletion, .disconnect:
                 switch operation.phase {
                 case .deletionSlotLocked:
-                    try rollbackUnstartedDeletion(operation)
-                    rolledBack.append(operation.operationID)
+                    if operation.kind == .disconnect {
+                        try await finishDeletion(operation)
+                        completed.append(operation.operationID)
+                    } else {
+                        try rollbackUnstartedDeletion(operation)
+                        rolledBack.append(operation.operationID)
+                    }
                 case .deletionKeyTombstoned, .deletionKeyDeleted:
                     try await finishDeletion(operation)
                     completed.append(operation.operationID)
@@ -529,11 +559,12 @@ extension ProviderCredentialStore {
     private func beginDeletion(
         credentialRef: String,
         expectedGeneration: UInt64,
-        operationID: String
+        operationID: String,
+        kind: CredentialLifecycleOperationKind = .deletion
     ) throws -> CredentialLifecycleOperation {
         try database.transaction {
             if let existing = try readLifecycleOperation(operationID) {
-                guard existing.kind == .deletion,
+                guard existing.kind == kind,
                       existing.credentialRef == credentialRef,
                       existing.expectedGeneration == expectedGeneration,
                       existing.nextGeneration == nil
@@ -547,12 +578,15 @@ extension ProviderCredentialStore {
                 throw credentialStoreFailure("credential.generation_conflict", "credential slot generation changed")
             }
             try requireNoCredentialUsers(credentialRef)
-            try requireNoCredentialReferences(credentialRef)
+            try requireNoCredentialReferences(
+                credentialRef,
+                allowingActiveProfileReference: kind == .disconnect
+            )
             try requireNoCompetingOperation(credentialRef, operationID: operationID)
             let operation = CredentialLifecycleOperation(
                 operationID: operationID,
                 credentialRef: credentialRef,
-                kind: .deletion,
+                kind: kind,
                 expectedGeneration: expectedGeneration,
                 nextGeneration: nil,
                 phase: .deletionSlotLocked
@@ -575,7 +609,9 @@ extension ProviderCredentialStore {
 
     private func finishDeletion(_ supplied: CredentialLifecycleOperation) async throws {
         var operation = try readLifecycleOperation(supplied.operationID) ?? supplied
-        guard operation.kind == .deletion else { throw operationConflict() }
+        guard operation.kind == .deletion || operation.kind == .disconnect else {
+            throw operationConflict()
+        }
         if operation.phase == .deletionSlotLocked {
             operation = try beginKeyDeletion(
                 operation,
@@ -596,7 +632,7 @@ extension ProviderCredentialStore {
             try faultInjector?(.deletionKeyDeleted)
         }
         if operation.phase == .deletionKeyDeleted {
-            try completeKeyDeletion(operation, deleteSlot: true)
+            try completeKeyDeletion(operation, deleteSlot: operation.kind != .disconnect)
         }
     }
 
@@ -704,6 +740,21 @@ extension ProviderCredentialStore {
                     ]
                 )
                 guard removed == 1 else { throw operationConflict() }
+            } else if operation.kind == .disconnect {
+                guard var slot = try readSlot(operation.credentialRef),
+                      slot.currentGeneration == operation.expectedGeneration,
+                      slot.lifecycle == .deleting(
+                        operationID: operation.operationID,
+                        expectedGeneration: operation.expectedGeneration
+                      )
+                else { throw operationConflict() }
+                slot.lifecycle = .disconnected
+                try persistSlot(
+                    slot,
+                    expectedGeneration: operation.expectedGeneration,
+                    expectedLifecycle: "deleting",
+                    expectedOperationID: operation.operationID
+                )
             }
             tombstone.phase = .complete
             let changed = try database.executeChanges(
@@ -898,12 +949,15 @@ extension ProviderCredentialStore {
         guard rows.isEmpty else { throw operationConflict() }
     }
 
-    private func requireNoCredentialReferences(_ credentialRef: String) throws {
+    private func requireNoCredentialReferences(
+        _ credentialRef: String,
+        allowingActiveProfileReference: Bool = false
+    ) throws {
         let activeProfiles = try database.queryRows(
             "SELECT profile_id FROM provider_profile_revisions WHERE credential_ref = ?1 AND lifecycle <> 'archived' LIMIT 1",
             bindings: [.text(credentialRef)]
         )
-        guard activeProfiles.isEmpty else {
+        guard allowingActiveProfileReference || activeProfiles.isEmpty else {
             throw credentialStoreFailure("credential.referenced", "credential is referenced by an active provider profile")
         }
         guard try !hasPendingBindingReference(credentialRef) else {
@@ -1088,7 +1142,7 @@ private func keyTombstoneID(_ operation: CredentialLifecycleOperation) -> String
     "\(operation.kind.rawValue)/\(operation.operationID)/\(operation.expectedGeneration)"
 }
 
-private func validLifecyclePhase(_ operation: CredentialLifecycleOperation) -> Bool {
+    private func validLifecyclePhase(_ operation: CredentialLifecycleOperation) -> Bool {
     switch operation.kind {
     case .rotation:
         return operation.nextGeneration != nil && [
@@ -1096,7 +1150,7 @@ private func validLifecyclePhase(_ operation: CredentialLifecycleOperation) -> B
             .rotationKeyPromoted, .rotationPublished,
             .rotationOldKeyTombstoned, .rotationOldKeyDeleted, .complete, .rolledBack,
         ].contains(operation.phase)
-    case .deletion:
+    case .deletion, .disconnect:
         return operation.nextGeneration == nil && [
             .deletionSlotLocked, .deletionKeyTombstoned, .deletionKeyDeleted,
             .complete, .rolledBack,

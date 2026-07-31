@@ -215,16 +215,36 @@ final class AgentBuilderViewModel {
         markEdited()
     }
 
-    func setParameter(_ id: LLMParameterID, _ value: LLMParameterValue) {
-        guard let selection = llmSelection else { return }
+    @discardableResult
+    func setParameter(_ id: LLMParameterID, _ value: LLMParameterValue) -> Bool {
+        guard let selection = llmSelection,
+              let target = llmTargets.first(where: { $0.target.reference == selection.target })
+        else { return false }
+        let value = normalized(value)
+        let overrides = selection.parameterOverrides.setting(id, to: value)
+        guard (try? LLMParameterSystem.resolve(
+            targetDefaults: target.target.defaultParameters,
+            hostOverrides: overrides,
+            schema: target.parameterSchema
+        )) != nil else {
+            return false
+        }
         llmSelection = AgentLLMSelectionDraft(
             operationID: selection.operationID,
             target: selection.target,
             requirements: selection.requirements,
-            parameterOverrides: selection.parameterOverrides.setting(id, to: value),
+            parameterOverrides: overrides,
             fallbackCandidates: selection.fallbackCandidates
         )
         markEdited()
+        return true
+    }
+
+    private func normalized(_ value: LLMParameterValue) -> LLMParameterValue {
+        guard case let .textList(values) = value else { return value }
+        return .textList(values.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty })
     }
 
     func previewContext(sampleUserMessage: String) async {

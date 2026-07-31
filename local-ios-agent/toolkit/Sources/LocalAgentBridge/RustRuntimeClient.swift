@@ -430,6 +430,10 @@ public struct RustRuntimeCFunctionTable: @unchecked Sendable {
                     return local_agent_runtime_bridge_prepare_profile_publish(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.commitProfilePublish.rawValue:
                     return local_agent_runtime_bridge_commit_profile_publish(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.prepareProfileRebind.rawValue:
+                    return local_agent_runtime_bridge_prepare_profile_rebind(runtime.map { OpaquePointer($0) }, requestJson)
+                case RustAgentOSOperation.commitProfileRebind.rawValue:
+                    return local_agent_runtime_bridge_commit_profile_rebind(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.beginPackageBinding.rawValue:
                     return local_agent_runtime_bridge_begin_package_binding(runtime.map { OpaquePointer($0) }, requestJson)
                 case RustAgentOSOperation.attachHostBinding.rawValue:
@@ -569,7 +573,8 @@ public final class RustRuntimeClient: RuntimeClient, ConversationRuntimeClient, 
                 result = functions.previewContext(handle, pointer)
             case .transcriptCommand:
                 result = functions.submitTranscriptCommand(handle, pointer)
-            case .buildAgentV2, .prepareProfilePublish, .commitProfilePublish, .beginPackageBinding,
+            case .buildAgentV2, .prepareProfilePublish, .commitProfilePublish,
+                 .prepareProfileRebind, .commitProfileRebind, .beginPackageBinding,
                  .attachHostBinding, .confirmHostBindingActivation, .previewRunPreparation, .renewRunPreparation,
                  .registerPreparedSession, .commitPreparedStart, .reconcilePreparation,
                  .beginAbortPreparation,

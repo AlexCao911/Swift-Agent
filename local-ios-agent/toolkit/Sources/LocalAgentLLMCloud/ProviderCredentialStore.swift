@@ -52,6 +52,7 @@ public struct CredentialCreationOperation: Codable, Equatable, Sendable {
 public enum CredentialSlotLifecycle: Equatable, Sendable {
     case creating(operationID: String, generation: UInt64)
     case active
+    case disconnected
     case rotating(operationID: String, expectedGeneration: UInt64, nextGeneration: UInt64)
     case deleting(operationID: String, expectedGeneration: UInt64)
 
@@ -59,6 +60,7 @@ public enum CredentialSlotLifecycle: Equatable, Sendable {
         switch self {
         case .creating: "creating"
         case .active: "active"
+        case .disconnected: "disconnected"
         case .rotating: "rotating"
         case .deleting: "deleting"
         }
@@ -69,7 +71,7 @@ public enum CredentialSlotLifecycle: Equatable, Sendable {
         case let .creating(operationID, _),
              let .rotating(operationID, _, _),
              let .deleting(operationID, _): operationID
-        case .active: nil
+        case .active, .disconnected: nil
         }
     }
 }
@@ -93,6 +95,8 @@ extension CredentialSlotLifecycle: Codable {
             )
         case "active":
             self = .active
+        case "disconnected":
+            self = .disconnected
         case "rotating":
             self = .rotating(
                 operationID: try container.decode(String.self, forKey: .operationID),
@@ -122,6 +126,8 @@ extension CredentialSlotLifecycle: Codable {
             try container.encode(generation, forKey: .generation)
         case .active:
             try container.encode("active", forKey: .tag)
+        case .disconnected:
+            try container.encode("disconnected", forKey: .tag)
         case let .rotating(operationID, expectedGeneration, nextGeneration):
             try container.encode("rotating", forKey: .tag)
             try container.encode(operationID, forKey: .operationID)
@@ -328,6 +334,17 @@ public actor ProviderCredentialStore {
             try activateCreatedSlot(operation)
             try faultInjector?(.creationActivated)
         }
+    }
+
+    public func disconnectCredential(
+        credentialRef: String,
+        expectedGeneration: UInt64
+    ) async throws {
+        try await beginCredentialDisconnect(
+            credentialRef: credentialRef,
+            expectedGeneration: expectedGeneration,
+            operationID: "disconnect-\(UUID().uuidString.lowercased())"
+        )
     }
 
     public func operation(_ operationID: String) throws -> CredentialCreationOperation? {

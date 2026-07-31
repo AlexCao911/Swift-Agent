@@ -138,6 +138,27 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
     ) -> Result<HostBindingCrossLink, HostBindingError> {
         self.commit(HostBindingKind::ProfilePublish, request)
     }
+    fn prepare_profile_rebind(
+        &mut self,
+        request: ProfilePublishPreparation,
+    ) -> Result<HostBindingOperation, HostBindingError> {
+        self.prepare(
+            HostBindingKindKey::Profile,
+            HostBindingKind::ProfileRebind,
+            request.idempotency_key(),
+            request.agent_profile_id(),
+            request.agent_profile_id(),
+            request.agent_profile_revision(),
+            request.llm_slot_id(),
+            request.requirements_hash(),
+        )
+    }
+    fn commit_profile_rebind(
+        &mut self,
+        request: HostBindingCommit,
+    ) -> Result<HostBindingCrossLink, HostBindingError> {
+        self.commit(HostBindingKind::ProfileRebind, request)
+    }
     fn begin_package_binding(
         &mut self,
         request: PackageBindingPreparation,
@@ -190,7 +211,7 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
         &mut self,
         confirmation: &crate::llm_contracts::HostBindingActivationConfirmation,
     ) -> Result<HostBindingCrossLink, HostBindingError> {
-        let (key, existing) = self
+        let (current_key, existing) = self
             .cross_links
             .iter()
             .find(|(_, link)| {
@@ -217,8 +238,30 @@ impl AgentOSStateRepository for InMemoryAgentOSStateStore {
                 "host binding is not awaiting activation",
             ));
         }
+        if existing.kind() == HostBindingKind::ProfileRebind {
+            let superseded = self
+                .cross_links
+                .iter()
+                .filter_map(|(key, link)| {
+                    (key != &current_key
+                        && link.state() == HostBindingOperationState::Active
+                        && link.agent_profile_id() == confirmation.agent_profile_id()
+                        && link.agent_profile_revision() == confirmation.agent_profile_revision()
+                        && link.llm_slot_id() == confirmation.llm_slot_id())
+                    .then_some(key.clone())
+                })
+                .collect::<Vec<_>>();
+            for superseded_key in superseded {
+                if let Some(link) = self.cross_links.get(&superseded_key).cloned() {
+                    self.cross_links.insert(
+                        superseded_key,
+                        link.with_state(HostBindingOperationState::Superseded),
+                    );
+                }
+            }
+        }
         let active = existing.with_state(HostBindingOperationState::Active);
-        self.cross_links.insert(key, active.clone());
+        self.cross_links.insert(current_key, active.clone());
         Ok(active)
     }
 }

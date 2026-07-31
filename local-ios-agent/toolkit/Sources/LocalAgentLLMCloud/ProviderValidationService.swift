@@ -42,6 +42,7 @@ public actor ProviderValidationService {
     private let profileStore: ProviderProfileStore
     private let catalogStore: CloudCapabilityCatalogStore
     private let credentialStore: ProviderCredentialStore
+    private let oauthRefresher: OAuthCredentialRefreshCoordinator?
     private let egressPolicy: ProviderEgressPolicy
     private let transport: any CloudHTTPTransport
     private let hostProcessEpoch: HostProcessEpoch
@@ -57,6 +58,7 @@ public actor ProviderValidationService {
         egressPolicy: ProviderEgressPolicy,
         transport: any CloudHTTPTransport,
         hostProcessEpoch: HostProcessEpoch,
+        oauthRefresher: OAuthCredentialRefreshCoordinator? = nil,
         clock: @escaping @Sendable () -> Date = Date.init,
         validity: TimeInterval = 24 * 60 * 60,
         idGenerator: @escaping @Sendable () throws -> String = { UUID().uuidString.lowercased() }
@@ -69,6 +71,7 @@ public actor ProviderValidationService {
         self.profileStore = profileStore
         self.catalogStore = catalogStore
         self.credentialStore = credentialStore
+        self.oauthRefresher = oauthRefresher
         self.egressPolicy = egressPolicy
         self.transport = transport
         self.hostProcessEpoch = hostProcessEpoch
@@ -102,6 +105,15 @@ public actor ProviderValidationService {
               preset.id == profile.revision.presetID
         else {
             throw validationFailure("provider_validation.route_invalid", "provider validation route is invalid")
+        }
+        if profile.revision.credentialMode == .oauth,
+           let oauthProfile = ProviderOAuthProfile.shipped.first(where: {
+               $0.presetID == profile.revision.presetID
+           }) {
+            _ = try await oauthRefresher?.refreshIfNeeded(
+                credentialRef: profile.revision.credentialRef,
+                profile: oauthProfile
+            )
         }
         let state = try requireState(
             await profileStore.state(profileID: profileID, profileRevision: profileRevision)

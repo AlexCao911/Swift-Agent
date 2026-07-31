@@ -39,6 +39,21 @@ struct OpenMinisProviderProductMappingTests {
         #expect(kimi.codecFamily == .openAIChatCompletions)
         #expect(openRouter.requiresDedicatedCodec == false)
         #expect(kimi.requiresDedicatedCodec == false)
+        #expect(openRouter.credentialModes == [.apiKey])
+        #expect(kimi.credentialModes == [.oauth])
+    }
+
+    @Test
+    func codexOAuthIsResponsesOnly() {
+        let chat = ProviderProductCompatibility.mapping(
+            rawProviderType: "openAI"
+        )
+        let responses = ProviderProductCompatibility.mapping(
+            rawProviderType: "openAIResponses"
+        )
+
+        #expect(chat.credentialModes == [.apiKey])
+        #expect(responses.credentialModes == [.apiKey, .oauth])
     }
 
     @Test

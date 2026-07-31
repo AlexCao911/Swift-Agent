@@ -99,7 +99,11 @@ enum AppBootstrapper {
         let modelCenterClient = AppModelCenterClient(
             local: local,
             cloud: cloud,
-            store: llmStore
+            store: llmStore,
+            selectionRegistry: container.llmHostSelections,
+            activeProfileRebinder: PortableActiveProfileBindingRebinder(
+                client: RustPortableAgentBuilderClient(gateway: rust)
+            )
         )
         let migration = LegacyLLMMigrationCoordinator(
             rust: RustLegacyProfileMigrationClient(gateway: rust),
@@ -107,6 +111,7 @@ enum AppBootstrapper {
             bindingSaga: AgentHostBindingSaga(store: llmStore)
         )
         let reconciliation = try await migration.reconcilePendingActivations()
+        try await modelCenterClient.reconcilePendingModelRebinds()
         let activeBindings = try await llmStore.activeHostBindings()
         let targets = await llmStore.targets()
         let availableTargets = try await modelCenterClient.targetOptions()

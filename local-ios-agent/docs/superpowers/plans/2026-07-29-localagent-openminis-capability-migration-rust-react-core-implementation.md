@@ -160,7 +160,8 @@ The variables are test-environment inputs, not project configuration.
   `OpenMinis/src/ios/Resources/KaTeX/`
 - Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/ChatUI/AIChatViewModel.swift`
 - Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/ChatUI/ChatStore.swift`
-- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisProductShellView.swift`
+- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisContentView.swift`
+- Create: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/Product/OpenMinisChatView.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/App/AppShellView.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/App/AppRoute.swift`
 - Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppContainer.swift`
@@ -288,10 +289,12 @@ package-internal mutation access; ordinary Views keep read-only access.
 
 - [ ] **Step 5: Put the migrated UI inside the existing shell**
 
-Use `OpenMinisProductShellView` for the chat/session experience while keeping
-the LocalAgent `.agents`, `.models`, `.tools`, `.settings`, and `.debug`
-destinations and existing Agent Builder/local-model ViewModels. Preserve
-`AppShellView` as the App root and `LocalAgentApp.swift` as `@main`.
+Use `OpenMinisContentView` and `OpenMinisChatView` as the navigation and
+chat/session experience. Remove the temporary five-tab product shell and embed
+the LocalAgent Agent Builder, local/cloud model manager, Tools, Skills, prompt
+documents, privacy settings, and debug destinations in the OpenMinis navigation
+hierarchy. Preserve the thin `AppShellView` composition root and
+`LocalAgentApp.swift` as `@main`.
 
 Update the migration manifest with:
 

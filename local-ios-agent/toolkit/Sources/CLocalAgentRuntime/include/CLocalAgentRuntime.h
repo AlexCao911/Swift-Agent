@@ -94,6 +94,8 @@ char *local_agent_runtime_bridge_submit_tool_result(
 );
 char *local_agent_runtime_bridge_prepare_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_commit_profile_publish(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_prepare_profile_rebind(LocalAgentRuntimeBridge *runtime, const char *request_json);
+char *local_agent_runtime_bridge_commit_profile_rebind(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_begin_package_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_attach_host_binding(LocalAgentRuntimeBridge *runtime, const char *request_json);
 char *local_agent_runtime_bridge_confirm_host_binding_activation(LocalAgentRuntimeBridge *runtime, const char *request_json);
