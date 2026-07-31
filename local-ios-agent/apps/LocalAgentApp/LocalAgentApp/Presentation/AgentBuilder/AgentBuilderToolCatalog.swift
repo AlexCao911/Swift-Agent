@@ -45,9 +45,34 @@ struct NativeManifestToolCatalogClient: AgentBuilderToolCatalogClient {
 
     func loadToolCards() async throws -> [AgentBuilderToolCard] {
         let catalog = try catalogProvider()
-        return catalog.schemas
+        let nativeCards = catalog.schemas
             .map(Self.card(from:))
+        let nativeNames = Set(nativeCards.map(\.name))
+        let coreCards = try OpenMinisToolDefinitionSnapshotProvider
+            .productDefaults()
+            .orderedDefinitions
+            .filter { !nativeNames.contains($0.name) }
+            .map(Self.card(from:))
+        return (coreCards + nativeCards)
             .sorted { $0.name < $1.name }
+    }
+
+    private static func card(
+        from definition: OpenMinisToolDefinitionSnapshot
+    ) -> AgentBuilderToolCard {
+        AgentBuilderToolCard(
+            id: definition.name,
+            name: definition.name,
+            title: definition.displayTitle,
+            description: definition.description,
+            riskLevel: definition.riskLevel.rawValue,
+            approvalPolicy: definition.approvalPolicy.rawValue,
+            trustLevel: NativeToolTrustLevel.trustedToolResult.rawValue,
+            permissionScope: nil,
+            fallbackText: "",
+            statusText: "Available",
+            isAvailable: true
+        )
     }
 
     private static func card(from schema: NativeToolSchema) -> AgentBuilderToolCard {

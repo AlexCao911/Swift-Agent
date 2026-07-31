@@ -333,7 +333,8 @@ final class RustAgentCoordinatorTests: XCTestCase {
 private struct StaticSnapshotProvider: RustAgentSnapshotProviding {
     func snapshot(
         conversationStreamID _: String?,
-        modelContextWindow: ModelContextWindowDTO
+        modelContextWindow: ModelContextWindowDTO,
+        supportsImageInput _: Bool
     ) async throws -> RunStartSnapshotDTO {
         try RunStartSnapshotDTO.make(
             orderedPromptDocuments: [],

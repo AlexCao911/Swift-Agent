@@ -1,12 +1,17 @@
 import Foundation
 import LocalAgentBridge
 import LocalAgentLLMContracts
+import LocalNativeToolkit
 
 struct OpenMinisToolDefinitionSnapshot: Equatable, Sendable {
     let name: String
+    let displayTitle: String
     let description: String
     let inputSchema: CanonicalJSONValue
     let requiredFields: [String]
+    let mode: NativeToolMode
+    let riskLevel: RiskLevelDTO
+    let approvalPolicy: NativeToolApprovalPolicy
 }
 
 struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
@@ -35,6 +40,7 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
         let builtIns = try [
             definition(
                 name: "shell_execute",
+                displayTitle: "Run Linux Command",
                 description: "Execute a command in an isolated Alpine Linux process. Each invocation is a fresh process with stdout and stderr captured. The bundled localagent-mcp-cli manages and invokes MCP servers from the guest.",
                 properties: [
                     ("tool_title", "string"),
@@ -42,10 +48,12 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
                     ("timeout", "integer"),
                     ("delay", "integer"),
                 ],
-                required: ["tool_title", "command"]
+                required: ["tool_title", "command"],
+                riskLevel: .confirm
             ),
             definition(
                 name: "file_read",
+                displayTitle: "Read File",
                 description: "Read a text file from the Linux filesystem or a LocalAgent virtual mount.",
                 properties: [
                     ("tool_title", "string"),
@@ -55,10 +63,12 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
                     ("max_length", "integer"),
                     ("direction", "string"),
                 ],
-                required: ["tool_title", "path"]
+                required: ["tool_title", "path"],
+                enums: ["direction": ["head", "tail"]]
             ),
             definition(
                 name: "file_write",
+                displayTitle: "Write File",
                 description: "Write text to the Linux filesystem or a writable LocalAgent virtual mount.",
                 properties: [
                     ("tool_title", "string"),
@@ -67,10 +77,12 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
                     ("append", "boolean"),
                     ("create_dirs", "boolean"),
                 ],
-                required: ["tool_title", "path", "content"]
+                required: ["tool_title", "path", "content"],
+                riskLevel: .destructive
             ),
             definition(
                 name: "file_edit",
+                displayTitle: "Edit File",
                 description: "Make an exact string replacement in an existing file.",
                 properties: [
                     ("tool_title", "string"),
@@ -79,10 +91,12 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
                     ("new_string", "string"),
                     ("replace_all", "boolean"),
                 ],
-                required: ["tool_title", "path", "old_string", "new_string"]
+                required: ["tool_title", "path", "old_string", "new_string"],
+                riskLevel: .destructive
             ),
             definition(
                 name: "browser_use",
+                displayTitle: "Use Browser",
                 description: "Control the product browser with up to three tabs. Navigate web and localagent:// resource URLs; inspect, interact with, capture, and download page content; manage tabs, cookies, user agent, and viewport.",
                 properties: [
                     ("tool_title", "string"),
@@ -109,7 +123,23 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
                     ("reset", "boolean"),
                     ("full_page", "boolean"),
                 ],
-                required: ["tool_title", "action"]
+                required: ["tool_title", "action"],
+                enums: [
+                    "action": BrowserAction.allCases.map(\.rawValue),
+                    "direction": ["up", "down"],
+                    "user_agent": ["desktop_safari", "mobile_safari"],
+                ],
+                riskLevel: .confirm
+            ),
+            definition(
+                name: "read_image",
+                displayTitle: "Read Image (Multimodal)",
+                description: "Read an image from the Linux filesystem or a LocalAgent virtual mount and attach bounded RGB pixels to the next model turn for visual analysis.",
+                properties: [
+                    ("tool_title", "string"),
+                    ("path", "string"),
+                ],
+                required: ["tool_title", "path"]
             ),
         ]
         let native = try nativeSchemas.map { schema in
@@ -130,9 +160,13 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
             }
             return OpenMinisToolDefinitionSnapshot(
                 name: schema.name,
+                displayTitle: schema.name,
                 description: schema.description,
                 inputSchema: inputSchema,
-                requiredFields: Self.requiredFields(from: inputSchema)
+                requiredFields: Self.requiredFields(from: inputSchema),
+                mode: .background,
+                riskLevel: schema.riskLevel,
+                approvalPolicy: .never
             )
         }
         return try Self(orderedDefinitions: builtIns + native)
@@ -140,16 +174,26 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
 
     private static func definition(
         name: String,
+        displayTitle: String,
         description: String,
         properties: [(String, String)],
-        required: [String]
+        required: [String],
+        enums: [String: [String]] = [:],
+        riskLevel: RiskLevelDTO = .readOnly
     ) throws -> OpenMinisToolDefinitionSnapshot {
         let propertyEntries = try properties.map { name, type in
-            CanonicalJSONObjectEntry(
+            var entries = [
+                CanonicalJSONObjectEntry(name: "type", value: .string(type)),
+            ]
+            if let values = enums[name] {
+                entries.append(CanonicalJSONObjectEntry(
+                    name: "enum",
+                    value: .array(values.map(CanonicalJSONValue.string))
+                ))
+            }
+            return CanonicalJSONObjectEntry(
                 name: name,
-                value: try .object(entries: [
-                    CanonicalJSONObjectEntry(name: "type", value: .string(type)),
-                ])
+                value: try .object(entries: entries)
             )
         }
         let schema = try CanonicalJSONValue.object(entries: [
@@ -166,9 +210,13 @@ struct OpenMinisToolDefinitionSnapshotProvider: Sendable {
         ])
         return OpenMinisToolDefinitionSnapshot(
             name: name,
+            displayTitle: displayTitle,
             description: description,
             inputSchema: schema,
-            requiredFields: required
+            requiredFields: required,
+            mode: .background,
+            riskLevel: riskLevel,
+            approvalPolicy: .never
         )
     }
 

@@ -377,17 +377,13 @@ struct OpenMinisContentView: View {
                 if !fabDidDrag { newConversation() }
             } label: {
                 Circle()
-                    .fill(Color(UIColor { traits in
-                        traits.userInterfaceStyle == .dark
-                            ? UIColor(red: 80 / 255, green: 76 / 255, blue: 66 / 255, alpha: 1)
-                            : UIColor(red: 183 / 255, green: 175 / 255, blue: 150 / 255, alpha: 1)
-                    }))
+                    .fill(Color(UIColor.secondarySystemBackground))
                     .overlay {
                         Image(systemName: "bubble.left.and.text.bubble.right")
                             .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color(UIColor.label))
                     }
-                    .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
             }
 
             if !chatStore.sessions.isEmpty {
@@ -609,15 +605,12 @@ private struct OpenMinisSessionRow: View {
     var body: some View {
         HStack(spacing: 8) {
             ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.18))
-                Image(systemName: "bubble.left.fill")
+                Image(systemName: "bubble.left")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.secondary)
                 if isActive {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(Color.accentColor)
                         .offset(x: 16, y: 16)
                 }
             }
@@ -688,8 +681,8 @@ private struct OpenMinisDetailPlaceholder: View {
     }
 }
 
-// Directly follows OpenMinis SettingsSheet's section order and colored icon
-// treatment. LocalAgent-specific Rust, local-model and Agent Builder pages are
+// Directly follows OpenMinis SettingsSheet's section order with monochrome SF
+// Symbols. LocalAgent-specific Rust, local-model and Agent Builder pages are
 // inserted as destinations rather than replacing the donor navigation.
 private struct OpenMinisSettingsSheet: View {
     @Bindable var shellViewModel: AppShellViewModel
@@ -712,8 +705,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Manage Providers & Models",
-                            systemImage: "key.circle.fill",
-                            color: .blue
+                            systemImage: "key"
                         )
                     }
 
@@ -728,8 +720,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Local Models",
-                            systemImage: "cpu.fill",
-                            color: .orange
+                            systemImage: "cpu"
                         )
                     }
 
@@ -741,8 +732,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Model Groups & Agent Bindings",
-                            systemImage: "gearshape.circle.fill",
-                            color: .indigo
+                            systemImage: "square.stack.3d.up"
                         )
                     }
                 } header: {
@@ -762,8 +752,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Agent Builder",
-                            systemImage: "slider.horizontal.3",
-                            color: .pink
+                            systemImage: "slider.horizontal.3"
                         )
                     }
 
@@ -772,8 +761,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Skills",
-                            systemImage: "puzzlepiece.extension",
-                            color: .blue
+                            systemImage: "puzzlepiece.extension"
                         )
                     }
 
@@ -782,8 +770,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Prompt Documents",
-                            systemImage: "doc.text",
-                            color: .purple
+                            systemImage: "doc.text"
                         )
                     }
 
@@ -792,8 +779,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Tools & Linux",
-                            systemImage: "terminal",
-                            color: .green
+                            systemImage: "terminal"
                         )
                     }
 
@@ -802,8 +788,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Browser Settings",
-                            systemImage: "globe",
-                            color: .teal
+                            systemImage: "globe"
                         )
                     }
                 }
@@ -817,8 +802,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Privacy, Storage & Permissions",
-                            systemImage: "lock.shield",
-                            color: .red
+                            systemImage: "lock.shield"
                         )
                     }
                 }
@@ -829,8 +813,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "Appearance",
-                            systemImage: "paintbrush.fill",
-                            color: .purple
+                            systemImage: "paintbrush"
                         )
                     }
                 }
@@ -841,8 +824,7 @@ private struct OpenMinisSettingsSheet: View {
                     } label: {
                         OpenMinisSettingsLabel(
                             "About LocalAgent",
-                            systemImage: "info.circle.fill",
-                            color: .indigo
+                            systemImage: "info.circle"
                         )
                     }
                 }
@@ -907,16 +889,13 @@ private struct AboutLocalAgentView: View {
 private struct OpenMinisSettingsLabel: View {
     let title: LocalizedStringKey
     let systemImage: String
-    let color: Color
 
     init(
         _ title: LocalizedStringKey,
-        systemImage: String,
-        color: Color
+        systemImage: String
     ) {
         self.title = title
         self.systemImage = systemImage
-        self.color = color
     }
 
     var body: some View {
@@ -924,10 +903,9 @@ private struct OpenMinisSettingsLabel: View {
             Text(title)
         } icon: {
             Image(systemName: systemImage)
-                .font(.system(size: 9))
-                .foregroundStyle(.white)
-                .frame(width: 21, height: 21)
-                .background(color, in: Circle())
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
         }
     }
 }

@@ -34,11 +34,20 @@ struct AgentBuilderToolCatalogTests {
         let client = NativeManifestToolCatalogClient(catalogProvider: { catalog })
         let cards = try await client.loadToolCards()
 
-        #expect(cards.map(\.id) == ["web.fetch_url_text"])
-        #expect(cards.first?.title == "Fetch Web Page")
-        #expect(cards.first?.approvalPolicy == "per_call")
-        #expect(cards.first?.trustLevel == "untrusted_external_content")
-        #expect(cards.first?.isAvailable == true)
+        #expect(Set(cards.map(\.id)).isSuperset(of: [
+            "shell_execute",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "browser_use",
+            "read_image",
+            "web.fetch_url_text",
+        ]))
+        let web = try #require(cards.first { $0.id == "web.fetch_url_text" })
+        #expect(web.title == "Fetch Web Page")
+        #expect(web.approvalPolicy == "per_call")
+        #expect(web.trustLevel == "untrusted_external_content")
+        #expect(web.isAvailable == true)
     }
 
     @Test("tools without stable manifest metadata are unavailable")

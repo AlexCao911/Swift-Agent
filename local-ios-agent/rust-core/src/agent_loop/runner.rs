@@ -298,6 +298,7 @@ where
                             &branch,
                             &context_policy,
                             pending_tool_results.clone(),
+                            generation_request.attachment_references.clone(),
                         ),
                         &mut DiscardingModelEventSink,
                     )?;
@@ -791,7 +792,7 @@ fn attachment_references_for_input(
     }
 
     let mut seen = BTreeSet::new();
-    input
+    let mut references = input
         .ordered_messages()
         .messages()
         .iter()
@@ -799,6 +800,41 @@ fn attachment_references_for_input(
         .filter_map(|blob_ref| catalog.get(blob_ref))
         .filter(|reference| seen.insert(reference.attachment_id.clone()))
         .cloned()
+        .collect::<Vec<_>>();
+    for message in input.ordered_messages().messages() {
+        if message.role() != ModelInputRole::Tool {
+            continue;
+        }
+        let Ok(result) = serde_json::from_str::<crate::tool::ToolCallResult>(message.content())
+        else {
+            continue;
+        };
+        for reference in attachment_references_from_tool_results(&[result]) {
+            if seen.insert(reference.attachment_id.clone()) {
+                references.push(reference);
+            }
+        }
+    }
+    references
+}
+
+fn attachment_references_from_tool_results(
+    results: &[crate::tool::ToolCallResult],
+) -> Vec<crate::conversation::TranscriptAttachmentReference> {
+    results
+        .iter()
+        .filter(|result| !result.is_error)
+        .filter_map(|result| result.result.get("attachment_reference").cloned())
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .filter(
+            |reference: &crate::conversation::TranscriptAttachmentReference| {
+                !reference.attachment_id.trim().is_empty()
+                    && !reference.display_name.trim().is_empty()
+                    && !reference.media_type.trim().is_empty()
+                    && !reference.modality.trim().is_empty()
+                    && !reference.content_digest.trim().is_empty()
+            },
+        )
         .collect()
 }
 
@@ -865,6 +901,7 @@ fn compaction_model_request(
     branch: &[RuntimeEvent],
     policy: &ContextWindowPolicy,
     ordered_tool_results: Vec<crate::tool::ToolCallResult>,
+    attachment_references: Vec<crate::conversation::TranscriptAttachmentReference>,
 ) -> ModelRequest {
     let system_prompt = concat!(
         "Compact the conversation for continued agent work. Preserve user intent, ",
@@ -891,7 +928,7 @@ fn compaction_model_request(
                 CompactionCandidate::new(messages).bounded_summary_text(content_budget),
             ),
         }],
-        attachment_references: Vec::new(),
+        attachment_references,
         ordered_tool_definitions: Vec::new(),
         ordered_tool_results,
         purpose: ModelRequestPurpose::Compaction,
@@ -1026,4 +1063,36 @@ fn storage_error(error: impl std::fmt::Display) -> AgentLoopError {
 
 fn serialization_error(error: serde_json::Error) -> AgentLoopError {
     AgentLoopError::new("agent_loop.serialization_failed", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::attachment_references_from_tool_results;
+    use crate::tool::ToolCallResult;
+
+    #[test]
+    fn tool_result_image_attachment_is_forwarded_to_the_next_model_turn() {
+        let references = attachment_references_from_tool_results(&[ToolCallResult {
+            call_id: "call-image".into(),
+            tool_name: "read_image".into(),
+            result: json!({
+                "attachment_reference": {
+                    "attachment_id": "att-image",
+                    "display_name": "plot.png",
+                    "media_type": "image/png",
+                    "modality": "image",
+                    "content_digest": "abc123"
+                }
+            }),
+            is_error: false,
+            data_classes: vec!["files".into()],
+            highest_sensitivity: "private".into(),
+        }]);
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].attachment_id, "att-image");
+        assert_eq!(references[0].modality, "image");
+    }
 }

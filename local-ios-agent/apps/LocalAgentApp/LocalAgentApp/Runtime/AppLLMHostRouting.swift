@@ -659,6 +659,44 @@ final class AppRustAgentModelRunPreparer: RustAgentModelRunPreparing {
         )
     }
 
+    func supportsImageInput(
+        agentProfileID: String,
+        agentProfileRevisionID: UInt64
+    ) async throws -> Bool {
+        let group = try await requireSelectionGroup(
+            profileID: agentProfileID,
+            revision: agentProfileRevisionID
+        )
+        for selection in group {
+            switch selection {
+            case let .local(_, target, _):
+                guard case let .local(installationID) = target.kind,
+                      let installation = try await local.inventory().first(where: {
+                          $0.installationID == installationID
+                              && $0.state == .installed
+                              && $0.catalogStatus == .current
+                      }),
+                      let manifest = local.acceptedCatalog.verified.models[
+                          installation.modelRevision
+                      ] else {
+                    return false
+                }
+                let supported = manifest.declaredCapabilities.contains { declaration in
+                    guard declaration.capabilityID == "image_input" else {
+                        return false
+                    }
+                    if case .support(.supported) = declaration.value { return true }
+                    return false
+                }
+                guard supported else { return false }
+            case .cloud:
+                // Cloud attachment codecs currently reject binary tool results.
+                return false
+            }
+        }
+        return true
+    }
+
     func prepareModelRun(
         runID: String,
         agentProfileID: String,

@@ -77,12 +77,22 @@ struct RustRuntimeAppIntegrationTests {
 
         await viewModel.reload()
 
-        let toolNames = viewModel.rows.map(\.name)
-        #expect(toolNames.contains("native.list_tools"))
-        #expect(toolNames.contains("native.permission_status"))
-        #expect(toolNames.contains("web.fetch_url_text"))
-        #expect(toolNames.contains("files.pick_document"))
-        #expect(toolNames.contains("photos.pick_images"))
+        let expectedNativeNames: Set<String> = [
+            "native.list_tools",
+            "native.permission_status",
+            "web.fetch_url_text",
+            "files.pick_document",
+            "photos.pick_images",
+            "calendar.search_events",
+            "reminders.create_reminder",
+            "files.describe_attachment",
+            "files.read_attachment",
+            "photos.describe_attachment",
+            "shortcuts.list_voice_shortcuts",
+        ]
+        let native = await container.nativeToolkitClient.registrationSnapshot()
+        #expect(Set(native.toolNames) == expectedNativeNames)
+        #expect(Set(viewModel.rows.map(\.name)).isSuperset(of: expectedNativeNames))
     }
 
     @Test("App bootstrapper installs the Rust host route without a Swift agent loop")

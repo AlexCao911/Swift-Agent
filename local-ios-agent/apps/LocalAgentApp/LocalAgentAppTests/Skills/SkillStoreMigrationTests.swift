@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class SkillStoreMigrationTests: XCTestCase {
+    func testSlashCommandFiltersAndEnablesConversationSkill() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let skill = try fixture.store.importSkill(
+            content: """
+            ---
+            name: Release Notes
+            description: Draft concise App Store release notes.
+            ---
+            Follow the release workflow.
+            """
+        )
+        try fixture.store.setEnabled(skill.id, enabled: false)
+
+        XCTAssertEqual(
+            fixture.store.slashCommandMatches(
+                query: "release",
+                conversationStreamID: "conversation-a"
+            ).map(\.id),
+            [skill.id]
+        )
+
+        fixture.store.activateFromSlash(
+            skillID: skill.id,
+            conversationStreamID: "conversation-a"
+        )
+
+        XCTAssertTrue(
+            fixture.store.isEnabled(skill.id, for: "conversation-a")
+        )
+        XCTAssertFalse(fixture.store.isEnabled(skill.id, for: nil))
+    }
+
     func testURLImportUsesTheBoundedDownloaderContract() async throws {
         let downloader = RecordingSkillDownloader(
             payload: SkillDownloadPayload(

@@ -214,7 +214,8 @@ enum AppBootstrapper {
             modelExecutor: modelExecutor,
             toolExecutor: OpenMinisToolBatchExecutor(
                 dispatcher: OpenMinisProductToolDispatcher(
-                    nativeTools: container.hostToolDriver
+                    nativeTools: container.hostToolDriver,
+                    attachmentStore: container.attachmentRepository
                 ),
                 definitions: try OpenMinisToolDefinitionSnapshotProvider
                     .productDefaults(nativeSchemas: nativeTools.schemas)
@@ -239,13 +240,15 @@ enum AppBootstrapper {
             hostProcessEpoch: hostProcessEpoch
         )
         let executionBridge = RustExecutionBridgeClient(gateway: client, legacyClient: client)
-        let nativeBundle = try makeNativeToolkitBundle()
-        let selections = AppLLMHostSelectionRegistry()
-        let hostStarter = AppHostRunStarter(selections: selections)
         let attachments = OpenMinisAttachmentRepository(
             directory: try attachmentStoreRoot ?? attachmentStoreURL(),
             policy: .productDefault
         )
+        let nativeBundle = try makeNativeToolkitBundle(
+            attachmentStore: attachments
+        )
+        let selections = AppLLMHostSelectionRegistry()
+        let hostStarter = AppHostRunStarter(selections: selections)
 
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -282,13 +285,15 @@ enum AppBootstrapper {
         error: Error,
         hostProcessEpoch: HostProcessEpoch
     ) throws -> AppContainer {
-        let nativeBundle = try makeNativeToolkitBundle()
-        let selections = AppLLMHostSelectionRegistry()
-        let hostStarter = AppHostRunStarter(selections: selections)
         let attachments = OpenMinisAttachmentRepository(
             directory: try attachmentStoreURL(),
             policy: .productDefault
         )
+        let nativeBundle = try makeNativeToolkitBundle(
+            attachmentStore: attachments
+        )
+        let selections = AppLLMHostSelectionRegistry()
+        let hostStarter = AppHostRunStarter(selections: selections)
 
         return AppContainer(
             hostProcessEpoch: hostProcessEpoch,
@@ -418,7 +423,9 @@ enum AppBootstrapper {
         }
     }
 
-    private static func makeNativeToolkitBundle() throws -> NativeToolkitBundle {
+    private static func makeNativeToolkitBundle(
+        attachmentStore: any NativeAttachmentByteStore
+    ) throws -> NativeToolkitBundle {
         let permissionStore = PermissionStore()
         let eventStore: EKEventStore?
 #if canImport(EventKit) && os(iOS)
@@ -435,7 +442,8 @@ enum AppBootstrapper {
         let nativeCatalog = try NativeToolCatalog(tools: nativeTools(
             listTools: listTools,
             permissionStore: permissionStore,
-            eventStore: eventStore
+            eventStore: eventStore,
+            attachmentStore: attachmentStore
         ))
         catalogBox.catalog = nativeCatalog
         let nativeToolkitClient = NativeToolkitClient(catalog: nativeCatalog)
@@ -473,7 +481,8 @@ enum AppBootstrapper {
     private static func nativeTools(
         listTools: NativeListToolsTool,
         permissionStore: PermissionStore,
-        eventStore: EKEventStore?
+        eventStore: EKEventStore?,
+        attachmentStore: any NativeAttachmentByteStore
     ) -> [any NativeTool] {
         var tools: [any NativeTool] = [
             listTools,
@@ -481,6 +490,12 @@ enum AppBootstrapper {
             WebFetchURLTextTool(),
             FilesPickDocumentTool(),
             PhotosPickImagesTool(),
+            FilesDescribeAttachmentTool(store: attachmentStore),
+            FilesReadAttachmentTool(store: attachmentStore),
+            PhotosDescribeAttachmentTool(store: attachmentStore),
+            ShortcutsListVoiceShortcutsTool(
+                shortcuts: ProductShortcutsFacade()
+            ),
         ]
 
         #if canImport(EventKit) && os(iOS)
@@ -585,6 +600,19 @@ private struct NativeToolkitBundle {
     let permissionGateway: any NativePermissionGateway
     let builderToolCatalogClient: NativeManifestToolCatalogClient
     let interactionBroker: NativeInteractionBroker
+}
+
+private struct ProductShortcutsFacade: ShortcutsFacade {
+    func listVoiceShortcuts() async throws -> [NativeVoiceShortcut] {
+        [
+            NativeVoiceShortcut(name: "Open Chat", phrase: "Open LocalAgent"),
+            NativeVoiceShortcut(name: "Chats", phrase: "Show chats in LocalAgent"),
+            NativeVoiceShortcut(name: "Start Chat", phrase: "Start chat with LocalAgent"),
+            NativeVoiceShortcut(name: "Agent Builder", phrase: "Build an agent in LocalAgent"),
+            NativeVoiceShortcut(name: "Capture Text", phrase: "Capture text with LocalAgent"),
+            NativeVoiceShortcut(name: "Settings", phrase: "Open settings in LocalAgent"),
+        ]
+    }
 }
 
 private struct AppLocalRouteUnloader: LocalRouteUnloading {

@@ -142,6 +142,27 @@ struct ShippingTargetOwnershipTests {
         }
     }
 
+    @Test("settings use monochrome SF Symbols and chat exposes slash Skills")
+    func settingsAndSlashSkillsUseNativePresentation() throws {
+        let appRoot = appRootURL().appendingPathComponent("LocalAgentApp")
+        let content = try String(
+            contentsOf: appRoot.appendingPathComponent(
+                "ThirdParty/OpenMinis/Product/OpenMinisContentView.swift"
+            ),
+            encoding: .utf8
+        )
+        let chat = try String(
+            contentsOf: appRoot.appendingPathComponent(
+                "ThirdParty/OpenMinis/Product/OpenMinisChatView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        #expect(!content.contains(".background(color, in: Circle())"))
+        #expect(chat.contains("slashSkillMatches"))
+        #expect(chat.contains("activateFromSlash"))
+    }
+
     @Test("migrated provider surfaces cannot bypass the LocalAgent transport boundary")
     func migratedProviderSurfacesCannotBypassTransportBoundary() throws {
         let providersRoot = appRootURL().appendingPathComponent(

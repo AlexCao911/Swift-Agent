@@ -558,6 +558,51 @@ final class SkillStore: ObservableObject {
         return overrides[conversationStreamID]?[skillID] ?? skill.isEnabled
     }
 
+    func slashCommandMatches(
+        query: String,
+        conversationStreamID: String
+    ) -> [Skill] {
+        let needle = query.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return skills
+            .filter { skill in
+                needle.isEmpty
+                    || skill.id.localizedCaseInsensitiveContains(needle)
+                    || skill.name.localizedCaseInsensitiveContains(needle)
+                    || skill.description.localizedCaseInsensitiveContains(needle)
+            }
+            .sorted {
+                let lhsEnabled = isEnabled(
+                    $0.id,
+                    for: conversationStreamID
+                )
+                let rhsEnabled = isEnabled(
+                    $1.id,
+                    for: conversationStreamID
+                )
+                if lhsEnabled != rhsEnabled {
+                    return lhsEnabled
+                }
+                if $0.sortOrder != $1.sortOrder {
+                    return $0.sortOrder < $1.sortOrder
+                }
+                return $0.name.localizedCaseInsensitiveCompare($1.name)
+                    == .orderedAscending
+            }
+    }
+
+    func activateFromSlash(
+        skillID: String,
+        conversationStreamID: String
+    ) {
+        setConversationOverride(
+            skillID: skillID,
+            conversationStreamID: conversationStreamID,
+            enabled: true
+        )
+    }
+
     func rustDescriptors(
         for conversationStreamID: String?
     ) throws -> [RustSkillDescriptorDTO] {

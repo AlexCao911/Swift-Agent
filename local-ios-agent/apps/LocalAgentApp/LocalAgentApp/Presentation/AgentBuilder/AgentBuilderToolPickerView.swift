@@ -46,7 +46,7 @@ struct AgentBuilderToolPickerView: View {
                         Spacer()
                         if selectedToolIds.contains(tool.id) {
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(.primary)
                         }
                     }
                 }

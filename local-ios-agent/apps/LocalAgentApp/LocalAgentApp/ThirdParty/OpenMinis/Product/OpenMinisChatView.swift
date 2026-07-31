@@ -104,6 +104,7 @@ struct OpenMinisChatView: View {
     @State private var editDraft = ""
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var showsFileImporter = false
+    @ObservedObject private var skillStore = SkillStore.shared
 
     @Bindable var shellViewModel: AppShellViewModel
     @ObservedObject var viewModel: AIChatViewModel
@@ -389,6 +390,56 @@ struct OpenMinisChatView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !slashSkillMatches.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(slashSkillMatches.prefix(6)) { skill in
+                        Button {
+                            skillStore.activateFromSlash(
+                                skillID: skill.id,
+                                conversationStreamID: viewModel.conversationStreamID
+                            )
+                            viewModel.draft = "/\(skill.id) "
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "puzzlepiece.extension")
+                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(skill.name)
+                                        .foregroundStyle(.primary)
+                                    if !skill.description.isEmpty {
+                                        Text(skill.description)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                                if skillStore.isEnabled(
+                                    skill.id,
+                                    for: viewModel.conversationStreamID
+                                ) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                        }
+                        .buttonStyle(.plain)
+
+                        if skill.id != slashSkillMatches.prefix(6).last?.id {
+                            Divider().padding(.leading, 42)
+                        }
+                    }
+                }
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(OpenMinisChatColors.border, lineWidth: 0.5)
+                }
+            }
+
             if !viewModel.inputAttachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -503,6 +554,16 @@ struct OpenMinisChatView: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.ultraThinMaterial)
+    }
+
+    private var slashSkillMatches: [Skill] {
+        guard viewModel.draft.hasPrefix("/") else { return [] }
+        let command = viewModel.draft.dropFirst()
+        guard command.allSatisfy({ !$0.isWhitespace }) else { return [] }
+        return skillStore.slashCommandMatches(
+            query: String(command),
+            conversationStreamID: viewModel.conversationStreamID
+        )
     }
 }
 

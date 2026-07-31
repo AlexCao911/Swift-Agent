@@ -10,7 +10,7 @@ struct ToolFileResolverTests {
 
         for path in ["/tmp/result.txt", "/root/.config/tool.json", "/usr/bin/env"] {
             let resolved = try fixture.resolver.resolve(path, access: .read)
-            guard case let .guestRootfs(linuxPath) = resolved.backend else {
+            guard case let .guestRootfs(linuxPath, _) = resolved.backend else {
                 Issue.record("Expected guest rootfs backend for \(path)")
                 continue
             }

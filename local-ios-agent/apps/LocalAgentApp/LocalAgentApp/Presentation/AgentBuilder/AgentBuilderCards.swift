@@ -164,7 +164,7 @@ struct AgentBuilderCardView: View {
     private var statusBadge: some View {
         if card.isPublishAffecting {
             Label("Included", systemImage: "checkmark.seal")
-                .foregroundStyle(.green)
+                .foregroundStyle(.primary)
         } else if card.isEnabled {
             Label("Preview only", systemImage: "eye")
                 .foregroundStyle(.secondary)

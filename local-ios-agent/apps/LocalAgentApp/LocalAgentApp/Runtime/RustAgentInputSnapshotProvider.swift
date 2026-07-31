@@ -37,7 +37,8 @@ struct RustAgentInputSnapshotProvider {
 
     func snapshot(
         conversationStreamID: String?,
-        modelContextWindow: ModelContextWindowDTO
+        modelContextWindow: ModelContextWindowDTO,
+        supportsImageInput: Bool = false
     ) async throws -> RunStartSnapshotDTO {
         let definitions = try await toolDefinitions()
         return try RunStartSnapshotDTO.make(
@@ -45,13 +46,15 @@ struct RustAgentInputSnapshotProvider {
             skillDescriptors: try skills.rustDescriptors(
                 for: conversationStreamID
             ),
-            orderedToolDefinitions: definitions.orderedDefinitions.map {
+            orderedToolDefinitions: definitions.orderedDefinitions
+                .filter { supportsImageInput || $0.name != "read_image" }
+                .map {
                 ToolDefinitionSnapshotDTO(
                     name: $0.name,
                     description: $0.description,
                     inputSchema: $0.inputSchema
                 )
-            },
+                },
             modelContextWindow: modelContextWindow
         )
     }

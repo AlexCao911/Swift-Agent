@@ -1,6 +1,7 @@
 import Foundation
 import LocalAgentBridge
 import LocalAgentLLMContracts
+import LocalNativeToolkit
 import XCTest
 @testable import LocalAgentApp
 
@@ -139,6 +140,53 @@ final class OpenMinisProductToolDispatcherTests: XCTestCase {
         XCTAssertEqual(output.highestSensitivity, "private")
         let executedToolName = await native.executedToolName
         XCTAssertEqual(executedToolName, "calendar.search_events")
+    }
+
+    func testReadImagePublishesAResolvableModelAttachment() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        let attachments = root.appendingPathComponent("attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let png = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )!
+        try png.write(to: shared.appendingPathComponent("pixel.png"))
+        let store = OpenMinisAttachmentRepository(directory: attachments)
+        let dispatcher = OpenMinisProductToolDispatcher(
+            ish: RecordingISHRuntime(),
+            browser: StubBrowserRuntime(),
+            files: ToolFileResolver(
+                guestRootURL: root.appendingPathComponent("guest", isDirectory: true),
+                hostMounts: [.shared: .init(rootURL: shared, isWritable: true)]
+            ),
+            attachmentStore: store
+        )
+
+        let output = await dispatcher.execute(
+            HostToolCall(
+                callID: "image-1",
+                toolName: "read_image",
+                argumentsJSON: #"{"tool_title":"Inspect pixel","path":"/var/localagent/shared/pixel.png"}"#
+            ),
+            context: OpenMinisToolExecutionContext(
+                batchID: "batch",
+                runID: "run",
+                onProcessStarted: { _ in }
+            )
+        )
+
+        XCTAssertFalse(output.isError)
+        let reference = output.result.objectValue(forKey: "attachment_reference")
+        guard case let .string(attachmentID)? = reference?
+            .objectValue(forKey: "attachment_id") else {
+            return XCTFail("read_image did not return an attachment identifier")
+        }
+        XCTAssertEqual(reference?.objectValue(forKey: "modality"), .string("image"))
+        XCTAssertEqual(reference?.objectValue(forKey: "media_type"), .string("image/rgb8"))
+        let stored = try await store.read(attachmentId: attachmentID, maxBytes: 16)
+        XCTAssertEqual(stored.count, 3)
     }
 }
 

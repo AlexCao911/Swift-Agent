@@ -7,6 +7,27 @@ import Testing
 @Suite("Tool Center view model")
 @MainActor
 struct ToolCenterViewModelTests {
+    @Test("OpenMinis core tools and native tools share one catalog")
+    func coreAndNativeToolsShareOneCatalog() async {
+        let viewModel = ToolCenterViewModel(
+            client: StaticNativeToolkitClient(schemas: [
+                schema(name: "calendar.search_events", auditLabel: "Search Calendar"),
+            ]),
+            permissionGateway: StaticPermissionGateway()
+        )
+
+        await viewModel.reload()
+
+        #expect(Set(viewModel.rows.map(\.name)).isSuperset(of: [
+            "shell_execute",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "browser_use",
+            "calendar.search_events",
+        ]))
+    }
+
     @Test("rows are sorted by title then name")
     func rowsAreSortedByTitleThenName() async {
         let viewModel = ToolCenterViewModel(
@@ -19,7 +40,11 @@ struct ToolCenterViewModelTests {
 
         await viewModel.reload()
 
-        #expect(viewModel.rows.map(\.title) == ["Alpha Tool", "Zeta Tool"])
+        #expect(
+            viewModel.rows
+                .filter { $0.name == "alpha.tool" || $0.name == "zeta.tool" }
+                .map(\.title) == ["Alpha Tool", "Zeta Tool"]
+        )
     }
 
     @Test("metadata comes from manifest schema json")
@@ -40,7 +65,7 @@ struct ToolCenterViewModelTests {
 
         await viewModel.reload()
 
-        #expect(viewModel.rows.first == ToolCenterRowState(
+        #expect(viewModel.rows.first { $0.name == "web.fetch_url_text" } == ToolCenterRowState(
             id: "web.fetch_url_text",
             name: "web.fetch_url_text",
             title: "Fetch Web Page",
@@ -69,9 +94,9 @@ struct ToolCenterViewModelTests {
 
         await viewModel.reload()
 
-        #expect(viewModel.rows.first?.name == "legacy.tool")
-        #expect(viewModel.rows.first?.title == "legacy.tool")
-        #expect(viewModel.rows.first?.readiness == .unavailable(
+        let row = viewModel.rows.first { $0.name == "legacy.tool" }
+        #expect(row?.title == "legacy.tool")
+        #expect(row?.readiness == .unavailable(
             scope: NativePermissionScope("legacy.tool"),
             reason: "missing_manifest_metadata"
         ))
@@ -100,7 +125,7 @@ struct ToolCenterViewModelTests {
 
         await viewModel.reload()
 
-        #expect(viewModel.rows.first?.readiness == denied)
+        #expect(viewModel.rows.first { $0.name == "calendar.search_events" }?.readiness == denied)
     }
 
     @Test("user mediated tools show picker required state")
@@ -119,8 +144,9 @@ struct ToolCenterViewModelTests {
 
         await viewModel.reload()
 
-        #expect(viewModel.rows.first?.mode == .userMediated)
-        #expect(viewModel.rows.first?.interactionLabel == "Picker required")
+        let row = viewModel.rows.first { $0.name == "photos.pick_images" }
+        #expect(row?.mode == .userMediated)
+        #expect(row?.interactionLabel == "Picker required")
     }
 }
 

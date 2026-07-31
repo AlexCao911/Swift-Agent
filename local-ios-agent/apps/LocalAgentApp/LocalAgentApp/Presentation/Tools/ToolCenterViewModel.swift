@@ -88,14 +88,36 @@ final class ToolCenterViewModel {
 
     func reload() async {
         let snapshot = await client.registrationSnapshot()
-        rows = await ToolCenterProjection.project(
+        let nativeRows = await ToolCenterProjection.project(
             schemas: snapshot.schemas,
             permissionGateway: permissionGateway
         )
+        let nativeNames = Set(snapshot.schemas.map(\.name))
+        let coreRows = (try? OpenMinisToolDefinitionSnapshotProvider
+            .productDefaults()
+            .orderedDefinitions
+            .filter { !nativeNames.contains($0.name) }
+            .map(ToolCenterProjection.project)) ?? []
+        rows = (coreRows + nativeRows).sorted(by: ToolCenterProjection.sort)
     }
 }
 
 enum ToolCenterProjection {
+    static func project(
+        _ definition: OpenMinisToolDefinitionSnapshot
+    ) -> ToolCenterRowState {
+        ToolCenterRowState(
+            id: definition.name,
+            name: definition.name,
+            title: definition.displayTitle,
+            mode: definition.mode,
+            riskLevel: definition.riskLevel,
+            permissionScope: nil,
+            approvalPolicy: definition.approvalPolicy,
+            readiness: .ready
+        )
+    }
+
     static func project(
         schemas: [ToolSchemaDTO],
         permissionGateway: any NativePermissionGateway
@@ -134,13 +156,15 @@ enum ToolCenterProjection {
             ))
         }
 
-        return rows.sorted { lhs, rhs in
-            let lhsKey = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
-            if lhsKey == .orderedSame {
-                return lhs.name < rhs.name
-            }
-            return lhsKey == .orderedAscending
+        return rows.sorted(by: sort)
+    }
+
+    static func sort(_ lhs: ToolCenterRowState, _ rhs: ToolCenterRowState) -> Bool {
+        let lhsKey = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if lhsKey == .orderedSame {
+            return lhs.name < rhs.name
         }
+        return lhsKey == .orderedAscending
     }
 
     private static func decodeMetadata(_ metadataJson: String?) -> NativeToolSchemaMetadataV1? {

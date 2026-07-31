@@ -6,7 +6,7 @@ enum FileAccess: String, Codable, Sendable {
 }
 
 enum ResolvedFileBackend: Sendable {
-    case guestRootfs(linuxPath: String)
+    case guestRootfs(linuxPath: String, localURL: URL)
     case hostMount(mount: ToolFileResolver.HostMount, localURL: URL)
 }
 
@@ -66,7 +66,7 @@ struct ToolFileResolver: Sendable {
         try requireContained(candidate, within: guestRootURL)
         return ResolvedToolFile(
             toolPath: toolPath,
-            backend: .guestRootfs(linuxPath: toolPath),
+            backend: .guestRootfs(linuxPath: toolPath, localURL: candidate),
             access: access
         )
     }

@@ -1,23 +1,35 @@
 import Foundation
 import LocalAgentBridge
 import LocalAgentLLMContracts
+import LocalNativeToolkit
+
+protocol OpenMinisImageAttachmentStoring: Sendable {
+    func putModelImage(
+        _ data: Data,
+        filename: String,
+        contentType: String
+    ) async throws -> TranscriptAttachmentReferenceDTO
+}
 
 final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked Sendable {
     private let ish: any OpenMinisISHRunning
     private let browser: any OpenMinisBrowserRunning
     private let files: ToolFileResolver
     private let nativeTools: (any HostToolDriving)?
+    private let attachmentStore: (any OpenMinisImageAttachmentStoring)?
 
     init(
         ish: any OpenMinisISHRunning = OpenMinisISHRuntime.shared,
         browser: any OpenMinisBrowserRunning = OpenMinisBrowserRuntime(),
         files: ToolFileResolver = LocalAgentToolMounts.makeDefaultResolver(),
-        nativeTools: (any HostToolDriving)? = nil
+        nativeTools: (any HostToolDriving)? = nil,
+        attachmentStore: (any OpenMinisImageAttachmentStoring)? = nil
     ) {
         self.ish = ish
         self.browser = browser
         self.files = files
         self.nativeTools = nativeTools
+        self.attachmentStore = attachmentStore
     }
 
     func execute(
@@ -49,8 +61,69 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 dataClasses: [EgressDataClass.text.rawValue],
                 sensitivity: DataSensitivity.private.rawValue
             )
+        case "read_image":
+            return await executeReadImage(call, arguments: arguments)
         default:
             return await executeNative(call, context: context)
+        }
+    }
+
+    private func executeReadImage(
+        _ call: HostToolCall,
+        arguments: [String: Any]
+    ) async -> HostToolResult {
+        guard let path = nonemptyString(arguments["path"]) else {
+            return error(call, "Missing required 'path' parameter.")
+        }
+        guard let attachmentStore else {
+            return error(call, "Image attachment storage is unavailable.")
+        }
+        do {
+            let resolved = try files.resolve(path, access: .read)
+            let fileURL: URL
+            switch resolved.backend {
+            case .hostMount(_, let url):
+                fileURL = url
+            case .guestRootfs(_, let url):
+                fileURL = url
+            }
+            let values = try fileURL.resourceValues(forKeys: [.fileSizeKey])
+            guard let byteCount = values.fileSize,
+                  byteCount <= OpenMinisAttachmentPolicy.productDefault
+                    .maximumSingleAttachmentBytes else {
+                throw ProductToolError.imageTooLarge
+            }
+            let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+            let mediaType = imageMediaType(data) ?? "application/octet-stream"
+            guard mediaType.hasPrefix("image/") else {
+                throw ProductToolError.invalidImage
+            }
+            let reference = try await attachmentStore.putModelImage(
+                data,
+                filename: fileURL.lastPathComponent,
+                contentType: mediaType
+            )
+            let attachment = try CanonicalJSONValue.object(entries: [
+                .init(name: "attachment_id", value: .string(reference.attachmentID)),
+                .init(name: "display_name", value: .string(reference.displayName)),
+                .init(name: "media_type", value: .string(reference.mediaType)),
+                .init(name: "modality", value: .string(reference.modality)),
+                .init(name: "content_digest", value: .string(reference.contentDigest)),
+            ])
+            return result(
+                call,
+                value: try .object(entries: [
+                    .init(name: "message", value: .string("Image loaded for visual analysis.")),
+                    .init(name: "path", value: .string(path)),
+                    .init(name: "source_media_type", value: .string(mediaType)),
+                    .init(name: "source_byte_count", value: .number(Double(data.count))),
+                    .init(name: "attachment_reference", value: attachment),
+                ]),
+                dataClasses: [EgressDataClass.files.rawValue],
+                sensitivity: DataSensitivity.private.rawValue
+            )
+        } catch {
+            return self.error(call, fileErrorMessage(error))
         }
     }
 
@@ -113,7 +186,7 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             return error(call, "Shell command cancelled before execution.")
         }
 
-        let timeout = boundedInteger(arguments["timeout"], default: 120, range: 1...600)
+        let timeout = boundedInteger(arguments["timeout"], default: 900, range: 1...3_600)
         let commandResult = await executeISH(
             executable: "/bin/sh",
             arguments: ["-c", command],
@@ -144,23 +217,28 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
         do {
             let resolved = try files.resolve(path, access: .read)
             let text = try await readText(resolved, context: context)
-            let offset = boundedInteger(arguments["offset"], default: 0, range: 0...Int.max)
+            let offset = boundedInteger(arguments["offset"], default: 1, range: 1...Int.max)
             let requestedLines = boundedInteger(arguments["lines"], default: 0, range: 0...100_000)
             let maxLength = boundedInteger(
                 arguments["max_length"],
-                default: 100_000,
-                range: 1...1_000_000
+                default: 15_000,
+                range: 1...80_000
             )
             var lines = text.split(
                 separator: "\n",
                 omittingEmptySubsequences: false
             ).map(String.init)
-            if offset < lines.count {
-                lines = Array(lines.dropFirst(offset))
+            if (arguments["direction"] as? String)?.lowercased() == "tail" {
+                if requestedLines > 0 {
+                    lines = Array(lines.suffix(requestedLines))
+                }
+            } else if offset <= lines.count {
+                lines = Array(lines.dropFirst(offset - 1))
             } else {
                 lines = []
             }
-            if requestedLines > 0 {
+            if requestedLines > 0,
+               (arguments["direction"] as? String)?.lowercased() != "tail" {
                 lines = Array(lines.prefix(requestedLines))
             }
             var output = lines.joined(separator: "\n")
@@ -193,7 +271,7 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 content,
                 to: resolved,
                 append: arguments["append"] as? Bool ?? false,
-                createDirectories: arguments["create_dirs"] as? Bool ?? true,
+                createDirectories: arguments["create_dirs"] as? Bool ?? false,
                 context: context
             )
             return result(
@@ -228,9 +306,16 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 return error(call, "old_string was not found in \(path).")
             }
             let replaceAll = arguments["replace_all"] as? Bool ?? false
+            let occurrences = text.components(separatedBy: old).count - 1
+            if occurrences > 1, !replaceAll {
+                return error(
+                    call,
+                    "old_string matches \(occurrences) locations in \(path). Provide more context or set replace_all to true."
+                )
+            }
             let replacements: Int
             if replaceAll {
-                replacements = text.components(separatedBy: old).count - 1
+                replacements = occurrences
                 text = text.replacingOccurrences(of: old, with: new)
             } else {
                 replacements = 1
@@ -269,7 +354,7 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
                 throw ProductToolError.notUTF8
             }
             return text
-        case .guestRootfs(let linuxPath):
+        case .guestRootfs(let linuxPath, _):
             let output = await executeISH(
                 executable: "/bin/cat",
                 arguments: [linuxPath],
@@ -308,7 +393,7 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
             } else {
                 try data.write(to: url, options: .atomic)
             }
-        case .guestRootfs(let linuxPath):
+        case .guestRootfs(let linuxPath, _):
             if createDirectories {
                 let parent = (linuxPath as NSString).deletingLastPathComponent
                 let mkdir = await executeISH(
@@ -413,6 +498,19 @@ final class OpenMinisProductToolDispatcher: OpenMinisToolDispatching, @unchecked
         return min(max(candidate, range.lowerBound), range.upperBound)
     }
 
+    private func imageMediaType(_ data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if bytes.starts(with: [0x47, 0x49, 0x46, 0x38]) { return "image/gif" }
+        if bytes.count >= 12,
+           String(bytes: bytes[0..<4], encoding: .ascii) == "RIFF",
+           String(bytes: bytes[8..<12], encoding: .ascii) == "WEBP" {
+            return "image/webp"
+        }
+        return nil
+    }
+
     private func result(
         _ call: HostToolCall,
         value: CanonicalJSONValue,
@@ -472,6 +570,8 @@ private enum TimedISHResult: Sendable {
 
 private enum ProductToolError: Error {
     case fileTooLarge
+    case imageTooLarge
+    case invalidImage
     case notUTF8
     case guestFailure(String)
 
@@ -479,6 +579,10 @@ private enum ProductToolError: Error {
         switch self {
         case .fileTooLarge:
             "File exceeds the 2 MB direct-read limit."
+        case .imageTooLarge:
+            "Image exceeds the configured attachment size limit."
+        case .invalidImage:
+            "File is not a supported image."
         case .notUTF8:
             "File is not valid UTF-8 text."
         case .guestFailure(let message):

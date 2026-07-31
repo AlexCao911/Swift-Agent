@@ -5,7 +5,8 @@ import LocalAgentBridge
 protocol RustAgentSnapshotProviding {
     func snapshot(
         conversationStreamID: String?,
-        modelContextWindow: ModelContextWindowDTO
+        modelContextWindow: ModelContextWindowDTO,
+        supportsImageInput: Bool
     ) async throws -> RunStartSnapshotDTO
 }
 
@@ -32,6 +33,18 @@ protocol RustAgentModelRunPreparing {
     ) async throws
 
     func finishModelRun(runID: String) async
+
+    func supportsImageInput(
+        agentProfileID: String,
+        agentProfileRevisionID: UInt64
+    ) async throws -> Bool
+}
+
+extension RustAgentModelRunPreparing {
+    func supportsImageInput(
+        agentProfileID _: String,
+        agentProfileRevisionID _: UInt64
+    ) async throws -> Bool { false }
 }
 
 @MainActor
@@ -79,7 +92,11 @@ final class RustAgentCoordinator: ObservableObject {
         try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
-            modelContextWindow: window
+            modelContextWindow: window,
+            supportsImageInput: try await models.supportsImageInput(
+                agentProfileID: agentProfileID,
+                agentProfileRevisionID: agentProfileRevisionID
+            )
         )
         try Task.checkCancellation()
         return try await submitRunCommand(
@@ -114,7 +131,11 @@ final class RustAgentCoordinator: ObservableObject {
         try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
-            modelContextWindow: window
+            modelContextWindow: window,
+            supportsImageInput: try await models.supportsImageInput(
+                agentProfileID: agentProfileID,
+                agentProfileRevisionID: agentProfileRevisionID
+            )
         )
         try Task.checkCancellation()
         return try await submitRunCommand(
@@ -149,7 +170,11 @@ final class RustAgentCoordinator: ObservableObject {
         try Task.checkCancellation()
         let snapshot = try await snapshots.snapshot(
             conversationStreamID: conversationStreamID,
-            modelContextWindow: window
+            modelContextWindow: window,
+            supportsImageInput: try await models.supportsImageInput(
+                agentProfileID: agentProfileID,
+                agentProfileRevisionID: agentProfileRevisionID
+            )
         )
         try Task.checkCancellation()
         return try await submitRunCommand(

@@ -218,6 +218,73 @@ struct OpenMinisToolBatchExecutorTests {
         #expect(properties?.contains("full_page") == true)
     }
 
+    @Test
+    func imageToolIsPartOfTheProductCatalog() throws {
+        let provider = try OpenMinisToolDefinitionSnapshotProvider
+            .productDefaults()
+        let definition = provider.definition(named: "read_image")
+
+        #expect(Set(provider.orderedDefinitions.map(\.name)) == [
+            "shell_execute",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "browser_use",
+            "read_image",
+        ])
+        #expect(definition?.requiredFields == ["tool_title", "path"])
+        #expect(
+            definition?.inputSchema
+                .objectValue(forKey: "properties")?
+                .objectKeys?
+                .contains("path") == true
+        )
+    }
+
+    @Test
+    func fileReadUsesOneBasedOffsetsAndTailDirection() async throws {
+        let fixture = try ProductFileToolFixture()
+        defer { fixture.cleanup() }
+        try "one\ntwo\nthree\nfour".write(
+            to: fixture.shared.appendingPathComponent("lines.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let fromSecond = await fixture.execute(
+            toolName: "file_read",
+            arguments: #"{"tool_title":"Read lines","path":"/var/localagent/shared/lines.txt","offset":2,"lines":2}"#
+        )
+        let tail = await fixture.execute(
+            toolName: "file_read",
+            arguments: #"{"tool_title":"Read tail","path":"/var/localagent/shared/lines.txt","direction":"tail","lines":2}"#
+        )
+
+        #expect(fromSecond.result == .string("two\nthree"))
+        #expect(tail.result == .string("three\nfour"))
+    }
+
+    @Test
+    func fileEditRequiresUniqueMatchUnlessReplaceAll() async throws {
+        let fixture = try ProductFileToolFixture()
+        defer { fixture.cleanup() }
+        try "same\nsame".write(
+            to: fixture.shared.appendingPathComponent("duplicate.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = await fixture.execute(
+            toolName: "file_edit",
+            arguments: #"{"tool_title":"Edit file","path":"/var/localagent/shared/duplicate.txt","old_string":"same","new_string":"new"}"#
+        )
+
+        #expect(result.isError)
+        #expect(result.result == .string(
+            "old_string matches 2 locations in /var/localagent/shared/duplicate.txt. Provide more context or set replace_all to true."
+        ))
+    }
+
     private func makeExecutor(
         dispatcher: BatchDispatcherProbe
     ) throws -> OpenMinisToolBatchExecutor {
@@ -226,6 +293,87 @@ struct OpenMinisToolBatchExecutorTests {
             definitions: try OpenMinisToolDefinitionSnapshotProvider.productDefaults()
         )
     }
+}
+
+private struct ProductFileToolFixture {
+    let root: URL
+    let shared: URL
+    let dispatcher: OpenMinisProductToolDispatcher
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        shared = root.appendingPathComponent("shared", isDirectory: true)
+        let guest = root.appendingPathComponent("guest", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: shared,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: guest,
+            withIntermediateDirectories: true
+        )
+        dispatcher = OpenMinisProductToolDispatcher(
+            ish: ProductFileISHStub(),
+            browser: ProductFileBrowserStub(),
+            files: ToolFileResolver(
+                guestRootURL: guest,
+                hostMounts: [
+                    .shared: .init(rootURL: shared, isWritable: true),
+                ]
+            )
+        )
+    }
+
+    func execute(toolName: String, arguments: String) async -> HostToolResult {
+        await dispatcher.execute(
+            HostToolCall(
+                callID: UUID().uuidString,
+                toolName: toolName,
+                argumentsJSON: arguments
+            ),
+            context: OpenMinisToolExecutionContext(
+                batchID: "batch",
+                runID: "run",
+                onProcessStarted: { _ in }
+            )
+        )
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private struct ProductFileISHStub: OpenMinisISHRunning {
+    func execute(
+        executable: String,
+        arguments: [String],
+        stdin: Data?,
+        onProcessStarted: @escaping @Sendable (Int32) async -> Void
+    ) async -> ISHCommandResult {
+        ISHCommandResult(
+            pid: -1,
+            exitCode: 1,
+            stdout: "",
+            stderr: "unused",
+            duration: 0,
+            wasCancelled: false
+        )
+    }
+}
+
+private struct ProductFileBrowserStub: OpenMinisBrowserRunning {
+    func execute(
+        runID: String,
+        argumentsJSON: String
+    ) async -> OpenMinisBrowserExecutionResult {
+        OpenMinisBrowserExecutionResult(value: .string("unused"), isError: true)
+    }
+
+    func finish(runID: String) async {}
 }
 
 private actor BatchDispatcherProbe: OpenMinisToolDispatching {

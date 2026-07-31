@@ -1,9 +1,11 @@
 import CryptoKit
 import Combine
 import Foundation
+import ImageIO
 import LocalAgentBridge
 import LocalAgentLLMContracts
 import LocalAgentLLMHost
+import LocalNativeToolkit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -632,6 +634,113 @@ actor OpenMinisAttachmentRepository: RustReActAttachmentResolving {
         }
     }
 
+    func put(
+        _ data: Data,
+        filename: String,
+        contentType: String
+    ) async throws -> NativeAttachmentStoredBytes {
+        guard data.count <= policy.maximumSingleAttachmentBytes else {
+            throw AttachmentTranscriptReferenceError.tooLarge(filename)
+        }
+        let attachmentID = "att_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let reference = TranscriptAttachmentReferenceDTO(
+            attachmentID: attachmentID,
+            displayName: filename,
+            mediaType: contentType,
+            modality: contentType.hasPrefix("image/") ? "image" : "file",
+            contentDigest: Self.digest(data)
+        )
+        let metadata = StoredMetadata(
+            reference: reference,
+            kind: contentType.hasPrefix("image/") ? .image : .file,
+            imageWidth: nil,
+            imageHeight: nil,
+            byteCount: data.count
+        )
+        guard try repositoryByteCount() + data.count
+            <= policy.maximumRepositoryBytes else {
+            throw AttachmentTranscriptReferenceError.repositoryFull
+        }
+        try data.write(to: dataURL(for: attachmentID), options: .atomic)
+        try encoder.encode(metadata).write(
+            to: metadataURL(for: attachmentID),
+            options: .atomic
+        )
+        return NativeAttachmentStoredBytes(
+            attachmentId: attachmentID,
+            filename: filename,
+            contentType: contentType,
+            byteCount: data.count
+        )
+    }
+
+    func putModelImage(
+        _ data: Data,
+        filename: String,
+        contentType _: String
+    ) async throws -> TranscriptAttachmentReferenceDTO {
+        guard data.count <= policy.maximumSingleAttachmentBytes else {
+            throw AttachmentTranscriptReferenceError.tooLarge(filename)
+        }
+        let image = try Self.rgb8Image(data)
+        guard image.data.count <= policy.maximumSingleAttachmentBytes else {
+            throw AttachmentTranscriptReferenceError.tooLarge(filename)
+        }
+        let attachmentID = "att_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let reference = TranscriptAttachmentReferenceDTO(
+            attachmentID: attachmentID,
+            displayName: filename,
+            mediaType: "image/rgb8",
+            modality: "image",
+            contentDigest: Self.digest(image.data)
+        )
+        let metadata = StoredMetadata(
+            reference: reference,
+            kind: .image,
+            imageWidth: image.width,
+            imageHeight: image.height,
+            byteCount: image.data.count
+        )
+        guard try repositoryByteCount() + image.data.count
+            <= policy.maximumRepositoryBytes else {
+            throw AttachmentTranscriptReferenceError.repositoryFull
+        }
+        try image.data.write(to: dataURL(for: attachmentID), options: .atomic)
+        try encoder.encode(metadata).write(
+            to: metadataURL(for: attachmentID),
+            options: .atomic
+        )
+        return reference
+    }
+
+    func describe(
+        attachmentId: String
+    ) async throws -> NativeAttachmentStoredBytes {
+        let metadata = try decoder.decode(
+            StoredMetadata.self,
+            from: Data(contentsOf: metadataURL(for: attachmentId))
+        )
+        let byteCount = try metadata.byteCount
+            ?? dataURL(for: attachmentId)
+                .resourceValues(forKeys: [.fileSizeKey])
+                .fileSize
+            ?? 0
+        return NativeAttachmentStoredBytes(
+            attachmentId: attachmentId,
+            filename: metadata.reference.displayName,
+            contentType: metadata.reference.mediaType,
+            byteCount: byteCount
+        )
+    }
+
+    func read(attachmentId: String, maxBytes: Int) async throws -> Data {
+        let handle = try FileHandle(
+            forReadingFrom: dataURL(for: attachmentId)
+        )
+        defer { try? handle.close() }
+        return try handle.read(upToCount: max(0, maxBytes)) ?? Data()
+    }
+
     private func repositoryByteCount() throws -> Int {
         try FileManager.default.contentsOfDirectory(
             at: directory,
@@ -686,7 +795,57 @@ actor OpenMinisAttachmentRepository: RustReActAttachmentResolving {
             .map { String(format: "%02x", $0) }
             .joined()
     }
+
+    private static func rgb8Image(_ data: Data) throws -> (
+        data: Data,
+        width: Int,
+        height: Int
+    ) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AttachmentTranscriptReferenceError.invalidImage
+        }
+        let scale = min(1, 2_000 / Double(max(image.width, image.height)))
+        let width = max(1, Int((Double(image.width) * scale).rounded()))
+        let height = max(1, Int((Double(image.height) * scale).rounded()))
+        let rgbaBytesPerRow = width * 4
+        var rgba = Data(count: rgbaBytesPerRow * height)
+        let rendered = rgba.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: rgbaBytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .high
+            context.draw(
+                image,
+                in: CGRect(x: 0, y: 0, width: width, height: height)
+            )
+            return true
+        }
+        guard rendered else {
+            throw AttachmentTranscriptReferenceError.invalidImage
+        }
+        var rgb = Data()
+        rgb.reserveCapacity(width * height * 3)
+        rgba.withUnsafeBytes { buffer in
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            for pixel in stride(from: 0, to: bytes.count, by: 4) {
+                rgb.append(bytes[pixel])
+                rgb.append(bytes[pixel + 1])
+                rgb.append(bytes[pixel + 2])
+            }
+        }
+        return (rgb, width, height)
+    }
 }
+
+extension OpenMinisAttachmentRepository: NativeAttachmentByteStore {}
+extension OpenMinisAttachmentRepository: OpenMinisImageAttachmentStoring {}
 
 private extension TranscriptAttachmentReferenceDTO {
     func matches(_ reference: HostAttachmentReference) -> Bool {
@@ -705,6 +864,7 @@ private enum AttachmentTranscriptReferenceError: LocalizedError {
     case repositoryFull
     case identityConflict(String)
     case digestMismatch(String)
+    case invalidImage
 
     var errorDescription: String? {
         switch self {
@@ -720,6 +880,8 @@ private enum AttachmentTranscriptReferenceError: LocalizedError {
             "Attachment \(attachmentID) conflicts with stored content"
         case let .digestMismatch(attachmentID):
             "Attachment \(attachmentID) failed its content digest check"
+        case .invalidImage:
+            "Attachment is not a decodable image"
         }
     }
 }

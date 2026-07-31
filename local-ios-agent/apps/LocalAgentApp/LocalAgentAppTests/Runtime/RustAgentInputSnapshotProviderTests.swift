@@ -101,6 +101,31 @@ final class RustAgentInputSnapshotProviderTests: XCTestCase {
         XCTAssertNotEqual(first.snapshotDigest, second.snapshotDigest)
     }
 
+    func testReadImageIsExposedOnlyForMultimodalRuns() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let provider = RustAgentInputSnapshotProvider(
+            promptDocuments: fixture.promptStore,
+            skills: fixture.skillStore
+        ) {
+            try OpenMinisToolDefinitionSnapshotProvider.productDefaults()
+        }
+
+        let textOnly = try await provider.snapshot(
+            conversationStreamID: "text",
+            modelContextWindow: modelWindow,
+            supportsImageInput: false
+        )
+        let multimodal = try await provider.snapshot(
+            conversationStreamID: "vision",
+            modelContextWindow: modelWindow,
+            supportsImageInput: true
+        )
+
+        XCTAssertFalse(textOnly.orderedToolDefinitions.map(\.name).contains("read_image"))
+        XCTAssertTrue(multimodal.orderedToolDefinitions.map(\.name).contains("read_image"))
+    }
+
     private func makeFixture() throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
