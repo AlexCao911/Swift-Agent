@@ -175,9 +175,12 @@ service, manager, facade, or registry.
 
 The target remains one Rust crate. These six names are structural module roots,
 not decorative facades and not a request for six packages or a trait per box.
-At the Phase 2 Core convergence gate, the 23 current public roots have a closed
-disposition and `lib.rs` exposes only these six roots; legacy root re-exports do
-not satisfy the gate.
+At the Phase 2 Core-shape gate, every one of the 23 current public roots has an
+explicit moved/private/deleted disposition and `lib.rs` exposes only these six
+roots; legacy root re-exports do not satisfy the gate. The old Builder may still
+exist at that point only as the single production implementation, private under
+`profile`, until its Phase 3 replacement. Phase 2 therefore closes the public
+Core shape without pretending the Phase 3 Builder deletion has already happened.
 
 ### 5.1 Rust Core boundaries
 
@@ -1325,8 +1328,9 @@ are deletion/consolidation candidates, not an unconditional bulk delete:
 - `run_snapshot` binding/preparation abstractions superseded by the flat profile
   and Run snapshot;
 - host-binding and preparation sagas after current production routes use the
-  direct model/tool contract; required legacy profile import remains owner-
-  private under the minimum-schema policy;
+  direct model/tool contract; only a reader required by a named
+  `supported_upgrade` row remains owner-private under `storage` or `profile`
+  until that row's support window closes;
 - the current global-one Run lease, after per-conversation exclusion, the
   five-slot product admission counter, and attested resource tokens become
   production-authoritative;
@@ -1340,15 +1344,17 @@ are deletion/consolidation candidates, not an unconditional bulk delete:
 
 ### 15.1 Current 23 roots to final 6
 
-This is a P0 architecture gate, not optional cleanup. The disposition ledger is
-exhaustive. “Private” means nested below one owner; it does not remain a public
-compatibility root or re-export.
+This is the cumulative P0 disposition ledger, not optional cleanup. Public-root
+ownership closes in Phase 2, transitional Builder deletion closes in Phase 3,
+and the complete ledger is verified at the Phase 5 global gate. “Private” means
+nested below one owner; it does not remain a public compatibility root or
+re-export.
 
 | Current public root | Final disposition |
 | --- | --- |
 | `agent_input` | `engine::input`; snapshot-owned profile values remain in `profile` |
 | `agent_loop` | `engine`; this is the only surviving production ReAct loop |
-| `agent_package` | Delete installer/export/lockfile/upgrade surface after migration |
+| `agent_package` | Delete installer/export/lockfile/upgrade root in Phase 3; if a named supported schema needs decoding, move only its smallest reader under private `profile` migration until that support window closes |
 | `app_service` | Thin composition moves into `ffi`; delete general application service |
 | `canonical_digest` | Private owner-local digest helpers; no public root |
 | `context` | `engine::context` |
@@ -1359,7 +1365,7 @@ compatibility root or re-export.
 | `host_adapter` | `host` |
 | `llm_contracts` | `host::transport`; keep envelopes/receipts/epochs, delete binding/preparation saga |
 | `memory` | Minimal `engine::memory` interface only; delete concrete unused backends |
-| `migration` | Private `storage::migration` plus `profile` legacy import command |
+| `migration` | For named supported rows only, private `storage::migration` plus `profile` legacy import command; otherwise delete |
 | `prompt` | Immutable documents/revisions in `profile`; assembly/budget contribution in `engine::context` |
 | `protocol` | Delete generic plugin/binding/instance registries; retained wire contracts live in `host::transport` |
 | `run_snapshot` | Freeze/retention moves to `profile`; consumption moves to `engine`; delete staging/resolver graph |
@@ -1377,12 +1383,55 @@ inversion from surviving under new names.
 
 ### 15.2 Persisted-data migration gate
 
-Existing installations may contain published Agent revisions, Swift model
-targets/host bindings, Swift Prompt documents, and conversations that were
-previously resolved through a shell-global Agent. Those stores cannot be
-deleted merely because the target model is simpler.
+Migration is an obligation only for data schemas that a real distributed build
+promised to preserve. Existing migration code, tests, fixtures,
+`MARKETING_VERSION`, or a developer database do not by themselves create that
+obligation.
 
-Before removing their readers, one idempotent migration must:
+#### Phase 0 support decision
+
+Before any compatibility reader or migration task is planned, Phase 0 produces
+one checked-in support decision table with a row for every persisted Rust and
+Swift store/schema family:
+
+| Required evidence | Classification | Allowed convergence action |
+| --- | --- | --- |
+| Identified App Store, TestFlight, enterprise/internal release, or another explicitly supported distributed build and its on-disk schema | `supported_upgrade` | Implement the smallest one-way migration from exactly the named source versions |
+| Developer-only installation or disposable internal build with no upgrade promise | `development_resettable` | Reset/reseed that store; do not build a legacy business-model translator |
+| Test fixture, generated cache, benchmark seed, or preview data | `fixture_or_generated` | Regenerate or delete it; retain a legacy fixture only when it tests a `supported_upgrade` row |
+
+Each row records distribution/build evidence, store location, source schema
+versions, data owner, classification, retained user-data promise, and chosen
+action. App Store Connect/TestFlight/internal-distribution records or an explicit
+published support policy decide distribution status; repository history alone
+does not. If evidence cannot identify a supported source build and schema, the
+row is not upgraded speculatively.
+
+The repository evidence audited for this design currently contains no Git tag,
+GitHub Release/deployment, archive/upload workflow, signing team, or other
+verifiable distributed App build. The placeholder `1.0 (1)`, existing migration
+code, development-profile seeding, and migration tests are not release evidence.
+The working classification is therefore no supported legacy schema unless
+Phase 0 records an out-of-repository TestFlight, Ad Hoc, enterprise, or manual
+internal distribution with its exact build and schema. If none exists, the
+first converged shipping schema becomes the future compatibility baseline.
+
+Phase 0 must end with one explicit product decision:
+
+- if there are no `supported_upgrade` rows, no old component-graph, binding,
+  Prompt-store, or package migration is implemented; development stores reset
+  and obsolete migration code is deleted with its last caller;
+- if supported rows exist, only those named schemas receive the conditional
+  migration below. There is no generic compatibility framework for hypothetical
+  versions.
+
+#### Conditional migration for supported rows
+
+A supported installation may contain published Agent revisions, Swift model
+targets/host bindings, Swift Prompt documents, and conversations that were
+previously resolved through a shell-global Agent. Only for a named
+`supported_upgrade` row, before removing its reader, one idempotent migration
+must:
 
 1. assign stable legacy-to-new IDs and a schema migration marker;
 2. import each published Agent's name, instructions/Prompt content and order,
@@ -1409,8 +1458,9 @@ Before removing their readers, one idempotent migration must:
    never infer a historical Retry snapshot from current conversation settings.
 
 A validation failure writes no partial new profile for that record and leaves
-the legacy source available for repair. Deletion requires counts and digests to
-match, not merely a new schema-version flag.
+the supported legacy source available for repair. Deletion requires counts and
+digests to match, not merely a new schema-version flag. Development-resettable
+and fixture/generated rows never enter this migration path.
 
 For each candidate:
 
@@ -1429,24 +1479,57 @@ evidence is forbidden.
 
 Migration readers are not a second production writer or Agent path. After a
 record migrates, all writes/runs use the six-boundary implementation. Until the
-minimum-schema window closes, remaining readers stay private under `storage` or
-`profile` and expose no legacy public root/FFI product operation.
+support table's minimum-schema window closes, remaining readers stay private
+under `storage` or `profile` and expose no legacy public root/FFI product
+operation.
 
-### 15.3 Slimming completion gate
+### 15.3 Staged slimming gates
 
-Architecture slimming is complete only when all of the following are true:
+The phases intentionally have different completion gates. Passing an earlier
+gate never claims that a later deletion has already happened.
+
+#### Phase 2 Core-shape gate
+
+Phase 2 is complete when:
 
 - `lib.rs` has exactly the six public roots in Section 5 and no legacy public
   re-export facade;
 - a checked import allowlist is acyclic and has zero forbidden edges;
-- all 23 rows in Section 15.1 have a closed disposition;
-- `agent_package`, generic `protocol`, component graph/catalog/version,
-  publish/review/readiness, legacy binding/preparation, old `RunMachine`, and old
-  Agent execution paths have zero production references and no public root;
-- there is exactly one `ProfileService`, one production Agent loop, one
-  canonical conversation store/path, and one Host transport path;
-- every Agent/profile/config write reaches `ProfileService`; direct store writes
-  and old build/publish/rebind/preparation FFI operations have zero callers;
+- all 23 rows in Section 15.1 have a closed public-root disposition;
+- there is exactly one production Agent loop, one canonical conversation
+  store/path, and one Host transport path; old `execution`/`RunMachine` cannot
+  accept a production Run;
+- any still-live old Builder is the sole production Builder, is private under
+  `profile`, and has no simultaneous flat `ProfileService` replacement path;
+- the Phase 0 upgrade-support table is complete, so Phase 2 does not preserve
+  speculative migration machinery.
+
+This gate permits `agent_package`, component graph/catalog/version,
+publish/readiness, and legacy binding internals only where the private old
+Builder still requires them. It does not permit them as public roots or as a
+second Agent/Run path.
+
+#### Phase 3 Builder-replacement gate
+
+Phase 3 is complete when:
+
+- there is exactly one production `ProfileService` implementing Section 6.1;
+- every Agent/profile/conversation-config write reaches `ProfileService`;
+- `agent_package`, generic component graph/catalog/version,
+  publish/review/readiness, legacy binding/preparation, old `run_snapshot`, the
+  general `app_service`, and old Builder operations have zero production
+  references and no public or private production path;
+- old build/publish/rebind/preparation FFI operations have zero callers;
+- only migrations for named `supported_upgrade` rows remain, owner-private
+  under `storage` or `profile`; development/fixture compatibility code is gone;
+- no compatibility adapter allows old and new Builders to accept the same
+  operation.
+
+#### Phase 5 global slimming gate
+
+Architecture convergence is complete only when the Phase 2 and Phase 3 gates
+still pass and all of the following are also true:
+
 - Swift Views depend on one Swift Product Facade and never call FFI directly;
 - no migration creates a permanent compatibility abstraction or allows old and
   new implementations to accept the same production operation;
@@ -1456,8 +1539,9 @@ Architecture slimming is complete only when all of the following are true:
   P0/P1 contract test, old implementation deletion, zero-caller evidence, and a
   passing focused suite/shipping build.
 
-Lines deleted are a diagnostic, not the completion metric. The gate is one
-owner and one production path per responsibility.
+Lines deleted are a diagnostic, not the completion metric. Each staged gate is
+one owner and one production path for the responsibilities completed in that
+phase; the Phase 5 gate is the full-project completion claim.
 
 ## 16. Conversation-First Product Experience
 
@@ -1762,8 +1846,15 @@ Time-box this phase and do not repair the old architecture. Produce only:
 - a production/debug/test/build/resource caller matrix for all 23 Rust roots;
 - Swift/Xcode target, source-membership, build-phase, package/framework, and
   resource callers;
+- the per-store/schema upgrade-support decision table from Section 15.2,
+  grounded in actual distribution records and naming every supported upgrade,
+  development reset, and regenerated fixture;
 - one complete ReAct product smoke path and one relaunch/projection replay path;
 - startup, RSS, idle activity, first-turn latency, and binary-size baselines.
+
+No compatibility migration task may enter a later phase until this table is
+accepted. If it contains no `supported_upgrade` row, later phases delete rather
+than rebuild the legacy component/profile/binding migration path.
 
 ### Phase 1: pure deletion
 
@@ -1775,7 +1866,9 @@ where the caller matrix confirms it:
 - duplicate adapters;
 - non-shipping LiteRT paths;
 - unreachable Swift runtime/inline-card UI;
-- unused debug/archive/utility code.
+- unused debug/archive/utility code;
+- zero-caller migration code and legacy fixtures classified resettable or
+  generated by the Phase 0 support decision.
 
 Each deletion remains independently buildable and reversible. Live Builder,
 Run, conversation, Host, and FFI behavior waits for a Phase 2/3 replacement
@@ -1783,12 +1876,12 @@ slice; Phase 1 does not create placeholder facades for it.
 
 ### Phase 2: Rust Core 23 to 6
 
-Make Section 5's six-root dependency graph structural and remove every old
-top-level export according to Section 15.1. A still-live Builder implementation
-may be relocated privately under `profile` as its sole production
-implementation until its Phase 3 replacement slice; it is not re-exported and
-no flat replacement runs beside it. In vertical slices, establish exactly one
-production path for:
+Make Section 5's six-root dependency graph structural, remove every legacy
+top-level export, and satisfy the Phase 2 Core-shape gate in Section 15.3. A
+still-live Builder implementation may be relocated privately under `profile` as
+its sole production implementation until its Phase 3 replacement slice; it is
+not re-exported and no flat replacement runs beside it. In vertical slices,
+establish exactly one production path for:
 
 - mixed text/tool ReAct rounds and one direct Agent loop;
 - Rust-first atomic Run acceptance, post-accept Host attestation, cancellation,
@@ -1806,7 +1899,8 @@ production path for:
 After correctness cutover, move polling to event-driven waits, index recovery,
 bound channels/buffers, and lazy-load heavy runtimes. A slice is incomplete if
 the old `execution`/RunMachine or another legacy root can still accept the same
-production Run.
+production Run. Phase 2 is complete when the Core-shape gate passes; it does not
+claim the private old Builder has been replaced.
 
 ### Phase 3: flat Agent Builder
 
@@ -1817,9 +1911,11 @@ The slices also finish:
 - final ProfileService ownership of Rust Skill selection with Swift-owned
   immutable files;
 - Prompt/Skill revision authoring, retirement, and garbage collection;
-- migration of already-enforced ProductPolicy/source-snapshot/credential
-  commitments from legacy profile stores into the flat profile commands;
-- Builder field errors and persisted-data migration for those revisions.
+- conditional migration of already-enforced ProductPolicy/source-snapshot/
+  credential commitments from legacy profile stores named by a
+  `supported_upgrade` row; development stores reset instead;
+- Builder field errors and any strictly required supported-schema migration for
+  those revisions.
 
 Phase 3 does not postpone any Run-safety field required by Phase 2; it replaces
 the authoring/storage path while preserving the already-shipping runtime
@@ -1829,7 +1925,8 @@ As each real caller moves, delete the corresponding `user_customization`
 component graph/catalog/version, publish/review/readiness, `agent_package`, host
 binding, old `run_snapshot`, and general `app_service` operation in the same
 slice. Save-time field validation replaces the old ceremony; no adapter keeps
-both Builder systems live.
+both Builder systems live. Phase 3 is incomplete until the Builder-replacement
+gate in Section 15.3 passes.
 
 ### Phase 4: Swift conversation-first UIUX
 
@@ -1849,10 +1946,12 @@ both Builder systems live.
 
 ### Phase 5: final cleanup and validation
 
-- Delete the last compatibility adapters allowed by the minimum-supported-
-  schema policy and the final zero-caller implementation remnants.
-- Verify `lib.rs` exposes only six roots and the dependency/caller gates in
-  Section 15.3 pass.
+- Delete compatibility adapters whose Phase 0 support window has closed and the
+  final zero-caller implementation remnants. A smallest owner-private reader
+  still required by a named `supported_upgrade` row may remain until that row's
+  support window closes; it exposes no legacy public root, FFI product
+  operation, writer, or alternate Agent path.
+- Verify the complete Phase 5 global slimming gate in Section 15.3 passes.
 - Run clean-checkout Simulator/device native/rootfs builds.
 - Compare performance with Phase 0 and investigate regressions.
 - Pass the two product paths and focused correctness/UI/accessibility suites.
@@ -1888,13 +1987,15 @@ kept, but these features neither expand nor block the convergence phases.
   recovery, summary checkpointing, and unchanged canonical history;
 - descriptor-only Skills and virtual path safety;
 - Prompt/Skill/source-snapshot reference retention, Skill retirement epoch/
-  zero-reference proof, and legacy derived-Retry backfill;
+  zero-reference proof, and—only for a named supported source schema—legacy
+  derived-Retry backfill;
 - Memory interface recall/completed-turn hooks;
 - indexed process-loss recovery;
 - stable attempt IDs and deduplicated active-path/all-attempt usage across
   fallback, compaction, cancellation, variants, and derived conversations;
-- six-root/import-direction check plus closed disposition of every old public
-  root.
+- Phase 2 six-root/import-direction/no-legacy-public-root check;
+- Phase 3 unique-`ProfileService` and zero-legacy-Builder-reference check;
+- Phase 5 complete disposition-ledger/global-slimming check.
 
 ### 20.2 Focused Swift/C++ suites
 
@@ -1995,9 +2096,12 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     conversation configuration.
 26. Dynamic Type, VoiceOver, keyboard, Reduce Motion, and Stage Manager behavior
     pass focused validation.
-27. Each vertical replacement names the retained implementation, migrates a real
-    production caller, fixes its contract, passes focused tests, deletes the old
-    implementation/export in the same slice, and proves zero callers.
+27. Each vertical replacement—not a structural relocation—names the retained
+    implementation, migrates a real production caller, fixes its contract,
+    passes focused tests, deletes the implementation/export it replaces in the
+    same slice, and proves zero callers. Phase 2 may relocate the sole old
+    Builder privately; the Phase 3 `ProfileService` replacement slice must
+    delete it.
 28. Clean-checkout Simulator and device builds regenerate the required pinned
     iSH/rootfs/native artifacts and preserve required third-party licenses.
 29. The focused suites and two product-level paths pass.
@@ -2014,18 +2118,28 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     variants/derived conversations, and removed after the final reference.
 34. Cross-conversation admission allows independent cloud/local work within the
     five-Run product limit without retaining the current global-one lease.
-35. `lib.rs` exposes exactly `engine`, `conversation`, `profile`, `host`,
-    `storage`, and `ffi`; the checked dependency allowlist is acyclic, all 23 old
-    roots have closed dispositions, and no legacy root re-export remains.
-36. Exactly one `ProfileService`, Agent loop, canonical conversation path, Host
-    transport path, and Swift Product Facade serve production; Views never call
-    FFI directly.
+35. Phase 2 passes when `lib.rs` exposes exactly `engine`, `conversation`,
+    `profile`, `host`, `storage`, and `ffi`; the checked import DAG is valid;
+    every former public root is deleted or privately owned; and only one Agent
+    loop, conversation path, and Host path drives production. The sole old
+    Builder may remain only as a private `profile` implementation.
+36. Phase 3 passes only when the unique `ProfileService` owns every
+    Agent/profile/config write and the old Builder, component/package/binding/
+    preparation, old `run_snapshot`, and obsolete `app_service` paths are
+    deleted with zero production references.
 37. Clear/Delete retain monotonic stream sequences and idempotency receipts,
     reject stale content epochs, and repair old Swift cursors with an explicit
     reset/terminal projection.
 38. Prompt, Skill, attachment, and source Run snapshot assets are physically
     deleted only after every Agent/conversation/Run/derived-history reference is
     gone.
+39. Phase 5 passes only when the complete Section 15.3 global slimming gate
+    passes, including one Swift Product Facade, zero direct View-to-FFI calls,
+    and no permanent migration compatibility abstraction.
+40. Phase 0 records the real supported-upgrade decision for every persisted
+    store/schema. Only named distributed schemas receive a migration;
+    development and generated data reset or regenerate without a speculative
+    legacy translator.
 
 ## 22. Implementation Planning Boundary
 
@@ -2042,6 +2156,9 @@ vertical tasks. It must not:
 - repeat every focused scenario in a giant product integration test.
 
 The first implementation plan should cover Phase 0 and Phase 1 in executable
-detail, then identify the measured gate for Phase 2. Later phases may be split
-into separate plans after the preceding convergence gate is satisfied; the
-target architecture and product semantics in this specification remain shared.
+detail, then identify the Phase 2 Core-shape gate defined in Section 15.3. It
+must not schedule a compatibility migration before the Section 15.2 support
+decision names a real `supported_upgrade` row; with no such row, it schedules
+reset/reseed and deletion instead. Later phases may be split into separate plans
+after the preceding convergence gate is satisfied; the target architecture and
+product semantics in this specification remain shared.
