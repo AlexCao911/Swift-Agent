@@ -77,14 +77,17 @@ For normative precedence:
   facilities, while redesigning the shipping UI around Apple conventions.
 - Make the primary product path conversation-first on both iPhone and iPad.
 - Improve cold start, idle work, memory bounds, recovery queries, and binary size.
-- Remove only code that has a verified replacement and no production, test,
-  debug, resource, or build caller.
+- Remove obsolete code after production, test, debug, resource, and build callers
+  are gone. Require a replacement only for capabilities the product retains;
+  development-only data may follow the explicit reset contract in Section 15.2.
 
 ## 3. Non-Goals
 
 - A second Rust Core, workspace of micro-crates, or new Swift package graph.
 - A component marketplace, dependency graph, component version resolver,
   lockfile, installer, or upgrade planner.
+- Compatibility with any pre-release development database, component graph,
+  binding, package, Prompt store, or fixture.
 - User-configurable Context algorithms, compaction thresholds, security policy,
   or low-level permissions.
 - A generic native plugin loader or runtime dynamic-link system.
@@ -134,19 +137,21 @@ state machine.
 
 ### 4.5 Preserve product behavior through vertical slices
 
-Every removal is preceded by a working replacement and zero-caller evidence.
-Each slice keeps the shipping App buildable and one real conversation path
-usable. Large deletion batches are prohibited.
+Every retained capability has a working replacement before its old path is
+removed. A capability proven unnecessary needs zero-caller evidence or the
+explicit development-data reset—not a ceremonial replacement. Each slice keeps
+the shipping App buildable and one real conversation path usable. Large
+deletion batches are prohibited.
 
 ### 4.6 One production path after every slice
 
-Migration is not a license for old and new implementations to drive production
+Refactoring is not a license for old and new implementations to drive production
 simultaneously. A vertical slice establishes the smallest retained interface,
-migrates one real product caller, fixes the relevant correctness contract,
+moves one real product caller, fixes the relevant correctness contract,
 deletes that caller's old path, and proves zero remaining production callers
-before the next slice starts. Temporary compatibility code may exist only
-inside that slice and is deleted with it; it never becomes another permanent
-service, manager, facade, or registry.
+before the next slice starts. A temporary cutover adapter may exist only inside
+that slice and is deleted with it; it never becomes another permanent service,
+manager, facade, or registry.
 
 ## 5. Target Architecture
 
@@ -385,7 +390,7 @@ Profile service. The conversation facade delegates the profile write to
 `ProfileService` inside the same Rust storage transaction.
 
 `ProfileService` is the sole writer of Agent/profile records and Run profile
-snapshots; its store mutation methods are private. FFI, migration, conversation
+snapshots; its store mutation methods are private. FFI, bootstrap, conversation
 creation, engine, and tests call this surface rather than writing profile tables
 directly. Duplicate and “Save as New Agent” normalize to the commands above;
 Prompt/Skill edits are part of one complete replacement, not independent
@@ -1043,8 +1048,8 @@ Deleting a reusable Agent is blocked if it is the default until another default
 is chosen. Existing conversations need no Agent reference because they own full
 configuration copies. Agent-owned revision references are released, but Prompt/
 Skill/Run revisions are purged only after all Agent, conversation, Run, and
-derived-history references reach zero. Non-secret legacy migration mappings
-remain only while their schema compatibility path is supported.
+derived-history references reach zero. No pre-release legacy mapping survives
+the development-data reset in Section 15.2.
 
 ## 11. Existing Transport and Projection
 
@@ -1289,8 +1294,9 @@ Record Debug and Release measurements for:
   notifications/condition variables plus explicit deadlines.
 - Query indexed incomplete runs during recovery instead of scanning historical
   streams.
-- Gate schema migration by stored schema version rather than replaying work at
-  every launch.
+- Starting with the first shipping schema, gate small forward storage migrations
+  by stored schema version rather than replaying work at every launch; pre-release
+  development stores reset under Section 15.2 instead.
 - Keep projection and streaming channels bounded and nonblocking.
 - Share immutable Prompt, Skill, Tool, and run snapshots instead of repeatedly
   cloning large values.
@@ -1328,9 +1334,7 @@ are deletion/consolidation candidates, not an unconditional bulk delete:
 - `run_snapshot` binding/preparation abstractions superseded by the flat profile
   and Run snapshot;
 - host-binding and preparation sagas after current production routes use the
-  direct model/tool contract; only a reader required by a named
-  `supported_upgrade` row remains owner-private under `storage` or `profile`
-  until that row's support window closes;
+  direct model/tool contract; no pre-release compatibility reader remains;
 - the current global-one Run lease, after per-conversation exclusion, the
   five-slot product admission counter, and attested resource tokens become
   production-authoritative;
@@ -1354,7 +1358,7 @@ re-export.
 | --- | --- |
 | `agent_input` | `engine::input`; snapshot-owned profile values remain in `profile` |
 | `agent_loop` | `engine`; this is the only surviving production ReAct loop |
-| `agent_package` | Delete installer/export/lockfile/upgrade root in Phase 3; if a named supported schema needs decoding, move only its smallest reader under private `profile` migration until that support window closes |
+| `agent_package` | Delete installer/export/lockfile/upgrade root in Phase 3; no compatibility reader remains |
 | `app_service` | Thin composition moves into `ffi`; delete general application service |
 | `canonical_digest` | Private owner-local digest helpers; no public root |
 | `context` | `engine::context` |
@@ -1365,7 +1369,7 @@ re-export.
 | `host_adapter` | `host` |
 | `llm_contracts` | `host::transport`; keep envelopes/receipts/epochs, delete binding/preparation saga |
 | `memory` | Minimal `engine::memory` interface only; delete concrete unused backends |
-| `migration` | For named supported rows only, private `storage::migration` plus `profile` legacy import command; otherwise delete |
+| `migration` | Delete the pre-release legacy translator and FFI surface; future post-release schema steps live privately under `storage` |
 | `prompt` | Immutable documents/revisions in `profile`; assembly/budget contribution in `engine::context` |
 | `protocol` | Delete generic plugin/binding/instance registries; retained wire contracts live in `host::transport` |
 | `run_snapshot` | Freeze/retention moves to `profile`; consumption moves to `engine`; delete staging/resolver graph |
@@ -1381,107 +1385,37 @@ receipts live under `host`. `engine` imports those ports; `host` never imports
 `engine`. This prevents the current `host_adapter -> agent_loop::contracts`
 inversion from surviving under new names.
 
-### 15.2 Persisted-data migration gate
+### 15.2 Development-data reset and first-release baseline
 
-Migration is an obligation only for data schemas that a real distributed build
-promised to preserve. Existing migration code, tests, fixtures,
-`MARKETING_VERSION`, or a developer database do not by themselves create that
-obligation.
+This App has never shipped and has no users. The product decision is therefore
+`supported_upgrade = ∅`: no current Rust or Swift database, component graph,
+binding, package, Prompt store, or test fixture has a compatibility obligation.
+Existing migration code proves only that development schemas changed; it is a
+deletion candidate, not a reason to preserve the old architecture.
 
-#### Phase 0 support decision
+Phase 0 records one short reset inventory so the cutover is deliberate rather
+than a collection of ad hoc deletes:
 
-Before any compatibility reader or migration task is planned, Phase 0 produces
-one checked-in support decision table with a row for every persisted Rust and
-Swift store/schema family:
+| Development data | Convergence action |
+| --- | --- |
+| Rust conversation/profile/runtime databases and old sidecars | Stop all development Runs, delete the stores together, and bootstrap the new schema plus default Agent; write no translator |
+| Swift Provider/model/binding/Prompt metadata | Reset the old business metadata and remove App-owned orphan Keychain references; configure the new model/profile path normally |
+| Projection databases, caches, catalogs, download jobs, and previews | Regenerate; already-downloaded model files may be rediscovered only through the final model repository format |
+| Skill file trees and other source-like developer assets | Re-index when already in the final file format, otherwise manually re-import; do not create a schema compatibility layer |
+| Provider plans, pending interactions, tool-effect records, and Run leases | Terminate development Runs and reset them coherently with canonical Run state so no half-reset effect can resume |
+| Tests, golden databases, and legacy fixtures | Delete or regenerate against the converged schema |
 
-| Required evidence | Classification | Allowed convergence action |
-| --- | --- | --- |
-| Identified App Store, TestFlight, enterprise/internal release, or another explicitly supported distributed build and its on-disk schema | `supported_upgrade` | Implement the smallest one-way migration from exactly the named source versions |
-| Developer-only installation or disposable internal build with no upgrade promise | `development_resettable` | Reset/reseed that store; do not build a legacy business-model translator |
-| Test fixture, generated cache, benchmark seed, or preview data | `fixture_or_generated` | Regenerate or delete it; retain a legacy fixture only when it tests a `supported_upgrade` row |
+The reset happens in the vertical slice that installs the sole replacement
+writer. That slice removes the old startup migration call, translator, FFI
+operation, schema tables, and tests before it completes. Old and new stores do
+not both accept writes, and no temporary reader survives the slice.
 
-Each row records distribution/build evidence, store location, source schema
-versions, data owner, classification, retained user-data promise, and chosen
-action. App Store Connect/TestFlight/internal-distribution records or an explicit
-published support policy decide distribution status; repository history alone
-does not. If evidence cannot identify a supported source build and schema, the
-row is not upgraded speculatively.
-
-The repository evidence audited for this design currently contains no Git tag,
-GitHub Release/deployment, archive/upload workflow, signing team, or other
-verifiable distributed App build. The placeholder `1.0 (1)`, existing migration
-code, development-profile seeding, and migration tests are not release evidence.
-The working classification is therefore no supported legacy schema unless
-Phase 0 records an out-of-repository TestFlight, Ad Hoc, enterprise, or manual
-internal distribution with its exact build and schema. If none exists, the
-first converged shipping schema becomes the future compatibility baseline.
-
-Phase 0 must end with one explicit product decision:
-
-- if there are no `supported_upgrade` rows, no old component-graph, binding,
-  Prompt-store, or package migration is implemented; development stores reset
-  and obsolete migration code is deleted with its last caller;
-- if supported rows exist, only those named schemas receive the conditional
-  migration below. There is no generic compatibility framework for hypothetical
-  versions.
-
-#### Conditional migration for supported rows
-
-A supported installation may contain published Agent revisions, Swift model
-targets/host bindings, Swift Prompt documents, and conversations that were
-previously resolved through a shell-global Agent. Only for a named
-`supported_upgrade` row, before removing its reader, one idempotent migration
-must:
-
-1. assign stable legacy-to-new IDs and a schema migration marker;
-2. import each published Agent's name, instructions/Prompt content and order,
-   selected Skills/Tools, immutable model-target reference, parameters, and
-   optional Memory reference into a validated Rust `AgentProfile` revision;
-3. create a `ConversationAgentConfig` from the last canonical Run identity when
-   it exists, otherwise from an explicitly persisted default Agent—not the first
-   record returned by a registry;
-4. mark a conversation `configuration_repair_required` instead of guessing when
-   neither identity is recoverable;
-5. keep credentials and model targets in Swift and verify every imported target
-   reference resolves without copying secrets;
-6. import Swift Prompt documents through Rust profile commands with content
-   digests, preserving the old store until readback matches;
-7. commit each Agent/conversation migration transactionally and make reruns
-   return the first stored mapping;
-8. keep owner-private migration readers for every on-disk schema allowed by the
-   named minimum-supported-schema/release policy. They may be removed only when
-   that policy no longer permits an installation to upgrade directly from the
-   legacy schema—not after one device happens to migrate successfully;
-9. before source-event purge, backfill derived messages' immutable
-   `source_run_snapshot_ref` from preserved source event identity. If the source
-   cannot be resolved, persist `retry_unavailable_legacy` and expose only Resend;
-   never infer a historical Retry snapshot from current conversation settings.
-
-A validation failure writes no partial new profile for that record and leaves
-the supported legacy source available for repair. Deletion requires counts and
-digests to match, not merely a new schema-version flag. Development-resettable
-and fixture/generated rows never enter this migration path.
-
-For each candidate:
-
-1. name the retained replacement;
-2. migrate one real production caller;
-3. fix the P0/P1 contract for that path and run its focused tests;
-4. delete the old implementation, public export, and obsolete FFI operation in
-   the same slice;
-5. prove production/debug/test/build/resource callers are zero and run the
-   shipping build.
-
-Useful security validation, envelope reliability, migration needed for stored
-user data, and diagnostic measurement code remain even if their file currently
-sits beside obsolete machinery. Directory-level deletion without call-site
-evidence is forbidden.
-
-Migration readers are not a second production writer or Agent path. After a
-record migrates, all writes/runs use the six-boundary implementation. Until the
-support table's minimum-schema window closes, remaining readers stay private
-under `storage` or `profile` and expose no legacy public root/FFI product
-operation.
+The first actually distributed LocalAgent build defines the future compatibility
+baseline. From that point onward, necessary forward storage migrations are
+small, explicit, owner-private steps under `storage`; they never revive the
+component graph, package system, binding saga, or a generic migration framework.
+Security validation, reliable envelopes, effect safety, and diagnostics remain
+because they protect current execution, not because of legacy data.
 
 ### 15.3 Staged slimming gates
 
@@ -1501,8 +1435,8 @@ Phase 2 is complete when:
   accept a production Run;
 - any still-live old Builder is the sole production Builder, is private under
   `profile`, and has no simultaneous flat `ProfileService` replacement path;
-- the Phase 0 upgrade-support table is complete, so Phase 2 does not preserve
-  speculative migration machinery.
+- the Phase 0 development-data reset inventory is complete, and no legacy
+  migration root, FFI operation, or startup path survives speculatively.
 
 This gate permits `agent_package`, component graph/catalog/version,
 publish/readiness, and legacy binding internals only where the private old
@@ -1520,8 +1454,8 @@ Phase 3 is complete when:
   general `app_service`, and old Builder operations have zero production
   references and no public or private production path;
 - old build/publish/rebind/preparation FFI operations have zero callers;
-- only migrations for named `supported_upgrade` rows remain, owner-private
-  under `storage` or `profile`; development/fixture compatibility code is gone;
+- every pre-release legacy reader, translator, migration FFI operation, schema
+  table used only by that path, and compatibility fixture is deleted;
 - no compatibility adapter allows old and new Builders to accept the same
   operation.
 
@@ -1531,11 +1465,11 @@ Architecture convergence is complete only when the Phase 2 and Phase 3 gates
 still pass and all of the following are also true:
 
 - Swift Views depend on one Swift Product Facade and never call FFI directly;
-- no migration creates a permanent compatibility abstraction or allows old and
-  new implementations to accept the same production operation;
+- no pre-release migration or cutover adapter remains, and no old/new
+  implementation pair accepts the same production operation;
 - a retained wrapper has at least two real production callers or is a necessary
   Apple/C/FFI/transport boundary; otherwise it is inlined or deleted;
-- each slice records retained replacement, migrated production caller, relevant
+- each slice records retained replacement, moved production caller, relevant
   P0/P1 contract test, old implementation deletion, zero-caller evidence, and a
   passing focused suite/shipping build.
 
@@ -1829,7 +1763,7 @@ vertical slice with this required shape:
 
 ```text
 retained replacement
--> migrate one production caller
+-> move one production caller
 -> fix the P0/P1 contract for that path
 -> run focused tests
 -> delete the old implementation/export in the same slice
@@ -1846,15 +1780,14 @@ Time-box this phase and do not repair the old architecture. Produce only:
 - a production/debug/test/build/resource caller matrix for all 23 Rust roots;
 - Swift/Xcode target, source-membership, build-phase, package/framework, and
   resource callers;
-- the per-store/schema upgrade-support decision table from Section 15.2,
-  grounded in actual distribution records and naming every supported upgrade,
-  development reset, and regenerated fixture;
+- the development-data reset inventory from Section 15.2, naming every store,
+  source-like asset, coordinated runtime reset, and regenerated fixture;
 - one complete ReAct product smoke path and one relaunch/projection replay path;
 - startup, RSS, idle activity, first-turn latency, and binary-size baselines.
 
-No compatibility migration task may enter a later phase until this table is
-accepted. If it contains no `supported_upgrade` row, later phases delete rather
-than rebuild the legacy component/profile/binding migration path.
+No compatibility migration task enters a later phase. The accepted inventory
+uses reset, reseed, re-index, or manual developer re-import and deletes the
+legacy component/profile/binding migration path.
 
 ### Phase 1: pure deletion
 
@@ -1868,7 +1801,7 @@ where the caller matrix confirms it:
 - unreachable Swift runtime/inline-card UI;
 - unused debug/archive/utility code;
 - zero-caller migration code and legacy fixtures classified resettable or
-  generated by the Phase 0 support decision.
+  generated by the Phase 0 reset inventory.
 
 Each deletion remains independently buildable and reversible. Live Builder,
 Run, conversation, Host, and FFI behavior waits for a Phase 2/3 replacement
@@ -1911,14 +1844,12 @@ The slices also finish:
 - final ProfileService ownership of Rust Skill selection with Swift-owned
   immutable files;
 - Prompt/Skill revision authoring, retirement, and garbage collection;
-- conditional migration of already-enforced ProductPolicy/source-snapshot/
-  credential commitments from legacy profile stores named by a
-  `supported_upgrade` row; development stores reset instead;
-- Builder field errors and any strictly required supported-schema migration for
-  those revisions.
+- coordinated reset/bootstrap of the old profile, Prompt, binding, snapshot,
+  and development runtime stores under Section 15.2;
+- Builder field errors and the first-release profile schema baseline.
 
 Phase 3 does not postpone any Run-safety field required by Phase 2; it replaces
-the authoring/storage path while preserving the already-shipping runtime
+the authoring/storage path while preserving the Phase 2-established runtime
 commitments.
 
 As each real caller moves, delete the corresponding `user_customization`
@@ -1946,11 +1877,9 @@ gate in Section 15.3 passes.
 
 ### Phase 5: final cleanup and validation
 
-- Delete compatibility adapters whose Phase 0 support window has closed and the
-  final zero-caller implementation remnants. A smallest owner-private reader
-  still required by a named `supported_upgrade` row may remain until that row's
-  support window closes; it exposes no legacy public root, FFI product
-  operation, writer, or alternate Agent path.
+- Verify every pre-release migration/cutover adapter was deleted in its owning
+  slice; delete only unrelated final zero-caller remnants. No legacy reader,
+  writer, FFI operation, or fixture remains.
 - Verify the complete Phase 5 global slimming gate in Section 15.3 passes.
 - Run clean-checkout Simulator/device native/rootfs builds.
 - Compare performance with Phase 0 and investigate regressions.
@@ -1986,9 +1915,10 @@ kept, but these features neither expand nor block the convergence phases.
 - model-derived budgets, 70% default policy, tool-output elision, attachment
   recovery, summary checkpointing, and unchanged canonical history;
 - descriptor-only Skills and virtual path safety;
-- Prompt/Skill/source-snapshot reference retention, Skill retirement epoch/
-  zero-reference proof, and—only for a named supported source schema—legacy
-  derived-Retry backfill;
+- Prompt/Skill/source-snapshot reference retention and Skill retirement epoch/
+  zero-reference proof;
+- coordinated development-store reset, clean bootstrap, and absence of old
+  migration/startup/FFI paths;
 - Memory interface recall/completed-turn hooks;
 - indexed process-loss recovery;
 - stable attempt IDs and deduplicated active-path/all-attempt usage across
@@ -2097,7 +2027,7 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
 26. Dynamic Type, VoiceOver, keyboard, Reduce Motion, and Stage Manager behavior
     pass focused validation.
 27. Each vertical replacement—not a structural relocation—names the retained
-    implementation, migrates a real production caller, fixes its contract,
+    implementation, moves a real production caller, fixes its contract,
     passes focused tests, deletes the implementation/export it replaces in the
     same slice, and proves zero callers. Phase 2 may relocate the sole old
     Builder privately; the Phase 3 `ProfileService` replacement slice must
@@ -2135,11 +2065,11 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     gone.
 39. Phase 5 passes only when the complete Section 15.3 global slimming gate
     passes, including one Swift Product Facade, zero direct View-to-FFI calls,
-    and no permanent migration compatibility abstraction.
-40. Phase 0 records the real supported-upgrade decision for every persisted
-    store/schema. Only named distributed schemas receive a migration;
-    development and generated data reset or regenerate without a speculative
-    legacy translator.
+    and no pre-release migration/cutover abstraction.
+40. `supported_upgrade = ∅`. Phase 0 records how every development store and
+    fixture resets, reseeds, re-indexes, or regenerates; no current legacy schema
+    receives a translator. The first distributed schema is the future
+    compatibility baseline.
 
 ## 22. Implementation Planning Boundary
 
@@ -2157,8 +2087,7 @@ vertical tasks. It must not:
 
 The first implementation plan should cover Phase 0 and Phase 1 in executable
 detail, then identify the Phase 2 Core-shape gate defined in Section 15.3. It
-must not schedule a compatibility migration before the Section 15.2 support
-decision names a real `supported_upgrade` row; with no such row, it schedules
-reset/reseed and deletion instead. Later phases may be split into separate plans
-after the preceding convergence gate is satisfied; the target architecture and
-product semantics in this specification remain shared.
+must schedule reset/reseed/re-index/deletion under Section 15.2 and must not
+schedule a pre-release compatibility translator. Later phases may be split into
+separate plans after the preceding convergence gate is satisfied; the target
+architecture and product semantics in this specification remain shared.
