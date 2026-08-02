@@ -1,8 +1,10 @@
 # LocalAgent Architecture Convergence and Conversation-First Product Design
 
-**Status:** Design approved in conversation; written-spec review pending
+**Status:** Design approved in conversation; written-spec revision review pending
 
 **Date:** 2026-08-02
+
+**Last revised:** 2026-08-03
 
 **Product:** `LocalAgentApp` for iPhone and iPad
 
@@ -136,6 +138,16 @@ Every removal is preceded by a working replacement and zero-caller evidence.
 Each slice keeps the shipping App buildable and one real conversation path
 usable. Large deletion batches are prohibited.
 
+### 4.6 One production path after every slice
+
+Migration is not a license for old and new implementations to drive production
+simultaneously. A vertical slice establishes the smallest retained interface,
+migrates one real product caller, fixes the relevant correctness contract,
+deletes that caller's old path, and proves zero remaining production callers
+before the next slice starts. Temporary compatibility code may exist only
+inside that slice and is deleted with it; it never becomes another permanent
+service, manager, facade, or registry.
+
 ## 5. Target Architecture
 
 ```text
@@ -161,8 +173,11 @@ usable. Large deletion batches are prohibited.
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-The target remains one Rust crate. The names above are conceptual ownership
-boundaries, not a requirement to create packages or traits for every box.
+The target remains one Rust crate. These six names are structural module roots,
+not decorative facades and not a request for six packages or a trait per box.
+At the Phase 2 Core convergence gate, the 23 current public roots have a closed
+disposition and `lib.rs` exposes only these six roots; legacy root re-exports do
+not satisfy the gate.
 
 ### 5.1 Rust Core boundaries
 
@@ -213,6 +228,52 @@ boundaries, not a requirement to create packages or traits for every box.
 - Explicit projection-subscription cancellation.
 - No view-specific business logic.
 
+#### Allowed dependency direction
+
+The six target roots form one acyclic dependency graph:
+
+```text
+Swift / C ABI
+      |
+      v
+ffi -> engine, conversation::facade, profile::facade
+       |
+       +-> conversation -> profile value references -> storage
+       +-> profile -------------------------------> storage
+       +-> host -> host-private transport contracts
+
+storage -> SQLite/filesystem/standard-library primitives only
+```
+
+More explicitly:
+
+- `ffi` translates versioned wire DTOs and calls only the three public Rust
+  facades. It does not expose its DTOs to business modules.
+- `engine` orchestrates `conversation`, `profile`, and `host`; none of those
+  modules calls back into `engine`.
+- `conversation` may use immutable profile value references and both
+  `conversation` and `profile` use storage primitives.
+- `host` owns model/tool transport contracts and reliability lifecycle. It does
+  not assemble Prompt/Context or mutate canonical transcript/profile data.
+- `storage` owns transactions and neutral persisted records. It imports no
+  business module and contains no Agent policy.
+
+Reverse edges and cross-layer shortcuts are forbidden. In particular:
+
+- `engine`, `conversation`, and `profile` never depend on Swift/FFI DTOs;
+- `host` never writes transcript/profile state or selects Prompt, Skills, Tools,
+  or models;
+- no new general `core`, `service`, `manager`, registry, or facade is introduced
+  to aggregate the six roots;
+- legacy `execution`/`RunMachine` and the new `engine` may not both accept or
+  drive a production Run.
+
+The final `lib.rs` declares only `engine`, `conversation`, `profile`, `host`,
+`storage`, and `ffi` as top-level module roots. Owner-specific helpers remain
+private below one of those roots; there is no generic `utils` dumping ground.
+A small source-boundary check in CI enforces forbidden imports without adding a
+runtime architecture framework.
+
 ### 5.2 Swift boundaries
 
 Swift keeps one thin product facade, based on the existing
@@ -226,7 +287,8 @@ Swift owns:
 - explicit ordered fallback configuration;
 - iSH/fakefs, virtual host mounts, browser, file/media/native APIs, and tool
   execution policy;
-- Skills upload, enablement, session selection, and virtual-path resolution;
+- Skills file storage, upload/import UI, immutable revision materialization, and
+  virtual-path resolution;
 - local-model download, compatibility, lifecycle, and C++ invocation;
 - bounded transient streaming presentation.
 
@@ -234,6 +296,7 @@ Swift does not own:
 
 - the Agent loop;
 - complete Prompt or Context construction;
+- Agent, conversation, or one-turn Skill selection/enabled state;
 - canonical message mutations;
 - conversation branching semantics;
 - a second provider HTTP implementation;
@@ -254,9 +317,9 @@ lazily and unload according to the existing lifecycle policy.
 | Model target | Swift model store | Immutable target revision | Missing targets put dependent Agents/conversations into repairable state |
 | Reusable Agent | Rust profile store | Agent revision | Delete is blocked or tombstoned while needed for audit; existing conversations keep copies |
 | Conversation Agent config | Rust conversation/profile store | One conversation, versioned | Full replacement; deleted with conversation retention policy |
-| Run snapshot | Rust canonical Run data | One Run, immutable | Retained with Run history/usage; never hot-swapped |
-| Prompt documents | Rust profile store; Swift editor only | Agent or conversation revision | Imported/edited Markdown enters Rust through profile commands; missing/mismatched content fails before execution |
-| Skill files | Swift Skills store | Global asset; selected by Agent/conversation/turn | Rust sees descriptor and virtual path only; file deletion reports unresolved references |
+| Run snapshot | Rust canonical Run data | One Run, immutable; inherited history keeps `source_run_snapshot_ref` | Retained while any source/derived history can Retry; never hot-swapped |
+| Prompt documents | Rust profile store; Swift editor only | Immutable revision referenced by Agent/conversation/Run | Imported/edited Markdown enters Rust through profile commands; physical deletion requires zero live references |
+| Skill files | Swift Skills store; Rust owns all selection references | Immutable global or conversation-local revision selected by Agent/conversation/turn | Swift tombstones visibility; physical deletion requires Rust retirement epoch and zero-reference proof |
 | Tool definitions | Swift executable snapshot validated by Rust | One Run | No independent Rust static OpenMinis catalog |
 | Attachment bytes | Swift managed Attachment Repository | Reference-counted asset shared by turns/variants/derived conversations | Rust stores IDs/verified metadata; bytes purge only after the last reference and retention receipt permit it |
 | Conversation/transcript | Rust event store | Conversation stream | Archive/delete/tombstone and effective history are projected one way |
@@ -294,6 +357,44 @@ The product supplies one useful default Agent. Users may create, duplicate,
 rename, update, delete, and choose another default. Internally, updates create a
 new immutable revision; the UI simply says Save.
 
+`ProfileService` is the only Rust command surface used by the Agent library and
+Builder:
+
+```text
+create_agent(request_id, complete_config)
+duplicate_agent(request_id, source_agent_id, optional_name)
+replace_agent_config(request_id, agent_id, expected_revision, complete_config)
+delete_agent(request_id, agent_id)
+set_default_agent(request_id, agent_id)
+create_conversation_from_agent(request_id, agent_id)
+save_conversation_as_agent(request_id, conversation_stream_id, optional_name)
+```
+
+`complete_config` always contains name and optional purpose, ordered Prompt
+document revisions, selected Skill revisions, selected Tool IDs, model and
+explicit fallback selection, default reasoning, and optional Memory reference.
+Save performs validation once and returns structured field errors directly.
+There is no draft/publish/review/readiness/binding/component-assembly/upgrade
+state between an edit and the next immutable revision. Conversation-only edits
+use the `conversation` facade's single full-replacement command with the same
+complete configuration and `expected_revision`; they do not create another
+Profile service. The conversation facade delegates the profile write to
+`ProfileService` inside the same Rust storage transaction.
+
+`ProfileService` is the sole writer of Agent/profile records and Run profile
+snapshots; its store mutation methods are private. FFI, migration, conversation
+creation, engine, and tests call this surface rather than writing profile tables
+directly. Duplicate and “Save as New Agent” normalize to the commands above;
+Prompt/Skill edits are part of one complete replacement, not independent
+publishable components.
+
+To preserve the dependency direction, `conversation::facade` owns stream/event
+creation and calls `ProfileService.create_conversation_from_agent` inside the
+same neutral storage transaction to materialize the complete
+`ConversationAgentConfig`; `profile` never imports `conversation`. Conversely,
+`save_conversation_as_agent` reads only that stored complete configuration, not
+transcript events.
+
 The initial default is deterministic:
 
 - name `LocalAgent` and a short general-assistant purpose;
@@ -307,6 +408,10 @@ The initial default is deterministic:
 - only bundled Skills marked `default_enabled` in the shipping Skill manifest;
 - the onboarding-selected model, `Auto` reasoning, no fallback, and
   `Memory = None`.
+
+Independently of Agent configuration, the App-global iSH external-network
+setting defaults Off under Section 13. It is never copied into an Agent,
+conversation configuration, or Run snapshot.
 
 Tests snapshot the default filenames, digests, selected capability IDs, and
 policy values so a release cannot silently broaden tool or data access.
@@ -333,23 +438,38 @@ Consequences:
 The canonical configuration stores stable IDs, order, values, and digests, not
 credentials or duplicated binary assets.
 
-### 6.3 Run snapshot
+### 6.3 Accepted intent and complete Run snapshot
 
-At Run start Rust freezes:
+`RunAccepted` first freezes an `AcceptedRunIntent` containing only data and
+commitments available without a Swift `await`:
 
-- the conversation Agent revision;
-- ordered Prompt document content;
-- ordered Skill descriptors;
-- executable Tool definitions (`name`, `description`, JSON schema);
-- selected model, Context window, output reserve, reasoning level, and fallback
-  references;
+- the conversation Agent revision and triggering command/TurnOverrides;
+- ordered user Prompt document revision/content references;
+- a `ProductPolicySnapshot`: policy schema/revision, immutable product safety/
+  runtime Prompt content-addressed bytes/reference and full assembled-system-
+  Prompt digest, Context/compaction algorithm revision and resolved values, and
+  safety/tool-policy revisions;
+- ordered selected Skill revision IDs/digests and expected virtual-location
+  commitments, not file bytes;
+- ordered selected Tool IDs plus expected executable-manifest revision/digest,
+  not a duplicate Rust tool schema catalog;
+- selected model/fallback target references, expected capability/parameter/
+  resource digests, and opaque credential-generation commitments;
+- reasoning level;
 - attachment metadata visible from the effective Context;
 - optional Memory provider reference.
 
-Swift resolves model capabilities, Skill descriptors, and executable Tool
-schemas once for that snapshot. Rust supplies Prompt documents from its profile
-store, validates all resolved inputs, and assembles the request. Neither side
-maintains a second static OpenMinis tool-schema catalog.
+Post-accept Host preparation compare-and-swap resolves those exact commitments:
+Swift materializes immutable Skill descriptors/path map, executable Tool
+definitions (`name`, `description`, JSON schema), model capabilities/window/
+output reserve, Provider plan, and Host resources. Rust supplies Prompt
+documents from `profile`, validates every resolved digest, and atomically
+attaches the attestation as the complete `RunStartSnapshot` with `RunStarted`.
+No Swift call occurs inside the acceptance transaction. A changed/missing Skill
+revision, Tool manifest, model target, credential generation, or policy
+commitment fails that accepted Run; preparation never silently substitutes a
+new revision. Neither side maintains a second static OpenMinis tool-schema
+catalog.
 
 Selected Skill references and Tool IDs are authoritative filters. Swift resolves
 only selected and currently executable entries. In this phase every selected
@@ -363,6 +483,30 @@ send command. They are frozen into that Run but do not rewrite the conversation
 Agent configuration. The reasoning control initializes from the conversation
 default and may retain the user's last draft choice for convenience.
 
+Prompt and Skill revisions are immutable retained assets. Rust transactionally
+tracks references from Agents, conversations, Runs, and derived-history source
+snapshots for Prompt revisions. For Swift-owned Skill bytes, Rust publishes the
+authoritative reference state. Skill deletion first tombstones discoverability;
+then one Rust transaction permanently marks that exact revision/digest
+non-referenceable, rejects future Agent/conversation/turn references, and
+returns a monotonic retention epoch plus zero-reference proof. Only that proof
+allows Swift to delete bytes idempotently. Relaunch reconciles retired-but-not-
+deleted revisions. A transient “not in current live set” snapshot is never
+sufficient. Deleting an Agent or hiding a Skill from the global library cannot
+physically remove a Prompt/Skill revision still referenced by a conversation,
+Run, retry source, or derived conversation.
+
+Historical Retry may use a retained `ProductPolicySnapshot` only when it still
+meets the current mandatory security floor. A later security migration may
+invalidate exact Retry; the UI then disables Retry with an explanation and
+offers `Resend from Here with Updated Policy`. Product upgrades never silently
+mix an old Prompt with a new Context/safety policy under the same snapshot. Run
+snapshots retain/reference-count the exact assembled product/system Prompt bytes
+rather than rebuilding a digest from the current App bundle. Retry also requires
+`canExecute(policy_schema, context_algorithm_revision)`; missing policy assets,
+unsupported old algorithm code, or a policy below the security floor disables
+exact Retry.
+
 ### 6.4 Cross-store model resolution
 
 Provider credentials and immutable model targets remain Swift-owned while Agent
@@ -371,8 +515,12 @@ presented as one cross-database ACID transaction or a host-binding saga.
 
 The sequence is:
 
-1. Swift validates/saves a Provider and immutable model target;
-2. Swift passes the stable target reference and non-secret capabilities to Rust;
+1. Swift validates/saves a Provider and immutable model target, including
+   non-secret capability/parameter/resource digests;
+2. Swift passes those stable references/digests to Rust; at Send it also includes
+   the current opaque credential-record/generation commitments for every frozen
+   candidate in the submitted target snapshot, without preparing a route or
+   holding a Rust lock;
 3. Rust creates or revises the Agent/conversation configuration;
 4. each Run asks Swift to resolve that frozen reference before generation.
 
@@ -384,34 +532,67 @@ repairable and cannot start a Run until the user selects a replacement. The
 target reference, not a shell-global active Agent or inferred binding order,
 restores conversation identity after relaunch.
 
-### 6.5 Digest-bound run preparation
+### 6.5 One atomic Run acceptance boundary
 
-Removing host-binding/preparation objects does not remove their trust checks.
-They are replaced by one narrow, idempotent prepare/accept handshake keyed by a
-Swift-created `submission_id` that exists before a Rust `run_id`.
+Run acceptance is Rust-first. There is no Swift-first prepared Run and no
+cross-store `PendingSubmission` state machine.
 
-Rust sends only an opaque immutable model-target reference, expected target and
-parameter/capability digests, conversation configuration revision, and request
-identity. Swift resolves the target privately and validates:
+Swift creates `submission_id` for immediate Send/Stop identity and sends one
+idempotent command. In one short Rust storage transaction, before any Swift
+`await` or model/tool effect, Rust:
 
-- exact target ID/revision and host-process epoch;
-- model capability and parameter schema/digest;
-- credential kind, current credential generation/lease, and secure availability;
-- provider retention and egress policy;
-- modality/attachment support and execution readiness.
+1. checks `(conversation_stream_id, request_id)`, `submission_id`, content
+   epoch, and expected conversation configuration revision;
+2. rejects an existing per-conversation active Run or unavailable five-Run
+   product slot;
+3. allocates `run_id`, freezes `AcceptedRunIntent`—including opaque
+   per-candidate credential-generation commitments supplied by the immutable
+   Swift target snapshot—and stores the submission-to-Run mapping;
+4. acquires the per-conversation/product reservations and atomically applies the
+   triggering transcript command—including the submitted user turn,
+   attachments, and `TurnOverrides` for Send—plus `RunAccepted`
+   (`accepted_preparing`).
 
-Swift returns a non-secret `RunStartAttestation` containing matching opaque
-identity/digests, host epoch, and generic capability/policy claims. Base URL,
-codec details, headers, credential values, and credential-generation material
-remain Swift-private. Rust validates the attestation before the first model
-request and binds the accepted `run_id` to `submission_id`.
+A preaccept idempotency/epoch/revision/capacity rejection writes neither the
+transcript mutation nor a Run and leaves the Swift draft intact.
 
-Preparation is idempotent. Before Rust acceptance, Stop cancels by
-`submission_id` and Swift releases the prepared route. After acceptance, Stop
-resolves the exact `run_id`; Coordinator cancellation requests do not release
-the route early, and host `CloseSession` is the single post-accept cleanup
-owner. Relaunch reconciliation closes unattached prepared routes and rejects
-attestations from an old host epoch.
+That transaction is the only acceptance boundary. No storage/conversation lock
+is held across a Swift call. After it commits, `engine` asks `host` through the
+existing reliable envelope transport to prepare the exact frozen target. Swift
+privately resolves and validates:
+
+- exact target ID/revision, parameter/capability digests, resource identity,
+  and current host-process epoch;
+- every selected Skill revision/digest/path-map commitment and executable Tool
+  manifest/schema digest;
+- model capability and execution readiness;
+- credential record ID, exact credential generation, kind, and secure
+  availability;
+- Provider retention/egress policy and modality/attachment support.
+
+Swift freezes a non-secret `ProviderRunPlan` plus credential record ID and
+generation, acquires the exact target resource token, and returns
+`RunStartAttestation`. Base URL, codec details, headers, and credential bytes
+remain Swift-private. Rust verifies every expected digest and then atomically
+attaches the attestation and appends `RunStarted`. No model request, credential
+encoding, network request, or tool effect may occur before that commit.
+Preparation failure appends `RunFailed`; cancellation appends
+`RunCancelled`. The Rust terminal transaction releases its conversation/product
+reservations exactly once and enqueues an idempotent `CloseSession(run_id)`
+outbox action. Swift `CloseSession` is the sole owner for releasing Swift Host
+resources—Provider plan, target token, credential lease, tool handles, and
+session state—including partial/failed preparation. Startup reconciliation
+repairs either missing half without transferring ownership across languages.
+
+Stop before acceptance writes an idempotent cancellation receipt keyed by
+`submission_id`; a late matching send observes it and never accepts a Run. Once
+accepted, the same submission maps Stop to `run_id`. An accepted-but-not-started
+Run may be claimed once after process loss and prepared again against the new
+host epoch using its frozen target/configuration/policy digests. Any old-epoch
+attestation is rejected. Preparation must compare-and-swap the frozen opaque
+credential-generation commitments; it cannot bind a newer generation during
+recovery. If exact target or credential preparation can no longer succeed,
+recovery writes `RunFailed` rather than silently changing the Run plan.
 
 ## 7. Prompt, Skills, Tools, and Memory
 
@@ -442,9 +623,10 @@ skill-name/
   assets/        optional
 ```
 
-- Every Skill edit creates an immutable Skill revision with a content digest.
-  Existing global or conversation configurations keep their selected revision
-  until explicitly updated.
+- Every Skill edit creates an immutable whole-tree revision whose manifest
+  digest covers `SKILL.md` and every referenced script/reference/asset path and
+  byte digest. Existing global or conversation configurations keep their
+  selected revision until explicitly updated.
 - Run start exposes only ordered descriptors: ID, immutable revision/digest,
   name, description, enabled state, and virtual location.
 - The descriptor count is bounded by one profile policy; the current compatibility
@@ -496,20 +678,57 @@ before dispatch. Multimodal tools are offered only when the selected model and
 runtime snapshot declare the required modality.
 
 Model-visible atomicity does not imply that external effects are rollbackable.
-Before Swift dispatch, Rust durably journals every stable `(run_id, batch_id,
-call_id)` as `planned`; execution receipts advance it through `began`,
-`completed`, or `failed`. Process loss/cancellation converts a `began` call with
-no trustworthy terminal receipt to `uncertain`. The journal is operational
-effect evidence, separate from the model-visible transcript. Only after every
-ordered result validates does Rust atomically commit assistant tool calls and
-tool results to the transcript.
+There is one durable effect ledger, owned by Swift at the execution boundary,
+not a competing Rust journal. The frozen tool manifest classifies a call as
+read-only or effectful; shell, browser, native-write, network, and unknown tools
+are effectful unless a narrower manifest proves otherwise. Before an effectful
+child task performs its first external side effect, Swift transactionally
+persists stable `(run_id, batch_id, call_id)`, arguments digest, tool identity,
+and `began`, then executes. It advances the same record to `completed`,
+`proven_not_applied`, or `uncertain` and returns an opaque receipt ID/digest with
+the ordered result. Only authoritative evidence that no effect crossed the
+boundary may produce `proven_not_applied`; timeout, cancellation, host loss, or
+an error after dispatch is `uncertain` even if Swift caught an error. Read-only
+calls do not pay this durability cost.
 
-Recovery never replays `began` or `uncertain` effects automatically. The Run is
-Interrupted and Conversation Control Center exposes the bounded call metadata,
-status, and native effect receipt so the user can inspect what may have happened.
-The existing Swift native effect ledger remains the execution authority for
-native idempotency; Rust stores its opaque receipt ID/digest rather than creating
-a competing native ledger.
+The ledger wrapper sits in `OpenMinisToolBatchExecutor` immediately before
+dispatcher execution, so shell/file/browser/native paths share it;
+`NativeHostToolDriver` is no longer a second ledger boundary. Its permission and
+pending-interaction records remain distinct safety state. The single effect-
+ledger key/schema includes batch ID and arguments digest, and `host` exposes
+idempotent query/resolve receipts to Rust for startup reconciliation.
+Shipping composition must inject a durable file-backed ledger into the batch
+executor; there is no optional `fileURL:nil`/in-memory fallback outside explicit
+tests. A relaunch test proves the pre-effect record survives process loss.
+
+Before dispatch, Rust transactionally persists a non-transcript
+`PendingToolRound` containing assistant text, ordered calls, stable run/batch/
+call IDs, arguments digests, and an outbox command. It is mandatory correlation
+and reconstruction evidence, never proof that an effect did or did not occur.
+Swift terminal receipts retain the bounded canonical result or an immutable
+result reference/digest. Only after every ordered result and effect receipt
+validates does Rust atomically commit assistant text, tool calls, and tool
+results, then clear the pending round. On recovery, Rust joins
+`PendingToolRound` with Swift receipts by stable call identity: complete
+recoverable results commit once; a `began` call without a trustworthy terminal
+receipt becomes `uncertain`; an unrecoverable non-effectful result interrupts
+the Run without inventing output.
+
+Recovery never replays an uncertain effect. Rust appends a canonical
+stream-level `EffectResolutionRequired` barrier outside variant-path message
+events. Edit/Delete-from-Here cannot hide or tombstone it. Every Run-starting
+command—Send, Edit & Send, Retry, and Resend—rejects until resolution.
+Model-visible Context carries a non-sensitive “outcome uncertain; do not repeat”
+barrier until resolution. Control Center exposes bounded call metadata and the
+native receipt so the user can resolve whether to treat the effect as completed
+or not completed. That explicit resolution becomes a model-visible safety
+contribution on the next Run; it is never fabricated as an ordinary tool result
+and never causes automatic re-execution.
+
+Clear and Branch are rejected while an unresolved effect barrier exists, so a
+new epoch or derived conversation cannot bypass it. Delete may terminalize the
+conversation but retains the minimum non-content effect identity/receipt
+required by the safety policy.
 
 `NativeToolManifest` validation, narrow OS permission gates, and persisted
 `pending_user_interaction` records are retained. Before Photos, Files, scanner,
@@ -552,16 +771,22 @@ for turn in 0..200
   check cancellation
   rebuild current model-visible Context
   compact if policy requires it
-  request one model generation
-  if final text: atomically commit final turn and finish
+  response = request one model generation
+  if response.tool_calls.is_empty():
+    validate and atomically commit assistant final text, then finish
   validate tool calls
   check cancellation before tools
   execute one ordered Swift tool batch
   validate ordered results
-  atomically commit assistant tool calls + all tool results
+  atomically commit assistant text + tool calls + all tool results
 end
 return resumable max-turn terminal outcome
 ```
+
+Assistant text does not imply terminality. A response containing both text and
+tool calls executes the tools and commits that text in the same atomic tool
+round; only a response with no tool calls may become the final assistant turn.
+An empty response with neither text nor tool calls is a model-protocol error.
 
 There is no general Agent state machine. Errors, retry eligibility, fallback,
 cancellation, and tool rounds are ordinary control-flow branches. Necessary
@@ -573,24 +798,27 @@ run concurrently. The target product policy allows at most five simultaneous
 conversation Runs; this is a new convergence target, not a claim about the
 current global-one host implementation.
 
-Admission is target/resource-aware rather than `min(global, host)`. Rust
-atomically acquires one product Run slot and every resource token declared by
-the attested target: cloud routes may expose independent capacities, while a
+Admission is target/resource-aware rather than `min(global, host)`. The Rust
+acceptance transaction acquires the per-conversation guard and one of five
+product Run slots. Post-accept Host preparation acquires the exact attested
+target token: cloud routes may expose independent capacities, while a
 memory-heavy local engine normally exposes one generation token. A local Run
-therefore need not block unrelated cloud Runs, but a second Run using the same
-saturated local resource is rejected before acceptance.
+therefore need not block unrelated cloud Runs.
 
-The product does not hide a queue in this phase. When the fifth product slot or
-a target resource is unavailable, send returns `runtime_capacity_busy` before
-external effects, preserves the composer draft, and shows the running
-conversation/target plus Stop or Retry actions. Tokens release exactly once on
-terminal `CloseSession`; startup reconciliation releases leases whose Run is no
-longer active. Cross-conversation cloud/local concurrency and relaunch tests
-must pass before deleting the current global lease.
+The product does not hide a queue. An unavailable product slot rejects before
+acceptance with `runtime_capacity_busy` and preserves the composer draft. An
+unavailable exact target token is discovered after `RunAccepted`, so that Run
+terminates as `RunFailed(runtime_capacity_busy)` attached to the submitted user
+turn; the draft is not falsely presented as unsent, and UI offers Retry when
+capacity changes. The Rust terminal transaction releases product/conversation
+reservations; Swift `CloseSession` releases exact Host resource tokens. Startup
+reconciliation repairs leases whose Run is no longer active.
+Cross-conversation cloud/local concurrency and relaunch tests must pass before
+deleting the current global lease.
 
 Transcript and variant-path mutations during a Run first request cancellation
-and wait for a terminal outcome; they
-never execute external effects concurrently against the same conversation.
+and wait for a terminal outcome; they never execute external effects
+concurrently against the same conversation.
 Configuration replacement is different: it may commit a next revision while a
 Run is active because the Run already owns a frozen prior snapshot and no
 external effect is replayed.
@@ -598,10 +826,10 @@ external effect is replayed.
 ## 9. Context and Compaction
 
 Context is rebuilt for every model round. Only the Run's Prompt documents,
-Skill descriptors, tool definitions, provider plan, and Agent revision are
-frozen. The current canonical conversation, newly committed tool results,
-budget, attachment set, Memory contributions, and compaction projection are
-recomputed each round.
+Skill descriptors, tool definitions, provider plan, Agent revision, and
+`ProductPolicySnapshot` are frozen. The current canonical conversation, newly
+committed tool results, budget usage, attachment set, Memory contributions, and
+compaction projection are recomputed each round under that frozen policy.
 
 ### 9.1 Model-derived budget
 
@@ -666,13 +894,15 @@ Every durable operation enters Rust first:
 - rename, pin, archive, and delete conversation;
 - replace conversation Agent configuration.
 
-Every command after creation carries `conversation_stream_id` and `request_id`.
-Idempotency is keyed by both. `CreateConversation` instead carries a stable
-local `creation_scope_id` and `request_id`; the first result stores and returns
-the newly allocated `conversation_stream_id`. The same canonical payload returns
-that first result, while a different payload with the same creation or stream
-key returns a conflict. Duplicate Swift/FFI submission cannot create a second
-conversation, append a message, or start another Run.
+Every command after creation carries `conversation_stream_id`, `request_id`, and
+`expected_content_epoch`. Idempotency is keyed by stream/request and the stored
+payload digest; epoch mismatch is a stale-command error, never a new mutation.
+`CreateConversation` instead carries a stable local `creation_scope_id` and
+`request_id`; the first result stores and returns the newly allocated
+`conversation_stream_id`. The same canonical payload returns that first result,
+while a different payload with the same creation or stream key returns a
+conflict. Duplicate or delayed Swift/FFI submission cannot create a second
+conversation, append a message, cross a Clear boundary, or start another Run.
 
 Rust also owns conversation title, archive/delete state, active variant ID, and
 configuration revision so relaunch does not depend on a partially populated
@@ -725,15 +955,19 @@ Committed content is not overwritten in place:
   path. It never leaves an invalid model history.
 - **Branch from Here** creates a separate conversation containing the effective
   history through the anchor and a copy of the source conversation's current
-  Agent configuration. The source remains unchanged and lineage is projected
-  into both conversation details.
+  Agent configuration. Inherited messages retain immutable source event IDs and
+  `source_run_snapshot_ref`; they are not rewritten with an empty/new `run_id`.
+  The source remains unchanged and lineage is projected into both conversation
+  details.
 
 Edit, resend, and retry keep the prior variant path, including its dependent
 suffix, accessible through a small previous/next version control. Explicit
 Branch creates a derived conversation and a new list item; it is not another
 name for a variant path. Retry anchors resolve semantic effective user turns,
 including an edited user variant; they are not limited to raw original
-`UserMessage` events.
+`UserMessage` events. Retry in a derived conversation resolves the inherited
+`source_run_snapshot_ref`; if that retained snapshot is no longer executable,
+only Resend with current conversation settings is offered.
 
 ### 10.4 Durable usage
 
@@ -769,26 +1003,45 @@ usage from displayed text.
   contain the content. It appends a path tombstone and does not claim secure
   erasure of shared ancestors.
 - **Clear Conversation** first cancels/waits for an active Run, then atomically
-  starts a new empty content epoch for the same conversation configuration. It
-  removes every prior message/variant payload, summary checkpoint, Run snapshot,
-  usage record, and projection cursor for that conversation, resets title/search
-  text to `New Conversation`, removes its Swift draft, and decrements attachment
-  references. It is not undoable. Derived conversations remain independent.
-- **Delete Conversation** performs the Clear purge and additionally removes the
-  conversation configuration, metadata, pins, browser workspace, command
-  activity, and Swift projection/draft state.
+  increments `content_epoch` and appends one reset record at the next monotonic
+  stream sequence for the same conversation configuration. That Rust
+  transaction removes the conversation's prior message/variant payload, summary
+  checkpoints, Run/usage ownership, resets canonical title/search text to `New
+  Conversation`, and decrements attachment/Prompt/Skill/source-snapshot
+  references owned by the purged messages/Runs/source links. Prompt/Skill
+  references held by the unchanged `ConversationAgentConfig` remain.
+  Shared immutable assets remain while a derived conversation still references
+  them. Clear is not undoable; derived conversations remain independent.
+- **Delete Conversation** performs the same content purge and additionally
+  removes the conversation configuration, metadata, pins, and other Rust-owned
+  state. Unlike Clear, terminal Delete is allowed with an unresolved effect and
+  retains its minimal safety receipt. The stream ID remains a tombstone and is
+  never reused.
 
-Clear/Delete retain only a non-content receipt containing stream ID, command
-request/digest, deletion epoch, and schema version so retries are idempotent and
-sync/import cannot resurrect the record. Attachment bytes are physically
-removed when the final canonical reference is gone. Native permission/effect
-ledgers retain only the minimum receipt required by their safety contract and no
-transcript/Prompt payload.
+Swift cleanup is not part of the Rust transaction. After applying
+`ProjectionReset`, Swift idempotently removes draft/projection rows from the old
+epoch; after applying the terminal Delete projection it removes remaining local
+conversation state, Browser workspace, and command activity. Failure retries
+locally and can never roll back or reuse the Rust epoch/sequence.
+
+Per-stream `sequence` never resets even when old content payload rows are
+physically purged. Stream metadata retains current epoch, next sequence,
+`minimum_replay_sequence`, the reset/terminal snapshot, and non-content command
+receipts containing stream ID, request/digest, expected/result epoch, and schema
+version. Every mutating command carries `expected_content_epoch`; a stale epoch
+is rejected, and an old request cannot execute again in a new epoch. These
+minimal receipts outlive content deletion so retry/sync/import cannot resurrect
+data. Attachment and immutable revision bytes are physically removed only after
+the final canonical reference is gone. Native permission/effect ledgers retain
+only the minimum receipt required by their safety contract and no transcript/
+Prompt payload.
 
 Deleting a reusable Agent is blocked if it is the default until another default
 is chosen. Existing conversations need no Agent reference because they own full
-copies. Agent-exclusive Prompt revisions are purged; non-secret legacy migration
-mappings remain only while their schema compatibility path is supported.
+configuration copies. Agent-owned revision references are released, but Prompt/
+Skill/Run revisions are purged only after all Agent, conversation, Run, and
+derived-history references reach zero. Non-secret legacy migration mappings
+remain only while their schema compatibility path is supported.
 
 ## 11. Existing Transport and Projection
 
@@ -796,10 +1049,15 @@ No second Rust/Swift protocol is introduced. Logical model/tool calls continue
 through the existing versioned command/event envelopes, IDs, sequences, digests,
 receipts, duplicate detection, process epoch, and resource lifecycle.
 
-Projection uses `(conversation_stream_id, sequence)`, not a global cursor.
-Observation registers before replay, catches up from canonical storage, detects
-gaps, then consumes live wake-ups. Cancellation wakes and unregisters an idle
-listener.
+Projection uses `(conversation_stream_id, content_epoch, sequence)`, not a
+global cursor. Sequence remains monotonic for the life of a stream. Observation
+registers before replay, catches up from canonical storage, detects gaps, then
+consumes live wake-ups. If a Swift cursor predates `minimum_replay_sequence`,
+Rust returns `ProjectionReset(current_epoch, reset_sequence,
+minimum_replay_sequence, reset_snapshot)`; Swift atomically replaces that
+conversation's local rows, installs `reset_sequence` as its cursor, and resumes
+after it instead of treating the purge as an unfillable gap. Cancellation wakes
+and unregisters an idle listener.
 
 Swift persistent feeds cover running conversations plus the currently open
 conversation. With the default five concurrent Runs this is at most six
@@ -832,9 +1090,9 @@ different Agent loop.
 
 ### 12.2 Frozen provider plan
 
-The prepare/accept handshake in Section 6.5 freezes a non-secret
-`ProviderRunPlan` before Rust accepts the Run. The same plan is used for the
-complete ReAct run:
+Host preparation after `RunAccepted` and before `RunStarted`, as defined in
+Section 6.5, freezes a non-secret `ProviderRunPlan`. The same plan is used for
+the complete ReAct run:
 
 - logical model and modality;
 - protocol/codec and Base URL;
@@ -842,15 +1100,22 @@ complete ReAct run:
 - compatible Context window and supported reasoning levels.
 
 Each fallback candidate is a complete immutable route containing its opaque
-target revision, Provider/credential reference, origin/codec class, retention
-mode, capabilities, and resource identity. A group is valid only when every
+target revision, credential-record/generation commitment and use-lease digest,
+origin/codec class, retention mode, capabilities, and resource identity. A
+group is valid only when every
 candidate supports the frozen tool/modality/reasoning contract. Rust budgets
 Context against the smallest compatible window and output reserve in the group.
 Swift-private origin, codec, and credential details remain behind the attested
 route digest rather than being copied into Rust.
 
-Credentials are read from Swift secure storage immediately before each request.
-Changing Settings between tool rounds does not affect the active Run.
+The plan freezes an exact credential record ID and generation. Swift reads the
+secret from secure storage immediately before each request only if that same
+generation still exists. A Settings edit that rotates/replaces it during the
+Run terminates with `credential_changed`; it never silently switches a key,
+route, or fallback candidate, and `credential_changed` itself cannot trigger
+fallback. Provider-authorized OAuth access-token refresh may update secret
+bytes inside the same logical credential generation and lease; account or grant
+replacement creates a new generation.
 
 Fallback index moves only forward. Once candidate B replaces A, later rounds
 start at B and never return to A's stale session. A failed candidate route is
@@ -864,11 +1129,11 @@ or conversation model configuration may add an explicitly ordered group with
 visible priorities; binding IDs, revision IDs, or registry iteration order are
 never interpreted as fallback priority.
 
-Swift removes a Run plan on host `CloseSession`. Before Rust accepts a command,
-the Coordinator may clean failed preparation; after acceptance it only requests
-cancellation and leaves resource cleanup to `CloseSession`. Launch removes
-orphan persisted plans that do not correspond to an active Rust Run, and
-persistence-cleanup errors are surfaced to diagnostics rather than swallowed.
+Swift removes a Run plan on idempotent host `CloseSession`. The Coordinator
+never owns a prepared route before Rust accepts a Run and never removes one
+after acceptance; it only requests cancellation. Launch removes orphan
+persisted plans that do not correspond to an active Rust Run, and persistence-
+cleanup errors are surfaced to diagnostics rather than swallowed.
 
 ### 12.3 Cloud
 
@@ -922,10 +1187,20 @@ readiness. Model loading is lazy.
   checks remain at the execution boundary.
 - API Keys and OAuth tokens never enter iSH files, environment, commands,
   results, Skills, or mounted directories.
-- Raw guest networking remains an independent high-privilege capability. Its
-  risk is disclosed when Linux/network tools are enabled or first used.
-- Command-string matching is not described as a network sandbox. A real guest
-  network policy requires future enforcement at the socket/connect boundary.
+- External guest networking is an independent high-privilege capability and is
+  disabled by default at the iSH network-adapter/socket-connect boundary;
+  loopback required by internal product services remains narrowly allowed. A
+  static App-global Tools & Linux Settings switch enables external networking
+  after one clear disclosure; there is no per-command approval queue. Turning
+  the switch off requires an acknowledged iSH runtime restart that terminates
+  guest processes and closes all existing external sockets before UI reports
+  Off. Narrow loopback is re-established after restart. Network-dependent tools
+  report `guest_network_disabled` while it is off.
+- Command-string matching is never treated as enforcement. Until the real
+  adapter/socket boundary and toggle exist, the product must not claim external
+  guest networking is disabled or expose the enable switch; the convergence
+  slice retains and clearly discloses the current uncontrolled behavior until
+  it is replaced.
 
 Opening Conversation Control Center to inspect Terminal or Browser status does
 not initialize iSH, WebKit pools, a local model, or provider sessions. The
@@ -1044,23 +1319,63 @@ are deletion/consolidation candidates, not an unconditional bulk delete:
 - legacy `core` runtime/session-tree/run-state paths superseded by
   `conversation` and the direct ReAct engine;
 - legacy `execution` planning, the generic Rust/iSH approval queue, and duplicate
-  run lifecycle paths superseded by `agent_loop`, `host`, and native Swift
+  run lifecycle paths superseded by `engine`, `host`, and native Swift
   checks; `NativeToolManifest`, OS permissions, persisted user interaction, and
   the native effect ledger are explicitly retained;
 - `run_snapshot` binding/preparation abstractions superseded by the flat profile
   and Run snapshot;
-- host-binding/profile-migration/preparation sagas after current production
-  routes use the direct model/tool contract;
+- host-binding and preparation sagas after current production routes use the
+  direct model/tool contract; required legacy profile import remains owner-
+  private under the minimum-schema policy;
 - the current global-one Run lease, after per-conversation exclusion, the
   five-slot product admission counter, and attested resource tokens become
   production-authoritative;
 - duplicate conversation repositories, frames, branch readers, wrapper services,
   and debug stores after `ConversationStore` has their required callers;
 - concrete or duplicate Memory implementations without a production backend;
+- the general `app_service` once composition delegates directly through `ffi`
+  to the three facades;
 - old Swift card Builder, Review/Validate/Publish UI, duplicate model/provider
   destinations, route families, and wrappers with no shipping caller.
 
-### 15.1 Persisted-data migration gate
+### 15.1 Current 23 roots to final 6
+
+This is a P0 architecture gate, not optional cleanup. The disposition ledger is
+exhaustive. “Private” means nested below one owner; it does not remain a public
+compatibility root or re-export.
+
+| Current public root | Final disposition |
+| --- | --- |
+| `agent_input` | `engine::input`; snapshot-owned profile values remain in `profile` |
+| `agent_loop` | `engine`; this is the only surviving production ReAct loop |
+| `agent_package` | Delete installer/export/lockfile/upgrade surface after migration |
+| `app_service` | Thin composition moves into `ffi`; delete general application service |
+| `canonical_digest` | Private owner-local digest helpers; no public root |
+| `context` | `engine::context` |
+| `conversation` | `conversation` |
+| `core` | Retained transcript/event IDs move to `conversation`; Run orchestration moves to `engine`; delete legacy runtime/session tree |
+| `execution` | Retained direct-loop logic moves to `engine`, transport lifecycle to `host`, recovery persistence to `storage`; delete planner/RunMachine/approval path |
+| `ffi_bridge` | `ffi` |
+| `host_adapter` | `host` |
+| `llm_contracts` | `host::transport`; keep envelopes/receipts/epochs, delete binding/preparation saga |
+| `memory` | Minimal `engine::memory` interface only; delete concrete unused backends |
+| `migration` | Private `storage::migration` plus `profile` legacy import command |
+| `prompt` | Immutable documents/revisions in `profile`; assembly/budget contribution in `engine::context` |
+| `protocol` | Delete generic plugin/binding/instance registries; retained wire contracts live in `host::transport` |
+| `run_snapshot` | Freeze/retention moves to `profile`; consumption moves to `engine`; delete staging/resolver graph |
+| `security` | Retained cloud/transport policy contracts move to `host`; native permission/effect enforcement stays Swift; delete generic manager/approval queue |
+| `skills` | Descriptor/revision/selection values move to `profile`; Swift keeps files/path resolution |
+| `storage` | `storage` |
+| `tool` | Executable contracts/receipts move to `host`; call/result validation moves to `engine` |
+| `user_customization` | Flat reusable/conversation configuration moves to `profile`; delete component graph/catalog/version/publish/readiness machinery |
+| `utils` | Private owner-local helpers or delete; never a public business root |
+
+`ModelRuntime`, `ToolRuntime`, model/tool request/event DTOs, and transport
+receipts live under `host`. `engine` imports those ports; `host` never imports
+`engine`. This prevents the current `host_adapter -> agent_loop::contracts`
+inversion from surviving under new names.
+
+### 15.2 Persisted-data migration gate
 
 Existing installations may contain published Agent revisions, Swift model
 targets/host bindings, Swift Prompt documents, and conversations that were
@@ -1084,9 +1399,14 @@ Before removing their readers, one idempotent migration must:
    digests, preserving the old store until readback matches;
 7. commit each Agent/conversation migration transactionally and make reruns
    return the first stored mapping;
-8. retain a read-only compatibility path until all records pass validation and
-   the shipping App has completed at least one successful migration/relaunch
-   cycle.
+8. keep owner-private migration readers for every on-disk schema allowed by the
+   named minimum-supported-schema/release policy. They may be removed only when
+   that policy no longer permits an installation to upgrade directly from the
+   legacy schema—not after one device happens to migrate successfully;
+9. before source-event purge, backfill derived messages' immutable
+   `source_run_snapshot_ref` from preserved source event identity. If the source
+   cannot be resolved, persist `retry_unavailable_legacy` and expose only Resend;
+   never infer a historical Retry snapshot from current conversation settings.
 
 A validation failure writes no partial new profile for that record and leaves
 the legacy source available for repair. Deletion requires counts and digests to
@@ -1095,15 +1415,49 @@ match, not merely a new schema-version flag.
 For each candidate:
 
 1. name the retained replacement;
-2. migrate production and focused tests;
-3. prove production/debug/test/build/resource callers are zero;
-4. delete that candidate alone or in a small coherent cluster;
-5. run the affected focused suite and shipping build.
+2. migrate one real production caller;
+3. fix the P0/P1 contract for that path and run its focused tests;
+4. delete the old implementation, public export, and obsolete FFI operation in
+   the same slice;
+5. prove production/debug/test/build/resource callers are zero and run the
+   shipping build.
 
 Useful security validation, envelope reliability, migration needed for stored
 user data, and diagnostic measurement code remain even if their file currently
 sits beside obsolete machinery. Directory-level deletion without call-site
 evidence is forbidden.
+
+Migration readers are not a second production writer or Agent path. After a
+record migrates, all writes/runs use the six-boundary implementation. Until the
+minimum-schema window closes, remaining readers stay private under `storage` or
+`profile` and expose no legacy public root/FFI product operation.
+
+### 15.3 Slimming completion gate
+
+Architecture slimming is complete only when all of the following are true:
+
+- `lib.rs` has exactly the six public roots in Section 5 and no legacy public
+  re-export facade;
+- a checked import allowlist is acyclic and has zero forbidden edges;
+- all 23 rows in Section 15.1 have a closed disposition;
+- `agent_package`, generic `protocol`, component graph/catalog/version,
+  publish/review/readiness, legacy binding/preparation, old `RunMachine`, and old
+  Agent execution paths have zero production references and no public root;
+- there is exactly one `ProfileService`, one production Agent loop, one
+  canonical conversation store/path, and one Host transport path;
+- every Agent/profile/config write reaches `ProfileService`; direct store writes
+  and old build/publish/rebind/preparation FFI operations have zero callers;
+- Swift Views depend on one Swift Product Facade and never call FFI directly;
+- no migration creates a permanent compatibility abstraction or allows old and
+  new implementations to accept the same production operation;
+- a retained wrapper has at least two real production callers or is a necessary
+  Apple/C/FFI/transport boundary; otherwise it is inlined or deleted;
+- each slice records retained replacement, migrated production caller, relevant
+  P0/P1 contract test, old implementation deletion, zero-caller evidence, and a
+  passing focused suite/shipping build.
+
+Lines deleted are a diagnostic, not the completion metric. The gate is one
+owner and one production path per responsibility.
 
 ## 16. Conversation-First Product Experience
 
@@ -1242,11 +1596,16 @@ attachment previews
 - During a Run the user may prepare a next-turn draft, but cannot send it or
   queue a second Run. Stop never deletes that draft.
 
-Drafts are encrypted/local Swift presentation metadata keyed by conversation,
-not transcript events. They include text, managed attachment IDs, requested
-Skill IDs, reasoning choice, and any stashed pre-edit draft. Relaunch restores
-them and list rows receive their draft indicator from this Swift store. Archive
-retains a draft; Clear/Delete removes it.
+Drafts are encrypted/local Swift presentation metadata keyed by
+`(conversation_stream_id, content_epoch)`, not transcript events. They include
+text, managed attachment IDs, requested Skill IDs, reasoning choice, and any
+stashed pre-edit draft. Relaunch renders/sends a draft only when its epoch
+matches the canonical projection; stale drafts are quarantined then purged.
+List rows receive their draft indicator from this Swift store. Archive retains a
+draft; Clear/Delete removes it after the reset/terminal projection. The submitted
+draft clears only after `RunAccepted`; a preaccept rejection preserves it, while
+a postaccept preparation failure remains represented by its canonical user turn
+and terminal failure rather than resurrecting an “unsent” draft.
 
 ### 16.7 Message management
 
@@ -1356,12 +1715,18 @@ hard-coded profile or “first” record when a requested identity is unavailabl
   Change Model.
 - Provider failure after an output-bearing event is terminal and never replayed
   automatically.
+- Host preparation/resource/credential failure after `RunAccepted` commits a
+  visible terminal failure on that submitted turn; it is not presented as an
+  unsent draft and never changes target/credential generation silently.
 - User/Swift/Rust cancellation never triggers fallback.
 - Attachment type/size/storage errors occur before unbounded loading and leave
   the composer draft recoverable.
 - Optional Skill catalog or Memory recall failure reports diagnostics without
   corrupting the transcript.
 - Tool batch identity/order mismatch rejects canonical commit.
+- An uncertain effect places the conversation behind
+  `EffectResolutionRequired`; no retry/resend/automatic loop may cross it until
+  explicit resolution is committed.
 - Projection gaps re-fetch from canonical storage. Slow UI projection never
   blocks the Agent loop.
 - Accepted but not started Runs may be claimed once after process loss. Started
@@ -1374,57 +1739,123 @@ hard-coded profile or “first” record when a requested identity is unavailabl
 
 ## 19. Delivery Sequence
 
-The work is deliberately ordered as the user requested: slim first, optimize
-the Core second, reconnect the simplified product configuration/UI last.
+The order is fixed: minimal evidence, pure deletion, Rust Core convergence,
+flat Builder, Swift UIUX, then final cleanup. Within Phases 2–4, every task is a
+vertical slice with this required shape:
 
-### Phase 0: evidence and safety baseline
+```text
+retained replacement
+-> migrate one production caller
+-> fix the P0/P1 contract for that path
+-> run focused tests
+-> delete the old implementation/export in the same slice
+-> prove zero callers and one remaining production path
+```
 
-- Record build/test, startup, RSS, idle-work, event-scale, and binary-size
-  baselines.
-- Map production/debug/test/resource callers for every deletion candidate.
-- Freeze the current complete ReAct, local/cloud model, tool, projection, and
-  relaunch product paths as regression tests.
+P0/P1 findings are acceptance conditions inside these slices, not reasons to
+create a new framework or dozens of horizontal infrastructure tasks.
 
-### Phase 1: vertical slimming
+### Phase 0: minimal evidence
 
-- Remove only component market/package/upgrade concepts and Swift UI whose
-  callers are already zero.
-- Collapse duplicate conversation wrappers and old Agent execution paths only
-  where the retained canonical store/direct loop already provides the shipping
-  behavior.
-- Inventory production Builder/publish/binding/preparation callers, but defer
-  their deletion until Phase 2 or Phase 3 has installed the flat-profile and UI
-  replacement. “Slim first” does not authorize dependency-inverted stubs.
-- Keep each deletion small, independently buildable, and reversible in Git.
+Time-box this phase and do not repair the old architecture. Produce only:
 
-### Phase 2: Core and performance convergence
+- a production/debug/test/build/resource caller matrix for all 23 Rust roots;
+- Swift/Xcode target, source-membership, build-phase, package/framework, and
+  resource callers;
+- one complete ReAct product smoke path and one relaunch/projection replay path;
+- startup, RSS, idle activity, first-turn latency, and binary-size baselines.
 
-- Establish the six Rust ownership boundaries without creating more crates.
-- Complete flat Agent/conversation profile revision semantics.
-- Complete message variant/branch commands and effective transcript rules.
-- Move polling to event-driven waits, index recovery, bound channels/buffers,
-  and lazy-load heavy runtimes.
-- Finalize model-aware Context/compaction and the minimal Memory interface.
+### Phase 1: pure deletion
 
-### Phase 3: conversation-first Swift product
+Create no replacement framework. Delete only proven zero-caller code, including
+where the caller matrix confirms it:
 
-- Replace current root/navigation and first-launch routing.
-- Implement the default/saved/custom new-conversation flow.
-- Redesign Chat header/composer and message management.
-- Add hierarchical Conversation Control Center.
-- Replace the card Builder and mixed Model Center with Agents, Models,
-  Providers, and lightweight Settings destinations.
-- Keep existing OpenMinis-derived execution facilities behind these new views.
-- Update the migration manifest when retained donor-derived view ownership or
-  migration descriptions change; license provenance remains intact.
+- generic `protocol` plugin machinery;
+- stale mocks and obsolete DTOs;
+- duplicate adapters;
+- non-shipping LiteRT paths;
+- unreachable Swift runtime/inline-card UI;
+- unused debug/archive/utility code.
 
-### Phase 4: cleanup and product validation
+Each deletion remains independently buildable and reversible. Live Builder,
+Run, conversation, Host, and FFI behavior waits for a Phase 2/3 replacement
+slice; Phase 1 does not create placeholder facades for it.
 
-- Remove final zero-caller adapters and obsolete tests/docs from the shipping
-  path.
+### Phase 2: Rust Core 23 to 6
+
+Make Section 5's six-root dependency graph structural and remove every old
+top-level export according to Section 15.1. A still-live Builder implementation
+may be relocated privately under `profile` as its sole production
+implementation until its Phase 3 replacement slice; it is not re-exported and
+no flat replacement runs beside it. In vertical slices, establish exactly one
+production path for:
+
+- mixed text/tool ReAct rounds and one direct Agent loop;
+- Rust-first atomic Run acceptance, post-accept Host attestation, cancellation,
+  and admission;
+- the runtime-critical `AcceptedRunIntent`/`RunStartSnapshot` commitments:
+  ProductPolicy bytes/revision, selected Skill/Tool digests, source Run snapshot
+  references, and per-candidate credential-generation CAS;
+- monotonic sequence/content-epoch Clear/Delete and projection reset;
+- pre-effect Swift ledger receipts and uncertain-effect barriers;
+- one active Run per conversation plus product/target resource admission;
+- one canonical conversation/event/projection path;
+- one reliable Host transport path;
+- model-aware Context/compaction and the minimal Memory interface.
+
+After correctness cutover, move polling to event-driven waits, index recovery,
+bound channels/buffers, and lazy-load heavy runtimes. A slice is incomplete if
+the old `execution`/RunMachine or another legacy root can still accept the same
+production Run.
+
+### Phase 3: flat Agent Builder
+
+Install the unique `ProfileService` commands in Section 6.1 and the simple
+create/duplicate/edit/delete/default/new-conversation/save-as-Agent UI contract.
+The slices also finish:
+
+- final ProfileService ownership of Rust Skill selection with Swift-owned
+  immutable files;
+- Prompt/Skill revision authoring, retirement, and garbage collection;
+- migration of already-enforced ProductPolicy/source-snapshot/credential
+  commitments from legacy profile stores into the flat profile commands;
+- Builder field errors and persisted-data migration for those revisions.
+
+Phase 3 does not postpone any Run-safety field required by Phase 2; it replaces
+the authoring/storage path while preserving the already-shipping runtime
+commitments.
+
+As each real caller moves, delete the corresponding `user_customization`
+component graph/catalog/version, publish/review/readiness, `agent_package`, host
+binding, old `run_snapshot`, and general `app_service` operation in the same
+slice. Save-time field validation replaces the old ceremony; no adapter keeps
+both Builder systems live.
+
+### Phase 4: Swift conversation-first UIUX
+
+- Replace the root with iPhone conversation navigation and iPad adaptive
+  sidebar/Chat/Control Center.
+- Complete Chat header/composer, attachment/Skill/reasoning controls,
+  Send/Stop, and Edit/Resend/Retry/Branch.
+- Complete Agent create/edit, Models/Providers, and the hierarchical
+  Conversation Control Center.
+- Enforce and expose the real iSH external-network default at the socket/adapter
+  boundary and attachment/model capability UI.
+- Route every View through one Swift Product Facade.
+- Delete old tabs, card Builder, Model Center, duplicate ViewModels, and routes
+  as their replacement screen ships.
+- Update the OpenMinis migration manifest when retained donor-derived ownership
+  changes; license provenance remains intact.
+
+### Phase 5: final cleanup and validation
+
+- Delete the last compatibility adapters allowed by the minimum-supported-
+  schema policy and the final zero-caller implementation remnants.
+- Verify `lib.rs` exposes only six roots and the dependency/caller gates in
+  Section 15.3 pass.
 - Run clean-checkout Simulator/device native/rootfs builds.
-- Compare performance metrics with Phase 0 and investigate regressions.
-- Verify the two end-to-end product paths and focused UI/accessibility suites.
+- Compare performance with Phase 0 and investigate regressions.
+- Pass the two product paths and focused correctness/UI/accessibility suites.
 
 Voice, alarms, widgets, extensions, backup, eligible sync, Cron, Hooks, and
 Multi-Agent remain independent future slices. Existing shipping callers may be
@@ -1434,14 +1865,21 @@ kept, but these features neither expand nor block the convergence phases.
 
 ### 20.1 Focused Rust suites
 
-- direct ReAct final/tool paths and 200-turn terminal outcome;
-- command idempotency and one-active-run exclusion;
-- conversation config full-replacement revision conflicts;
+- direct ReAct final, tool-only, mixed text-plus-tool, empty-response, and
+  200-turn terminal paths;
+- Rust-first acceptance transaction, submission cancellation, post-accept Host
+  attestation/start, recovery, and one-active-run exclusion;
+- command idempotency, stale content-epoch rejection, Clear/Delete reset replay,
+  monotonic sequence, and minimum replay handling;
+- unique ProfileService command/write surface and complete-replacement revision
+  conflicts;
 - edit/resend/retry/delete effective transcript semantics;
 - same-conversation variants and separate-conversation branch lineage;
-- retry with original snapshot versus resend with current settings;
-- atomic tool-round persistence, per-call execution-journal recovery, uncertain
-  effect handling, and cancellation races;
+- retry with retained source/ProductPolicy snapshot versus resend with current
+  settings and mandatory security-floor invalidation;
+- atomic tool-round persistence, pre-effect Swift-ledger reconciliation,
+  model-visible uncertain-effect barriers, Clear/Branch bypass rejection, and
+  cancellation races;
 - five-slot/resource-token admission, mixed cloud/local Runs, sixth-send
   rejection, exact release, and relaunch reconciliation;
 - projection replay, gap recovery, idle cancellation, bounded coalescing, and
@@ -1449,29 +1887,42 @@ kept, but these features neither expand nor block the convergence phases.
 - model-derived budgets, 70% default policy, tool-output elision, attachment
   recovery, summary checkpointing, and unchanged canonical history;
 - descriptor-only Skills and virtual path safety;
+- Prompt/Skill/source-snapshot reference retention, Skill retirement epoch/
+  zero-reference proof, and legacy derived-Retry backfill;
 - Memory interface recall/completed-turn hooks;
 - indexed process-loss recovery;
 - stable attempt IDs and deduplicated active-path/all-attempt usage across
-  fallback, compaction, cancellation, variants, and derived conversations.
+  fallback, compaction, cancellation, variants, and derived conversations;
+- six-root/import-direction check plus closed disposition of every old public
+  root.
 
 ### 20.2 Focused Swift/C++ suites
 
 - provider setup, Keychain isolation, explicit fallback order, forward-only
   candidate selection, complete compatible route groups, and cleanup;
-- prepare/accept attestation mismatch and old-epoch rejection, Stop before
-  acceptance, and `CloseSession` ownership after acceptance;
+- accept/prepare/start attestation mismatch, credential-generation change,
+  old-host-epoch recovery, Stop by submission/Run identity, and idempotent
+  `CloseSession` ownership after acceptance;
+- credential rotation after Send/before prepare fails generation CAS and the
+  accepted Run; rotation between rounds terminates without fallback/key switch;
+  same-generation OAuth access-token refresh remains allowed;
 - per-turn cloud disclosure/egress authorization and sealed-request ordering;
 - cloud/local unified model capability filtering;
 - attachment preflight, bounded import, direct-cloud capability gating,
   reference counting, and final-byte deletion;
-- tool-batch cancellation before later chunks and per-run cleanup;
+- tool-batch cancellation before later chunks, ledger coverage immediately
+  before every effectful dispatcher path, durable file-backed relaunch,
+  query/resolve receipts, and per-run cleanup;
 - native manifest/permission gates and pending-interaction relaunch recovery;
-- iSH bounded output and virtual mount security;
+- iSH bounded output and virtual mount security; with external networking off,
+  IPv4/IPv6 TCP/UDP/connect and DNS/non-connect escape paths fail while required
+  loopback remains usable, and toggle restart/existing-socket semantics hold;
 - app launch restoration and projection read-model behavior;
 - onboarding resume, new-conversation scope isolation, Send/Stop, `/` Skills,
   one-turn Skill hints, reasoning capability mapping, draft lifecycle, and
   Control Center navigation;
 - iPhone/iPad size-class navigation and accessibility actions;
+- one Swift Product Facade with zero direct View-to-FFI calls;
 - C++ lazy model lifecycle, streaming, cancellation, and usage.
 
 ### 20.3 Product-level tests
@@ -1498,22 +1949,27 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
 5. The existing reliable host envelopes are retained; no second protocol or
    projection bus exists.
 6. The component marketplace, package upgrade planner, component graph,
-   publish/binding/preparation ceremony, and duplicate business state machines
-   have no shipping path.
+   legacy publish/binding/preparation saga, and duplicate business state
+   machines have no public root or production reference.
 7. A default Agent works immediately; saved Agents are flat and editable.
-8. Every conversation owns an independent copied Agent configuration and a Run
-   freezes one revision.
+8. Every conversation owns an independent complete Agent configuration and a
+   Run freezes its Agent, ProductPolicy, model/credential commitment, Prompt,
+   Skill, Tool, and Context-policy revisions.
 9. Prompt is ordered Markdown assembled only in Rust.
-10. Skills use descriptor-first progressive disclosure and virtual paths.
+10. Skills use descriptor-first progressive disclosure and virtual paths; Rust
+    owns all selection state while Swift owns immutable file revisions and path
+    resolution.
 11. Tools execute as one validated ordered Swift batch; multimodal availability
-    follows model/runtime capabilities.
+    follows model/runtime capabilities, and assistant text accompanying tool
+    calls commits with that tool round rather than ending the Run.
 12. Memory remains a fact-oriented optional interface, never transcript or
     Context storage.
 13. Context rebuilds every round, uses the frozen model window, defaults to an
     approximately 70% compaction policy, bounds transient tool data, and keeps
     canonical history unchanged.
 14. Message edit, resend, retry, delete, variant navigation, and separate
-    conversation branching have deterministic Rust semantics and complete UI.
+    conversation branching have deterministic Rust semantics and complete UI;
+    derived Retry retains an immutable source Run snapshot reference.
 15. Relaunch restores canonical conversation summaries and transcripts before
     live observation.
 16. Streaming projection and tool output are bounded and cannot block the Agent
@@ -1522,8 +1978,9 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     triggered by cancellation.
 18. Cloud requests execute only through `LocalAgentLLMCloud`; credentials remain
     Swift-only and never enter Rust or iSH.
-19. iSH guest-network risk is accurately disclosed and host mounts remain
-    traversal/symlink protected.
+19. iSH external guest networking is disabled by default at the real network
+    boundary, loopback exceptions and toggle semantics are tested, risk is
+    accurately disclosed, and host mounts remain traversal/symlink protected.
 20. Cold/warm start, RSS, idle work, large-event recovery, and binary size are
     measured before and after convergence.
 21. The shipping UI is conversation-first, Apple-adaptive, and contains no
@@ -1538,26 +1995,41 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     conversation configuration.
 26. Dynamic Type, VoiceOver, keyboard, Reduce Motion, and Stage Manager behavior
     pass focused validation.
-27. Each deletion has a named retained replacement, zero-caller evidence, and a
-    passing focused suite/build.
+27. Each vertical replacement names the retained implementation, migrates a real
+    production caller, fixes its contract, passes focused tests, deletes the old
+    implementation/export in the same slice, and proves zero callers.
 28. Clean-checkout Simulator and device builds regenerate the required pinned
     iSH/rootfs/native artifacts and preserve required third-party licenses.
 29. The focused suites and two product-level paths pass.
-30. Run preparation is attested before acceptance, cancellable by submission
-    identity, and cleaned only by the designated preaccept or `CloseSession`
-    owner.
-31. Tool effects have durable per-call evidence; uncertain effects are visible
-    and never automatically replayed.
+30. Run acceptance is one idempotent Rust transaction; post-accept Host
+    preparation is attested before `RunStarted`, performs no model/tool/network
+    effect, Rust releases its own reservations transactionally, and idempotent
+    `CloseSession` exclusively releases Swift Host resources.
+31. Effectful tools persist one Swift-ledger receipt before the effect boundary;
+    only `proven_not_applied` is replayable, while uncertain effects create a
+    visible, model-aware barrier and are never automatically repeated.
 32. Cloud transmission retains exact per-turn disclosure and egress
     authorization before credential encoding or network execution.
 33. Attachment bytes are bounded, capability-gated, reference-counted across
     variants/derived conversations, and removed after the final reference.
 34. Cross-conversation admission allows independent cloud/local work within the
     five-Run product limit without retaining the current global-one lease.
+35. `lib.rs` exposes exactly `engine`, `conversation`, `profile`, `host`,
+    `storage`, and `ffi`; the checked dependency allowlist is acyclic, all 23 old
+    roots have closed dispositions, and no legacy root re-export remains.
+36. Exactly one `ProfileService`, Agent loop, canonical conversation path, Host
+    transport path, and Swift Product Facade serve production; Views never call
+    FFI directly.
+37. Clear/Delete retain monotonic stream sequences and idempotency receipts,
+    reject stale content epochs, and repair old Swift cursors with an explicit
+    reset/terminal projection.
+38. Prompt, Skill, attachment, and source Run snapshot assets are physically
+    deleted only after every Agent/conversation/Run/derived-history reference is
+    gone.
 
 ## 22. Implementation Planning Boundary
 
-The implementation plan must follow the four delivery phases and create small
+The implementation plan must follow the six delivery phases and create small
 vertical tasks. It must not:
 
 - revive the complete OpenMinis app or its navigation as the product;
