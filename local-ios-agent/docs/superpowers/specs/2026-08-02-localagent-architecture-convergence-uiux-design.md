@@ -389,6 +389,11 @@ requests and returns streaming model events and usage. It contains no Agent,
 conversation, Prompt, Skill, Tool, provider-selection, or UI policy. Models load
 lazily and unload according to the existing lifecycle policy.
 
+Android is not part of this phase. The C ABI and wire DTOs remain platform-
+neutral and contain no Apple-specific paths or types. A future Kotlin/JNI host
+may implement the same logical `ModelRuntime` and `ToolRuntime` contracts. This
+does not introduce UniFFI, an Android package, or a second Host now.
+
 ### 5.4 Ownership and lifetime matrix
 
 | Feature | Owner/source of truth | Scope and lifetime | Deletion/reconciliation |
@@ -737,7 +742,7 @@ skill-name/
   selected revision until explicitly updated.
 - Run start exposes only ordered descriptors: ID, immutable revision/digest,
   name, description, enabled state, and virtual location.
-- The descriptor count is bounded by one profile policy; the current compatibility
+- The descriptor count is bounded by one profile policy; the current product
   default is 20, not a constant repeated across layers.
 - Full `SKILL.md` content is never proactively injected.
 - The Agent reads a relevant `SKILL.md` and referenced files through ordinary
@@ -790,21 +795,27 @@ There is one durable effect ledger, owned by Swift at the execution boundary,
 not a competing Rust journal. The frozen tool manifest classifies a call as
 read-only or effectful; shell, browser, native-write, network, and unknown tools
 are effectful unless a narrower manifest proves otherwise. Before an effectful
-child task performs its first external side effect, Swift transactionally
-persists stable `(run_id, batch_id, call_id)`, arguments digest, tool identity,
-and `began`, then executes. It advances the same record to `completed`,
-`proven_not_applied`, or `uncertain` and returns an opaque receipt ID/digest with
-the ordered result. Only authoritative evidence that no effect crossed the
-boundary may produce `proven_not_applied`; timeout, cancellation, host loss, or
-an error after dispatch is `uncertain` even if Swift caught an error. Read-only
-calls do not pay this durability cost.
+call enters dispatcher execution, Swift transactionally persists stable
+`(run_id, batch_id, call_id)`, arguments digest, tool identity, and `began`.
+The state model is deliberately small:
+
+```text
+began -> completed
+began -> uncertain -> acknowledged
+```
+
+Once `began` is durable, the call is considered dispatch-entered and is never
+automatically replayed, even if the process fails before the platform operation
+actually begins. A trustworthy terminal receipt produces `completed`; timeout,
+cancellation, host loss, dispatch error, or a missing terminal receipt produces
+`uncertain`. Read-only calls do not pay this durability cost.
 
 The ledger wrapper sits in `OpenMinisToolBatchExecutor` immediately before
 dispatcher execution, so shell/file/browser/native paths share it;
 `NativeHostToolDriver` is no longer a second ledger boundary. Its permission and
 pending-interaction records remain distinct safety state. The single effect-
 ledger key/schema includes batch ID and arguments digest, and `host` exposes
-idempotent query/resolve receipts to Rust for startup reconciliation.
+idempotent query/acknowledge receipts to Rust for startup reconciliation.
 Shipping composition must inject a durable file-backed ledger into the batch
 executor; there is no optional `fileURL:nil`/in-memory fallback outside explicit
 tests. A relaunch test proves the pre-effect record survives process loss.
@@ -822,20 +833,26 @@ recoverable results commit once; a `began` call without a trustworthy terminal
 receipt becomes `uncertain`; an unrecoverable non-effectful result interrupts
 the Run without inventing output.
 
-Recovery never replays an uncertain effect. Rust appends a canonical
-stream-level `EffectResolutionRequired` barrier outside variant-path message
+Recovery never replays an effectful call after `began`. Rust appends a canonical
+stream-level `EffectAcknowledgementRequired` barrier outside variant-path message
 events. Edit/Delete-from-Here cannot hide or tombstone it. Every Run-starting
-command—Send, Edit & Send, Retry, and Resend—rejects until resolution.
+command—Send, Edit & Send, Retry, and Resend—rejects until acknowledgement.
 Model-visible Context carries a non-sensitive “outcome uncertain; do not repeat”
-barrier until resolution. Control Center exposes bounded call metadata and the
-native receipt so the user can resolve whether to treat the effect as completed
-or not completed. That explicit resolution becomes a model-visible safety
-contribution on the next Run; it is never fabricated as an ordinary tool result
-and never causes automatic re-execution.
+barrier until acknowledgement. Control Center exposes bounded call metadata and
+the effect receipt plus bounded platform evidence so the user can acknowledge
+whether to treat the uncertain effect as completed or not completed. That action
+stores stable `acknowledgement_id`, `acknowledged_as = completed | not_completed`,
+and payload digest, then changes `uncertain` to `acknowledged`, clears the
+barrier, and becomes a model-visible safety contribution on the next Run. The
+same ID/payload returns the first result; a different disposition conflicts. It
+never fabricates an ordinary tool result or replays the prior call. Only an
+explicit user action may acknowledge; neither the model nor Host does so
+automatically. Any later intentional invocation uses a new call ID and ordinary
+user/model control flow.
 
-Clear and Branch are rejected while an unresolved effect barrier exists, so a
-new epoch or derived conversation cannot bypass it. Delete may terminalize the
-conversation but retains the minimum non-content effect identity/receipt
+Clear and Branch are rejected while an unacknowledged effect barrier exists, so
+a new epoch or derived conversation cannot bypass it. Delete may terminalize
+the conversation but retains the minimum non-content effect identity/receipt
 required by the safety policy.
 
 `NativeToolManifest` validation, narrow OS permission gates, and persisted
@@ -1146,9 +1163,9 @@ usage from displayed text.
   them. Clear is not undoable; derived conversations remain independent.
 - **Delete Conversation** performs the same content purge and additionally
   removes the conversation configuration, metadata, pins, and other Rust-owned
-  state. Unlike Clear, terminal Delete is allowed with an unresolved effect and
-  retains its minimal safety receipt. The stream ID remains a tombstone and is
-  never reused.
+  state. Unlike Clear, terminal Delete is allowed with an unacknowledged effect
+  and retains its minimal safety receipt. The stream ID remains a tombstone and
+  is never reused.
 
 Swift cleanup is not part of the Rust transaction. After applying
 `ProjectionReset`, Swift idempotently removes draft/projection rows from the old
@@ -1164,9 +1181,9 @@ version. Every mutating command carries `expected_content_epoch`; a stale epoch
 is rejected, and an old request cannot execute again in a new epoch. These
 minimal receipts outlive content deletion so retry/sync/import cannot resurrect
 data. Attachment and immutable revision bytes are physically removed only after
-the final canonical reference is gone. Native permission/effect ledgers retain
-only the minimum receipt required by their safety contract and no transcript/
-Prompt payload.
+the final canonical reference is gone. Native permission records and the
+universal effect ledger retain only the minimum receipt required by their safety
+contract and no transcript/Prompt payload.
 
 Deleting a reusable Agent is blocked if it is the default until another default
 is chosen. Existing conversations need no Agent reference because they own full
@@ -1457,7 +1474,7 @@ are deletion/consolidation candidates, not an unconditional bulk delete:
 - legacy `execution` planning, the generic Rust/iSH approval queue, and duplicate
   run lifecycle paths superseded by `engine`, `host`, and native Swift
   checks; `NativeToolManifest`, OS permissions, persisted user interaction, and
-  the native effect ledger are explicitly retained;
+  the Swift-owned universal effect ledger are explicitly retained;
 - `run_snapshot` binding/preparation abstractions superseded by the flat profile
   and Run snapshot;
 - host-binding and preparation sagas after current production routes use the
@@ -1888,8 +1905,8 @@ hard-coded profile or “first” record when a requested identity is unavailabl
   corrupting the transcript.
 - Tool batch identity/order mismatch rejects canonical commit.
 - An uncertain effect places the conversation behind
-  `EffectResolutionRequired`; no retry/resend/automatic loop may cross it until
-  explicit resolution is committed.
+  `EffectAcknowledgementRequired`; no retry/resend/automatic loop may cross it
+  until explicit acknowledgement is committed.
 - Projection gaps re-fetch from canonical storage. Slow UI projection never
   blocks the Agent loop.
 - Accepted but not started Runs may be claimed once after process loss. Started
@@ -2102,7 +2119,9 @@ kept, but these features neither expand nor block the convergence phases.
   reference counting, and final-byte deletion;
 - tool-batch cancellation before later chunks, ledger coverage immediately
   before every effectful dispatcher path, durable file-backed relaunch,
-  query/resolve receipts, and per-run cleanup;
+  `began`-without-terminal recovery to `uncertain`, query/acknowledge receipts,
+  acknowledgement idempotency/disposition conflict, no automatic replay after
+  `began`, and per-run cleanup;
 - native manifest/permission gates and pending-interaction relaunch recovery;
 - iSH bounded output and virtual mount security; with external networking off,
   IPv4/IPv6 TCP/UDP/connect and DNS/non-connect escape paths fail while required
@@ -2203,8 +2222,10 @@ Do not recreate a single integration test with dozens of unrelated scenarios.
     effect, Rust releases its own reservations transactionally, and idempotent
     `CloseSession` exclusively releases Swift Host resources.
 31. Effectful tools persist one Swift-ledger receipt before the effect boundary;
-    only `proven_not_applied` is replayable, while uncertain effects create a
-    visible, model-aware barrier and are never automatically repeated.
+    after `began` they are never automatically replayed. Missing trustworthy
+    completion becomes `uncertain`; an idempotent user acknowledgement clears
+    the visible model-aware barrier without replaying the prior call, while a
+    conflicting disposition is rejected.
 32. Cloud transmission retains exact per-turn disclosure and egress
     authorization before credential encoding or network execution.
 33. Attachment bytes are bounded, capability-gated, reference-counted across
@@ -2264,10 +2285,10 @@ Future extension uses only the retained seams:
 | --- | --- |
 | Prompt | Ordered Markdown documents |
 | Skill | File tree, descriptor, and virtual path |
-| Tool | Swift executable manifest plus `ToolRuntime` |
-| Cloud/local model | `ModelRuntime` plus Swift/C++ adapter |
+| Tool | Platform host manifest plus `ToolRuntime` |
+| Model | `ModelRuntime` plus platform/C++ adapter |
 | Memory | `MemoryProvider` |
-| UI | Concrete Swift feature client and ViewModel |
+| UI | Platform-native feature client and ViewModel |
 
 It does not create a plugin registry, component graph, package installer, or
 generic event bus. Cron, Hooks, and Multi-Agent enter later through concrete
