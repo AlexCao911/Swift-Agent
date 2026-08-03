@@ -67,6 +67,15 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Record the resolved device names, OS runtime, and UDIDs in the evidence document before any erase. If either UDID is not an explicitly dedicated test Simulator, stop.
 
+Prime the locked Rust dependency cache once, before Task 1 or any script invokes Cargo:
+
+```bash
+cargo fetch --locked \
+  --manifest-path local-ios-agent/rust-core/Cargo.toml
+```
+
+After this succeeds, keep every explicitly offline Cargo verification under `CARGO_NET_OFFLINE=true`. A clean machine must not discover its missing dependency cache halfway through Phase 0.
+
 ## Evidence Artifact
 
 Phase 0 and Phase 1 maintain one concise ledger:
@@ -111,7 +120,7 @@ rg -n 'builtin-openai-compatible|compiled_list_includes_openai_provider_when_fea
   local-ios-agent/rust-core scripts/ci
 rg -n 'localhost_transport_uses_content_length_and_does_not_wait_for_eof' \
   local-ios-agent/rust-core scripts/ci
-scripts/ci/rust-contract.sh
+CARGO_NET_OFFLINE=true scripts/ci/rust-contract.sh
 ```
 
 Expected:
@@ -296,16 +305,30 @@ Record:
 
 - [ ] **Step 3: Add one exhaustive source-membership assertion**
 
-Extend `ShippingTargetOwnershipTests.swift` with one test that:
+Extend `ShippingTargetOwnershipTests.swift` with one test. Parse the OpenStep plist once with Foundation; do not scan text sections or comments:
 
-1. parses only the `PBXNativeTarget`, `PBXSourcesBuildPhase`, `PBXBuildFile`, `PBXFileReference`, and `PBXGroup` sections;
-2. resolves `LocalAgentApp` and `LocalAgentAppTests` by target name, follows each target's build-phase object IDs to its Sources phase, then resolves every build file through its file-reference ID and the complete parent-group `path` chain;
-3. normalizes those results to project-relative paths, using `<group>` inheritance and `SOURCE_ROOT` relative to the `.xcodeproj` directory; PBX comments and `name` are display metadata, not path identity;
-4. enumerates the App's compilable `.swift`/`.m` files and the test target's `.swift` files as the same project-relative paths;
-5. compares filesystem and PBX path sets separately per target, reporting sorted `missing from target` and `unexpected in target` paths;
-6. rejects the same resolved path appearing twice in one Sources phase, while explicitly allowing equal basenames in different directories or targets.
+```swift
+let data = try Data(contentsOf: projectFileURL())
+let project = try #require(
+    PropertyListSerialization.propertyList(
+        from: data,
+        format: nil
+    ) as? [String: Any]
+)
+let objects = try #require(project["objects"] as? [String: Any])
+```
 
-Use Foundation plus a lightweight section scanner/`NSRegularExpression`; do not add an Xcode project parser dependency or generated manifest. If the project later adopts `PBXFileSystemSynchronizedRootGroup`, fail with an explicit unsupported-format message until the gate is updated. Do not assert basename uniqueness.
+Then the test:
+
+1. filters `objects` by `isa` instead of parsing `PBX* section` text;
+2. resolves `LocalAgentApp` and `LocalAgentAppTests` by `PBXNativeTarget.name`, follows `buildPhases` to the unique `PBXSourcesBuildPhase`, then follows `files → PBXBuildFile.fileRef → PBXFileReference.path`;
+3. builds `child object ID → parent PBXGroup` from every `PBXGroup.children`, then resolves `<group>` paths through parent-group `path` values and resolves `SOURCE_ROOT` from the `.xcodeproj` parent directory;
+4. normalizes with `standardizedFileURL` to project-relative paths; PBX comments and `name` are display metadata and never path identity;
+5. enumerates the App's compilable `.swift`/`.m` files and the test target's `.swift` files as the same project-relative paths;
+6. compares filesystem and PBX path sets separately per target, reporting sorted `missing from target` and `unexpected in target` paths;
+7. rejects the same resolved path appearing twice in one Sources phase, while explicitly allowing equal basenames in different directories or targets.
+
+Use only Foundation and the parsed `objects` dictionary; do not add `NSRegularExpression`, a section scanner, Xcode project parser dependency, or generated manifest. If the project later adopts `PBXFileSystemSynchronizedRootGroup`, fail with an explicit unsupported-format message until the gate is updated. Do not assert basename uniqueness.
 
 - [ ] **Step 4: Run the architecture test**
 
@@ -463,11 +486,13 @@ git commit -m "docs: freeze current product smoke paths"
 **Files:**
 
 - Modify: `local-ios-agent/docs/convergence/phase-0-1-evidence.md`
-- Verify: `local-ios-agent/rust-core/tests/integration/react_loop.rs`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift`
+- Modify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Integration/OpenMinisProductBenchmarkTests.swift`
+- Modify: `local-ios-agent/rust-core/tests/integration/react_loop.rs`
 
 **Time-box:** Complete this task within half an engineer-day. Phase 0 as a whole remains capped at one engineer-day.
 
-**Rule:** Debug proves only that the App builds and launches. All measurements use the Release build. Do not add a benchmark framework, production signpost layer, scale fixture generator, cache, scheduler, or profiling abstraction. Record five raw readings and a median for every Release row; size readings are expected to be identical because they come from one build.
+**Rule:** Debug proves only that the App builds and launches. Runtime measurements use an optimized Release/test-only build or Rust `--release`. Do not add a benchmark framework, production signpost layer, scale fixture generator, cache, scheduler, or profiling abstraction. Record five raw readings and a median for timing/activity rows; read each binary size once from the one Release build.
 
 - [ ] **Step 1: Freeze the small measurement environment**
 
@@ -485,10 +510,10 @@ The Phase 0 metric table has exactly these rows:
 | --- | --- | --- |
 | Debug build and launch | Debug | one smoke result; no timing |
 | Cold App launch | Release | five raw samples and median |
-| Rust runtime initialization | Release | the Rust bridge interval from the same five launch traces and median |
+| Rust runtime initialization | optimized App test using live SQLite runtime | five in-process `ContinuousClock` samples and median |
 | Idle RSS and CPU activity | Release | five raw samples after a fixed settling interval and median |
-| Deterministic first ReAct turn | Rust Release test binary | five raw samples and median |
-| Rust archive, linked App executable, App bundle | Release | five readings and median for each |
+| Deterministic first ReAct turn | Rust `--release` integration test | five in-process `Instant` samples around `AgentLoopService::run` and median |
+| Rust archive, linked App executable, App bundle | Release | one size reading each |
 
 Do not add warm launch, cloud/local request, conversation-count, event-count, iSH, Browser, local-model activation, or SQLite-transaction rows. Those belong to the final store or their owning runtime/provider slice.
 
@@ -554,7 +579,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: one Release build succeeds and replaces the Debug App on the dedicated Simulator.
 
-- [ ] **Step 4: Measure Release cold launch and Rust initialization five times**
+- [ ] **Step 4: Measure Release cold launch five times**
 
 Create five uniquely named App Launch traces:
 
@@ -576,9 +601,79 @@ for SAMPLE in 1 2 3 4 5; do
 done
 ```
 
-Inspect/export the five traces using the same Instruments view. Record total cold-launch duration and the symbol interval rooted at `local_agent_runtime_bridge_new_with_config` for every sample, plus each median. Keep traces outside Git. The Release dSYM must resolve this symbol in all five traces; otherwise Task 6 fails and Phase 0 does not close. Do not omit the required metric or add a new instrumentation layer to work around failed symbolication.
+Inspect/export the five traces using the same Instruments view. Record five total cold-launch durations and their median. Keep traces outside Git. Do not infer the short Rust initialization interval from sampled call stacks.
 
-- [ ] **Step 5: Measure Release idle RSS and CPU activity**
+- [ ] **Step 5: Add and run the scoped Rust initialization measurement**
+
+`OpenMinisProductBenchmarkTests.swift` already depends entirely on Debug-only trace types. Put `#if DEBUG` before its imports and `#endif` after its final declaration so an optimized Release test build excludes that diagnostics-only file without changing shipping code.
+
+Append this second suite to the existing, already-targeted `RustRuntimeAppIntegrationTests.swift`:
+
+```swift
+@Suite("Phase 0 runtime initialization baseline")
+struct PhaseZeroRuntimeInitializationBaselineTests {
+    @Test("live Rust SQLite initialization records five scoped samples")
+    func measuresFiveFreshSQLiteInitializations() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let clock = ContinuousClock()
+        var samples: [Int64] = []
+        for index in 0..<5 {
+            let configuration = RustRuntimeConfiguration(
+                hostProcessEpoch: try HostProcessEpoch.generate(),
+                store: .sqlite(
+                    path: root.appending(path: "runtime-\(index).sqlite").path
+                ),
+                agentOS: RustAgentOSConfiguration(seedDevelopmentProfile: true)
+            )
+            var client: RustRuntimeClient?
+            let started = clock.now
+            client = try RustRuntimeClient(configuration: configuration)
+            let elapsed = started.duration(to: clock.now)
+            #expect(client != nil)
+            client = nil
+
+            let value = nanoseconds(elapsed)
+            #expect(value > 0)
+            samples.append(value)
+            print("phase0_rust_init_ns sample=\(index + 1) value=\(value)")
+        }
+
+        #expect(samples.count == 5)
+        print("phase0_rust_init_ns median=\(samples.sorted()[2])")
+    }
+
+    private func nanoseconds(_ duration: Duration) -> Int64 {
+        let components = duration.components
+        return components.seconds * 1_000_000_000
+            + components.attoseconds / 1_000_000_000
+    }
+}
+```
+
+The epoch/configuration and unique SQLite path are prepared before `clock.now`. The start/end calls immediately surround only `RustRuntimeClient(configuration:)`, and `client = nil` closes the live runtime outside that interval. Run the suite under the optimized App configuration; `ENABLE_TESTABILITY=YES` is test-only and is not written into the project:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -configuration Release \
+  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
+  -derivedDataPath /private/tmp/localagent-convergence-release-init \
+  -only-testing:LocalAgentAppTests/PhaseZeroRuntimeInitializationBaselineTests \
+  ENABLE_TESTABILITY=YES
+```
+
+Expected: the one test passes and prints exactly five `phase0_rust_init_ns sample=` values plus one median. Record it as a Release-optimized test-host initialization metric, not as shipping App cold-start time. Do not assert a latency threshold.
+
+- [ ] **Step 6: Measure Release idle RSS and CPU activity**
 
 Launch once, wait the same 30-second settling interval, then collect five process samples five seconds apart:
 
@@ -604,52 +699,81 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Record the five RSS and CPU values and their medians. Do not activate iSH, Browser, or a local model in this task.
 
-- [ ] **Step 6: Measure one deterministic Release ReAct turn**
+- [ ] **Step 7: Add and run the in-process Release ReAct measurement**
 
-Build the existing offline integration test once, capture the emitted test executable path, and run only the direct text-turn test five times:
+In `react_loop.rs`, add `use std::time::Instant;` and this already-registered focused test:
+
+```rust
+#[test]
+fn release_first_react_turn_records_five_in_process_samples() {
+    let mut samples = Vec::with_capacity(5);
+
+    for sample in 1..=5 {
+        let model = Arc::new(ScriptedModel::new(vec![
+            Ok(tool_turn(vec![call("call-1", "file_read")])),
+            Ok(final_turn("done")),
+        ]));
+        let tools = Arc::new(RecordingTools::default());
+        let setup = make_setup(model.clone(), tools.clone());
+        let mut sink = RecordingSink::default();
+
+        let started = Instant::now();
+        let outcome = setup.service.run(setup.request, &mut sink).unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome, AgentLoopOutcome::Completed);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        println!(
+            "phase0_react_first_turn_ns sample={sample} value={}",
+            elapsed.as_nanos()
+        );
+        samples.push(elapsed);
+    }
+
+    samples.sort_unstable();
+    println!(
+        "phase0_react_first_turn_ns median={}",
+        samples[2].as_nanos()
+    );
+}
+```
+
+Each fresh setup, model, and tool runtime is constructed before `Instant::now()`. The interval contains only one complete `AgentLoopService::run` with a tool round followed by a final model round; it excludes Cargo, process startup, test discovery, and filtering.
 
 ```bash
-LOCAL_AGENT_REACT_BUILD_LOG=/private/tmp/localagent-react-release-build.log
 CARGO_NET_OFFLINE=true cargo test \
   --release \
   --manifest-path local-ios-agent/rust-core/Cargo.toml \
   --test integration \
-  --no-run 2>&1 | tee "$LOCAL_AGENT_REACT_BUILD_LOG"
-LOCAL_AGENT_REACT_TEST_BIN="$(
-  sed -n 's/^  Executable .* (\(.*\/integration-[^)]*\))$/\1/p' \
-    "$LOCAL_AGENT_REACT_BUILD_LOG" \
-    | tail -1
-)"
-test -n "$LOCAL_AGENT_REACT_TEST_BIN"
-test -x "$LOCAL_AGENT_REACT_TEST_BIN"
-for SAMPLE in 1 2 3 4 5; do
-  /usr/bin/time -p "$LOCAL_AGENT_REACT_TEST_BIN" \
-    --exact react_loop::text_only_turn_commits_once_and_closes_the_model
-done
+  react_loop::release_first_react_turn_records_five_in_process_samples \
+  -- --exact --nocapture --test-threads=1
 ```
 
-Record the five elapsed values and median as a stable offline Rust ReAct first-turn proxy. It is not a cloud-provider latency measurement.
+Expected: one test process prints exactly five scoped samples and one median. Record it as an optimized in-memory/fake-runtime Agent-loop baseline, not provider, network, or whole-product latency. Do not assert a latency threshold.
 
-- [ ] **Step 7: Record Release binary sizes five times**
+- [ ] **Step 8: Record Release binary sizes once**
 
 ```bash
-for SAMPLE in 1 2 3 4 5; do
-  /usr/bin/stat -f '%z' \
-    local-ios-agent/rust-core/target/xcode-ios/liblocal_ios_agent_runtime.a
-  /usr/bin/stat -f '%z' \
-    /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app/LocalAgentApp
-  /usr/bin/du -sk \
-    /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
-done
+/usr/bin/stat -f '%z' \
+  local-ios-agent/rust-core/target/xcode-ios/liblocal_ios_agent_runtime.a
+/usr/bin/stat -f '%z' \
+  /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app/LocalAgentApp
+/usr/bin/du -sk \
+  /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
 ```
 
-Record five Rust archive-byte, linked-App-executable-byte, and App-bundle-KiB readings plus each median. All five should match; a mismatch means the artifact changed during measurement and the run is invalid.
+Record Rust archive bytes, linked App executable bytes, and App bundle KiB once. The artifacts are immutable outputs of the single Release build, so repeated reads provide no additional sample.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add local-ios-agent/docs/convergence/phase-0-1-evidence.md
-git commit -m "docs: record lean LocalAgent convergence baselines"
+git add \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Integration/OpenMinisProductBenchmarkTests.swift \
+  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Integration/RustRuntimeAppIntegrationTests.swift \
+  local-ios-agent/rust-core/tests/integration/react_loop.rs \
+  local-ios-agent/docs/convergence/phase-0-1-evidence.md
+git commit -m "test: record scoped LocalAgent convergence baselines"
 ```
 
 ---

@@ -1421,12 +1421,16 @@ Performance work begins with measurement and deletion, not speculative caches.
 Keep the Phase 0 baseline deliberately small:
 
 - Debug proves one clean build and launch only; it is not sampled repeatedly.
-- Release records cold App launch, Rust runtime initialization, idle RSS/CPU
-  activity, and one deterministic offline ReAct first turn. Collect five raw
-  samples and the median for each timing/activity metric.
-- Record linked App executable, App bundle, and Rust archive size five times
-  from the same Release build and keep the median; the readings should be
-  identical, and any mismatch invalidates the measurement run.
+- Release records five cold App launches and five idle RSS/CPU samples.
+- An optimized test-only App host uses `ContinuousClock` around five live
+  `RustRuntimeClient(configuration:)` initializations with fresh temporary
+  SQLite stores; it does not infer this short interval from sampled stacks.
+- A Rust `--release` focused test uses `Instant` around five complete
+  `AgentLoopService::run` calls in one process; setup, Cargo, test discovery,
+  dynamic linking, and process startup remain outside the interval.
+- Keep the five raw values and median for each timing/activity metric. Read the
+  linked App executable, App bundle, and Rust archive size once from the same
+  immutable Release build.
 
 Defer scale and subsystem-specific measurements until their real owner exists:
 
@@ -1464,11 +1468,12 @@ Every optimization must move at least one measured startup, RSS, idle-work,
 latency, or size metric without weakening correctness.
 
 Phase 0 records the reference device, OS, build configuration, thermal state,
-and command used for each retained metric. Every retained Release row uses five
-readings and the median. Until a metric has an explicit
-product budget, any regression greater than 10% or outside normal run-to-run
-variance is investigated and documented rather than silently accepted; this is
-a review gate, not a promise to fail a build on simulator noise.
+and command used for each retained metric. Every timing/activity row uses five
+readings and the median; immutable binary sizes use one reading. Until a metric
+has an explicit product budget, any regression greater than 10% or outside
+normal run-to-run variance is investigated and documented rather than silently
+accepted; this is a review gate, not a promise to fail a build on simulator
+noise.
 
 ## 15. Architecture Slimming
 
