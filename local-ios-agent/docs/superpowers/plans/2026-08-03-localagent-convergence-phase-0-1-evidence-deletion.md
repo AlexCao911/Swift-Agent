@@ -16,11 +16,11 @@
 
 - `supported_upgrade = ∅`. LocalAgent has never shipped and has no users. Do not add a translator, legacy reader, dual writer, compatibility database, migration facade, or in-App general reset framework.
 - Use a dedicated disposable Simulator for reset and measurement. Never erase a daily-use Simulator, a physical device, `booted`, or an unresolved UDID.
-- Phase 0 is time-boxed evidence work. It may repair a false CI command or add one focused architecture assertion, but it must not repair or redesign live business behavior.
-- Task 6 is capped at one engineer-day. Give each unavailable metric one focused instrumentation attempt, then record the gap and nearest honest proxy instead of building profiling infrastructure.
+- Phase 0 is capped at one engineer-day. It may repair a false CI command or add one focused architecture assertion, but it must not repair or redesign live business behavior.
+- Task 6 is capped at half an engineer-day. Collect only the baselines named in that task; do not spend the time-box cataloguing unsupported scale fixtures or instrumentation gaps.
 - Phase 1 creates no replacement facade, service, manager, registry, DTO layer, package, event bus, cache, or feature framework.
 - A Phase 1 deletion requires evidence that the candidate has no shipping production caller. Test/build callers that exist solely to exercise a non-shipping subsystem are removed with that subsystem.
-- No complete Rust public root is deleted in Phase 1. The audit proves all 23 roots are still ABI-, production-, or transitively production-reachable.
+- Phase 1 defaults to deleting proven zero-caller subgraphs. If the audit instead proves that an entire Rust public root has no production, ABI, build, or retained test caller, delete that root as one buildable slice and update the later 23-to-6 disposition map; do not predetermine the audit result.
 - Keep current live Builder, Run, conversation, Host, reliable transport, effect ledger, native permission, App Intent, provider, local-model, attachment, Skill, iSH, Browser, and FFI paths until their owning Phase 2/3/4 vertical replacement slice.
 - Do not modify `OpenMinis/`, `pi/`, `.derivedData/`, `.superpowers/`, `audits/`, or developer-local scheme environment values. Those are not implementation inputs.
 - Preserve `local-ios-agent/apps/LocalAgentApp` as the only shipping App and preserve OpenMinis-derived license/source provenance.
@@ -82,9 +82,9 @@ It contains exactly these sections:
 3. Swift/Xcode/SwiftPM/source/resource caller matrix;
 4. development-data reset inventory;
 5. current product smoke paths and known seams;
-6. Debug/Release performance samples and medians;
-7. Phase 1 deletion ledger with before/after caller evidence;
-8. Phase 2 Core-shape entry checklist and reset schedule.
+6. Debug build/launch smoke and Release performance samples/medians;
+7. Phase 0/1 change/deletion ledger with scope reason and, for deletions, before/after caller evidence;
+8. Phase 2 Core-shape entry checklist.
 
 Raw `.trace`, `.xcresult`, DerivedData, downloaded models, native build products, SQLite databases, and Simulator containers remain under `/private/tmp` or ignored build directories. Commit only commands, metadata, raw numeric samples, medians, conclusions, and stable source evidence.
 
@@ -228,13 +228,14 @@ Use these columns for every root:
 | Current root | Direct production caller(s) | ABI/Swift/build caller | Test caller(s) | Phase 1 action | Final design disposition |
 | --- | --- | --- | --- | --- | --- |
 
-Record the audited conclusion: no complete root is eligible for Phase 1 deletion. In particular:
+Treat every previously observed caller as a hypothesis to verify, not as the required conclusion. Classify each root from the captured evidence:
 
-- `agent_package` remains reachable from the old host-binding path;
-- `protocol` remains reachable from old profile bindings;
-- `migration` remains reachable through profile migration and FFI;
-- `ffi_bridge` is the C ABI/Swift entry;
-- `BridgeRuntime` still composes old and new Run paths, which is Phase 2 evidence rather than a Phase 1 bulk-delete authorization.
+- retain when it has a shipping production, C ABI, Swift, build, or retained-test caller;
+- delete a zero-caller subgraph when only part of the root is dead;
+- allow whole-root deletion when the root has no production, ABI, Swift, build, resource, or retained-test caller and every test-only caller can be removed with it;
+- when a whole root qualifies, add its buildable deletion slice to Phase 1 and update the final 23-to-6 disposition map before implementation.
+
+Record the actual conclusion and its commands. Do not preserve a root merely because the current design expected it to survive, and do not infer reachability from a directory name or a stale test alone.
 
 - [ ] **Step 4: Record the file-level Phase 1 candidates**
 
@@ -297,12 +298,14 @@ Record:
 
 Extend `ShippingTargetOwnershipTests.swift` with one test that:
 
-1. enumerates `.swift` and `.m` basenames under `LocalAgentApp/` and, separately, `.swift` basenames under `LocalAgentAppTests/`;
-2. asserts basenames are unique within each target's source tree, without imposing cross-target basename uniqueness;
-3. resolves the `LocalAgentApp` and `LocalAgentAppTests` `PBXNativeTarget` build-phase IDs, then extracts each target's own `PBXSourcesBuildPhase` entries;
-4. asserts the App filesystem set equals only the App Sources set and the test filesystem set equals only the test Sources set.
+1. parses only the `PBXNativeTarget`, `PBXSourcesBuildPhase`, `PBXBuildFile`, `PBXFileReference`, and `PBXGroup` sections;
+2. resolves `LocalAgentApp` and `LocalAgentAppTests` by target name, follows each target's build-phase object IDs to its Sources phase, then resolves every build file through its file-reference ID and the complete parent-group `path` chain;
+3. normalizes those results to project-relative paths, using `<group>` inheritance and `SOURCE_ROOT` relative to the `.xcodeproj` directory; PBX comments and `name` are display metadata, not path identity;
+4. enumerates the App's compilable `.swift`/`.m` files and the test target's `.swift` files as the same project-relative paths;
+5. compares filesystem and PBX path sets separately per target, reporting sorted `missing from target` and `unexpected in target` paths;
+6. rejects the same resolved path appearing twice in one Sources phase, while explicitly allowing equal basenames in different directories or targets.
 
-Use `NSRegularExpression`; do not add an Xcode project parser dependency or a generated manifest.
+Use Foundation plus a lightweight section scanner/`NSRegularExpression`; do not add an Xcode project parser dependency or generated manifest. If the project later adopts `PBXFileSystemSynchronizedRootGroup`, fail with an explicit unsupported-format message until the gate is updated. Do not assert basename uniqueness.
 
 - [ ] **Step 4: Run the architecture test**
 
@@ -339,48 +342,35 @@ git add \
 git commit -m "test: lock Xcode source ownership baseline"
 ```
 
-### Task 4: Freeze the Development-Data Reset Contract
+### Task 4: Record the Development-Data Ownership and Reset Inventory
 
 **Files:**
 
 - Modify: `local-ios-agent/docs/convergence/phase-0-1-evidence.md`
-- Inspect: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/Composition/AppBootstrapper.swift`
-- Inspect: `local-ios-agent/rust-core/src/storage/sqlite_runtime_state.rs`
-- Inspect: `local-ios-agent/toolkit/Sources/LocalAgentLLMCore/LLMStore.swift`
-- Inspect: `local-ios-agent/toolkit/Sources/LocalAgentLLMLocal/{LocalModelStore.swift,LocalModelPaths.swift}`
-- Inspect: `local-ios-agent/toolkit/Sources/LocalAgentLLMCloud/SecurityCredentialVault.swift`
-- Inspect: `local-ios-agent/apps/LocalAgentApp/LocalAgentApp/ThirdParty/OpenMinis/{Skills,ISH,Tools,ChatUI}/**/*`
+- Inspect: current Rust/Swift persistence, Keychain, asset, model, temporary-run, and projection owners discovered by Task 2/3
 
-- [ ] **Step 1: Record every owned path and namespace**
+- [ ] **Step 1: Fill one reset inventory table from verified owners**
 
-The inventory must name owner, exact relative path/namespace, reset action, and owning future slice for at least:
+Keep this section to one table. Resolve every broad path to the exact current path or namespace discovered in source; do not reproduce the design's future Phase 2/3/4 schedule.
 
-- `LocalAgent/agent.sqlite`, WAL/SHM/journal, `.agent-os`, and recovered sidecars;
-- `LocalAgent/LLM/llm-state.sqlite` and old `.importing`/`.migrated` artifacts;
-- exact Keychain service `com.alexandercou.local-agent.llm-provider-credentials`;
-- `LocalAgent/LLM/local-models.sqlite` and `models/{staging,installations,trash,resume}`;
-- background model-download session `com.localagent.app.local-model-downloads.v1`;
-- `LocalAgent/LLM/provider-run-plans.json`;
-- `LocalAgent/transcript-projection.sqlite`;
-- `LocalAgent/host-tool-effects.sqlite`;
-- `LocalAgent/PendingInteractions/*.json`;
-- `LocalAgent/Attachments/*`;
-- Skill metadata, conversation overrides, ToolMount skill tree, Prompt documents;
-- ToolMount shared/mounts source files;
-- Browser tabs/history/cookie backup/audit data;
-- `Documents/alpine-rootfs`, DNS files, relevant UserDefaults, WebKit/URLSession caches;
-- tests, golden DBs, and migration fixtures.
+| Category | Current owner/path | Convergence action |
+| --- | --- | --- |
+| Canonical/runtime data | Exact Rust canonical/runtime stores and Swift provider/model metadata stores | With all Runs stopped, replace Rust canonical/runtime stores with `localagent.sqlite`; rebuild Swift product metadata in its final Swift-owned store; no translator, legacy reader, or dual writer |
+| Credentials | Exact Keychain service/record namespace | Retain references used by the final profile schema and delete only orphaned records in that namespace; never bulk-clear Keychain |
+| Skills, Prompt documents, and attachments | Exact managed file roots and metadata owners | Keep assets already in the final format or re-import through the product path; no compatibility scanner |
+| Local model files | Exact model repository, index, download, and staging paths | Re-download, or let the final repository rebuild its own index; do not migrate the legacy index |
+| Run/effect temporary state | Exact provider-plan, lease, receipt/effect, and pending-interaction owners | Stop active work, then clear the complete temporary-state group at cutover |
+| Caches/UI projections | Exact Swift projection, browser/WebKit, URLSession, and UI cache owners | Treat as rebuildable and clear at any time; never use them as canonical input |
 
-- [ ] **Step 2: Adopt clean sandbox as the first-release cutover**
+- [ ] **Step 2: Record the only reset rules**
 
 Record these hard rules:
 
 - the first distributed build is a clean install;
 - no reset code ships in the product;
 - CI and convergence work use a dedicated erased Simulator;
-- no code reads, attaches, translates, or dual-writes `agent.sqlite`, `.agent-os`, old LLM JSON, or legacy profile/component schemas after its owning cutover;
-- local model files are re-downloaded after a clean sandbox; do not build a speculative rediscovery indexer;
-- Skills are re-imported through the existing upload path; do not build a compatibility scanner;
+- no legacy database, JSON, sidecar, profile/component schema, or cache is read, attached, translated, or dual-written after its owning cutover;
+- file assets are either already final-format or re-imported, and model files are re-downloaded or indexed by the final repository;
 - Keychain cleanup, if ever needed outside Simulator erase, is restricted to the exact service namespace and never clears the whole Keychain.
 
 - [ ] **Step 3: Validate and erase only the dedicated Simulator**
@@ -402,16 +392,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: an active dedicated Simulator is shut down first; an already-shut-down dedicated Simulator skips shutdown without failing; only the pre-recorded Simulator is erased. Do not run against the iPad yet; it remains a second clean build target.
 
-- [ ] **Step 4: Record the future reset schedule**
-
-The ledger must assign, without implementing:
-
-- Phase 2: canonical/runtime DB cutover to `LocalAgent/localagent.sqlite`, Run leases, provider run plans, projection cache, pending interactions, effect records, and attachments reset as one stopped-runtime cutover;
-- Phase 3: old profile/component/binding/Prompt business metadata and legacy LLM migration paths removed while the final profile schema becomes the first compatibility baseline;
-- Phase 4: UI caches only; no canonical mutation or compatibility reader;
-- fixture deletion/regeneration in the same slice as its writer replacement.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add local-ios-agent/docs/convergence/phase-0-1-evidence.md
@@ -477,62 +458,52 @@ git add local-ios-agent/docs/convergence/phase-0-1-evidence.md
 git commit -m "docs: freeze current product smoke paths"
 ```
 
-### Task 6: Record Debug and Release Performance Baselines
+### Task 6: Record the Lean Phase 0 Performance Baseline
 
 **Files:**
 
 - Modify: `local-ios-agent/docs/convergence/phase-0-1-evidence.md`
-- Verify: `local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests/Integration/OpenMinisProductBenchmarkTests.swift`
-- Verify: `local-ios-agent/scripts/run-llm-phase-2-release-smoke.sh`
-- Verify: `local-ios-agent/scripts/run-simulator-llamacpp-smoke.sh`
+- Verify: `local-ios-agent/rust-core/tests/integration/react_loop.rs`
 
-**Rule:** Do not add Criterion, a general profiling service, production signpost framework, cache, scheduler, or benchmark-only product abstraction. Use current product seams, Xcode/Instruments, standard process tools, and direct file-size commands.
+**Time-box:** Complete this task within half an engineer-day. Phase 0 as a whole remains capped at one engineer-day.
 
-- [ ] **Step 1: Prepare one fixed measurement environment**
+**Rule:** Debug proves only that the App builds and launches. All measurements use the Release build. Do not add a benchmark framework, production signpost layer, scale fixture generator, cache, scheduler, or profiling abstraction. Record five raw readings and a median for every Release row; size readings are expected to be identical because they come from one build.
 
-Record:
+- [ ] **Step 1: Freeze the small measurement environment**
+
+Record only:
 
 - baseline commit;
-- iPhone Simulator model/UDID and iOS runtime;
-- macOS/Xcode/Rust/Swift versions;
-- Debug and Release configuration;
+- dedicated iPhone Simulator model/UDID and iOS runtime;
+- macOS, Xcode, Rust, and Swift versions;
 - thermal state and other foreground workloads;
-- one row for each required metric, including whether the current product exposes a supported measurement seam;
-- fixed fixture identity when such a seam exists; otherwise `instrumentation gap` plus the exact discovery query and nearest honest proxy;
-- fixed cloud/local model IDs and prompt only when an already-configured test provider/model exists; never record credentials or incur an unapproved paid request.
+- the exact commands below.
 
-Use at least five repetitions and median for every release-gate metric.
+The Phase 0 metric table has exactly these rows:
 
-- [ ] **Step 2: Build Debug and Release once**
+| Metric | Configuration | Samples |
+| --- | --- | --- |
+| Debug build and launch | Debug | one smoke result; no timing |
+| Cold App launch | Release | five raw samples and median |
+| Rust runtime initialization | Release | the Rust bridge interval from the same five launch traces and median |
+| Idle RSS and CPU activity | Release | five raw samples after a fixed settling interval and median |
+| Deterministic first ReAct turn | Rust Release test binary | five raw samples and median |
+| Rust archive, linked App executable, App bundle | Release | five readings and median for each |
+
+Do not add warm launch, cloud/local request, conversation-count, event-count, iSH, Browser, local-model activation, or SQLite-transaction rows. Those belong to the final store or their owning runtime/provider slice.
+
+- [ ] **Step 2: Build and launch Debug once**
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build-for-testing \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build \
   -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
   -scheme LocalAgentApp \
   -configuration Debug \
   -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
   -derivedDataPath /private/tmp/localagent-convergence-debug
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build \
-  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
-  -scheme LocalAgentApp \
-  -configuration Release \
-  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
-  -derivedDataPath /private/tmp/localagent-convergence-release
-```
-
-Expected: both builds pass without changing the shared scheme.
-
-- [ ] **Step 3: Install, launch, sample, and terminate the built App**
-
-Use the Debug App for the process/RSS sequence:
-
-```bash
-LOCAL_AGENT_BASELINE_APP=/private/tmp/localagent-convergence-debug/Build/Products/Debug-iphonesimulator/LocalAgentApp.app
-LOCAL_AGENT_RELEASE_APP=/private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
-test -d "$LOCAL_AGENT_BASELINE_APP"
-test -d "$LOCAL_AGENT_RELEASE_APP"
+LOCAL_AGENT_DEBUG_APP=/private/tmp/localagent-convergence-debug/Build/Products/Debug-iphonesimulator/LocalAgentApp.app
+test -d "$LOCAL_AGENT_DEBUG_APP"
 if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun simctl list devices \
   | rg -F "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
@@ -542,153 +513,150 @@ if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 fi
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun simctl bootstatus "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" -b
-if DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun simctl get_app_container \
-    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app app \
-    >/dev/null 2>&1; then
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    /usr/bin/xcrun simctl uninstall \
-      "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
-fi
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun simctl install \
-    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" "$LOCAL_AGENT_BASELINE_APP"
-LOCAL_AGENT_BASELINE_LAUNCH="$(
+    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" "$LOCAL_AGENT_DEBUG_APP"
+LOCAL_AGENT_DEBUG_LAUNCH="$(
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     /usr/bin/xcrun simctl launch --terminate-running-process \
       "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
 )"
-LOCAL_AGENT_BASELINE_PID="${LOCAL_AGENT_BASELINE_LAUNCH##*: }"
-case "$LOCAL_AGENT_BASELINE_PID" in
+LOCAL_AGENT_DEBUG_PID="${LOCAL_AGENT_DEBUG_LAUNCH##*: }"
+case "$LOCAL_AGENT_DEBUG_PID" in
   ''|*[!0-9]*) exit 1 ;;
 esac
-/bin/ps -o pid=,rss=,%cpu=,etime= -p "$LOCAL_AGENT_BASELINE_PID"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /usr/bin/xcrun simctl terminate \
     "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
 ```
 
-Expected: install succeeds, `simctl launch` returns a numeric PID, `ps` reports one App process, and terminate succeeds. Repeat the cold-install and warm terminate/relaunch sequences five times for Debug, then set `LOCAL_AGENT_BASELINE_APP="$LOCAL_AGENT_RELEASE_APP"` and repeat for Release. Record raw values and medians.
+Expected: Debug builds, installs, launches with a numeric PID, and terminates. Record pass/fail only; do not repeat or time it.
 
-- [ ] **Step 4: Record directly observable launch and idle traces**
-
-Create `/private/tmp/localagent-convergence-traces/`, then record five uniquely named samples per configuration. One sample has this exact shape:
+- [ ] **Step 3: Build Release once**
 
 ```bash
-mkdir -p /private/tmp/localagent-convergence-traces
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun xctrace list templates \
-  | rg 'App Launch|Time Profiler|System Trace'
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -configuration Release \
+  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
+  -derivedDataPath /private/tmp/localagent-convergence-release
+LOCAL_AGENT_RELEASE_APP=/private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
+test -d "$LOCAL_AGENT_RELEASE_APP"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun xctrace record \
-    --template 'App Launch' \
-    --device "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
-    --time-limit 15s \
-    --output /private/tmp/localagent-convergence-traces/debug-launch-1.trace \
-    --launch -- "$LOCAL_AGENT_BASELINE_APP"
-LOCAL_AGENT_BASELINE_LAUNCH="$(
+  /usr/bin/xcrun simctl uninstall \
+    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun simctl install \
+    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" "$LOCAL_AGENT_RELEASE_APP"
+```
+
+Expected: one Release build succeeds and replaces the Debug App on the dedicated Simulator.
+
+- [ ] **Step 4: Measure Release cold launch and Rust initialization five times**
+
+Create five uniquely named App Launch traces:
+
+```bash
+LOCAL_AGENT_TRACE_DIR="$(
+  mktemp -d /private/tmp/localagent-convergence-traces.XXXXXX
+)"
+for SAMPLE in 1 2 3 4 5; do
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    /usr/bin/xcrun simctl terminate \
+      "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app 2>/dev/null || true
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    /usr/bin/xcrun xctrace record \
+      --template 'App Launch' \
+      --device "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
+      --time-limit 15s \
+      --output "$LOCAL_AGENT_TRACE_DIR/release-launch-$SAMPLE.trace" \
+      --launch -- "$LOCAL_AGENT_RELEASE_APP"
+done
+```
+
+Inspect/export the five traces using the same Instruments view. Record total cold-launch duration and the symbol interval rooted at `local_agent_runtime_bridge_new_with_config` for every sample, plus each median. Keep traces outside Git. The Release dSYM must resolve this symbol in all five traces; otherwise Task 6 fails and Phase 0 does not close. Do not omit the required metric or add a new instrumentation layer to work around failed symbolication.
+
+- [ ] **Step 5: Measure Release idle RSS and CPU activity**
+
+Launch once, wait the same 30-second settling interval, then collect five process samples five seconds apart:
+
+```bash
+LOCAL_AGENT_RELEASE_LAUNCH="$(
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     /usr/bin/xcrun simctl launch --terminate-running-process \
       "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
 )"
-LOCAL_AGENT_BASELINE_PID="${LOCAL_AGENT_BASELINE_LAUNCH##*: }"
+LOCAL_AGENT_RELEASE_PID="${LOCAL_AGENT_RELEASE_LAUNCH##*: }"
+case "$LOCAL_AGENT_RELEASE_PID" in
+  ''|*[!0-9]*) exit 1 ;;
+esac
+sleep 30
+for SAMPLE in 1 2 3 4 5; do
+  /bin/ps -o pid=,rss=,%cpu=,etime= -p "$LOCAL_AGENT_RELEASE_PID"
+  sleep 5
+done
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun xctrace record \
-    --template 'Time Profiler' \
-    --device "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
-    --attach "$LOCAL_AGENT_BASELINE_PID" \
-    --time-limit 60s \
-    --output /private/tmp/localagent-convergence-traces/debug-idle-1.trace
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /usr/bin/xcrun xctrace record \
-    --template 'System Trace' \
-    --device "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
-    --attach "$LOCAL_AGENT_BASELINE_PID" \
-    --time-limit 60s \
-    --output /private/tmp/localagent-convergence-traces/debug-system-1.trace
+  /usr/bin/xcrun simctl terminate \
+    "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" com.localagent.app
 ```
 
-Keep `.trace` files outside Git. Export or inspect them with Instruments and record only raw numeric samples, medians, and the inspection method.
+Record the five RSS and CPU values and their medians. Do not activate iSH, Browser, or a local model in this task.
 
-- [ ] **Step 5: Attempt the currently unsupported scale/timing rows once**
+- [ ] **Step 6: Measure one deterministic Release ReAct turn**
 
-The required Debug/Release matrix has these rows. Where a supported seam exists, collect five raw samples and a median; otherwise record the one-attempt instrumentation gap:
-
-- cold launch after install;
-- warm launch after terminate/relaunch;
-- Rust bridge initialization;
-- first conversation restoration for 0, 100, and 1,000 summaries;
-- first deterministic ReAct turn;
-- first cloud product request;
-- first local product request;
-- 10,000- and 100,000-event canonical replay/query fixtures.
-
-Before inventing a fixture or hook, search for an existing supported entry:
+Build the existing offline integration test once, capture the emitted test executable path, and run only the direct text-turn test five times:
 
 ```bash
-rg -n -i \
-  'rust.*init|restore.*summar|10_?000.*event|100_?000.*event|first.*(turn|token|request)|measure\(' \
-  local-ios-agent/rust-core/tests \
-  local-ios-agent/toolkit/Tests \
-  local-ios-agent/apps/LocalAgentApp/LocalAgentAppTests \
-  local-ios-agent/scripts
+LOCAL_AGENT_REACT_BUILD_LOG=/private/tmp/localagent-react-release-build.log
+CARGO_NET_OFFLINE=true cargo test \
+  --release \
+  --manifest-path local-ios-agent/rust-core/Cargo.toml \
+  --test integration \
+  --no-run 2>&1 | tee "$LOCAL_AGENT_REACT_BUILD_LOG"
+LOCAL_AGENT_REACT_TEST_BIN="$(
+  sed -n 's/^  Executable .* (\(.*\/integration-[^)]*\))$/\1/p' \
+    "$LOCAL_AGENT_REACT_BUILD_LOG" \
+    | tail -1
+)"
+test -n "$LOCAL_AGENT_REACT_TEST_BIN"
+test -x "$LOCAL_AGENT_REACT_TEST_BIN"
+for SAMPLE in 1 2 3 4 5; do
+  /usr/bin/time -p "$LOCAL_AGENT_REACT_TEST_BIN" \
+    --exact react_loop::text_only_turn_commits_once_and_closes_the_model
+done
 ```
 
-Current expected result: there is no supported 0/100/1,000-summary or 10,000/100,000-event product fixture generator, and the existing `OpenMinisProductBenchmarkTests` is functional diagnostics rather than a product timing harness. Give each missing row one focused attempt, record `instrumentation gap` and the nearest current test/process proxy, and stop. Do not create a benchmark repository, write directly into private SQLite schemas, or add production timing APIs during Phase 0.
+Record the five elapsed values and median as a stable offline Rust ReAct first-turn proxy. It is not a cloud-provider latency measurement.
 
-- [ ] **Step 6: Record RSS deltas for lazy heavy runtimes**
-
-Reuse the verified launch/PID sequence from Step 3 and record:
+- [ ] **Step 7: Record Release binary sizes five times**
 
 ```bash
-/bin/ps -o pid=,rss=,%cpu=,etime= -p "$LOCAL_AGENT_BASELINE_PID"
+for SAMPLE in 1 2 3 4 5; do
+  /usr/bin/stat -f '%z' \
+    local-ios-agent/rust-core/target/xcode-ios/liblocal_ios_agent_runtime.a
+  /usr/bin/stat -f '%z' \
+    /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app/LocalAgentApp
+  /usr/bin/du -sk \
+    /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
+done
 ```
 
-Collect five samples before and after separately activating:
+Record five Rust archive-byte, linked-App-executable-byte, and App-bundle-KiB readings plus each median. All five should match; a mismatch means the artifact changed during measurement and the run is invalid.
 
-- iSH;
-- Browser/WebKit;
-- one local model.
-
-Use the Step 4 traces for the 60-second idle window. If current Instruments templates cannot attribute SQLite transaction counts, record that instrumentation gap rather than adding a database observer.
-
-- [ ] **Step 7: Record binary sizes**
-
-```bash
-/usr/bin/stat -f '%z' \
-  local-ios-agent/rust-core/target/xcode-ios/liblocal_ios_agent_runtime.a
-/usr/bin/stat -f '%z' \
-  /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app/LocalAgentApp
-/usr/bin/du -sk \
-  /private/tmp/localagent-convergence-release/Build/Products/Release-iphonesimulator/LocalAgentApp.app
-```
-
-Record Rust archive bytes, linked App executable bytes, and App bundle KiB.
-
-- [ ] **Step 8: Preserve the existing diagnostics test as functional evidence only**
-
-```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test-without-building \
-  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
-  -scheme LocalAgentApp \
-  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
-  -derivedDataPath /private/tmp/localagent-convergence-debug \
-  -only-testing:LocalAgentAppTests/OpenMinisProductBenchmarkTests
-```
-
-Expected: it passes. Document that it proves milestone order and no leaked fake tool processes; it is not a startup/RSS/product-latency benchmark.
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add local-ios-agent/docs/convergence/phase-0-1-evidence.md
-git commit -m "docs: record LocalAgent convergence baselines"
+git commit -m "docs: record lean LocalAgent convergence baselines"
 ```
 
 ---
 
 ## Phase 1 — Pure Deletion
+
+Tasks 7–13 are deletion candidates, not predetermined outcomes. In every task, Step 1 is a hard evidence gate: if it finds a production, ABI, build, resource, or retained-test caller not already classified in Task 2/3, stop that deletion, record `retain/skip` and the caller in the ledger, and continue to the next candidate. Never edit around a newly discovered caller merely to make the planned deletion pass.
 
 ### Task 7: Delete the Obsolete Agent-Package Export and Upgrade Subgraph
 
@@ -1138,25 +1106,60 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: unit, lint, contract, golden, integration, Rust staticlib, and SwiftPM Bridge gates pass with nonzero tests.
 
-- [ ] **Step 2: Run the focused App product gates on iPhone and iPad**
+- [ ] **Step 2: Run focused logic suites on iPhone; clean-build and launch on iPad**
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   local-ios-agent/scripts/prepare-ios-native.sh --platform iphonesimulator
-for UDID in "$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID"; do
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPHONE_UDID" \
+  -derivedDataPath /private/tmp/localagent-convergence-final-iphone \
+  -only-testing:LocalAgentAppTests/ShippingTargetOwnershipTests \
+  -only-testing:LocalAgentAppTests/RustReActProductPathTests \
+  -only-testing:LocalAgentAppTests/RelaunchProjectionReplayProductTests
+
+LOCAL_AGENT_IPAD_DERIVED_DATA="$(
+  mktemp -d /private/tmp/localagent-convergence-final-ipad.XXXXXX
+)"
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build \
+  -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
+  -scheme LocalAgentApp \
+  -configuration Debug \
+  -destination "platform=iOS Simulator,id=$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" \
+  -derivedDataPath "$LOCAL_AGENT_IPAD_DERIVED_DATA"
+LOCAL_AGENT_IPAD_APP="$LOCAL_AGENT_IPAD_DERIVED_DATA/Build/Products/Debug-iphonesimulator/LocalAgentApp.app"
+test -d "$LOCAL_AGENT_IPAD_APP"
+if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun simctl list devices \
+  | rg -F "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" \
+  | rg -q '\(Booted\)'; then
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test \
-    -project local-ios-agent/apps/LocalAgentApp/LocalAgentApp.xcodeproj \
-    -scheme LocalAgentApp \
-    -destination "platform=iOS Simulator,id=$UDID" \
-    -derivedDataPath "/private/tmp/localagent-convergence-final-$UDID" \
-    -only-testing:LocalAgentAppTests/ShippingTargetOwnershipTests \
-    -only-testing:LocalAgentAppTests/RustReActProductPathTests \
-    -only-testing:LocalAgentAppTests/RelaunchProjectionReplayProductTests
-done
+    /usr/bin/xcrun simctl boot "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID"
+fi
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun simctl bootstatus "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" -b
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun simctl install \
+    "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" "$LOCAL_AGENT_IPAD_APP"
+LOCAL_AGENT_IPAD_LAUNCH="$(
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    /usr/bin/xcrun simctl launch --terminate-running-process \
+      "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" com.localagent.app
+)"
+LOCAL_AGENT_IPAD_PID="${LOCAL_AGENT_IPAD_LAUNCH##*: }"
+case "$LOCAL_AGENT_IPAD_PID" in
+  ''|*[!0-9]*) exit 1 ;;
+esac
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /usr/bin/xcrun simctl terminate \
+    "$LOCAL_AGENT_CONVERGENCE_IPAD_UDID" com.localagent.app
 ```
 
-Expected: exactly the architecture suite and two product paths pass on both form factors.
+Expected: the architecture suite and two product paths pass once on iPhone. A fresh DerivedData directory produces an iPad build that installs, launches with a numeric PID, and terminates. Split-view, sidebar, and size-class behavior waits for the real Phase 4 UIUX suite.
 
 - [ ] **Step 3: Re-run every deletion proof**
 
@@ -1171,14 +1174,14 @@ Mark Phase 0 and Phase 1 complete only if all prior tasks pass. Add the followin
 - one concrete `LocalAgentStore` over `localagent.sqlite` owns Rust persistence;
 - shipping open/recovery failure blocks mutation; no in-memory production fallback;
 - only `ModelRuntime`, `ToolRuntime`, and `MemoryProvider` remain as runtime dynamic ports outside the private transitional Builder;
-- all 23 current roots have a closed moved/private/deleted disposition;
+- all baseline Rust roots have a closed moved/private/deleted disposition, including any whole-root deletion discovered in Phase 0;
 - exactly one production Agent loop, canonical conversation path, and Host transport path remain;
 - old `execution`/`RunMachine` cannot accept a production Run;
 - no fixed polling/timer loop remains idle;
 - no legacy migration root, FFI operation, startup reader, sidecar attach, or translator remains;
 - the private old Builder may remain only as the sole Builder under `profile` until Phase 3.
 
-Also copy the Phase 2/3 reset schedule from Task 4 into this handoff. Do not create Phase 2 stubs or move modules in this task.
+Reference the six-row ownership/reset table from Task 4; do not copy a future reset schedule, create Phase 2 stubs, or move modules in this task.
 
 - [ ] **Step 5: Review the plan evidence against the approved design**
 
@@ -1202,7 +1205,9 @@ Expected:
 
 - no unresolved placeholder;
 - manual review confirms no compatibility translator, dual-write task, or second production path;
-- the baseline-to-HEAD name list contains only files and directories explicitly named by Tasks 1–13;
+- every baseline-to-HEAD change belongs to Phase 0 evidence/gates or a caller-proven Phase 1 deletion and has a concise reason in the deletion ledger;
+- an unanticipated registration, manifest, build, or test file is allowed when required to keep an in-scope deletion buildable, but its reason must be recorded;
+- there is no unrelated feature change or new replacement abstraction;
 - no generated artifacts staged.
 
 - [ ] **Step 6: Commit the gate evidence**
@@ -1219,10 +1224,11 @@ This plan is complete only when:
 1. the evidence ledger contains all eight required sections and every command/result is reproducible;
 2. all 23 Rust roots have caller and final-disposition rows;
 3. Xcode/SwiftPM/source/resource ownership is explicit and filesystem/PBX membership matches;
-4. the clean-sandbox reset contract covers every identified store, source-like asset, Keychain namespace, Run/effect state, and fixture without a translator;
+4. one six-row ownership/reset table covers canonical/runtime data, credentials, assets, models, temporary Run/effect state, and rebuildable projections/caches without a translator or reset framework;
 5. the two current product paths pass and their test seams are documented honestly;
-6. Debug/Release samples, medians, environment, and instrumentation gaps are recorded;
+6. Debug build/launch smoke and the lean Release cold-launch, Rust-init, idle RSS/CPU, deterministic ReAct-turn, and binary-size baselines are recorded within the time-box;
 7. every Phase 1 candidate has before/after zero-production-caller evidence;
 8. live Builder, Agent loop, conversation, Host, storage, transport, and FFI behavior was not bulk-deleted or duplicated;
-9. the complete Rust/SwiftPM gate, iPhone/iPad architecture gate, and two product smoke paths pass;
-10. the next implementation artifact is a separate Phase 2 plan, beginning from the Core-shape checklist rather than extending this plan.
+9. the complete Rust/SwiftPM gate and the three focused App suites pass on iPhone, while a clean iPad build/install/launch passes without repeating Host/Rust logic tests;
+10. every baseline-to-HEAD changed path is traceable to an in-scope evidence/deletion-ledger reason, with no unrelated feature work;
+11. the next implementation artifact is a separate Phase 2 plan, beginning from the Core-shape checklist rather than extending this plan.

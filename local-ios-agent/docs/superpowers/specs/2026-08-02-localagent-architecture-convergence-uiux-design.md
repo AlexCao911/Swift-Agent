@@ -1418,17 +1418,28 @@ Performance work begins with measurement and deletion, not speculative caches.
 
 ### 14.1 Baselines
 
-Record Debug and Release measurements for:
+Keep the Phase 0 baseline deliberately small:
 
-- cold and warm App launch;
-- Rust initialization;
-- first conversation restoration;
-- first cloud request and first local request;
-- idle CPU wake-ups and SQLite transactions;
-- resident memory before and after iSH, browser, and local-model activation;
-- 0, 100, and 1,000 conversation summaries;
-- 10,000 and 100,000 canonical events;
-- linked App and Rust binary size.
+- Debug proves one clean build and launch only; it is not sampled repeatedly.
+- Release records cold App launch, Rust runtime initialization, idle RSS/CPU
+  activity, and one deterministic offline ReAct first turn. Collect five raw
+  samples and the median for each timing/activity metric.
+- Record linked App executable, App bundle, and Rust archive size five times
+  from the same Release build and keep the median; the readings should be
+  identical, and any mismatch invalidates the measurement run.
+
+Defer scale and subsystem-specific measurements until their real owner exists:
+
+- measure 0/100/1,000 conversation summaries and 10,000/100,000 canonical
+  events only after the final `LocalAgentStore` cutover;
+- measure warm restoration and iSH, Browser/WebKit, or local-model activation
+  in the vertical slice that owns that runtime;
+- measure real cloud/local provider latency only in the provider/model slice,
+  never by issuing an incidental paid request during Phase 0.
+
+Do not create a scale fixture generator or an inventory of instrumentation gaps
+just to complete Phase 0. That phase is capped at one engineer-day, and its
+performance task is capped at half an engineer-day.
 
 ### 14.2 Direct improvements
 
@@ -1452,12 +1463,12 @@ Record Debug and Release measurements for:
 Every optimization must move at least one measured startup, RSS, idle-work,
 latency, or size metric without weakening correctness.
 
-Phase 0 records the reference device, OS, build configuration, fixture seed,
-thermal state, and command used for each metric. Release-gate comparisons use at
-least five repetitions and the median. Until a metric has an explicit product
-budget, any regression greater than 10% or outside normal run-to-run variance is
-investigated and documented rather than silently accepted; this is a review
-gate, not a promise to fail a build on simulator noise.
+Phase 0 records the reference device, OS, build configuration, thermal state,
+and command used for each retained metric. Every retained Release row uses five
+readings and the median. Until a metric has an explicit
+product budget, any regression greater than 10% or outside normal run-to-run
+variance is investigated and documented rather than silently accepted; this is
+a review gate, not a promise to fail a build on simulator noise.
 
 ## 15. Architecture Slimming
 
@@ -1537,17 +1548,17 @@ binding, package, Prompt store, or test fixture has a compatibility obligation.
 Existing migration code proves only that development schemas changed; it is a
 deletion candidate, not a reason to preserve the old architecture.
 
-Phase 0 records one short reset inventory so the cutover is deliberate rather
-than a collection of ad hoc deletes:
+Phase 0 records one six-row ownership/reset table so the cutover is deliberate
+rather than a collection of ad hoc deletes:
 
-| Development data | Convergence action |
-| --- | --- |
-| Rust conversation/profile/runtime databases and old sidecars | Stop all development Runs, delete every old store/sidecar together, and bootstrap one `localagent.sqlite` plus the default Agent; write no translator |
-| Swift Provider/model/binding/Prompt metadata | Reset the old business metadata and remove App-owned orphan Keychain references; configure the new model/profile path normally |
-| Projection databases, caches, catalogs, download jobs, and previews | Regenerate; already-downloaded model files may be rediscovered only through the final model repository format |
-| Skill file trees and other source-like developer assets | Re-index when already in the final file format, otherwise manually re-import; do not create a schema compatibility layer |
-| Provider plans, pending interactions, tool-effect records, and Run leases | Terminate development Runs and reset them coherently with canonical Run state so no half-reset effect can resume |
-| Tests, golden databases, and legacy fixtures | Delete or regenerate against the converged schema |
+| Category | Current owner/path | Convergence action |
+| --- | --- | --- |
+| Canonical/runtime data | Exact Rust canonical/runtime stores and Swift Provider/model metadata stores | With Runs stopped, replace Rust canonical/runtime stores with `localagent.sqlite`; rebuild Swift product metadata in its final Swift-owned store; write no translator, legacy reader, or dual writer |
+| Credentials | Exact App-owned Keychain namespace | Keep references used by the final profile schema and delete only orphaned records in that namespace; never bulk-clear Keychain |
+| Skills, Prompt documents, and attachments | Exact managed file roots and metadata owners | Keep final-format assets or re-import through the product path; add no compatibility scanner |
+| Local model files | Exact model repository, index, download, and staging paths | Re-download, or let the final repository rebuild its index when files already use its final format; do not migrate the legacy index |
+| Run/effect temporary state | Exact Provider-plan, lease, receipt/effect, and pending-interaction owners | Terminate development Runs, then clear the whole temporary-state group coherently with canonical Run state |
+| Caches/UI projections | Exact Swift projection, Browser/WebKit, URLSession, test-fixture, and UI cache owners | Delete and rebuild; never use them as canonical input |
 
 The reset happens in the vertical slice that installs the sole replacement
 writer. That slice removes the old startup migration call, translator, FFI
@@ -1937,15 +1948,18 @@ create a new framework or dozens of horizontal infrastructure tasks.
 
 ### Phase 0: minimal evidence
 
-Time-box this phase and do not repair the old architecture. Produce only:
+Cap this phase at one engineer-day, including at most half a day for performance,
+and do not repair the old architecture. Produce only:
 
 - a production/debug/test/build/resource caller matrix for all 23 Rust roots;
 - Swift/Xcode target, source-membership, build-phase, package/framework, and
   resource callers;
-- the development-data reset inventory from Section 15.2, naming every store,
-  source-like asset, coordinated runtime reset, and regenerated fixture;
+- the six-category development-data ownership/reset table from Section 15.2,
+  without a shipped reset framework or repeated future-phase schedule;
 - one complete ReAct product smoke path and one relaunch/projection replay path;
-- startup, RSS, idle activity, first-turn latency, and binary-size baselines.
+- one Debug build/launch smoke plus the lean Release cold-launch, Rust-init,
+  idle RSS/CPU, deterministic ReAct-turn, and binary-size baselines from
+  Section 14.1.
 
 No compatibility migration task enters a later phase. The accepted inventory
 uses reset, reseed, re-index, or manual developer re-import and deletes the
@@ -2003,6 +2017,10 @@ the old `execution`/RunMachine or another legacy root can still accept the same
 production Run. Phase 2 is complete when the Core-shape gate passes; it does not
 claim the private old Builder has been replaced.
 
+Once the final `LocalAgentStore` is the sole production store, record the
+deferred 0/100/1,000-conversation and 10,000/100,000-event measurements. Do not
+backfill those fixtures against the legacy stores during Phase 0.
+
 ### Phase 3: flat Agent Builder
 
 Install the unique `ProfileService` and `ConversationFacade` commands in Section
@@ -2053,7 +2071,9 @@ gate in Section 15.3 passes.
   writer, FFI operation, or fixture remains.
 - Verify the complete Phase 5 global slimming gate in Section 15.3 passes.
 - Run clean-checkout Simulator/device native/rootfs builds.
-- Compare performance with Phase 0 and investigate regressions.
+- Compare the lean shared metrics with Phase 0 and investigate regressions;
+  include deferred store-scale and subsystem/provider metrics only when their
+  owning vertical slice has supplied a real supported measurement path.
 - Pass the two product paths and focused correctness/UI/accessibility suites.
 
 Voice, alarms, widgets, extensions, backup, eligible sync, Cron, Hooks, and
